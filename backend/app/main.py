@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import auth
 from app.config import settings
 from app.database import init_db
 
@@ -30,8 +31,9 @@ def health() -> dict[str, str]:
     return {"status": "ok", "app": settings.app_name}
 
 
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+
 # 后续阶段挂载路由：
-# from app.api import auth, articles, files
-# app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+# from app.api import articles, files
 # app.include_router(articles.router, prefix="/api/articles", tags=["articles"])
 # app.include_router(files.router, prefix="/api/files", tags=["files"])

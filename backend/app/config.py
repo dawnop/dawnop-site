@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     app_name: str = "dawnop-site"
 
     # 鉴权
-    secret_key: str = "dev-insecure-secret-change-me"
+    secret_key: str = "dev-insecure-secret-change-me-before-deploying-to-production"
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440
 

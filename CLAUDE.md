@@ -24,7 +24,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 |----|------|------|
 | 后端框架 | **FastAPI** + Uvicorn | Python、轻量、自带 OpenAPI 文档（利于后续多客户端对接） |
 | ORM / DB | **SQLAlchemy 2.x** + **SQLite** | 需求明确指定 SQLite |
-| 鉴权 | OAuth2 Password + **JWT**（python-jose、passlib[bcrypt]） | 前后端分离用 token 而非 session |
+| 鉴权 | OAuth2 Password + **JWT**（**PyJWT** + **bcrypt**） | 前后端分离用 token；PyJWT/bcrypt 比 python-jose/passlib 维护更活跃、依赖更少 |
 | 对象存储 | 七牛云 **Kodo**，官方 `qiniu` Python SDK | 需求指定 |
 | 前端框架 | **Vue 3 + Vite** | 简单、构建快、契合「简洁干净」 |
 | Markdown | `markdown-it` | 可扩展插件体系 |
@@ -33,6 +33,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 部署 | **Nginx**（80 端口）+ systemd 托管 uvicorn | 4 核 4G 足够 |
 
 > 这些是推荐默认值。若你（用户）更倾向 Flask / React 等，请在动工前提出，我会相应调整计划。
+
+> **Python 版本基线：`>=3.10`**。生产服务器是 Ubuntu 22.04 LTS，默认 `python3.10`（无 3.14、无 pyenv）。
+> 故后端代码须保持 3.10 兼容，**不得使用 3.11+ / 3.14-only 语法**。本地若用更高版本（如 3.14）开发，
+> 上线前请在 3.10 下跑一遍 `pytest`。服务器另需安装 nginx；前端只需把本地 `npm run build` 的 `dist/` 传上去，
+> 服务器不必装 node。
 
 ## 3. 规划目录结构
 
