@@ -91,7 +91,8 @@ dawnop-site/
   后台可管理的导航页面；`type` ∈ {`content`(Markdown 内容页), `article_list`(文章列表页, 充当分类)}。
   导航栏 = 固定「首页」+ `nav_visible` 的页面按 `nav_order` 排序。
 
-> 无 Alembic：`init_db()` 内有 SQLite 轻量迁移，对旧库自动补加 `articles.page_id` 列。
+> 无 Alembic / 无迁移：表结构由 `create_all` 创建；改了模型结构需**重建本地库**
+> （删 `backend/*.db` 后重跑 `seed_admin.py`）。`scripts/wipe_qiniu.py` 可清空七牛空间。
 
 ## 5. 关键 API 草图
 

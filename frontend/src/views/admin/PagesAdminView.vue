@@ -5,6 +5,7 @@ import MarkdownView from '../../components/MarkdownView.vue'
 
 const pages = ref([])
 const loading = ref(true)
+const error = ref('')
 
 // 编辑中的页面（null=未打开；无 id=新建）
 const editing = ref(null)
@@ -13,9 +14,12 @@ const saving = ref(false)
 
 async function load() {
   loading.value = true
+  error.value = ''
   try {
     const { data } = await pagesApi.listAll()
     pages.value = data
+  } catch (e) {
+    error.value = '加载失败，请确认后端已启动并已登录。'
   } finally {
     loading.value = false
   }
@@ -84,7 +88,8 @@ async function move(index, delta) {
     </div>
     <p class="hint">导航顺序即下表顺序；首页固定在最前，不在此列。</p>
 
-    <p v-if="loading" class="muted">加载中…</p>
+    <p v-if="error" class="error">{{ error }}</p>
+    <p v-else-if="loading" class="muted">加载中…</p>
     <table v-else class="grid">
       <thead>
         <tr>
@@ -169,6 +174,9 @@ async function move(index, delta) {
   color: #8b949e;
   font-size: 0.85rem;
   margin: 0 0 16px;
+}
+.error {
+  color: #b91c1c;
 }
 .grid {
   width: 100%;
