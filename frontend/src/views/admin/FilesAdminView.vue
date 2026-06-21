@@ -8,11 +8,14 @@ const total = ref(0)
 const page = ref(1)
 const size = 20
 const loading = ref(true)
-const uploading = ref(false)
-const fileInput = ref(null)
 
-// 当前预览：{ file, url }
-const preview = ref(null)
+const uploading = ref(false)
+const progress = ref({ done: 0, total: 0 })
+const dragging = ref(false)
+const fileInput = ref(null)
+const dirInput = ref(null)
+
+const preview = ref(null) // { file, url }
 
 async function load() {
   loading.value = true
@@ -25,36 +28,87 @@ async function load() {
   }
 }
 
-function pick() {
-  fileInput.value.click()
-}
-
-async function onUpload(e) {
-  const file = e.target.files[0]
-  if (!file) return
+// 统一上传入口：list = [{ file, path }]
+async function uploadList(list) {
+  if (!list.length) return
   uploading.value = true
+  progress.value = { done: 0, total: list.length }
   try {
-    await filesApi.upload(file)
-    e.target.value = ''
+    for (const { file, path } of list) {
+      await filesApi.upload(file, path)
+      progress.value.done++
+    }
     page.value = 1
-    load()
+    await load()
   } finally {
     uploading.value = false
   }
 }
 
+function fromFileList(fileList) {
+  return Array.from(fileList).map((f) => ({
+    file: f,
+    path: f.webkitRelativePath || f.name,
+  }))
+}
+
+// ---- 选择文件 / 文件夹 ----
+function pickFiles() {
+  fileInput.value.click()
+}
+function pickDir() {
+  dirInput.value.click()
+}
+async function onPick(e) {
+  await uploadList(fromFileList(e.target.files))
+  e.target.value = ''
+}
+
+// ---- 拖拽（支持拖入文件夹）----
+function readEntries(reader) {
+  return new Promise((res, rej) => reader.readEntries(res, rej))
+}
+async function traverse(entry, prefix, out) {
+  if (entry.isFile) {
+    const file = await new Promise((res, rej) => entry.file(res, rej))
+    out.push({ file, path: prefix + entry.name })
+  } else if (entry.isDirectory) {
+    const reader = entry.createReader()
+    let batch
+    do {
+      batch = await readEntries(reader)
+      for (const child of batch) await traverse(child, prefix + entry.name + '/', out)
+    } while (batch.length > 0)
+  }
+}
+
+async function onDrop(e) {
+  dragging.value = false
+  const dt = e.dataTransfer
+  const items_ = dt.items
+  if (items_ && items_.length && items_[0].webkitGetAsEntry) {
+    const entries = Array.from(items_)
+      .map((i) => i.webkitGetAsEntry())
+      .filter(Boolean)
+    const out = []
+    for (const en of entries) await traverse(en, '', out)
+    await uploadList(out)
+  } else {
+    await uploadList(fromFileList(dt.files))
+  }
+}
+
+// ---- 预览 / 链接 / 删除 ----
 async function openPreview(f) {
   preview.value = { file: f, url: '' }
   const { data } = await filesApi.url(f.id)
   preview.value = { file: f, url: data.url }
 }
-
 async function copyUrl(f) {
   const { data } = await filesApi.url(f.id)
   await navigator.clipboard.writeText(data.url)
   alert('已复制带签名的临时链接')
 }
-
 async function remove(f) {
   if (!confirm(`确定删除 ${f.filename}？`)) return
   await filesApi.remove(f.id)
@@ -76,11 +130,26 @@ onMounted(load)
     <div class="toolbar">
       <h1>文件管理</h1>
       <div class="actions">
-        <input ref="fileInput" type="file" hidden @change="onUpload" />
-        <button class="primary" :disabled="uploading" @click="pick">
-          {{ uploading ? '上传中…' : '上传文件' }}
-        </button>
+        <input ref="fileInput" type="file" multiple hidden @change="onPick" />
+        <input ref="dirInput" type="file" webkitdirectory hidden @change="onPick" />
+        <button @click="pickFiles" :disabled="uploading">上传文件</button>
+        <button @click="pickDir" :disabled="uploading">导入文件夹</button>
       </div>
+    </div>
+
+    <!-- 拖拽区 -->
+    <div
+      class="dropzone"
+      :class="{ active: dragging, busy: uploading }"
+      @dragover.prevent="dragging = true"
+      @dragenter.prevent="dragging = true"
+      @dragleave.prevent="dragging = false"
+      @drop.prevent="onDrop"
+    >
+      <template v-if="uploading">
+        上传中… {{ progress.done }} / {{ progress.total }}
+      </template>
+      <template v-else> 把文件或文件夹拖到这里上传（保留文件夹路径） </template>
     </div>
 
     <p v-if="loading" class="muted">加载中…</p>
@@ -89,7 +158,7 @@ onMounted(load)
     <table v-else class="grid">
       <thead>
         <tr>
-          <th>文件名</th>
+          <th>文件名 / 路径</th>
           <th>类型</th>
           <th>大小</th>
           <th class="ops">操作</th>
@@ -130,7 +199,28 @@ onMounted(load)
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 18px;
+  margin-bottom: 16px;
+}
+.actions {
+  display: flex;
+  gap: 10px;
+}
+.dropzone {
+  border: 2px dashed #d0d7de;
+  border-radius: 10px;
+  padding: 26px;
+  text-align: center;
+  color: #8b949e;
+  margin-bottom: 22px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.dropzone.active {
+  border-color: var(--accent);
+  background: #eff6ff;
+  color: var(--accent);
+}
+.dropzone.busy {
+  color: var(--fg);
 }
 .grid {
   width: 100%;

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { articlesApi } from '../../api'
+import { articlesApi, pagesApi } from '../../api'
 import MarkdownView from '../../components/MarkdownView.vue'
 
 const route = useRoute()
@@ -16,12 +16,18 @@ const form = ref({
   summary: '',
   content: '',
   published: false,
+  page_id: null,
 })
+const listPages = ref([])
 const showPreview = ref(false)
 const saving = ref(false)
 const error = ref('')
 
 onMounted(async () => {
+  // 可分配的列表页（充当分类）
+  const { data: allPages } = await pagesApi.listAll()
+  listPages.value = allPages.filter((p) => p.type === 'article_list')
+
   if (isEdit.value) {
     const { data } = await articlesApi.getForEdit(id.value)
     form.value = {
@@ -30,6 +36,7 @@ onMounted(async () => {
       summary: data.summary,
       content: data.content,
       published: data.published,
+      page_id: data.page_id,
     }
   }
 })
@@ -75,6 +82,12 @@ async function save() {
 
     <label>Slug（留空自动生成）</label>
     <input v-model="form.slug" placeholder="url-friendly-slug" />
+
+    <label>所属列表页（分类，可不选）</label>
+    <select v-model="form.page_id">
+      <option :value="null">— 不分配 —</option>
+      <option v-for="p in listPages" :key="p.id" :value="p.id">{{ p.title }}</option>
+    </select>
 
     <label>摘要</label>
     <input v-model="form.summary" placeholder="一句话摘要（可选）" />

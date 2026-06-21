@@ -16,8 +16,8 @@ client.interceptors.response.use(
   (error) => {
     if (error.response && error.response.status === 401) {
       auth.logout()
-      if (!location.hash.startsWith('#/login')) {
-        location.hash = '#/login'
+      if (!location.hash.startsWith('#/admin/login')) {
+        location.hash = '#/admin/login'
       }
     }
     return Promise.reject(error)

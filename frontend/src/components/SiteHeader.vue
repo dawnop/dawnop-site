@@ -1,13 +1,19 @@
 <script setup>
-import { RouterLink, useRouter } from 'vue-router'
-import { auth } from '../store/auth'
+import { ref, onMounted } from 'vue'
+import { RouterLink } from 'vue-router'
+import { pagesApi } from '../api'
 
-const router = useRouter()
+// 导航 = 固定「首页」+ 后台「显示在导航」的页面（按顺序）
+const navPages = ref([])
 
-function logout() {
-  auth.logout()
-  router.push({ name: 'home' })
-}
+onMounted(async () => {
+  try {
+    const { data } = await pagesApi.nav()
+    navPages.value = data
+  } catch (e) {
+    navPages.value = []
+  }
+})
 </script>
 
 <template>
@@ -16,13 +22,9 @@ function logout() {
       <RouterLink to="/" class="brand">dawnop</RouterLink>
       <nav class="nav">
         <RouterLink to="/">首页</RouterLink>
-        <RouterLink to="/about">关于</RouterLink>
-        <template v-if="auth.isAuthenticated">
-          <RouterLink to="/admin/articles">文章管理</RouterLink>
-          <RouterLink to="/admin/files">文件管理</RouterLink>
-          <a href="#" class="link" @click.prevent="logout">退出</a>
-        </template>
-        <RouterLink v-else to="/login">登录</RouterLink>
+        <RouterLink v-for="p in navPages" :key="p.id" :to="`/p/${p.slug}`">
+          {{ p.title }}
+        </RouterLink>
       </nav>
     </div>
   </header>
@@ -53,6 +55,7 @@ function logout() {
   display: flex;
   gap: 18px;
   align-items: center;
+  flex-wrap: wrap;
 }
 .nav a {
   color: #57606a;
@@ -60,7 +63,7 @@ function logout() {
   font-size: 0.95rem;
 }
 .nav a:hover,
-.nav a.router-link-active {
+.nav a.router-link-exact-active {
   color: #1a1a1a;
 }
 </style>

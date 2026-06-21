@@ -1,0 +1,257 @@
+<script setup>
+import { ref, onMounted } from 'vue'
+import { pagesApi } from '../../api'
+import MarkdownView from '../../components/MarkdownView.vue'
+
+const pages = ref([])
+const loading = ref(true)
+
+// 编辑中的页面（null=未打开；无 id=新建）
+const editing = ref(null)
+const showPreview = ref(false)
+const saving = ref(false)
+
+async function load() {
+  loading.value = true
+  try {
+    const { data } = await pagesApi.listAll()
+    pages.value = data
+  } finally {
+    loading.value = false
+  }
+}
+
+function newPage() {
+  editing.value = {
+    title: '',
+    slug: '',
+    type: 'article_list',
+    content: '',
+    nav_visible: true,
+  }
+  showPreview.value = false
+}
+
+function edit(p) {
+  editing.value = { ...p }
+  showPreview.value = false
+}
+
+async function save() {
+  if (!editing.value.title.trim()) return
+  saving.value = true
+  try {
+    const payload = {
+      title: editing.value.title,
+      slug: editing.value.slug,
+      type: editing.value.type,
+      content: editing.value.content,
+      nav_visible: editing.value.nav_visible,
+    }
+    if (editing.value.id) {
+      await pagesApi.update(editing.value.id, payload)
+    } else {
+      await pagesApi.create(payload)
+    }
+    editing.value = null
+    load()
+  } finally {
+    saving.value = false
+  }
+}
+
+async function remove(p) {
+  if (!confirm(`确定删除页面「${p.title}」？其下文章会解除归属。`)) return
+  await pagesApi.remove(p.id)
+  load()
+}
+
+async function move(index, delta) {
+  const target = index + delta
+  if (target < 0 || target >= pages.value.length) return
+  const ids = pages.value.map((p) => p.id)
+  ;[ids[index], ids[target]] = [ids[target], ids[index]]
+  const { data } = await pagesApi.reorder(ids)
+  pages.value = data
+}
+</script>
+
+<template>
+  <div>
+    <div class="toolbar">
+      <h1>页面管理</h1>
+      <button class="primary" @click="newPage">新建页面</button>
+    </div>
+    <p class="hint">导航顺序即下表顺序；首页固定在最前，不在此列。</p>
+
+    <p v-if="loading" class="muted">加载中…</p>
+    <table v-else class="grid">
+      <thead>
+        <tr>
+          <th>标题</th>
+          <th>类型</th>
+          <th>路径</th>
+          <th>导航</th>
+          <th class="ops">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="(p, i) in pages" :key="p.id">
+          <td>{{ p.title }}</td>
+          <td class="muted">{{ p.type === 'content' ? '内容页' : '文章列表' }}</td>
+          <td class="muted">/p/{{ p.slug }}</td>
+          <td>
+            <span :class="['badge', p.nav_visible ? 'on' : 'off']">
+              {{ p.nav_visible ? '显示' : '隐藏' }}
+            </span>
+          </td>
+          <td class="ops">
+            <a href="#" @click.prevent="move(i, -1)">↑</a>
+            <a href="#" @click.prevent="move(i, 1)">↓</a>
+            <a href="#" @click.prevent="edit(p)">编辑</a>
+            <a href="#" class="danger" @click.prevent="remove(p)">删除</a>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- 编辑面板 -->
+    <div v-if="editing" class="editor">
+      <div class="editor-head">
+        <h2>{{ editing.id ? '编辑页面' : '新建页面' }}</h2>
+        <div class="actions">
+          <button @click="editing = null">取消</button>
+          <button class="primary" :disabled="saving" @click="save">
+            {{ saving ? '保存中…' : '保存' }}
+          </button>
+        </div>
+      </div>
+
+      <label>标题</label>
+      <input v-model="editing.title" placeholder="页面标题" />
+
+      <label>路径 slug（留空自动生成）</label>
+      <input v-model="editing.slug" placeholder="url-friendly-slug" />
+
+      <label>类型</label>
+      <select v-model="editing.type">
+        <option value="article_list">文章列表页（充当分类）</option>
+        <option value="content">内容页（Markdown）</option>
+      </select>
+
+      <template v-if="editing.type === 'content'">
+        <label>
+          正文（Markdown，支持 $LaTeX$）
+          <a href="#" class="toggle" @click.prevent="showPreview = !showPreview">
+            {{ showPreview ? '编辑' : '预览' }}
+          </a>
+        </label>
+        <MarkdownView v-if="showPreview" :source="editing.content" class="preview-box" />
+        <textarea v-else v-model="editing.content" rows="12" class="md-editor"></textarea>
+      </template>
+
+      <label class="checkbox">
+        <input type="checkbox" v-model="editing.nav_visible" />
+        显示在导航栏
+      </label>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.hint {
+  color: #8b949e;
+  font-size: 0.85rem;
+  margin: 0 0 16px;
+}
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+}
+.grid th,
+.grid td {
+  text-align: left;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.grid th {
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+.ops {
+  white-space: nowrap;
+}
+.ops a {
+  margin-right: 12px;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+.ops a.danger {
+  color: #b91c1c;
+}
+.badge {
+  font-size: 0.78rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.badge.on {
+  background: #dcfce7;
+  color: #166534;
+}
+.badge.off {
+  background: #f1f5f9;
+  color: #64748b;
+}
+.muted {
+  color: #8b949e;
+}
+.editor {
+  margin-top: 28px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+}
+.editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.editor-head h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.actions {
+  display: flex;
+  gap: 10px;
+}
+.toggle {
+  margin-left: 10px;
+  font-size: 0.85rem;
+}
+.md-editor {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+}
+.preview-box {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  min-height: 120px;
+}
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg);
+}
+.checkbox input {
+  width: auto;
+}
+</style>

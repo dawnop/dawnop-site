@@ -54,9 +54,10 @@ export const filesApi = {
   list(page = 1, size = 20) {
     return client.get('/files', { params: { page, size } })
   },
-  upload(file) {
+  // relativePath 用于文件夹导入：作为上传文件名携带相对路径
+  upload(file, relativePath) {
     const form = new FormData()
-    form.append('file', file)
+    form.append('file', file, relativePath || file.name)
     return client.post('/files/upload', form)
   },
   url(id) {
@@ -64,5 +65,33 @@ export const filesApi = {
   },
   remove(id) {
     return client.delete(`/files/${id}`)
+  },
+}
+
+// ---- 页面 ----
+export const pagesApi = {
+  nav() {
+    return client.get('/pages/nav')
+  },
+  get(slug) {
+    return client.get(`/pages/${slug}`)
+  },
+  listArticles(slug, page = 1, size = 10) {
+    return client.get(`/pages/${slug}/articles`, { params: { page, size } })
+  },
+  listAll() {
+    return client.get('/pages/admin')
+  },
+  create(data) {
+    return client.post('/pages', data)
+  },
+  update(id, data) {
+    return client.put(`/pages/${id}`, data)
+  },
+  remove(id) {
+    return client.delete(`/pages/${id}`)
+  },
+  reorder(ids) {
+    return client.post('/pages/reorder', { ids })
   },
 }
