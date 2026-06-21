@@ -64,8 +64,8 @@ dawnop-site/
 │   └── scripts/seed_admin.py    # 初始化管理员账号
 ├── frontend/
 │   ├── src/
-│   │   ├── views/               # Home, Article, About, Login, AdminArticles, AdminFiles
-│   │   ├── components/          # MarkdownView（md+mathjax）、FilePreview 等
+│   │   ├── views/               # Home, Article, Page(内容/列表); admin/{Login,Articles,ArticleEdit,Pages,Files}
+│   │   ├── components/          # PublicLayout, AdminLayout, SiteHeader, MarkdownView(md+mathjax), FilePreview
 │   │   ├── api/                 # axios 封装，统一带 token
 │   │   ├── router/              # 公开路由 + 后台受保护路由
 │   │   └── store/               # 登录态
@@ -80,12 +80,18 @@ dawnop-site/
 └── program.md
 ```
 
-## 4. 数据模型（初版）
+## 4. 数据模型
 
 - **User**：`id, username, password_hash, created_at`（单管理员，启动脚本注入）。
-- **Article**：`id, title, slug(唯一), summary, content(markdown), published(bool), created_at, updated_at`。
+- **Article**：`id, title, slug(唯一), summary, content(markdown), published(bool), page_id(可空), created_at, updated_at`。
+  `page_id` 指向所属「文章列表页」（一对多，删除页面置空）。
 - **FileObject**：`id, key(七牛 key, 唯一), filename, content_type, size, created_at`。
-  本地只存元数据用于列表/预览，文件本体在七牛。
+  本地只存元数据用于列表/预览，文件本体在七牛；文件夹导入时 key/filename 体现相对路径。
+- **Page**：`id, title, slug(唯一), type, content, nav_visible, nav_order, created_at, updated_at`。
+  后台可管理的导航页面；`type` ∈ {`content`(Markdown 内容页), `article_list`(文章列表页, 充当分类)}。
+  导航栏 = 固定「首页」+ `nav_visible` 的页面按 `nav_order` 排序。
+
+> 无 Alembic：`init_db()` 内有 SQLite 轻量迁移，对旧库自动补加 `articles.page_id` 列。
 
 ## 5. 关键 API 草图
 
@@ -99,6 +105,14 @@ dawnop-site/
 
 > 直传 vs 代理上传：默认推荐**前端直传**（后端只签 token），减轻 4G 机器带宽/内存压力；
 > 若需服务端校验/改名，再走代理上传。
+
+- 页面：`GET /api/pages/nav`（公开，导航项）、`GET /api/pages/{slug}`（公开）、
+  `GET /api/pages/{slug}/articles`（公开，列表页文章分页）、`GET /api/pages/admin`（需鉴权，全部）、
+  `POST/PUT/DELETE /api/pages`（需鉴权）、`POST /api/pages/reorder`（需鉴权，按 id 列表排序）。
+
+> **前端结构**：单应用双布局——`PublicLayout`(前台) 与 `AdminLayout`(后台侧边栏)。登录页在 `/admin/login`，
+> 前台不含登录/管理入口。后台路由 `meta.requiresAuth`，401 自动跳 `/admin/login`。首页 `/` 独立保留，
+> 列表页/内容页走 `/p/{slug}`。
 
 ## 6. 开发阶段计划（建议按序推进，每阶段本地测试通过再进入下一阶段）
 
