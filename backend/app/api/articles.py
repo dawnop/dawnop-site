@@ -96,6 +96,7 @@ def create_article(
         summary=payload.summary,
         content=payload.content,
         published=payload.published,
+        page_id=payload.page_id,
     )
     db.add(article)
     db.commit()

@@ -16,14 +16,16 @@ def slugify(text: str) -> str:
     return text or "article"
 
 
-def unique_slug(db: Session, base: str, exclude_id: int | None = None) -> str:
+def unique_slug(
+    db: Session, base: str, exclude_id: int | None = None, _model=Article
+) -> str:
     base = slugify(base)
     candidate = base
     i = 2
     while True:
-        q = db.query(Article).filter(Article.slug == candidate)
+        q = db.query(_model).filter(_model.slug == candidate)
         if exclude_id is not None:
-            q = q.filter(Article.id != exclude_id)
+            q = q.filter(_model.id != exclude_id)
         if q.first() is None:
             return candidate
         candidate = f"{base}-{i}"

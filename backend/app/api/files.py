@@ -4,8 +4,8 @@
 所有接口经 get_current_user 保护。
 """
 import mimetypes
-import os
 import uuid
+from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
@@ -29,9 +29,16 @@ router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 def _make_key(filename: str) -> str:
-    """uuid 前缀避免重名/覆盖；保留原扩展名便于按类型预览。"""
-    ext = os.path.splitext(filename or "")[1].lower()
-    return f"{uuid.uuid4().hex}{ext}"
+    """uuid 文件名避免覆盖；保留扩展名便于按类型预览。
+
+    若 filename 含目录（文件夹导入，如 docs/sub/a.txt），把目录作为 key 前缀，
+    使七牛 key 与本地一样体现文件夹层级。
+    """
+    p = PurePosixPath((filename or "").replace("\\", "/"))
+    ext = p.suffix.lower()
+    uid = f"{uuid.uuid4().hex}{ext}"
+    parts = [seg for seg in p.parent.parts if seg not in ("", ".", "..", "/")]
+    return f"{'/'.join(parts)}/{uid}" if parts else uid
 
 
 def _guess_mime(filename: str, fallback: str | None = None) -> str:

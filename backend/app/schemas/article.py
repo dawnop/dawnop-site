@@ -9,6 +9,7 @@ class ArticleBase(BaseModel):
     summary: str = ""
     content: str = ""
     published: bool = False
+    page_id: int | None = None
 
 
 class ArticleCreate(ArticleBase):
@@ -22,6 +23,7 @@ class ArticleUpdate(BaseModel):
     summary: str | None = None
     content: str | None = None
     published: bool | None = None
+    page_id: int | None = None
 
 
 class ArticleOut(BaseModel):
@@ -33,6 +35,7 @@ class ArticleOut(BaseModel):
     summary: str
     content: str
     published: bool
+    page_id: int | None
     created_at: datetime
     updated_at: datetime
 
@@ -47,6 +50,7 @@ class ArticleListItem(BaseModel):
     slug: str
     summary: str
     published: bool
+    page_id: int | None
     created_at: datetime
     updated_at: datetime
 
