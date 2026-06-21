@@ -28,7 +28,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 对象存储 | 七牛云 **Kodo**，官方 `qiniu` Python SDK | 需求指定 |
 | 前端框架 | **Vue 3 + Vite** | 简单、构建快、契合「简洁干净」 |
 | Markdown | `markdown-it` | 可扩展插件体系 |
-| LaTeX | **KaTeX**（`markdown-it-katex` / `@vscode/markdown-it-katex`） | 渲染快，按需加载 |
+| LaTeX | **MathJax 3**（`markdown-it-mathjax3`） | 兼容性好、支持的 LaTeX 命令更全 |
 | 代码高亮 | `highlight.js` | 文章代码块 |
 | 部署 | **Nginx**（80 端口）+ systemd 托管 uvicorn | 4 核 4G 足够 |
 
@@ -65,7 +65,7 @@ dawnop-site/
 ├── frontend/
 │   ├── src/
 │   │   ├── views/               # Home, Article, About, Login, AdminArticles, AdminFiles
-│   │   ├── components/          # MarkdownView（md+katex）、FilePreview 等
+│   │   ├── components/          # MarkdownView（md+mathjax）、FilePreview 等
 │   │   ├── api/                 # axios 封装，统一带 token
 │   │   ├── router/              # 公开路由 + 后台受保护路由
 │   │   └── store/               # 登录态
@@ -109,7 +109,7 @@ dawnop-site/
 - **阶段 2 — 鉴权**：User 模型、密码哈希、JWT 登录、`seed_admin.py`、受保护依赖。
 - **阶段 3 — 文章模块**：Article 模型、CRUD、md 导入/导出、公开只读接口 + pytest。
 - **阶段 4 — 七牛文件模块**：`qiniu_client.py`、上传凭证 / 上传、列表、预览/下载 url、删除。
-- **阶段 5 — 前端公开页**：首页、文章页（markdown-it + KaTeX + highlight.js）、关于页，简洁主题。
+- **阶段 5 — 前端公开页**：首页、文章页（markdown-it + MathJax 3 + highlight.js）、关于页，简洁主题。
 - **阶段 6 — 前端后台**：登录页、文章管理、文件管理（图片/文本预览），axios 统一带 token。
 - **阶段 7 — 本地联调测试**：前后端跑通全流程，跑测试。
 - **阶段 8 — 部署上线**：服务器 Nginx + systemd，绑定 `dawnop.com`，80 端口验证。

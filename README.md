@@ -15,7 +15,7 @@
 | 鉴权 | OAuth2 Password + JWT |
 | 对象存储 | 七牛云 Kodo（`qiniu` SDK） |
 | 前端 | Vue 3 + Vite |
-| Markdown / LaTeX | markdown-it + KaTeX + highlight.js |
+| Markdown / LaTeX | markdown-it + MathJax 3 + highlight.js |
 | 部署 | Nginx + systemd |
 
 ## 本地开发
