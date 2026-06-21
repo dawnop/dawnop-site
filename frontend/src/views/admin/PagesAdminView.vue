@@ -78,6 +78,8 @@ async function move(index, delta) {
   const { data } = await pagesApi.reorder(ids)
   pages.value = data
 }
+
+onMounted(load)
 </script>
 
 <template>
