@@ -172,8 +172,12 @@ async function save() {
 .checkbox input {
   width: auto;
 }
+/* 圆角 + 阴影，与后台卡片观感一致（md-editor 默认直角） */
 .editor {
   height: calc(100vh - 210px);
   min-height: 440px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
 }
 </style>

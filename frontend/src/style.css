@@ -81,7 +81,9 @@ textarea:focus {
   border-color: var(--accent);
 }
 
-label {
+/* 表单标签默认样式；排除 md-editor-v3 / VueFinder 内部 label，
+   否则其底栏「字数」等标签会被加上 14px 上边距而错位。 */
+label:not(.md-editor *, .vuefinder *) {
   display: block;
   font-size: 0.9rem;
   color: var(--muted);

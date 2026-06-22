@@ -147,7 +147,8 @@ function logout() {
   font-size: 1.05rem;
   color: #1f2329;
 }
-.icon-btn {
+/* .topbar 前缀提高优先级，压过 admin.css 的 .admin button 基础样式 */
+.topbar .icon-btn {
   border: none;
   background: transparent;
   padding: 6px;
@@ -155,7 +156,7 @@ function logout() {
   color: #595959;
   display: inline-flex;
 }
-.icon-btn:hover {
+.topbar .icon-btn:hover {
   background: #f0f2f5;
   color: var(--accent);
 }
@@ -289,9 +290,10 @@ function logout() {
 .main.fluid {
   min-height: 0;
 }
+/* 文件管理：保留正常内边距（与其他页一致），但让内容撑满剩余高度 */
 .view.fluid {
   flex: 1;
-  padding: 0;
+  padding: 20px 28px 24px;
   display: flex;
   flex-direction: column;
   min-height: 0;

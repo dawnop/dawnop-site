@@ -31,8 +31,13 @@ const features = { archive: false, unarchive: false }
   display: flex;
   flex-direction: column;
 }
+/* 圆角卡片化，与后台其余页面的卡片观感一致 */
 .fm-wrap :deep(.vuefinder) {
   flex: 1;
   min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
 }
 </style>

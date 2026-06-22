@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
+import { MdEditor } from 'md-editor-v3'
 import { pagesApi } from '../../api'
-import MarkdownView from '../../components/MarkdownView.vue'
 
 const pages = ref([])
 const loading = ref(true)
@@ -9,7 +9,6 @@ const error = ref('')
 
 // 编辑中的页面（null=未打开；无 id=新建）
 const editing = ref(null)
-const showPreview = ref(false)
 const saving = ref(false)
 
 async function load() {
@@ -33,12 +32,10 @@ function newPage() {
     content: '',
     nav_visible: true,
   }
-  showPreview.value = false
 }
 
 function edit(p) {
   editing.value = { ...p }
-  showPreview.value = false
 }
 
 async function save() {
@@ -149,14 +146,13 @@ onMounted(load)
       </select>
 
       <template v-if="editing.type === 'content'">
-        <label>
-          正文（Markdown，支持 $LaTeX$）
-          <a href="#" class="toggle" @click.prevent="showPreview = !showPreview">
-            {{ showPreview ? '编辑' : '预览' }}
-          </a>
-        </label>
-        <MarkdownView v-if="showPreview" :source="editing.content" class="preview-box" />
-        <textarea v-else v-model="editing.content" rows="12" class="md-editor"></textarea>
+        <label>正文（Markdown，支持 $LaTeX$）</label>
+        <MdEditor
+          v-model="editing.content"
+          language="zh-CN"
+          :preview="true"
+          class="page-editor"
+        />
       </template>
 
       <label class="checkbox">
@@ -187,19 +183,10 @@ onMounted(load)
   display: flex;
   gap: 10px;
 }
-.toggle {
-  margin-left: 10px;
-  font-size: 0.85rem;
-}
-.md-editor {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.9rem;
-}
-.preview-box {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 14px;
-  min-height: 120px;
+.page-editor {
+  height: 460px;
+  border-radius: var(--radius);
+  overflow: hidden;
 }
 .checkbox {
   display: flex;
