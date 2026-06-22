@@ -1,15 +1,13 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { MdEditor } from 'md-editor-v3'
+import { useRouter } from 'vue-router'
 import { pagesApi } from '../../api'
 
+const router = useRouter()
 const pages = ref([])
 const loading = ref(true)
 const error = ref('')
-
-// 编辑中的页面（null=未打开；无 id=新建）
-const editing = ref(null)
-const saving = ref(false)
+const counts = ref({}) // page.id -> 文章数（仅文章列表页）
 
 async function load() {
   loading.value = true
@@ -17,6 +15,7 @@ async function load() {
   try {
     const { data } = await pagesApi.listAll()
     pages.value = data
+    loadCounts()
   } catch (e) {
     error.value = '加载失败，请确认后端已启动并已登录。'
   } finally {
@@ -24,41 +23,26 @@ async function load() {
   }
 }
 
+// 文章列表页：查该栏目下文章数（页面通常很少，逐个查可接受）
+async function loadCounts() {
+  const next = {}
+  for (const p of pages.value) {
+    if (p.type !== 'article_list') continue
+    try {
+      const { data } = await pagesApi.listArticles(p.slug, 1, 1)
+      next[p.id] = data.total
+    } catch (e) {
+      /* 忽略单页失败 */
+    }
+  }
+  counts.value = next
+}
+
 function newPage() {
-  editing.value = {
-    title: '',
-    slug: '',
-    type: 'article_list',
-    content: '',
-    nav_visible: true,
-  }
+  router.push('/admin/pages/new')
 }
-
 function edit(p) {
-  editing.value = { ...p }
-}
-
-async function save() {
-  if (!editing.value.title.trim()) return
-  saving.value = true
-  try {
-    const payload = {
-      title: editing.value.title,
-      slug: editing.value.slug,
-      type: editing.value.type,
-      content: editing.value.content,
-      nav_visible: editing.value.nav_visible,
-    }
-    if (editing.value.id) {
-      await pagesApi.update(editing.value.id, payload)
-    } else {
-      await pagesApi.create(payload)
-    }
-    editing.value = null
-    load()
-  } finally {
-    saving.value = false
-  }
+  router.push(`/admin/pages/${p.id}/edit`)
 }
 
 async function remove(p) {
@@ -67,12 +51,24 @@ async function remove(p) {
   load()
 }
 
-async function move(index, delta) {
-  const target = index + delta
-  if (target < 0 || target >= pages.value.length) return
-  const ids = pages.value.map((p) => p.id)
-  ;[ids[index], ids[target]] = [ids[target], ids[index]]
-  const { data } = await pagesApi.reorder(ids)
+function fmtDate(s) {
+  return new Date(s).toLocaleDateString('zh-CN')
+}
+
+// 拖拽排序
+const dragIndex = ref(null)
+function onDragStart(i) {
+  dragIndex.value = i
+}
+async function onDrop(i) {
+  const from = dragIndex.value
+  dragIndex.value = null
+  if (from === null || from === i) return
+  const arr = pages.value.slice()
+  const [moved] = arr.splice(from, 1)
+  arr.splice(i, 0, moved)
+  pages.value = arr
+  const { data } = await pagesApi.reorder(arr.map((p) => p.id))
   pages.value = data
 }
 
@@ -85,80 +81,60 @@ onMounted(load)
       <h1>页面管理</h1>
       <button class="primary" @click="newPage">新建页面</button>
     </div>
-    <p class="hint">导航顺序即下表顺序；首页固定在最前，不在此列。</p>
+    <p class="hint">拖动行首 ⠿ 调整导航顺序；首页固定在最前，不在此列。</p>
 
     <div class="card">
       <p v-if="error" class="error">{{ error }}</p>
       <p v-else-if="loading" class="muted">加载中…</p>
+      <p v-else-if="pages.length === 0" class="empty">还没有页面，点右上角「新建页面」。</p>
       <table v-else class="data-grid">
         <thead>
           <tr>
+            <th class="drag-col"></th>
             <th>标题</th>
             <th>类型</th>
             <th>路径</th>
+            <th>文章数</th>
             <th>导航</th>
+            <th>更新于</th>
             <th class="ops">操作</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(p, i) in pages" :key="p.id">
+          <tr
+            v-for="(p, i) in pages"
+            :key="p.id"
+            :class="{ dragging: dragIndex === i }"
+            @dragover.prevent
+            @drop="onDrop(i)"
+          >
+            <td
+              class="drag-handle"
+              draggable="true"
+              title="拖动排序"
+              @dragstart="onDragStart(i)"
+            >
+              ⠿
+            </td>
             <td>{{ p.title }}</td>
             <td class="muted">{{ p.type === 'content' ? '内容页' : '文章列表' }}</td>
             <td class="muted">/p/{{ p.slug }}</td>
+            <td class="muted">
+              {{ p.type === 'article_list' ? (counts[p.id] ?? '…') : '—' }}
+            </td>
             <td>
               <span :class="['badge', p.nav_visible ? 'on' : 'off']">
                 {{ p.nav_visible ? '显示' : '隐藏' }}
               </span>
             </td>
+            <td class="muted">{{ fmtDate(p.updated_at) }}</td>
             <td class="ops">
-              <a @click.prevent="move(i, -1)">↑</a>
-              <a @click.prevent="move(i, 1)">↓</a>
               <a @click.prevent="edit(p)">编辑</a>
               <a class="danger" @click.prevent="remove(p)">删除</a>
             </td>
           </tr>
         </tbody>
       </table>
-    </div>
-
-    <!-- 编辑面板 -->
-    <div v-if="editing" class="card editor">
-      <div class="editor-head">
-        <h2>{{ editing.id ? '编辑页面' : '新建页面' }}</h2>
-        <div class="actions">
-          <button @click="editing = null">取消</button>
-          <button class="primary" :disabled="saving" @click="save">
-            {{ saving ? '保存中…' : '保存' }}
-          </button>
-        </div>
-      </div>
-
-      <label>标题</label>
-      <input v-model="editing.title" placeholder="页面标题" />
-
-      <label>路径 slug（留空自动生成）</label>
-      <input v-model="editing.slug" placeholder="url-friendly-slug" />
-
-      <label>类型</label>
-      <select v-model="editing.type">
-        <option value="article_list">文章列表页（充当分类）</option>
-        <option value="content">内容页（Markdown）</option>
-      </select>
-
-      <template v-if="editing.type === 'content'">
-        <label>正文（Markdown，支持 $LaTeX$）</label>
-        <MdEditor
-          v-model="editing.content"
-          language="zh-CN"
-          :preview="true"
-          class="page-editor"
-        />
-      </template>
-
-      <label class="checkbox">
-        <input type="checkbox" v-model="editing.nav_visible" />
-        显示在导航栏
-      </label>
     </div>
   </div>
 </template>
@@ -167,34 +143,19 @@ onMounted(load)
 .hint {
   margin: -8px 0 16px;
 }
-.editor {
-  margin-top: 20px;
+.drag-col {
+  width: 28px;
 }
-.editor-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.drag-handle {
+  cursor: grab;
+  color: #c9cdd4;
+  text-align: center;
+  user-select: none;
 }
-.editor-head h2 {
-  margin: 0;
-  font-size: 1.1rem;
+.drag-handle:active {
+  cursor: grabbing;
 }
-.editor-head .actions {
-  display: flex;
-  gap: 10px;
-}
-.page-editor {
-  height: 460px;
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-.checkbox {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--fg);
-}
-.checkbox input {
-  width: auto;
+.dragging {
+  opacity: 0.5;
 }
 </style>

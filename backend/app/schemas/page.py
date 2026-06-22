@@ -10,6 +10,7 @@ PageType = Literal["content", "article_list"]
 class PageCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     type: PageType = "content"
+    description: str = ""
     content: str = ""
     nav_visible: bool = True
     nav_order: int = 0
@@ -20,6 +21,7 @@ class PageUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     slug: str | None = Field(default=None, max_length=255)
     type: PageType | None = None
+    description: str | None = None
     content: str | None = None
     nav_visible: bool | None = None
     nav_order: int | None = None
@@ -32,6 +34,7 @@ class PageOut(BaseModel):
     title: str
     slug: str
     type: str
+    description: str
     content: str
     nav_visible: bool
     nav_order: int
