@@ -54,6 +54,8 @@ onMounted(async () => {
       page_id: data.page_id,
     }
     publishAt.value = toLocalInput(data.created_at)
+  } else {
+    showSettings.value = true // 新建默认展开设置抽屉（标题等在抽屉内）
   }
 })
 

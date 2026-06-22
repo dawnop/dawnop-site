@@ -12,31 +12,54 @@ const error = ref('')
 const importing = ref(false)
 const fileInput = ref(null)
 const pageMap = ref({}) // page_id -> title
+const listPages = ref([]) // 文章列表页（用于分类筛选）
+
+// 筛选条件
+const fStatus = ref('') // '' | 'published' | 'draft'
+const fPageId = ref('') // '' | id
+const fq = ref('')
 
 function pageName(id) {
   return id ? pageMap.value[id] || `#${id}` : '—'
 }
 
 function articleUrl(slug) {
-  return `${location.origin}/#/article/${slug}`
+  return `${location.origin}/article/${slug}`
 }
 
 async function load() {
   loading.value = true
   error.value = ''
   try {
+    const filters = {}
+    if (fStatus.value) filters.published = fStatus.value === 'published'
+    if (fPageId.value) filters.page_id = Number(fPageId.value)
+    if (fq.value.trim()) filters.q = fq.value.trim()
     const [arts, pages] = await Promise.all([
-      articlesApi.listAll(page.value, size),
+      articlesApi.listAll(page.value, size, filters),
       pagesApi.listAll(),
     ])
     items.value = arts.data.items
     total.value = arts.data.total
     pageMap.value = Object.fromEntries(pages.data.map((p) => [p.id, p.title]))
+    listPages.value = pages.data.filter((p) => p.type === 'article_list')
   } catch (e) {
     error.value = '加载失败，请确认后端已启动并已登录。'
   } finally {
     loading.value = false
   }
+}
+
+function applyFilters() {
+  page.value = 1
+  load()
+}
+function resetFilters() {
+  fStatus.value = ''
+  fPageId.value = ''
+  fq.value = ''
+  page.value = 1
+  load()
 }
 
 async function remove(a) {
@@ -98,6 +121,21 @@ onMounted(load)
       </div>
     </div>
 
+    <div class="filter-bar">
+      <input v-model="fq" class="search" placeholder="搜索标题…" @keyup.enter="applyFilters" />
+      <select v-model="fStatus" @change="applyFilters">
+        <option value="">全部状态</option>
+        <option value="published">已发布</option>
+        <option value="draft">草稿</option>
+      </select>
+      <select v-model="fPageId" @change="applyFilters">
+        <option value="">全部分类</option>
+        <option v-for="p in listPages" :key="p.id" :value="p.id">{{ p.title }}</option>
+      </select>
+      <button @click="applyFilters">搜索</button>
+      <button v-if="fStatus || fPageId || fq" @click="resetFilters">重置</button>
+    </div>
+
     <div class="card">
       <p v-if="error" class="error">{{ error }}</p>
       <p v-else-if="loading" class="muted">加载中…</p>
@@ -148,6 +186,20 @@ onMounted(load)
 </template>
 
 <style scoped>
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.filter-bar .search {
+  width: 220px;
+}
+.filter-bar select {
+  width: auto;
+  min-width: 120px;
+}
 .link-cell {
   font-size: 0.85rem;
   max-width: 220px;
