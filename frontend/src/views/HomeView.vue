@@ -28,6 +28,10 @@ function fmtDate(s) {
   return new Date(s).toLocaleDateString('zh-CN')
 }
 
+function readMinutes(wc) {
+  return Math.max(1, Math.round((wc || 0) / 300))
+}
+
 function go(p) {
   page.value = p
   load()
@@ -45,8 +49,12 @@ onMounted(load)
     <ul v-else class="post-list">
       <li v-for="a in items" :key="a.id" class="post">
         <RouterLink :to="`/article/${a.slug}`" class="post-title">{{ a.title }}</RouterLink>
-        <div class="post-meta">{{ fmtDate(a.created_at) }}</div>
         <p v-if="a.summary" class="post-summary">{{ a.summary }}</p>
+        <div class="post-meta">
+          <span>{{ fmtDate(a.created_at) }}</span>
+          <span class="dot">·</span>
+          <span>约 {{ readMinutes(a.word_count) }} 分钟</span>
+        </div>
       </li>
     </ul>
 
@@ -65,26 +73,38 @@ onMounted(load)
   margin: 0;
 }
 .post {
-  padding: 20px 0;
+  padding: 28px 0;
   border-bottom: 1px solid var(--border);
 }
+.post:first-child {
+  padding-top: 8px;
+}
 .post-title {
-  font-size: 1.3rem;
-  font-weight: 600;
+  display: inline-block;
+  font-size: 1.45rem;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
   text-decoration: none;
   color: var(--fg);
+  transition: color 0.15s;
 }
 .post-title:hover {
   color: var(--accent);
 }
-.post-meta {
-  color: #8b949e;
-  font-size: 0.85rem;
-  margin-top: 4px;
-}
 .post-summary {
   color: var(--muted);
   margin: 10px 0 0;
+  line-height: 1.7;
+}
+.post-meta {
+  color: #8b949e;
+  font-size: 0.85rem;
+  margin-top: 12px;
+}
+.post-meta .dot {
+  margin: 0 8px;
+  color: #c9cdd4;
 }
 .muted {
   color: #8b949e;

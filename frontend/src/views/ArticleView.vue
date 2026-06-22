@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { articlesApi } from '../api'
 import MarkdownView from '../components/MarkdownView.vue'
@@ -9,10 +9,14 @@ const article = ref(null)
 const loading = ref(true)
 const notFound = ref(false)
 
+const headings = ref([])
+const activeId = ref('')
+
 async function load(slug) {
   loading.value = true
   notFound.value = false
   article.value = null
+  headings.value = []
   try {
     const { data } = await articlesApi.getBySlug(slug)
     article.value = data
@@ -27,28 +31,159 @@ function fmtDate(s) {
   return new Date(s).toLocaleDateString('zh-CN')
 }
 
+const readMinutes = computed(() =>
+  article.value ? Math.max(1, Math.round((article.value.word_count || 0) / 300)) : 0
+)
+
+// 目录：取 h1~h3
+const toc = computed(() => headings.value.filter((h) => h.level <= 3))
+
+function onHeadings(h) {
+  headings.value = h
+  nextTick(updateActive)
+}
+
+// 滚动高亮当前章节
+let raf = 0
+function updateActive() {
+  let cur = toc.value[0]?.id || ''
+  for (const h of toc.value) {
+    const el = document.getElementById(h.id)
+    if (el && el.getBoundingClientRect().top <= 100) cur = h.id
+    else break
+  }
+  activeId.value = cur
+}
+function onScroll() {
+  if (raf) return
+  raf = requestAnimationFrame(() => {
+    raf = 0
+    updateActive()
+  })
+}
+function goTo(id) {
+  // hash 路由下不能改 location.hash（会冲掉 /#/article/slug 路由），仅平滑滚动
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
+}
+
+onMounted(() => window.addEventListener('scroll', onScroll, { passive: true }))
+onBeforeUnmount(() => window.removeEventListener('scroll', onScroll))
+
 watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true })
 </script>
 
 <template>
-  <article v-if="article">
-    <h1 class="title">{{ article.title }}</h1>
-    <div class="meta">{{ fmtDate(article.created_at) }}</div>
-    <MarkdownView :source="article.content" />
-  </article>
-  <p v-else-if="loading" class="muted">加载中…</p>
-  <p v-else-if="notFound" class="muted">文章不存在或未发布。</p>
+  <div class="article-wrap">
+    <article v-if="article" class="article">
+      <header class="head">
+        <h1 class="title">{{ article.title }}</h1>
+        <div class="meta">
+          <span>{{ fmtDate(article.created_at) }}</span>
+          <span class="dot">·</span>
+          <span>{{ article.word_count }} 字</span>
+          <span class="dot">·</span>
+          <span>约 {{ readMinutes }} 分钟</span>
+        </div>
+      </header>
+      <MarkdownView :source="article.content" @headings="onHeadings" />
+    </article>
+
+    <aside v-if="article && toc.length > 1" class="toc">
+      <div class="toc-title">目录</div>
+      <ul>
+        <li
+          v-for="h in toc"
+          :key="h.id"
+          :class="['lv' + h.level, { active: activeId === h.id }]"
+        >
+          <a :href="'#' + h.id" @click.prevent="goTo(h.id)">{{ h.text }}</a>
+        </li>
+      </ul>
+    </aside>
+
+    <p v-if="loading" class="muted">加载中…</p>
+    <p v-else-if="notFound" class="muted">文章不存在或未发布。</p>
+  </div>
 </template>
 
 <style scoped>
+.article-wrap {
+  position: relative;
+}
+.article {
+  max-width: 720px;
+  margin: 0 auto;
+}
+.head {
+  margin-bottom: 28px;
+}
 .title {
-  font-size: 2rem;
-  margin: 0 0 6px;
+  font-size: 2.4rem;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  margin: 0 0 14px;
 }
 .meta {
   color: #8b949e;
-  font-size: 0.85rem;
-  margin-bottom: 24px;
+  font-size: 0.88rem;
+}
+.meta .dot {
+  margin: 0 8px;
+  color: #c9cdd4;
+}
+
+/* 目录：宽屏固定在右侧留白区，窄屏隐藏 */
+.toc {
+  display: none;
+}
+@media (min-width: 1200px) {
+  .toc {
+    display: block;
+    position: fixed;
+    top: 96px;
+    left: calc(50% + 380px);
+    width: 200px;
+    max-height: calc(100vh - 140px);
+    overflow-y: auto;
+    font-size: 0.85rem;
+  }
+}
+.toc-title {
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: 10px;
+}
+.toc ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-left: 2px solid var(--border);
+}
+.toc li {
+  margin: 0;
+}
+.toc li a {
+  display: block;
+  padding: 5px 0 5px 14px;
+  margin-left: -2px;
+  border-left: 2px solid transparent;
+  color: var(--muted);
+  text-decoration: none;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.toc li.lv3 a {
+  padding-left: 28px;
+  font-size: 0.95em;
+}
+.toc li a:hover {
+  color: var(--fg);
+}
+.toc li.active a {
+  color: var(--accent);
+  border-left-color: var(--accent);
 }
 .muted {
   color: #8b949e;

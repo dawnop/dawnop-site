@@ -36,12 +36,13 @@ class ArticleOut(BaseModel):
     content: str
     published: bool
     page_id: int | None
+    word_count: int
     created_at: datetime
     updated_at: datetime
 
 
 class ArticleListItem(BaseModel):
-    """列表项：不含正文，减小传输体积。"""
+    """列表项：不含正文，减小传输体积（保留 word_count 供列表显示阅读时间）。"""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -51,6 +52,7 @@ class ArticleListItem(BaseModel):
     summary: str
     published: bool
     page_id: int | None
+    word_count: int
     created_at: datetime
     updated_at: datetime
 
