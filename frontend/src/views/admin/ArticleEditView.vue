@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
 import { MdEditor } from 'md-editor-v3'
 import { articlesApi, pagesApi } from '../../api'
+import SettingsDrawer from '../../components/SettingsDrawer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -18,10 +19,25 @@ const form = ref({
   published: false,
   page_id: null,
 })
+const publishAt = ref('') // datetime-local 字符串；对应 created_at（发布时间）
 const listPages = ref([])
 const showSettings = ref(false)
 const saving = ref(false)
 const error = ref('')
+
+// ISO/带时区时间 → datetime-local 输入值（本地时区，YYYY-MM-DDTHH:mm）
+function toLocalInput(v) {
+  if (!v) return ''
+  const d = new Date(v)
+  if (isNaN(d)) return ''
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+const slugPreview = computed(() => {
+  const s = form.value.slug.trim()
+  return s ? `/article/${s}` : '/article/（留空将根据标题自动生成）'
+})
 
 onMounted(async () => {
   const { data: allPages } = await pagesApi.listAll()
@@ -37,6 +53,7 @@ onMounted(async () => {
       published: data.published,
       page_id: data.page_id,
     }
+    publishAt.value = toLocalInput(data.created_at)
   }
 })
 
@@ -49,10 +66,12 @@ async function save() {
   saving.value = true
   error.value = ''
   try {
+    const payload = { ...form.value }
+    if (publishAt.value) payload.created_at = new Date(publishAt.value).toISOString()
     if (isEdit.value) {
-      await articlesApi.update(id.value, form.value)
+      await articlesApi.update(id.value, payload)
     } else {
-      await articlesApi.create(form.value)
+      await articlesApi.create(payload)
     }
     router.push('/admin/articles')
   } catch (e) {
@@ -65,15 +84,15 @@ async function save() {
 
 <template>
   <div class="edit-wrap">
-    <div class="page-head">
+    <div class="edit-topbar">
       <div class="title-row">
         <RouterLink to="/admin/articles" class="back" title="返回列表">←</RouterLink>
         <input class="title-input" v-model="form.title" placeholder="文章标题" />
       </div>
       <div class="actions">
-        <button @click="showSettings = !showSettings">
-          {{ showSettings ? '收起设置' : '文章设置' }}
-        </button>
+        <span v-if="form.published" class="badge pub">已发布</span>
+        <span v-else class="badge draft">草稿</span>
+        <button @click="showSettings = true">设置</button>
         <button class="primary" :disabled="saving" @click="save">
           {{ saving ? '保存中…' : '保存' }}
         </button>
@@ -82,36 +101,39 @@ async function save() {
 
     <p v-if="error" class="error">{{ error }}</p>
 
-    <!-- 可折叠：文章设置 -->
-    <div v-show="showSettings" class="card settings">
-      <div class="grid2">
-        <div>
-          <label>Slug（留空自动生成）</label>
-          <input v-model="form.slug" placeholder="url-friendly-slug" />
-        </div>
-        <div>
-          <label>所属列表页（分类，可不选）</label>
-          <select v-model="form.page_id">
-            <option :value="null">— 不分配 —</option>
-            <option v-for="p in listPages" :key="p.id" :value="p.id">{{ p.title }}</option>
-          </select>
-        </div>
-      </div>
+    <!-- 核心：Markdown 编辑器（满区，设置抽屉覆盖右侧、不挤压） -->
+    <MdEditor v-model="form.content" language="zh-CN" :preview="true" class="editor" />
+
+    <!-- 右侧设置抽屉 -->
+    <SettingsDrawer v-model="showSettings" title="文章设置">
+      <label>Slug</label>
+      <input v-model="form.slug" placeholder="url-friendly-slug" />
+      <p class="field-hint">访问地址：<code>{{ slugPreview }}</code></p>
+
+      <label>所属列表页（分类，可不选）</label>
+      <select v-model="form.page_id">
+        <option :value="null">— 不分配 —</option>
+        <option v-for="p in listPages" :key="p.id" :value="p.id">{{ p.title }}</option>
+      </select>
+
       <label>摘要</label>
       <input v-model="form.summary" placeholder="一句话摘要（可选）" />
+
+      <label>发布时间</label>
+      <input type="datetime-local" v-model="publishAt" />
+      <p class="field-hint">前台显示与排序用此时间；留空则用当前时间。</p>
+
       <label class="checkbox">
         <input type="checkbox" v-model="form.published" />
         立即发布
       </label>
-    </div>
 
-    <!-- 核心：Markdown 编辑器 -->
-    <MdEditor
-      v-model="form.content"
-      language="zh-CN"
-      :preview="true"
-      class="editor"
-    />
+      <template #footer>
+        <button class="primary block" :disabled="saving" @click="save">
+          {{ saving ? '保存中…' : '保存' }}
+        </button>
+      </template>
+    </SettingsDrawer>
   </div>
 </template>
 
@@ -119,6 +141,13 @@ async function save() {
 .edit-wrap {
   display: flex;
   flex-direction: column;
+}
+.edit-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 .title-row {
   display: flex;
@@ -151,17 +180,20 @@ async function save() {
   border-bottom-color: var(--accent);
   box-shadow: none;
 }
-.settings {
-  margin-bottom: 14px;
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
-.settings .grid2 {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
+.field-hint {
+  margin: 6px 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
 }
-.settings label:first-child,
-.settings .grid2 label {
-  margin-top: 0;
+.field-hint code {
+  background: #f0f1f3;
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
 }
 .checkbox {
   display: flex;
@@ -172,9 +204,11 @@ async function save() {
 .checkbox input {
   width: auto;
 }
-/* 圆角 + 阴影，与后台卡片观感一致（md-editor 默认直角） */
+.block {
+  width: 100%;
+}
 .editor {
-  height: calc(100vh - 210px);
+  height: calc(100vh - 168px);
   min-height: 440px;
   border-radius: var(--radius);
   overflow: hidden;

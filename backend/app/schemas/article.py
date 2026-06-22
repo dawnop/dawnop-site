@@ -15,6 +15,8 @@ class ArticleBase(BaseModel):
 class ArticleCreate(ArticleBase):
     # 不传则由后端按 title 生成
     slug: str | None = Field(default=None, max_length=255)
+    # 发布时间（前台显示/排序用）；不传则用当前时间
+    created_at: datetime | None = None
 
 
 class ArticleUpdate(BaseModel):
@@ -24,6 +26,7 @@ class ArticleUpdate(BaseModel):
     content: str | None = None
     published: bool | None = None
     page_id: int | None = None
+    created_at: datetime | None = None
 
 
 class ArticleOut(BaseModel):

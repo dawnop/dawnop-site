@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
 import { MdEditor } from 'md-editor-v3'
 import { pagesApi } from '../../api'
+import SettingsDrawer from '../../components/SettingsDrawer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -18,7 +19,8 @@ const form = ref({
   content: '',
   nav_visible: true,
 })
-const showSettings = ref(true)
+const publishAt = ref('') // datetime-local 字符串；对应 created_at
+const showSettings = ref(false)
 const saving = ref(false)
 const error = ref('')
 
@@ -29,11 +31,18 @@ const catLoaded = ref(false)
 const originalType = ref(null) // 进入编辑时的类型，用于切换类型的安全提示
 
 const isList = computed(() => form.value.type === 'article_list')
-// slug 实时预览：留空时后端按标题自动生成
 const slugPreview = computed(() => {
   const s = form.value.slug.trim()
   return s ? `/p/${s}` : '/p/（留空将根据标题自动生成）'
 })
+
+function toLocalInput(v) {
+  if (!v) return ''
+  const d = new Date(v)
+  if (isNaN(d)) return ''
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
 
 async function loadCategoryArticles(slug) {
   if (!slug) return
@@ -65,6 +74,7 @@ onMounted(async () => {
       content: p.content || '',
       nav_visible: p.nav_visible,
     }
+    publishAt.value = toLocalInput(p.created_at)
     originalType.value = p.type
     if (p.type === 'article_list') loadCategoryArticles(p.slug)
   }
@@ -92,10 +102,12 @@ async function save() {
   saving.value = true
   error.value = ''
   try {
+    const payload = { ...form.value }
+    if (publishAt.value) payload.created_at = new Date(publishAt.value).toISOString()
     if (isEdit.value) {
-      await pagesApi.update(id.value, form.value)
+      await pagesApi.update(id.value, payload)
     } else {
-      await pagesApi.create(form.value)
+      await pagesApi.create(payload)
     }
     router.push('/admin/pages')
   } catch (e) {
@@ -108,15 +120,14 @@ async function save() {
 
 <template>
   <div class="edit-wrap">
-    <div class="page-head">
+    <div class="edit-topbar">
       <div class="title-row">
         <RouterLink to="/admin/pages" class="back" title="返回列表">←</RouterLink>
         <input class="title-input" v-model="form.title" placeholder="页面标题" />
       </div>
       <div class="actions">
-        <button @click="showSettings = !showSettings">
-          {{ showSettings ? '收起设置' : '页面设置' }}
-        </button>
+        <span class="badge">{{ isList ? '文章列表页' : '内容页' }}</span>
+        <button @click="showSettings = true">设置</button>
         <button class="primary" :disabled="saving" @click="save">
           {{ saving ? '保存中…' : '保存' }}
         </button>
@@ -124,30 +135,6 @@ async function save() {
     </div>
 
     <p v-if="error" class="error">{{ error }}</p>
-
-    <!-- 可折叠：页面设置 -->
-    <div v-show="showSettings" class="card settings">
-      <div class="grid2">
-        <div>
-          <label>类型</label>
-          <select v-model="form.type">
-            <option value="content">内容页（Markdown）</option>
-            <option value="article_list">文章列表页（充当分类）</option>
-          </select>
-        </div>
-        <div>
-          <label>路径 slug</label>
-          <input v-model="form.slug" placeholder="url-friendly-slug" />
-          <p class="field-hint">访问地址：<code>{{ slugPreview }}</code></p>
-        </div>
-      </div>
-      <label>页面摘要 / 描述（可选，用于 SEO 与列表说明）</label>
-      <input v-model="form.description" placeholder="一句话描述这个页面" />
-      <label class="checkbox">
-        <input type="checkbox" v-model="form.nav_visible" />
-        显示在导航栏
-      </label>
-    </div>
 
     <!-- 内容页：Markdown 编辑器为核心 -->
     <MdEditor
@@ -177,6 +164,37 @@ async function save() {
         </li>
       </ul>
     </div>
+
+    <!-- 右侧设置抽屉 -->
+    <SettingsDrawer v-model="showSettings" title="页面设置">
+      <label>类型</label>
+      <select v-model="form.type">
+        <option value="content">内容页（Markdown）</option>
+        <option value="article_list">文章列表页（充当分类）</option>
+      </select>
+
+      <label>路径 slug</label>
+      <input v-model="form.slug" placeholder="url-friendly-slug" />
+      <p class="field-hint">访问地址：<code>{{ slugPreview }}</code></p>
+
+      <label>页面摘要 / 描述（可选，用于 SEO 与列表说明）</label>
+      <input v-model="form.description" placeholder="一句话描述这个页面" />
+
+      <label>发布时间</label>
+      <input type="datetime-local" v-model="publishAt" />
+      <p class="field-hint">前台展示与排序用此时间；留空则用当前时间。</p>
+
+      <label class="checkbox">
+        <input type="checkbox" v-model="form.nav_visible" />
+        显示在导航栏
+      </label>
+
+      <template #footer>
+        <button class="primary block" :disabled="saving" @click="save">
+          {{ saving ? '保存中…' : '保存' }}
+        </button>
+      </template>
+    </SettingsDrawer>
   </div>
 </template>
 
@@ -184,6 +202,13 @@ async function save() {
 .edit-wrap {
   display: flex;
   flex-direction: column;
+}
+.edit-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 .title-row {
   display: flex;
@@ -216,17 +241,10 @@ async function save() {
   border-bottom-color: var(--accent);
   box-shadow: none;
 }
-.settings {
-  margin-bottom: 14px;
-}
-.settings .grid2 {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-.settings label:first-child,
-.settings .grid2 label {
-  margin-top: 0;
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .field-hint {
   margin: 6px 0 0;
@@ -247,8 +265,11 @@ async function save() {
 .checkbox input {
   width: auto;
 }
+.block {
+  width: 100%;
+}
 .editor {
-  height: calc(100vh - 240px);
+  height: calc(100vh - 168px);
   min-height: 420px;
   border-radius: var(--radius);
   overflow: hidden;

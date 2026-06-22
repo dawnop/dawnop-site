@@ -15,6 +15,7 @@ class PageCreate(BaseModel):
     nav_visible: bool = True
     nav_order: int = 0
     slug: str | None = Field(default=None, max_length=255)
+    created_at: datetime | None = None
 
 
 class PageUpdate(BaseModel):
@@ -25,6 +26,7 @@ class PageUpdate(BaseModel):
     content: str | None = None
     nav_visible: bool | None = None
     nav_order: int | None = None
+    created_at: datetime | None = None
 
 
 class PageOut(BaseModel):
