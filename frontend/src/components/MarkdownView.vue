@@ -95,6 +95,30 @@ function enhance() {
     pre.appendChild(btn)
   })
 }
+// 复制到剪贴板：安全上下文(HTTPS/localhost)用 Clipboard API；
+// 普通 HTTP 下 navigator.clipboard 不存在，回退到 execCommand。返回是否成功，绝不抛错。
+function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    return navigator.clipboard.writeText(text).then(
+      () => true,
+      () => false
+    )
+  }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return Promise.resolve(ok)
+  } catch (e) {
+    return Promise.resolve(false)
+  }
+}
+
 function onClick(e) {
   // 标题锚点：点击复制本节直达链接（/path#标题）到剪贴板并滚动过去，给「✓」反馈
   const anchor = e.target.closest('.heading-anchor')
@@ -104,7 +128,8 @@ function onClick(e) {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
     const url =
       location.origin + location.pathname + location.search + '#' + encodeURIComponent(id)
-    navigator.clipboard?.writeText(url).then(() => {
+    copyText(url).then((ok) => {
+      if (!ok) return
       anchor.textContent = '✓'
       setTimeout(() => (anchor.textContent = '#'), 1200)
     })
@@ -114,8 +139,8 @@ function onClick(e) {
   if (!btn) return
   const code = btn.parentElement.querySelector('code')
   if (!code) return
-  navigator.clipboard?.writeText(code.innerText).then(() => {
-    btn.textContent = '已复制'
+  copyText(code.innerText).then((ok) => {
+    btn.textContent = ok ? '已复制' : '复制失败'
     setTimeout(() => (btn.textContent = '复制'), 1500)
   })
 }
