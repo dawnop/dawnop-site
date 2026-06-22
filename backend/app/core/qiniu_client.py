@@ -4,7 +4,9 @@
 所有函数失败时抛 RuntimeError，由上层转换为 HTTP 错误。
 """
 from functools import lru_cache
+from urllib.parse import quote
 
+import requests
 from qiniu import Auth, BucketManager, put_data
 
 from app.config import settings
@@ -27,8 +29,29 @@ def _expires(expires: int | None) -> int:
 
 
 def upload_token(key: str, expires: int | None = None) -> str:
-    """签发限定 key 的上传凭证，供前端直传。"""
+    """签发**限定到具体 key** 的上传凭证，供前端直传（不下发密钥）。"""
     return _auth().upload_token(settings.qiniu_bucket, key, _expires(expires))
+
+
+@lru_cache
+def upload_host() -> str:
+    """解析当前空间所在区域的上传域名，供前端直传 POST。
+
+    通过七牛 v4/query 接口（只需公开的 AccessKey + bucket）拿到区域上传域名；
+    失败时回退到默认上传域名。结果缓存（区域不会变）。
+    """
+    try:
+        resp = requests.get(
+            "https://api.qiniu.com/v4/query",
+            params={"ak": settings.qiniu_access_key, "bucket": settings.qiniu_bucket},
+            timeout=10,
+        )
+        domains = resp.json()["hosts"][0]["up"]["domains"]
+        if domains:
+            return f"https://{domains[0]}"
+    except Exception:  # noqa: BLE001  网络/结构异常都回退默认域名
+        pass
+    return "https://upload.qiniup.com"
 
 
 def proxy_upload(key: str, data: bytes, mime: str | None = None) -> dict:
@@ -42,10 +65,18 @@ def proxy_upload(key: str, data: bytes, mime: str | None = None) -> dict:
     return ret
 
 
-def private_url(key: str, expires: int | None = None) -> str:
-    """生成私有空间的带签名下载/预览 URL。"""
+def private_url(
+    key: str, expires: int | None = None, attname: str | None = None
+) -> str:
+    """生成私有空间的带签名下载/预览 URL。
+
+    attname 不为空时通过七牛 `?attname=` 强制以附件（指定文件名）下载；
+    为空则浏览器内联预览。
+    """
     domain = settings.qiniu_domain.rstrip("/")
     base_url = f"{domain}/{key}"
+    if attname:
+        base_url += f"?attname={quote(attname)}"
     return _auth().private_download_url(base_url, expires=_expires(expires))
 
 
@@ -62,3 +93,11 @@ def delete(key: str) -> None:
     ret, info = _bucket_manager().delete(settings.qiniu_bucket, key)
     if info.status_code not in (200, 612):
         raise RuntimeError(f"七牛删除失败: {info}")
+
+
+def copy(src_key: str, dst_key: str) -> None:
+    """在同一空间内复制对象（用于复制文件/文件夹）。"""
+    bucket = settings.qiniu_bucket
+    ret, info = _bucket_manager().copy(bucket, src_key, bucket, dst_key, force="true")
+    if info.status_code != 200:
+        raise RuntimeError(f"七牛复制失败: {info}")

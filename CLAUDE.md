@@ -30,6 +30,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Markdown | `markdown-it` | 可扩展插件体系 |
 | LaTeX | **MathJax 3**（`markdown-it-mathjax3`） | 兼容性好、支持的 LaTeX 命令更全 |
 | 代码高亮 | `highlight.js` | 文章代码块 |
+| 文件管理 UI | **VueFinder 4**（内置 `RemoteDriver`） | 类资源管理器：文件夹树/面包屑/右键菜单/预览，后端无关 |
 | 部署 | **Nginx**（80 端口）+ systemd 托管 uvicorn | 4 核 4G 足够 |
 
 > 这些是推荐默认值。若你（用户）更倾向 Flask / React 等，请在动工前提出，我会相应调整计划。
@@ -64,9 +65,9 @@ dawnop-site/
 │   └── scripts/seed_admin.py    # 初始化管理员账号
 ├── frontend/
 │   ├── src/
-│   │   ├── views/               # Home, Article, Page(内容/列表); admin/{Login,Articles,ArticleEdit,Pages,Files}
-│   │   ├── components/          # PublicLayout, AdminLayout, SiteHeader, MarkdownView(md+mathjax), FilePreview
-│   │   ├── api/                 # axios 封装，统一带 token
+│   │   ├── views/               # Home, Article, Page(内容/列表); admin/{Login,Articles,ArticleEdit,Pages,Files(VueFinder)}
+│   │   ├── components/          # PublicLayout, AdminLayout, SiteHeader, MarkdownView(md+mathjax)
+│   │   ├── api/                 # axios 封装(统一带 token) + vuefinderDriver.js(QiniuDriver)
 │   │   ├── router/              # 公开路由 + 后台受保护路由
 │   │   └── store/               # 登录态
 │   ├── package.json
@@ -85,8 +86,10 @@ dawnop-site/
 - **User**：`id, username, password_hash, created_at`（单管理员，启动脚本注入）。
 - **Article**：`id, title, slug(唯一), summary, content(markdown), published(bool), page_id(可空), created_at, updated_at`。
   `page_id` 指向所属「文章列表页」（一对多，删除页面置空）。
-- **FileObject**：`id, key(七牛 key, 唯一), filename, content_type, size, created_at`。
-  本地只存元数据用于列表/预览，文件本体在七牛；文件夹导入时 key/filename 体现相对路径。
+- **FileObject**：`id, path(相对路径, 唯一), is_dir, key(七牛 key, 可空), content_type, size, created_at, updated_at`。
+  文件与**文件夹共用此表**（文件夹 `is_dir=True`、`key` 空），故空文件夹可持久化；
+  七牛 `key` 是不透明 uuid，因此**重命名/移动只改 `path`（不动七牛对象）**，复制才真正复制七牛对象。
+  本地只存元数据，文件本体在七牛私有空间。
 - **Page**：`id, title, slug(唯一), type, content, nav_visible, nav_order, created_at, updated_at`。
   后台可管理的导航页面；`type` ∈ {`content`(Markdown 内容页), `article_list`(文章列表页, 充当分类)}。
   导航栏 = 固定「首页」+ `nav_visible` 的页面按 `nav_order` 排序。
@@ -100,12 +103,28 @@ dawnop-site/
 - 文章：`GET /api/articles`（公开，分页）、`GET /api/articles/{slug}`（公开）、
   `POST/PUT/DELETE /api/articles`（需鉴权）、`POST /api/articles/import`（上传 .md）、
   `GET /api/articles/{id}/export`（下载 .md）。
-- 文件：`GET /api/files`（列表）、`POST /api/files/upload-token`（向前端下发七牛上传凭证，
-  前端直传七牛）或 `POST /api/files/upload`（经后端代理上传）、`GET /api/files/{key}/url`
-  （生成下载/预览私有 url）、`DELETE /api/files/{key}`。图片/文本预览由前端按 content_type 渲染。
+- 文件（`/api/fm`，对接 VueFinder `RemoteDriver`，全部需鉴权）：
+  `GET ""`（列目录，`?path=qiniu://dir`）、`POST /upload-token`+`POST /register`（**前端直传**，见下）、
+  `POST /delete|/rename|/move|/copy`、`POST /create-folder|/create-file`、`POST /save`（文本编辑）、
+  `GET /search`、`GET /preview`、`GET /download`、`GET /sign`（返回签名 URL，供文本预览直连）。
+  还有 `POST /upload`（后端代理上传，备用 / 其他客户端）。
+  返回体匹配 VueFinder 的 `FsData`/`DirEntry` 形状。
 
-> 直传 vs 代理上传：默认推荐**前端直传**（后端只签 token），减轻 4G 机器带宽/内存压力；
-> 若需服务端校验/改名，再走代理上传。
+> **上传 = 前端直传七牛**（省后端流量）：`/upload-token` 下发**限定到具体 key、短时效**的上传凭证
+> （SecretKey 不出后端）+ 上传域名（v4/query 解析），浏览器 Uppy 直接 POST 到七牛，成功后 `/register`
+> 登记 path↔key。前端用 VueFinder 的 `customUploader`（`api/qiniuUploader.js`）接管 Uppy 实现。
+>
+> **预览/下载 = 302 重定向到签名 URL**（不经后端中转，省流量）：后端校验登录后 302 跳到
+> 七牛私有签名 URL，浏览器随后**直连七牛**取字节；下载用 `?attname=` 强制附件名。这两个 GET
+> 由浏览器 `<img>`/下载链接直接发起、带不上 Authorization 头，故支持 `?token=`
+> （`deps.get_current_user_flexible`）；前端 `QiniuDriver` 子类在 `getPreviewUrl/getDownloadUrl`
+> 追加 token。**文本在线预览/编辑**不能走 302（跨域重定向会把 Origin 变 null，命不中七牛 CORS），
+> 故 `QiniuDriver` 覆写 `getContent`：先 `GET /sign` 拿签名 URL，再**直连七牛** `fetch`（Origin 正常）。
+>
+> **需在七牛空间配置 CORS** 才能用文本预览（图片 `<img>`/下载不需要）：允许来源要**逐字匹配**
+> （`http://localhost:5173` 与 `http://127.0.0.1:5173` 是两个来源，按需各加；生产加 `https://dawnop.com`），
+> 方法 GET/HEAD。生产环境还需把私有空间**绑定自定义 HTTPS 域名**（测试域名 http 且限速，https 站点下混合内容会被拦）。
+> 七牛无压缩能力，archive/unarchive 已禁用。
 
 - 页面：`GET /api/pages/nav`（公开，导航项）、`GET /api/pages/{slug}`（公开）、
   `GET /api/pages/{slug}/articles`（公开，列表页文章分页）、`GET /api/pages/admin`（需鉴权，全部）、

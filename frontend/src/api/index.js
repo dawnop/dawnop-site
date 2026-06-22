@@ -49,24 +49,8 @@ export const articlesApi = {
   },
 }
 
-// ---- 文件 ----
-export const filesApi = {
-  list(page = 1, size = 20) {
-    return client.get('/files', { params: { page, size } })
-  },
-  // relativePath 用于文件夹导入：作为上传文件名携带相对路径
-  upload(file, relativePath) {
-    const form = new FormData()
-    form.append('file', file, relativePath || file.name)
-    return client.post('/files/upload', form)
-  },
-  url(id) {
-    return client.get(`/files/${id}/url`)
-  },
-  remove(id) {
-    return client.delete(`/files/${id}`)
-  },
-}
+// 文件管理改用 VueFinder + 其内置 RemoteDriver（见 api/vuefinderDriver.js），
+// 直接对接 /api/fm，不再走这里的 axios 封装。
 
 // ---- 页面 ----
 export const pagesApi = {

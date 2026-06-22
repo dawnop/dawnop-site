@@ -1,8 +1,13 @@
 <script setup>
-import { RouterLink, RouterView, useRouter } from 'vue-router'
+import { computed } from 'vue'
+import { RouterLink, RouterView, useRouter, useRoute } from 'vue-router'
 import { auth } from '../store/auth'
 
 const router = useRouter()
+const route = useRoute()
+
+// 文件管理用满铺布局（去掉内边距与最大宽度限制）
+const fluid = computed(() => route.name === 'admin-files')
 
 function logout() {
   auth.logout()
@@ -24,7 +29,7 @@ function logout() {
         <button class="logout" @click="logout">退出登录</button>
       </div>
     </aside>
-    <main class="content">
+    <main class="content" :class="{ fluid }">
       <RouterView />
     </main>
   </div>
@@ -95,5 +100,13 @@ function logout() {
   padding: 32px 40px;
   max-width: 900px;
   background: #fff;
+}
+.content.fluid {
+  padding: 0;
+  max-width: none;
+  /* 让子组件可按 100% 高度铺满 */
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 </style>
