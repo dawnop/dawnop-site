@@ -21,6 +21,16 @@ async function loadArticles(slug) {
   total.value = data.total
 }
 
+function setMeta(desc) {
+  let m = document.querySelector('meta[name="description"]')
+  if (!m) {
+    m = document.createElement('meta')
+    m.setAttribute('name', 'description')
+    document.head.appendChild(m)
+  }
+  m.setAttribute('content', desc || '')
+}
+
 async function load(slug) {
   loading.value = true
   notFound.value = false
@@ -29,6 +39,8 @@ async function load(slug) {
   try {
     const { data } = await pagesApi.get(slug)
     page.value = data
+    document.title = `${data.title} · dawnop`
+    setMeta(data.description)
     if (data.type === 'article_list') await loadArticles(slug)
   } catch (e) {
     notFound.value = true
@@ -55,6 +67,7 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
 
   <template v-else-if="page">
     <h1 class="page-title">{{ page.title }}</h1>
+    <p v-if="page.description" class="page-desc">{{ page.description }}</p>
 
     <!-- 内容页 -->
     <MarkdownView v-if="page.type === 'content'" :source="page.content" />
@@ -82,6 +95,12 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
 .page-title {
   font-size: 1.8rem;
   margin: 0 0 20px;
+}
+.page-desc {
+  margin: -12px 0 24px;
+  color: var(--muted);
+  font-size: 1.02rem;
+  line-height: 1.6;
 }
 .post-list {
   list-style: none;

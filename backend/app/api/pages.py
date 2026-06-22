@@ -57,6 +57,7 @@ def create_page(
         title=payload.title,
         slug=unique_slug(db, payload.slug or payload.title, _model=Page),
         type=payload.type,
+        description=payload.description,
         content=payload.content,
         nav_visible=payload.nav_visible,
         nav_order=payload.nav_order,

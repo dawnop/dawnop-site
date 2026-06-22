@@ -42,6 +42,8 @@ const crumbs = computed(() => {
     'admin-article-new': ['文章管理', '写文章'],
     'admin-article-edit': ['文章管理', '编辑文章'],
     'admin-pages': ['页面管理'],
+    'admin-page-new': ['页面管理', '新建页面'],
+    'admin-page-edit': ['页面管理', '编辑页面'],
     'admin-files': ['文件管理'],
   }
   return map[route.name] || []

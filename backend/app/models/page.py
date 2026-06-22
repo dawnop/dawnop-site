@@ -19,6 +19,7 @@ class Page(Base):
     title: Mapped[str] = mapped_column(String(255))
     slug: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     type: Mapped[str] = mapped_column(String(32), default="content")  # content | article_list
+    description: Mapped[str] = mapped_column(Text, default="")  # 页面摘要 / SEO 描述
     content: Mapped[str] = mapped_column(Text, default="")  # 仅内容页使用
     nav_visible: Mapped[bool] = mapped_column(Boolean, default=True)
     nav_order: Mapped[int] = mapped_column(Integer, default=0, index=True)

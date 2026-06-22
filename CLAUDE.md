@@ -91,7 +91,7 @@ dawnop-site/
   文件与**文件夹共用此表**（文件夹 `is_dir=True`、`key` 空），故空文件夹可持久化；
   七牛 `key` 是不透明 uuid，因此**重命名/移动只改 `path`（不动七牛对象）**，复制才真正复制七牛对象。
   本地只存元数据，文件本体在七牛私有空间。
-- **Page**：`id, title, slug(唯一), type, content, nav_visible, nav_order, created_at, updated_at`。
+- **Page**：`id, title, slug(唯一), type, description(摘要/SEO), content, nav_visible, nav_order, created_at, updated_at`。
   后台可管理的导航页面；`type` ∈ {`content`(Markdown 内容页), `article_list`(文章列表页, 充当分类)}。
   导航栏 = 固定「首页」+ `nav_visible` 的页面按 `nav_order` 排序。
 
