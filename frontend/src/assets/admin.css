@@ -210,3 +210,12 @@
   width: 22px;
   height: 22px;
 }
+
+/* md-editor 预览代码块默认是内置深色底（--md-theme-code-* 变量），覆盖成 github 浅色，
+   与前台文章页一致（语法着色由全局 github.css 提供）。特指度高于其 .md-editor .md-editor-preview。 */
+.admin .md-editor .md-editor-preview {
+  --md-theme-code-block-bg-color: #f6f8fa;
+  --md-theme-code-block-color: #24292f;
+  --md-theme-code-inline-bg-color: #f0f1f3;
+  --md-theme-code-inline-color: #24292f;
+}
