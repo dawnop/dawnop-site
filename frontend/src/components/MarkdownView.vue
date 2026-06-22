@@ -81,7 +81,8 @@ function enhance() {
     const a = document.createElement('a')
     a.className = 'heading-anchor'
     a.href = '#' + h.id
-    a.setAttribute('aria-label', '锚点')
+    a.title = '复制链接'
+    a.setAttribute('aria-label', '复制本节链接')
     a.textContent = '#'
     h.prepend(a)
   })
@@ -95,12 +96,18 @@ function enhance() {
   })
 }
 function onClick(e) {
-  // 标题锚点：本站是 hash 路由，裸 #id 跳转会冲掉路由，故拦截后用 JS 平滑滚动（不改 location.hash）
+  // 标题锚点：点击复制本节直达链接（/path#标题）到剪贴板并滚动过去，给「✓」反馈
   const anchor = e.target.closest('.heading-anchor')
   if (anchor) {
     e.preventDefault()
     const id = decodeURIComponent(anchor.getAttribute('href').slice(1))
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
+    const url =
+      location.origin + location.pathname + location.search + '#' + encodeURIComponent(id)
+    navigator.clipboard?.writeText(url).then(() => {
+      anchor.textContent = '✓'
+      setTimeout(() => (anchor.textContent = '#'), 1200)
+    })
     return
   }
   const btn = e.target.closest('.code-copy')

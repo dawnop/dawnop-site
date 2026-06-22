@@ -31,6 +31,7 @@ async function submit() {
 <template>
   <div class="login-page">
     <div class="login-card">
+      <img src="/logo.svg" alt="dawnop" class="login-logo" />
       <h1>dawnop 后台</h1>
       <form @submit.prevent="submit">
         <label for="u">用户名</label>
@@ -60,6 +61,12 @@ async function submit() {
   padding: 32px 28px;
   border-radius: 12px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+}
+.login-logo {
+  display: block;
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 12px;
 }
 .login-card h1 {
   margin: 0 0 18px;

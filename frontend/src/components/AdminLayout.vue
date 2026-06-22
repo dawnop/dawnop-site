@@ -69,7 +69,7 @@ function logout() {
         <button class="icon-btn" @click="toggle" :title="collapsed ? '展开' : '收起'">
           <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
         </button>
-        <span class="brand">dawnop 控制台</span>
+        <span class="brand"><img src="/logo.svg" alt="" class="brand-logo" />dawnop 控制台</span>
       </div>
       <div class="right">
         <a href="/" target="_blank" rel="noopener" class="topbar-link">查看站点 ↗</a>
@@ -143,9 +143,17 @@ function logout() {
   gap: 14px;
 }
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 700;
   font-size: 1.05rem;
   color: #1f2329;
+}
+.brand-logo {
+  width: 24px;
+  height: 24px;
+  display: block;
 }
 /* .topbar 前缀提高优先级，压过 admin.css 的 .admin button 基础样式 */
 .topbar .icon-btn {

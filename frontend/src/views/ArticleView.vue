@@ -12,11 +12,14 @@ const notFound = ref(false)
 const headings = ref([])
 const activeId = ref('')
 
+let hashHandled = false
+
 async function load(slug) {
   loading.value = true
   notFound.value = false
   article.value = null
   headings.value = []
+  hashHandled = false
   try {
     const { data } = await articlesApi.getBySlug(slug)
     article.value = data
@@ -40,7 +43,18 @@ const toc = computed(() => headings.value.filter((h) => h.level <= 3))
 
 function onHeadings(h) {
   headings.value = h
-  nextTick(updateActive)
+  nextTick(() => {
+    updateActive()
+    // 若是带 #标题 的分享链接首次进入，渲染完成后滚到对应标题
+    if (!hashHandled && location.hash) {
+      const id = decodeURIComponent(location.hash.slice(1))
+      const el = document.getElementById(id)
+      if (el) {
+        hashHandled = true
+        el.scrollIntoView()
+      }
+    }
+  })
 }
 
 // 滚动高亮当前章节
