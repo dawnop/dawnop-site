@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
-import { useRoute, useRouter, RouterLink } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { MdEditor } from 'md-editor-v3'
 import { articlesApi, pagesApi } from '../../api'
 import SettingsDrawer from '../../components/SettingsDrawer.vue'
@@ -85,10 +85,7 @@ async function save() {
 <template>
   <div class="edit-wrap">
     <div class="edit-topbar">
-      <div class="title-row">
-        <RouterLink to="/admin/articles" class="back" title="返回列表">←</RouterLink>
-        <input class="title-input" v-model="form.title" placeholder="文章标题" />
-      </div>
+      <h1 class="doc-title">{{ form.title || '未命名文章' }}</h1>
       <div class="actions">
         <span v-if="form.published" class="badge pub">已发布</span>
         <span v-else class="badge draft">草稿</span>
@@ -106,6 +103,9 @@ async function save() {
 
     <!-- 右侧设置抽屉 -->
     <SettingsDrawer v-model="showSettings" title="文章设置">
+      <label>标题</label>
+      <input v-model="form.title" placeholder="文章标题" />
+
       <label>Slug</label>
       <input v-model="form.slug" placeholder="url-friendly-slug" />
       <p class="field-hint">访问地址：<code>{{ slugPreview }}</code></p>
@@ -149,36 +149,15 @@ async function save() {
   gap: 12px;
   margin-bottom: 14px;
 }
-.title-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.doc-title {
   flex: 1;
   min-width: 0;
-}
-.back {
-  text-decoration: none;
+  margin: 0;
   font-size: 1.3rem;
-  color: var(--muted);
-  line-height: 1;
-}
-.back:hover {
-  color: var(--accent);
-}
-.title-input {
-  font-size: 1.25rem;
   font-weight: 600;
-  border: none;
-  padding: 4px 2px;
-  border-bottom: 1px solid transparent;
-  border-radius: 0;
-  width: 100%;
-  max-width: 560px;
-}
-.title-input:focus {
-  outline: none;
-  border-bottom-color: var(--accent);
-  box-shadow: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .actions {
   display: flex;

@@ -38,8 +38,8 @@ async function loadCounts() {
   counts.value = next
 }
 
-function newPage() {
-  router.push('/admin/pages/new')
+function newPage(type) {
+  router.push({ path: '/admin/pages/new', query: { type } })
 }
 function edit(p) {
   router.push(`/admin/pages/${p.id}/edit`)
@@ -79,7 +79,10 @@ onMounted(load)
   <div>
     <div class="page-head">
       <h1>页面管理</h1>
-      <button class="primary" @click="newPage">新建页面</button>
+      <div class="actions">
+        <button @click="newPage('content')">新建内容页</button>
+        <button class="primary" @click="newPage('article_list')">新建文章列表页</button>
+      </div>
     </div>
     <p class="hint">拖动行首 ⠿ 调整导航顺序；首页固定在最前，不在此列。</p>
 
