@@ -1,9 +1,10 @@
-import { createRouter, createWebHashHistory } from 'vue-router'
+import { createRouter, createWebHistory } from 'vue-router'
 import { auth } from '../store/auth'
 import PublicLayout from '../components/PublicLayout.vue'
 import AdminLayout from '../components/AdminLayout.vue'
 
-// 用 hash 路由：部署时无需为 SPA 配置 nginx try_files 回退。
+// history 路由：URL 干净（/article/x，利于 SEO 与分享）。
+// 代价：刷新/直达子路径需 nginx 把任意路径回退到 index.html（见 deploy/nginx.conf 的 try_files）。
 const routes = [
   {
     path: '/',
@@ -67,7 +68,7 @@ const routes = [
 ]
 
 const router = createRouter({
-  history: createWebHashHistory(),
+  history: createWebHistory(),
   routes,
   scrollBehavior() {
     return { top: 0 }
