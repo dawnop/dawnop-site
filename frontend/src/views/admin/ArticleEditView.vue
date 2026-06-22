@@ -1,8 +1,8 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, RouterLink } from 'vue-router'
+import { MdEditor } from 'md-editor-v3'
 import { articlesApi, pagesApi } from '../../api'
-import MarkdownView from '../../components/MarkdownView.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,12 +19,11 @@ const form = ref({
   page_id: null,
 })
 const listPages = ref([])
-const showPreview = ref(false)
+const showSettings = ref(false)
 const saving = ref(false)
 const error = ref('')
 
 onMounted(async () => {
-  // 可分配的列表页（充当分类）
   const { data: allPages } = await pagesApi.listAll()
   listPages.value = allPages.filter((p) => p.type === 'article_list')
 
@@ -44,6 +43,7 @@ onMounted(async () => {
 async function save() {
   if (!form.value.title.trim()) {
     error.value = '标题不能为空'
+    showSettings.value = true
     return
   }
   saving.value = true
@@ -64,12 +64,15 @@ async function save() {
 </script>
 
 <template>
-  <div>
-    <div class="toolbar">
-      <h1>{{ isEdit ? '编辑文章' : '写文章' }}</h1>
+  <div class="edit-wrap">
+    <div class="page-head">
+      <div class="title-row">
+        <RouterLink to="/admin/articles" class="back" title="返回列表">←</RouterLink>
+        <input class="title-input" v-model="form.title" placeholder="文章标题" />
+      </div>
       <div class="actions">
-        <button @click="showPreview = !showPreview">
-          {{ showPreview ? '编辑' : '预览' }}
+        <button @click="showSettings = !showSettings">
+          {{ showSettings ? '收起设置' : '文章设置' }}
         </button>
         <button class="primary" :disabled="saving" @click="save">
           {{ saving ? '保存中…' : '保存' }}
@@ -77,56 +80,88 @@ async function save() {
       </div>
     </div>
 
-    <label>标题</label>
-    <input v-model="form.title" placeholder="文章标题" />
-
-    <label>Slug（留空自动生成）</label>
-    <input v-model="form.slug" placeholder="url-friendly-slug" />
-
-    <label>所属列表页（分类，可不选）</label>
-    <select v-model="form.page_id">
-      <option :value="null">— 不分配 —</option>
-      <option v-for="p in listPages" :key="p.id" :value="p.id">{{ p.title }}</option>
-    </select>
-
-    <label>摘要</label>
-    <input v-model="form.summary" placeholder="一句话摘要（可选）" />
-
-    <label>正文（Markdown，支持 $LaTeX$）</label>
-    <MarkdownView v-if="showPreview" :source="form.content" class="preview-box" />
-    <textarea v-else v-model="form.content" rows="20" class="editor"></textarea>
-
-    <label class="checkbox">
-      <input type="checkbox" v-model="form.published" />
-      立即发布
-    </label>
-
     <p v-if="error" class="error">{{ error }}</p>
+
+    <!-- 可折叠：文章设置 -->
+    <div v-show="showSettings" class="card settings">
+      <div class="grid2">
+        <div>
+          <label>Slug（留空自动生成）</label>
+          <input v-model="form.slug" placeholder="url-friendly-slug" />
+        </div>
+        <div>
+          <label>所属列表页（分类，可不选）</label>
+          <select v-model="form.page_id">
+            <option :value="null">— 不分配 —</option>
+            <option v-for="p in listPages" :key="p.id" :value="p.id">{{ p.title }}</option>
+          </select>
+        </div>
+      </div>
+      <label>摘要</label>
+      <input v-model="form.summary" placeholder="一句话摘要（可选）" />
+      <label class="checkbox">
+        <input type="checkbox" v-model="form.published" />
+        立即发布
+      </label>
+    </div>
+
+    <!-- 核心：Markdown 编辑器 -->
+    <MdEditor
+      v-model="form.content"
+      language="zh-CN"
+      :preview="true"
+      class="editor"
+    />
   </div>
 </template>
 
 <style scoped>
-.toolbar {
+.edit-wrap {
+  display: flex;
+  flex-direction: column;
+}
+.title-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
 }
-.actions {
-  display: flex;
-  gap: 10px;
+.back {
+  text-decoration: none;
+  font-size: 1.3rem;
+  color: var(--muted);
+  line-height: 1;
 }
-.editor {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.9rem;
-  line-height: 1.6;
-  resize: vertical;
+.back:hover {
+  color: var(--accent);
 }
-.preview-box {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 16px;
-  min-height: 200px;
+.title-input {
+  font-size: 1.25rem;
+  font-weight: 600;
+  border: none;
+  padding: 4px 2px;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+  width: 100%;
+  max-width: 560px;
+}
+.title-input:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+  box-shadow: none;
+}
+.settings {
+  margin-bottom: 14px;
+}
+.settings .grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.settings label:first-child,
+.settings .grid2 label {
+  margin-top: 0;
 }
 .checkbox {
   display: flex;
@@ -137,8 +172,8 @@ async function save() {
 .checkbox input {
   width: auto;
 }
-.error {
-  color: #b91c1c;
-  margin-top: 12px;
+.editor {
+  height: calc(100vh - 210px);
+  min-height: 440px;
 }
 </style>

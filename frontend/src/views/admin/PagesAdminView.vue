@@ -84,46 +84,48 @@ onMounted(load)
 
 <template>
   <div>
-    <div class="toolbar">
+    <div class="page-head">
       <h1>页面管理</h1>
       <button class="primary" @click="newPage">新建页面</button>
     </div>
     <p class="hint">导航顺序即下表顺序；首页固定在最前，不在此列。</p>
 
-    <p v-if="error" class="error">{{ error }}</p>
-    <p v-else-if="loading" class="muted">加载中…</p>
-    <table v-else class="grid">
-      <thead>
-        <tr>
-          <th>标题</th>
-          <th>类型</th>
-          <th>路径</th>
-          <th>导航</th>
-          <th class="ops">操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="(p, i) in pages" :key="p.id">
-          <td>{{ p.title }}</td>
-          <td class="muted">{{ p.type === 'content' ? '内容页' : '文章列表' }}</td>
-          <td class="muted">/p/{{ p.slug }}</td>
-          <td>
-            <span :class="['badge', p.nav_visible ? 'on' : 'off']">
-              {{ p.nav_visible ? '显示' : '隐藏' }}
-            </span>
-          </td>
-          <td class="ops">
-            <a href="#" @click.prevent="move(i, -1)">↑</a>
-            <a href="#" @click.prevent="move(i, 1)">↓</a>
-            <a href="#" @click.prevent="edit(p)">编辑</a>
-            <a href="#" class="danger" @click.prevent="remove(p)">删除</a>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="card">
+      <p v-if="error" class="error">{{ error }}</p>
+      <p v-else-if="loading" class="muted">加载中…</p>
+      <table v-else class="data-grid">
+        <thead>
+          <tr>
+            <th>标题</th>
+            <th>类型</th>
+            <th>路径</th>
+            <th>导航</th>
+            <th class="ops">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="(p, i) in pages" :key="p.id">
+            <td>{{ p.title }}</td>
+            <td class="muted">{{ p.type === 'content' ? '内容页' : '文章列表' }}</td>
+            <td class="muted">/p/{{ p.slug }}</td>
+            <td>
+              <span :class="['badge', p.nav_visible ? 'on' : 'off']">
+                {{ p.nav_visible ? '显示' : '隐藏' }}
+              </span>
+            </td>
+            <td class="ops">
+              <a @click.prevent="move(i, -1)">↑</a>
+              <a @click.prevent="move(i, 1)">↓</a>
+              <a @click.prevent="edit(p)">编辑</a>
+              <a class="danger" @click.prevent="remove(p)">删除</a>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <!-- 编辑面板 -->
-    <div v-if="editing" class="editor">
+    <div v-if="editing" class="card editor">
       <div class="editor-head">
         <h2>{{ editing.id ? '编辑页面' : '新建页面' }}</h2>
         <div class="actions">
@@ -166,67 +168,11 @@ onMounted(load)
 </template>
 
 <style scoped>
-.toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
-}
 .hint {
-  color: #8b949e;
-  font-size: 0.85rem;
-  margin: 0 0 16px;
-}
-.error {
-  color: #b91c1c;
-}
-.grid {
-  width: 100%;
-  border-collapse: collapse;
-}
-.grid th,
-.grid td {
-  text-align: left;
-  padding: 10px 8px;
-  border-bottom: 1px solid var(--border);
-}
-.grid th {
-  font-size: 0.85rem;
-  color: var(--muted);
-  font-weight: 600;
-}
-.ops {
-  white-space: nowrap;
-}
-.ops a {
-  margin-right: 12px;
-  text-decoration: none;
-  font-size: 0.9rem;
-}
-.ops a.danger {
-  color: #b91c1c;
-}
-.badge {
-  font-size: 0.78rem;
-  padding: 2px 8px;
-  border-radius: 10px;
-}
-.badge.on {
-  background: #dcfce7;
-  color: #166534;
-}
-.badge.off {
-  background: #f1f5f9;
-  color: #64748b;
-}
-.muted {
-  color: #8b949e;
+  margin: -8px 0 16px;
 }
 .editor {
-  margin-top: 28px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 20px;
+  margin-top: 20px;
 }
 .editor-head {
   display: flex;
@@ -237,7 +183,7 @@ onMounted(load)
   margin: 0;
   font-size: 1.1rem;
 }
-.actions {
+.editor-head .actions {
   display: flex;
   gap: 10px;
 }

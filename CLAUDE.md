@@ -27,8 +27,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 鉴权 | OAuth2 Password + **JWT**（**PyJWT** + **bcrypt**） | 前后端分离用 token；PyJWT/bcrypt 比 python-jose/passlib 维护更活跃、依赖更少 |
 | 对象存储 | 七牛云 **Kodo**，官方 `qiniu` Python SDK | 需求指定 |
 | 前端框架 | **Vue 3 + Vite** | 简单、构建快、契合「简洁干净」 |
-| Markdown | `markdown-it` | 可扩展插件体系 |
-| LaTeX | **MathJax 3**（`markdown-it-mathjax3`） | 兼容性好、支持的 LaTeX 命令更全 |
+| Markdown | `markdown-it` | 文章页渲染（`MarkdownView`） |
+| Markdown 编辑器 | **md-editor-v3**（CodeMirror6 内核） | 后台写/编辑文章共用；分屏预览、工具栏、暗色 |
+| LaTeX | **KaTeX**（编辑器内置 + 文章页 `@mdit/plugin-katex`） | 编辑器与文章页同款渲染；本地实例(不依赖 CDN) |
 | 代码高亮 | `highlight.js` | 文章代码块 |
 | 文件管理 UI | **VueFinder 4**（内置 `RemoteDriver`） | 类资源管理器：文件夹树/面包屑/右键菜单/预览，后端无关 |
 | 部署 | **Nginx**（80 端口）+ systemd 托管 uvicorn | 4 核 4G 足够 |
@@ -66,7 +67,7 @@ dawnop-site/
 ├── frontend/
 │   ├── src/
 │   │   ├── views/               # Home, Article, Page(内容/列表); admin/{Login,Articles,ArticleEdit,Pages,Files(VueFinder)}
-│   │   ├── components/          # PublicLayout, AdminLayout, SiteHeader, MarkdownView(md+mathjax)
+│   │   ├── components/          # PublicLayout, AdminLayout, SiteHeader, MarkdownView(md+katex)
 │   │   ├── api/                 # axios 封装(统一带 token) + vuefinderDriver.js(QiniuDriver)
 │   │   ├── router/              # 公开路由 + 后台受保护路由
 │   │   └── store/               # 登录态

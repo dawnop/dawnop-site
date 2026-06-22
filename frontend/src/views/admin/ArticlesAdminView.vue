@@ -69,7 +69,6 @@ async function onImport(e) {
 }
 
 async function exportMd(a) {
-  // 导出接口需鉴权：用带 token 的请求取 blob 再触发下载
   const { data } = await articlesApi.exportMarkdown(a.id)
   const url = URL.createObjectURL(data)
   const link = document.createElement('a')
@@ -88,7 +87,7 @@ onMounted(load)
 
 <template>
   <div>
-    <div class="toolbar">
+    <div class="page-head">
       <h1>文章管理</h1>
       <div class="actions">
         <input ref="fileInput" type="file" accept=".md,text/markdown" hidden @change="onImport" />
@@ -99,82 +98,56 @@ onMounted(load)
       </div>
     </div>
 
-    <p v-if="error" class="error">{{ error }}</p>
-    <p v-else-if="loading" class="muted">加载中…</p>
-    <p v-else-if="items.length === 0" class="muted">还没有文章。</p>
+    <div class="card">
+      <p v-if="error" class="error">{{ error }}</p>
+      <p v-else-if="loading" class="muted">加载中…</p>
+      <p v-else-if="items.length === 0" class="empty">还没有文章。</p>
 
-    <table v-else class="grid">
-      <thead>
-        <tr>
-          <th>标题</th>
-          <th>链接</th>
-          <th>所属页面</th>
-          <th>状态</th>
-          <th>更新时间</th>
-          <th class="ops">操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="a in items" :key="a.id">
-          <td>{{ a.title }}</td>
-          <td class="link-cell">
-            <a v-if="a.published" :href="articleUrl(a.slug)" target="_blank" rel="noopener" :title="articleUrl(a.slug)">/article/{{ a.slug }}</a>
-            <span v-else class="muted" :title="'草稿未发布，前台不可见'">/article/{{ a.slug }}</span>
-          </td>
-          <td class="muted">{{ pageName(a.page_id) }}</td>
-          <td>
-            <span :class="['badge', a.published ? 'pub' : 'draft']">
-              {{ a.published ? '已发布' : '草稿' }}
-            </span>
-          </td>
-          <td class="muted">{{ fmtDate(a.updated_at) }}</td>
-          <td class="ops">
-            <RouterLink :to="`/admin/articles/${a.id}/edit`">编辑</RouterLink>
-            <a href="#" @click.prevent="togglePublish(a)">{{ a.published ? '转草稿' : '发布' }}</a>
-            <a href="#" @click.prevent="exportMd(a)">导出</a>
-            <a href="#" class="danger" @click.prevent="remove(a)">删除</a>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+      <table v-else class="data-grid">
+        <thead>
+          <tr>
+            <th>标题</th>
+            <th>链接</th>
+            <th>所属页面</th>
+            <th>状态</th>
+            <th>更新时间</th>
+            <th class="ops">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="a in items" :key="a.id">
+            <td>{{ a.title }}</td>
+            <td class="link-cell">
+              <a v-if="a.published" :href="articleUrl(a.slug)" target="_blank" rel="noopener" :title="articleUrl(a.slug)">/article/{{ a.slug }}</a>
+              <span v-else class="muted" :title="'草稿未发布，前台不可见'">/article/{{ a.slug }}</span>
+            </td>
+            <td class="muted">{{ pageName(a.page_id) }}</td>
+            <td>
+              <span :class="['badge', a.published ? 'pub' : 'draft']">
+                {{ a.published ? '已发布' : '草稿' }}
+              </span>
+            </td>
+            <td class="muted">{{ fmtDate(a.updated_at) }}</td>
+            <td class="ops">
+              <RouterLink :to="`/admin/articles/${a.id}/edit`">编辑</RouterLink>
+              <a @click.prevent="togglePublish(a)">{{ a.published ? '转草稿' : '发布' }}</a>
+              <a @click.prevent="exportMd(a)">导出</a>
+              <a class="danger" @click.prevent="remove(a)">删除</a>
+            </td>
+          </tr>
+        </tbody>
+      </table>
 
-    <div v-if="total > size" class="pager">
-      <button :disabled="page <= 1" @click="(page--, load())">上一页</button>
-      <span class="muted">第 {{ page }} 页</span>
-      <button :disabled="page * size >= total" @click="(page++, load())">下一页</button>
+      <div v-if="total > size" class="pager">
+        <button :disabled="page <= 1" @click="(page--, load())">上一页</button>
+        <span class="muted">第 {{ page }} 页</span>
+        <button :disabled="page * size >= total" @click="(page++, load())">下一页</button>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 18px;
-}
-.actions {
-  display: flex;
-  gap: 10px;
-}
-.grid {
-  width: 100%;
-  border-collapse: collapse;
-}
-.grid th,
-.grid td {
-  text-align: left;
-  padding: 10px 8px;
-  border-bottom: 1px solid var(--border);
-}
-.grid th {
-  font-size: 0.85rem;
-  color: var(--muted);
-  font-weight: 600;
-}
-.error {
-  color: #b91c1c;
-}
 .link-cell {
   font-size: 0.85rem;
   max-width: 220px;
@@ -184,39 +157,5 @@ onMounted(load)
 }
 .link-cell a {
   text-decoration: none;
-}
-.ops {
-  white-space: nowrap;
-}
-.ops a {
-  margin-right: 12px;
-  text-decoration: none;
-  font-size: 0.9rem;
-}
-.ops a.danger {
-  color: #b91c1c;
-}
-.badge {
-  font-size: 0.78rem;
-  padding: 2px 8px;
-  border-radius: 10px;
-}
-.badge.pub {
-  background: #dcfce7;
-  color: #166534;
-}
-.badge.draft {
-  background: #f1f5f9;
-  color: #64748b;
-}
-.muted {
-  color: #8b949e;
-}
-.pager {
-  display: flex;
-  gap: 14px;
-  align-items: center;
-  justify-content: center;
-  margin-top: 24px;
 }
 </style>

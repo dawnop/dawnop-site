@@ -1,0 +1,192 @@
+/* 后台（Ant Design Pro 亮色风）设计令牌与共享样式。
+   全部作用域限定在 .admin / .login-page，前台样式不受影响。 */
+
+.admin,
+.login-page {
+  --accent: #1677ff; /* Ant 主色 */
+  --accent-hover: #4096ff;
+  --accent-active: #0958d9;
+  --accent-soft: #e6f4ff; /* 选中项浅蓝底 */
+  --fg: #1f2329;
+  --muted: #8c8c8c;
+  --border: #f0f0f0; /* 分隔线 */
+  --border-strong: #d9d9d9; /* 控件边框 */
+  --layout-bg: #f0f2f5; /* 内容区底色 */
+  --container: #ffffff;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.04);
+  --danger: #cf1322;
+  --success: #389e0d;
+}
+
+/* ---- 控件（覆盖全局基础样式为 Ant 观感）---- */
+.admin button,
+.login-page button {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 15px;
+}
+.admin button:hover,
+.login-page button:hover {
+  border-color: var(--accent-hover);
+  color: var(--accent-hover);
+  background: #fff;
+}
+.admin button.primary,
+.login-page button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.admin button.primary:hover,
+.login-page button.primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #fff;
+}
+.admin button.danger {
+  color: var(--danger);
+  border-color: #ffccc7;
+  background: #fff;
+}
+.admin button.danger:hover {
+  background: #fff2f0;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.admin input,
+.admin textarea,
+.admin select,
+.login-page input {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 11px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.admin input:focus,
+.admin textarea:focus,
+.admin select:focus,
+.login-page input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.1);
+}
+
+/* ---- 卡片 ---- */
+.admin .card {
+  background: var(--container);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 20px 24px;
+}
+
+/* ---- 页头（标题 + 操作）---- */
+.admin .page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.admin .page-head h1 {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+.admin .page-head .actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* ---- 数据表格 ---- */
+.admin .data-grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+.admin .data-grid th,
+.admin .data-grid td {
+  text-align: left;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.admin .data-grid thead th {
+  background: #fafafa;
+  color: #595959;
+  font-weight: 600;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.admin .data-grid tbody tr:hover {
+  background: #fafcff;
+}
+.admin .data-grid tbody tr:last-child td {
+  border-bottom: none;
+}
+.admin .data-grid .ops {
+  white-space: nowrap;
+}
+.admin .data-grid .ops a {
+  margin-right: 14px;
+  text-decoration: none;
+  font-size: 0.9rem;
+  color: var(--accent);
+  cursor: pointer;
+}
+.admin .data-grid .ops a:last-child {
+  margin-right: 0;
+}
+.admin .data-grid .ops a.danger {
+  color: var(--danger);
+}
+
+/* ---- 徽章 ---- */
+.admin .badge {
+  display: inline-block;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  padding: 1px 9px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+.admin .badge.on,
+.admin .badge.pub {
+  background: #f6ffed;
+  color: var(--success);
+  border-color: #b7eb8f;
+}
+.admin .badge.off,
+.admin .badge.draft {
+  background: #fafafa;
+  color: #8c8c8c;
+  border-color: #d9d9d9;
+}
+
+/* ---- 杂项 ---- */
+.admin .muted {
+  color: var(--muted);
+}
+.admin .error {
+  color: var(--danger);
+}
+.admin .hint {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* ---- 空状态 ---- */
+.admin .empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 48px 0;
+}
+
+/* ---- 分页 ---- */
+.admin .pager {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 20px;
+}

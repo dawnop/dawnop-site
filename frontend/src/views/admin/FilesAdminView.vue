@@ -24,10 +24,10 @@ const features = { archive: false, unarchive: false }
 </template>
 
 <style scoped>
-/* 铺满右栏：撑满后台内容区的整高整宽 */
+/* 铺满右栏：撑满后台内容区剩余高度（顶栏之下） */
 .fm-wrap {
   flex: 1;
-  min-height: 100vh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }

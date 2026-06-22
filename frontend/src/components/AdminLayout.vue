@@ -1,13 +1,59 @@
 <script setup>
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { RouterLink, RouterView, useRouter, useRoute } from 'vue-router'
 import { auth } from '../store/auth'
 
 const router = useRouter()
 const route = useRoute()
 
-// 文件管理用满铺布局（去掉内边距与最大宽度限制）
+// 侧栏折叠态（持久化）
+const collapsed = ref(localStorage.getItem('dawnop_admin_collapsed') === '1')
+function toggle() {
+  collapsed.value = !collapsed.value
+  localStorage.setItem('dawnop_admin_collapsed', collapsed.value ? '1' : '0')
+}
+
+// 分组导航
+const groups = [
+  {
+    label: '内容',
+    items: [
+      { to: '/admin/articles', label: '文章管理', icon: 'doc' },
+      { to: '/admin/pages', label: '页面管理', icon: 'layers' },
+    ],
+  },
+  {
+    label: '存储',
+    items: [{ to: '/admin/files', label: '文件管理', icon: 'folder' }],
+  },
+]
+
+// 行内 SVG 图标（描边风，折叠态只显示图标）
+const icons = {
+  doc: `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M6 2h9l5 5v15H6z" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M14 2v6h6" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>`,
+  layers: `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 3l9 5-9 5-9-5 9-5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M3 13l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
+  folder: `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 6h6l2 2h10v11H3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
+}
+
+// 面包屑
+const crumbs = computed(() => {
+  const map = {
+    'admin-articles': ['文章管理'],
+    'admin-article-new': ['文章管理', '写文章'],
+    'admin-article-edit': ['文章管理', '编辑文章'],
+    'admin-pages': ['页面管理'],
+    'admin-files': ['文件管理'],
+  }
+  return map[route.name] || []
+})
+
+// 文件管理满铺（无面包屑、无内边距）
 const fluid = computed(() => route.name === 'admin-files')
+
+// 当前分区高亮（含子路由，如 /admin/articles/new 仍高亮“文章管理”）
+function isActive(to) {
+  return route.path === to || route.path.startsWith(to + '/')
+}
 
 function logout() {
   auth.logout()
@@ -16,97 +62,238 @@ function logout() {
 </script>
 
 <template>
-  <div class="admin">
-    <aside class="sidebar">
-      <div class="brand">dawnop 后台</div>
-      <nav>
-        <RouterLink to="/admin/articles">文章管理</RouterLink>
-        <RouterLink to="/admin/pages">页面管理</RouterLink>
-        <RouterLink to="/admin/files">文件管理</RouterLink>
-      </nav>
-      <div class="bottom">
-        <a href="/" target="_blank" rel="noopener" class="view-site">查看站点 ↗</a>
+  <div class="admin" :class="{ collapsed }">
+    <!-- 顶栏 -->
+    <header class="topbar">
+      <div class="left">
+        <button class="icon-btn" @click="toggle" :title="collapsed ? '展开' : '收起'">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        </button>
+        <span class="brand">dawnop 控制台</span>
+      </div>
+      <div class="right">
+        <a href="/" target="_blank" rel="noopener" class="topbar-link">查看站点 ↗</a>
+        <span class="account">管理员</span>
         <button class="logout" @click="logout">退出登录</button>
       </div>
-    </aside>
-    <main class="content" :class="{ fluid }">
-      <RouterView />
-    </main>
+    </header>
+
+    <div class="body">
+      <!-- 侧栏 -->
+      <aside class="sidebar">
+        <nav>
+          <div v-for="g in groups" :key="g.label" class="group">
+            <div class="group-label">{{ g.label }}</div>
+            <RouterLink
+              v-for="it in g.items"
+              :key="it.to"
+              :to="it.to"
+              class="nav-item"
+              :class="{ active: isActive(it.to) }"
+              :title="it.label"
+            >
+              <span class="ico" v-html="icons[it.icon]"></span>
+              <span class="txt">{{ it.label }}</span>
+            </RouterLink>
+          </div>
+        </nav>
+      </aside>
+
+      <!-- 主区 -->
+      <main class="main" :class="{ fluid }">
+        <nav v-if="!fluid && crumbs.length" class="breadcrumb">
+          <RouterLink to="/admin/articles">首页</RouterLink>
+          <template v-for="(c, i) in crumbs" :key="i">
+            <span class="sep">/</span><span class="crumb">{{ c }}</span>
+          </template>
+        </nav>
+        <div class="view" :class="{ fluid }">
+          <RouterView />
+        </div>
+      </main>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .admin {
-  display: flex;
   min-height: 100vh;
-}
-.sidebar {
-  width: 210px;
-  flex-shrink: 0;
-  background: #0f172a;
-  color: #cbd5e1;
   display: flex;
   flex-direction: column;
-  padding: 20px 0;
+  background: var(--layout-bg);
+}
+
+/* 顶栏 */
+.topbar {
+  height: 56px;
+  flex-shrink: 0;
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.topbar .left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
 .brand {
   font-weight: 700;
-  color: #fff;
-  padding: 4px 20px 20px;
   font-size: 1.05rem;
+  color: #1f2329;
 }
-.sidebar nav {
+.icon-btn {
+  border: none;
+  background: transparent;
+  padding: 6px;
+  border-radius: 6px;
+  color: #595959;
+  display: inline-flex;
+}
+.icon-btn:hover {
+  background: #f0f2f5;
+  color: var(--accent);
+}
+.topbar .right {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 16px;
 }
-.sidebar nav a {
-  color: #cbd5e1;
+.topbar-link {
+  color: var(--muted);
+  font-size: 0.88rem;
   text-decoration: none;
-  padding: 11px 20px;
-  font-size: 0.95rem;
 }
-.sidebar nav a:hover {
-  background: #1e293b;
-  color: #fff;
+.topbar-link:hover {
+  color: var(--accent);
 }
-.sidebar nav a.router-link-active {
-  background: #1e293b;
-  color: #fff;
-  box-shadow: inset 3px 0 0 #2563eb;
-}
-.bottom {
-  margin-top: auto;
-  padding: 16px 20px 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.view-site {
-  color: #94a3b8;
-  font-size: 0.85rem;
-  text-decoration: none;
+.account {
+  font-size: 0.9rem;
+  color: #1f2329;
 }
 .logout {
-  background: transparent;
-  border: 1px solid #334155;
-  color: #cbd5e1;
+  padding: 5px 12px;
+  font-size: 0.88rem;
 }
-.logout:hover {
-  background: #1e293b;
-  border-color: #475569;
-}
-.content {
+
+.body {
   flex: 1;
-  padding: 32px 40px;
-  max-width: 900px;
-  background: #fff;
+  display: flex;
+  min-height: 0;
 }
-.content.fluid {
-  padding: 0;
-  max-width: none;
-  /* 让子组件可按 100% 高度铺满 */
+
+/* 侧栏 */
+.sidebar {
+  width: 208px;
+  flex-shrink: 0;
+  background: #fff;
+  border-right: 1px solid var(--border);
+  padding: 12px 0;
+  transition: width 0.18s ease;
+  overflow: hidden;
+}
+.admin.collapsed .sidebar {
+  width: 60px;
+}
+.group {
+  margin-bottom: 8px;
+}
+.group-label {
+  font-size: 0.72rem;
+  color: #b0b3b8;
+  padding: 8px 20px 4px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.admin.collapsed .group-label {
+  visibility: hidden;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  color: #4e5969;
+  text-decoration: none;
+  font-size: 0.95rem;
+  border-left: 3px solid transparent;
+  white-space: nowrap;
+}
+.nav-item .ico {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: #86909c;
+}
+.nav-item:hover {
+  background: #f7f8fa;
+  color: var(--accent);
+}
+.nav-item:hover .ico {
+  color: var(--accent);
+}
+.nav-item.router-link-active,
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-left-color: var(--accent);
+  font-weight: 500;
+}
+.nav-item.router-link-active .ico,
+.nav-item.active .ico {
+  color: var(--accent);
+}
+.admin.collapsed .nav-item .txt {
+  display: none;
+}
+.admin.collapsed .nav-item {
+  justify-content: center;
+  padding: 10px 0;
+  gap: 0;
+}
+
+/* 主区 */
+.main {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  min-width: 0;
+}
+.breadcrumb {
+  padding: 14px 28px 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.breadcrumb a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.breadcrumb a:hover {
+  color: var(--accent);
+}
+.breadcrumb .sep {
+  margin: 0 8px;
+  color: #c9cdd4;
+}
+.breadcrumb .crumb {
+  color: #1f2329;
+}
+.view {
+  padding: 20px 28px 32px;
+}
+/* 文件管理满铺 */
+.main.fluid {
+  min-height: 0;
+}
+.view.fluid {
+  flex: 1;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 </style>

@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import MarkdownIt from 'markdown-it'
-import mathjax3 from 'markdown-it-mathjax3'
+import { katex } from '@mdit/plugin-katex'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github.css'
 
@@ -9,7 +9,7 @@ const props = defineProps({
   source: { type: String, default: '' },
 })
 
-// markdown-it + MathJax 3（LaTeX）+ highlight.js（代码高亮）
+// markdown-it + KaTeX（LaTeX，与后台编辑器同款）+ highlight.js（代码高亮）
 const md = new MarkdownIt({
   html: false,
   linkify: true,
@@ -28,7 +28,7 @@ const md = new MarkdownIt({
     }
     return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>'
   },
-}).use(mathjax3)
+}).use(katex)
 
 const html = computed(() => md.render(props.source || ''))
 </script>
