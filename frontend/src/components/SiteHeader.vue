@@ -19,7 +19,10 @@ onMounted(async () => {
 <template>
   <header class="site-header">
     <div class="inner">
-      <RouterLink to="/" class="brand">dawnop</RouterLink>
+      <RouterLink to="/" class="brand">
+        <img src="/logo.svg" alt="dawnop" class="logo" />
+        <span>dawnop</span>
+      </RouterLink>
       <nav class="nav">
         <RouterLink to="/">首页</RouterLink>
         <RouterLink v-for="p in navPages" :key="p.id" :to="`/p/${p.slug}`">
@@ -33,7 +36,11 @@ onMounted(async () => {
 <style scoped>
 .site-header {
   border-bottom: 1px solid #ebedf0;
-  background: #fff;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: saturate(180%) blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: 50;
 }
 .inner {
   max-width: 820px;
@@ -45,11 +52,19 @@ onMounted(async () => {
   justify-content: space-between;
 }
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
   font-weight: 700;
   font-size: 1.2rem;
   color: #1a1a1a;
   text-decoration: none;
   letter-spacing: 0.5px;
+}
+.brand .logo {
+  width: 28px;
+  height: 28px;
+  display: block;
 }
 .nav {
   display: flex;
