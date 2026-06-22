@@ -98,6 +98,8 @@ def create_article(
         published=payload.published,
         page_id=payload.page_id,
     )
+    if payload.created_at is not None:
+        article.created_at = payload.created_at
     db.add(article)
     db.commit()
     db.refresh(article)
@@ -113,6 +115,10 @@ def update_article(
 ):
     article = _get_or_404(db, article_id)
     data = payload.model_dump(exclude_unset=True)
+
+    # created_at 显式传 null 时忽略，避免把发布时间清空
+    if data.get("created_at") is None:
+        data.pop("created_at", None)
 
     if "slug" in data:
         # 显式传 slug（含空串）时重算唯一 slug；以 slug 优先，否则用新/旧标题

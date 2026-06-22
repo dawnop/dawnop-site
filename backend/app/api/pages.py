@@ -62,6 +62,8 @@ def create_page(
         nav_visible=payload.nav_visible,
         nav_order=payload.nav_order,
     )
+    if payload.created_at is not None:
+        page.created_at = payload.created_at
     db.add(page)
     db.commit()
     db.refresh(page)
@@ -91,6 +93,8 @@ def update_page(
 ):
     page = _get_or_404(db, page_id)
     data = payload.model_dump(exclude_unset=True)
+    if data.get("created_at") is None:
+        data.pop("created_at", None)
     if "slug" in data:
         base = data["slug"] or data.get("title") or page.title
         page.slug = unique_slug(db, base, exclude_id=page.id, _model=Page)
