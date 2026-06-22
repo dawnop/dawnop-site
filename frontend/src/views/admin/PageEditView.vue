@@ -77,6 +77,10 @@ onMounted(async () => {
     publishAt.value = toLocalInput(p.created_at)
     originalType.value = p.type
     if (p.type === 'article_list') loadCategoryArticles(p.slug)
+  } else {
+    // 新建：类型由列表页的两个「新建」按钮决定（?type=content|article_list），新建时不可切换
+    const t = route.query.type
+    if (t === 'content' || t === 'article_list') form.value.type = t
   }
 })
 
@@ -121,10 +125,7 @@ async function save() {
 <template>
   <div class="edit-wrap">
     <div class="edit-topbar">
-      <div class="title-row">
-        <RouterLink to="/admin/pages" class="back" title="返回列表">←</RouterLink>
-        <input class="title-input" v-model="form.title" placeholder="页面标题" />
-      </div>
+      <h1 class="doc-title">{{ form.title || '未命名页面' }}</h1>
       <div class="actions">
         <span class="badge">{{ isList ? '文章列表页' : '内容页' }}</span>
         <button @click="showSettings = true">设置</button>
@@ -167,11 +168,20 @@ async function save() {
 
     <!-- 右侧设置抽屉 -->
     <SettingsDrawer v-model="showSettings" title="页面设置">
+      <label>标题</label>
+      <input v-model="form.title" placeholder="页面标题" />
+
       <label>类型</label>
-      <select v-model="form.type">
+      <select v-if="isEdit" v-model="form.type">
         <option value="content">内容页（Markdown）</option>
         <option value="article_list">文章列表页（充当分类）</option>
       </select>
+      <input
+        v-else
+        :value="isList ? '文章列表页（充当分类）' : '内容页（Markdown）'"
+        disabled
+      />
+      <p v-if="!isEdit" class="field-hint">由新建入口决定，新建时不可切换。</p>
 
       <label>路径 slug</label>
       <input v-model="form.slug" placeholder="url-friendly-slug" />
@@ -210,36 +220,15 @@ async function save() {
   gap: 12px;
   margin-bottom: 14px;
 }
-.title-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.doc-title {
   flex: 1;
   min-width: 0;
-}
-.back {
-  text-decoration: none;
+  margin: 0;
   font-size: 1.3rem;
-  color: var(--muted);
-  line-height: 1;
-}
-.back:hover {
-  color: var(--accent);
-}
-.title-input {
-  font-size: 1.25rem;
   font-weight: 600;
-  border: none;
-  padding: 4px 2px;
-  border-bottom: 1px solid transparent;
-  border-radius: 0;
-  width: 100%;
-  max-width: 560px;
-}
-.title-input:focus {
-  outline: none;
-  border-bottom-color: var(--accent);
-  box-shadow: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .actions {
   display: flex;

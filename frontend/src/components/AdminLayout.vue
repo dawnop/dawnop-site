@@ -35,16 +35,16 @@ const icons = {
   folder: `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 6h6l2 2h10v11H3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
 }
 
-// 面包屑
+// 面包屑：带 to 的可点击跳转（用于编辑页返回列表），末项为当前页不带链接
 const crumbs = computed(() => {
   const map = {
-    'admin-articles': ['文章管理'],
-    'admin-article-new': ['文章管理', '写文章'],
-    'admin-article-edit': ['文章管理', '编辑文章'],
-    'admin-pages': ['页面管理'],
-    'admin-page-new': ['页面管理', '新建页面'],
-    'admin-page-edit': ['页面管理', '编辑页面'],
-    'admin-files': ['文件管理'],
+    'admin-articles': [{ label: '文章管理' }],
+    'admin-article-new': [{ label: '文章管理', to: '/admin/articles' }, { label: '写文章' }],
+    'admin-article-edit': [{ label: '文章管理', to: '/admin/articles' }, { label: '编辑文章' }],
+    'admin-pages': [{ label: '页面管理' }],
+    'admin-page-new': [{ label: '页面管理', to: '/admin/pages' }, { label: '新建页面' }],
+    'admin-page-edit': [{ label: '页面管理', to: '/admin/pages' }, { label: '编辑页面' }],
+    'admin-files': [{ label: '文件管理' }],
   }
   return map[route.name] || []
 })
@@ -104,9 +104,10 @@ function logout() {
       <!-- 主区 -->
       <main class="main" :class="{ fluid }">
         <nav v-if="!fluid && crumbs.length" class="breadcrumb">
-          <RouterLink to="/admin/articles">首页</RouterLink>
           <template v-for="(c, i) in crumbs" :key="i">
-            <span class="sep">/</span><span class="crumb">{{ c }}</span>
+            <span v-if="i > 0" class="sep">/</span>
+            <RouterLink v-if="c.to" :to="c.to">{{ c.label }}</RouterLink>
+            <span v-else class="crumb">{{ c.label }}</span>
           </template>
         </nav>
         <div class="view" :class="{ fluid }">
