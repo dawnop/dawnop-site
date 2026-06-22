@@ -65,10 +65,27 @@ def list_published(
 def list_all(
     page: int = Query(1, ge=1),
     size: int = Query(10, ge=1, le=100),
+    published: bool | None = Query(None, description="按状态筛选：true=已发布 false=草稿 省略=全部"),
+    page_id: int | None = Query(None, description="按所属列表页筛选"),
+    q: str | None = Query(None, description="按标题模糊搜索"),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    return _paginate(db, page, size, published_only=False)
+    query = db.query(Article)
+    if published is not None:
+        query = query.filter(Article.published.is_(published))
+    if page_id is not None:
+        query = query.filter(Article.page_id == page_id)
+    if q:
+        query = query.filter(Article.title.ilike(f"%{q}%"))
+    total = query.count()
+    items = (
+        query.order_by(Article.created_at.desc())
+        .offset((page - 1) * size)
+        .limit(size)
+        .all()
+    )
+    return {"total": total, "page": page, "size": size, "items": items}
 
 
 @router.get("/admin/{article_id}", response_model=ArticleOut)

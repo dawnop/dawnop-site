@@ -22,8 +22,14 @@ export const articlesApi = {
   getBySlug(slug) {
     return client.get(`/articles/${slug}`)
   },
-  listAll(page = 1, size = 20) {
-    return client.get('/articles/admin', { params: { page, size } })
+  listAll(page = 1, size = 20, filters = {}) {
+    const params = { page, size }
+    if (filters.published !== undefined && filters.published !== null)
+      params.published = filters.published
+    if (filters.page_id !== undefined && filters.page_id !== null)
+      params.page_id = filters.page_id
+    if (filters.q) params.q = filters.q
+    return client.get('/articles/admin', { params })
   },
   getForEdit(id) {
     return client.get(`/articles/admin/${id}`)

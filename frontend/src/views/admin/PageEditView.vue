@@ -28,7 +28,6 @@ const error = ref('')
 const catArticles = ref([])
 const catTotal = ref(0)
 const catLoaded = ref(false)
-const originalType = ref(null) // 进入编辑时的类型，用于切换类型的安全提示
 
 const isList = computed(() => form.value.type === 'article_list')
 const slugPreview = computed(() => {
@@ -75,12 +74,12 @@ onMounted(async () => {
       nav_visible: p.nav_visible,
     }
     publishAt.value = toLocalInput(p.created_at)
-    originalType.value = p.type
     if (p.type === 'article_list') loadCategoryArticles(p.slug)
   } else {
-    // 新建：类型由列表页的两个「新建」按钮决定（?type=content|article_list），新建时不可切换
+    // 新建：类型由列表页的两个「新建」按钮决定（?type=content|article_list），且不可再转换
     const t = route.query.type
     if (t === 'content' || t === 'article_list') form.value.type = t
+    showSettings.value = true // 新建默认展开设置抽屉（标题等在抽屉内）
   }
 })
 
@@ -89,19 +88,6 @@ async function save() {
     error.value = '标题不能为空'
     showSettings.value = true
     return
-  }
-  // 安全提示：从「文章列表页」改成「内容页」且栏目下有文章时，提醒前台将不再展示（数据保留、可逆）
-  if (
-    isEdit.value &&
-    originalType.value === 'article_list' &&
-    form.value.type === 'content' &&
-    catTotal.value > 0
-  ) {
-    const ok = confirm(
-      `本栏目下有 ${catTotal.value} 篇文章，切换为内容页后前台将不再展示它们` +
-        `（数据保留，切回「文章列表页」即可恢复）。确定切换？`
-    )
-    if (!ok) return
   }
   saving.value = true
   error.value = ''
@@ -172,16 +158,8 @@ async function save() {
       <input v-model="form.title" placeholder="页面标题" />
 
       <label>类型</label>
-      <select v-if="isEdit" v-model="form.type">
-        <option value="content">内容页（Markdown）</option>
-        <option value="article_list">文章列表页（充当分类）</option>
-      </select>
-      <input
-        v-else
-        :value="isList ? '文章列表页（充当分类）' : '内容页（Markdown）'"
-        disabled
-      />
-      <p v-if="!isEdit" class="field-hint">由新建入口决定，新建时不可切换。</p>
+      <input :value="isList ? '文章列表页（充当分类）' : '内容页（Markdown）'" disabled />
+      <p class="field-hint">类型在创建时确定，不可转换。</p>
 
       <label>路径 slug</label>
       <input v-model="form.slug" placeholder="url-friendly-slug" />

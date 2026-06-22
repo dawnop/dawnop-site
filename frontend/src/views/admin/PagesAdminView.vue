@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import draggable from 'vuedraggable'
 import { pagesApi } from '../../api'
 
 const router = useRouter()
@@ -55,20 +56,9 @@ function fmtDate(s) {
   return new Date(s).toLocaleDateString('zh-CN')
 }
 
-// 拖拽排序
-const dragIndex = ref(null)
-function onDragStart(i) {
-  dragIndex.value = i
-}
-async function onDrop(i) {
-  const from = dragIndex.value
-  dragIndex.value = null
-  if (from === null || from === i) return
-  const arr = pages.value.slice()
-  const [moved] = arr.splice(from, 1)
-  arr.splice(i, 0, moved)
-  pages.value = arr
-  const { data } = await pagesApi.reorder(arr.map((p) => p.id))
+// 拖拽排序：vuedraggable(SortableJS) 提供平滑动画/手柄/占位，拖完提交顺序
+async function onReorderEnd() {
+  const { data } = await pagesApi.reorder(pages.value.map((p) => p.id))
   pages.value = data
 }
 
@@ -103,40 +93,37 @@ onMounted(load)
             <th class="ops">操作</th>
           </tr>
         </thead>
-        <tbody>
-          <tr
-            v-for="(p, i) in pages"
-            :key="p.id"
-            :class="{ dragging: dragIndex === i }"
-            @dragover.prevent
-            @drop="onDrop(i)"
-          >
-            <td
-              class="drag-handle"
-              draggable="true"
-              title="拖动排序"
-              @dragstart="onDragStart(i)"
-            >
-              ⠿
-            </td>
-            <td>{{ p.title }}</td>
-            <td class="muted">{{ p.type === 'content' ? '内容页' : '文章列表' }}</td>
-            <td class="muted">/p/{{ p.slug }}</td>
-            <td class="muted">
-              {{ p.type === 'article_list' ? (counts[p.id] ?? '…') : '—' }}
-            </td>
-            <td>
-              <span :class="['badge', p.nav_visible ? 'on' : 'off']">
-                {{ p.nav_visible ? '显示' : '隐藏' }}
-              </span>
-            </td>
-            <td class="muted">{{ fmtDate(p.updated_at) }}</td>
-            <td class="ops">
-              <a @click.prevent="edit(p)">编辑</a>
-              <a class="danger" @click.prevent="remove(p)">删除</a>
-            </td>
-          </tr>
-        </tbody>
+        <draggable
+          v-model="pages"
+          tag="tbody"
+          item-key="id"
+          handle=".drag-handle"
+          animation="180"
+          ghost-class="drag-ghost"
+          @end="onReorderEnd"
+        >
+          <template #item="{ element: p }">
+            <tr>
+              <td class="drag-handle" title="拖动排序">⠿</td>
+              <td>{{ p.title }}</td>
+              <td class="muted">{{ p.type === 'content' ? '内容页' : '文章列表' }}</td>
+              <td class="muted">/p/{{ p.slug }}</td>
+              <td class="muted">
+                {{ p.type === 'article_list' ? (counts[p.id] ?? '…') : '—' }}
+              </td>
+              <td>
+                <span :class="['badge', p.nav_visible ? 'on' : 'off']">
+                  {{ p.nav_visible ? '显示' : '隐藏' }}
+                </span>
+              </td>
+              <td class="muted">{{ fmtDate(p.updated_at) }}</td>
+              <td class="ops">
+                <a @click.prevent="edit(p)">编辑</a>
+                <a class="danger" @click.prevent="remove(p)">删除</a>
+              </td>
+            </tr>
+          </template>
+        </draggable>
       </table>
     </div>
   </div>
@@ -158,7 +145,9 @@ onMounted(load)
 .drag-handle:active {
   cursor: grabbing;
 }
-.dragging {
+/* SortableJS 拖拽占位行样式 */
+.drag-ghost {
   opacity: 0.5;
+  background: var(--accent-soft);
 }
 </style>
