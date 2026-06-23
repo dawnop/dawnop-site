@@ -1,9 +1,14 @@
 import { createApp } from 'vue'
+import ElementPlus from 'element-plus'
+import zhCnLocale from 'element-plus/es/locale/lang/zh-cn'
+import * as ElIcons from '@element-plus/icons-vue'
 import { VueFinderPlugin } from 'vuefinder'
 import zhCN from 'vuefinder/dist/locales/zhCN.js'
 import { config as mdConfig } from 'md-editor-v3'
 import katexLib from 'katex'
 import hljs from 'highlight.js'
+import 'element-plus/dist/index.css'
+import './assets/element-theme.css'
 import './style.css'
 import './assets/admin.css'
 import 'vuefinder/dist/vuefinder.css'
@@ -29,7 +34,15 @@ mdConfig({
 
 // VueFinder 组件依赖插件 provide 的 VueFinderOptions（含 i18n/locale），必须 use；
 // 注册中文语言包并设为默认。
-createApp(App)
+const app = createApp(App)
+
+// 全量注册 Element Plus 图标为全局组件（<el-icon><Search/></el-icon> 用法）
+for (const [name, comp] of Object.entries(ElIcons)) {
+  app.component(name, comp)
+}
+
+app
   .use(router)
+  .use(ElementPlus, { locale: zhCnLocale })
   .use(VueFinderPlugin, { i18n: { zhCN }, locale: 'zhCN' })
   .mount('#app')

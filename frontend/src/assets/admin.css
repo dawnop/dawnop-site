@@ -20,59 +20,8 @@
   --success: #389e0d;
 }
 
-/* ---- 控件（覆盖全局基础样式为 Ant 观感）----
-   用 :not() 排除 md-editor-v3 / VueFinder 内部控件，避免污染它们自带的
-   工具栏图标按钮、底栏、表单等（否则图标按钮被撑成大方块、横向溢出）。 */
-.admin button:not(.md-editor *, .vuefinder *),
-.login-page button {
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 6px 15px;
-}
-.admin button:not(.md-editor *, .vuefinder *):hover,
-.login-page button:hover {
-  border-color: var(--accent-hover);
-  color: var(--accent-hover);
-  background: #fff;
-}
-.admin button.primary,
-.login-page button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-.admin button.primary:hover,
-.login-page button.primary:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-  color: #fff;
-}
-.admin button.danger {
-  color: var(--danger);
-  border-color: #ffccc7;
-  background: #fff;
-}
-.admin button.danger:hover {
-  background: #fff2f0;
-  border-color: var(--danger);
-  color: var(--danger);
-}
-.admin input:not(.md-editor *, .vuefinder *),
-.admin textarea:not(.md-editor *, .vuefinder *),
-.admin select:not(.md-editor *, .vuefinder *),
-.login-page input {
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 7px 11px;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-.admin input:not(.md-editor *, .vuefinder *):focus,
-.admin textarea:not(.md-editor *, .vuefinder *):focus,
-.admin select:not(.md-editor *, .vuefinder *):focus,
-.login-page input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.1);
-}
+/* 原生控件样式已交由 Element Plus 接管（el-button / el-input / el-form 等），
+   不再在此覆盖，避免高特指度规则压过 .el-* 组件。md-editor / VueFinder 自带样式。 */
 
 /* ---- 卡片 ---- */
 .admin .card {

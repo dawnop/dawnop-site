@@ -76,7 +76,7 @@ function onScroll() {
   })
 }
 function goTo(id) {
-  // hash 路由下不能改 location.hash（会冲掉 /#/article/slug 路由），仅平滑滚动
+  // 仅平滑滚动，不改 location.hash（避免与 history 路由相互干扰）
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
 }
 
@@ -115,8 +115,17 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
       </ul>
     </aside>
 
-    <p v-if="loading" class="muted">加载中…</p>
-    <p v-else-if="notFound" class="muted">文章不存在或未发布。</p>
+    <el-skeleton v-if="loading" :rows="8" animated />
+    <el-result
+      v-else-if="notFound"
+      icon="warning"
+      title="文章不存在或未发布"
+      sub-title="该文章可能已被删除、转为草稿或地址有误"
+    >
+      <template #extra>
+        <el-button type="primary" @click="$router.push('/')">返回首页</el-button>
+      </template>
+    </el-result>
   </div>
 </template>
 

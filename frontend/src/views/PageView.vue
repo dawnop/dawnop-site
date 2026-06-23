@@ -62,8 +62,17 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
 </script>
 
 <template>
-  <p v-if="loading" class="muted">加载中…</p>
-  <p v-else-if="notFound" class="muted">页面不存在。</p>
+  <el-skeleton v-if="loading" :rows="6" animated />
+  <el-result
+    v-else-if="notFound"
+    icon="warning"
+    title="页面不存在"
+    sub-title="该页面可能已被删除或地址有误"
+  >
+    <template #extra>
+      <el-button type="primary" @click="$router.push('/')">返回首页</el-button>
+    </template>
+  </el-result>
 
   <template v-else-if="page">
     <h1 class="page-title">{{ page.title }}</h1>
@@ -74,7 +83,7 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
 
     <!-- 文章列表页 -->
     <template v-else>
-      <p v-if="items.length === 0" class="muted">该栏目下还没有文章。</p>
+      <el-empty v-if="items.length === 0" description="该栏目下还没有文章" />
       <ul v-else class="post-list">
         <li v-for="a in items" :key="a.id" class="post">
           <RouterLink :to="`/article/${a.slug}`" class="post-title">{{ a.title }}</RouterLink>
@@ -83,9 +92,14 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
         </li>
       </ul>
       <div v-if="total > size" class="pager">
-        <button :disabled="pageNum <= 1" @click="go(pageNum - 1)">上一页</button>
-        <span class="muted">第 {{ pageNum }} 页</span>
-        <button :disabled="pageNum * size >= total" @click="go(pageNum + 1)">下一页</button>
+        <el-pagination
+          background
+          layout="prev, pager, next"
+          :total="total"
+          :page-size="size"
+          :current-page="pageNum"
+          @current-change="go"
+        />
       </div>
     </template>
   </template>
@@ -129,13 +143,8 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
   color: var(--muted);
   margin: 10px 0 0;
 }
-.muted {
-  color: #8b949e;
-}
 .pager {
   display: flex;
-  gap: 14px;
-  align-items: center;
   justify-content: center;
   margin-top: 28px;
 }

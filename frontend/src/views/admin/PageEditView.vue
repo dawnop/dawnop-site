@@ -1,9 +1,10 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
-import { useRoute, useRouter, RouterLink } from 'vue-router'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { useRoute, useRouter, onBeforeRouteLeave, RouterLink } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Setting } from '@element-plus/icons-vue'
 import { MdEditor } from 'md-editor-v3'
 import { pagesApi } from '../../api'
-import SettingsDrawer from '../../components/SettingsDrawer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -11,6 +12,7 @@ const router = useRouter()
 const id = computed(() => route.params.id)
 const isEdit = computed(() => !!id.value)
 
+const formRef = ref(null)
 const form = ref({
   title: '',
   slug: '',
@@ -19,10 +21,9 @@ const form = ref({
   content: '',
   nav_visible: true,
 })
-const publishAt = ref('') // datetime-local 字符串；对应 created_at
+const publishAt = ref(null) // Date | null，对应 created_at
 const showSettings = ref(false)
 const saving = ref(false)
-const error = ref('')
 
 // 文章列表页：展示该分类下的文章
 const catArticles = ref([])
@@ -30,18 +31,13 @@ const catTotal = ref(0)
 const catLoaded = ref(false)
 
 const isList = computed(() => form.value.type === 'article_list')
+const rules = {
+  title: [{ required: true, message: '请输入标题', trigger: 'blur' }],
+}
 const slugPreview = computed(() => {
   const s = form.value.slug.trim()
-  return s ? `/p/${s}` : '/p/（留空将根据标题自动生成）'
+  return s ? `/p/${s}` : '/p/（留空将按标题自动生成）'
 })
-
-function toLocalInput(v) {
-  if (!v) return ''
-  const d = new Date(v)
-  if (isNaN(d)) return ''
-  const p = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
-}
 
 async function loadCategoryArticles(slug) {
   if (!slug) return
@@ -57,12 +53,34 @@ async function loadCategoryArticles(slug) {
   }
 }
 
+// ---- 未保存离开拦截 ----
+let snapshot = ''
+let justSaved = false
+function serialize() {
+  return JSON.stringify({
+    ...form.value,
+    publishAt: publishAt.value ? publishAt.value.getTime() : null,
+  })
+}
+function takeSnapshot() {
+  snapshot = serialize()
+}
+const dirty = computed(() => serialize() !== snapshot)
+
+function beforeUnload(e) {
+  if (dirty.value && !justSaved) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+}
+
 onMounted(async () => {
   if (isEdit.value) {
     const { data } = await pagesApi.listAll()
     const p = data.find((x) => String(x.id) === String(id.value))
     if (!p) {
-      error.value = '页面不存在'
+      ElMessage.error('页面不存在')
+      router.replace('/admin/pages')
       return
     }
     form.value = {
@@ -73,24 +91,43 @@ onMounted(async () => {
       content: p.content || '',
       nav_visible: p.nav_visible,
     }
-    publishAt.value = toLocalInput(p.created_at)
+    publishAt.value = p.created_at ? new Date(p.created_at) : null
     if (p.type === 'article_list') loadCategoryArticles(p.slug)
   } else {
-    // 新建：类型由列表页的两个「新建」按钮决定（?type=content|article_list），且不可再转换
+    // 新建：类型由列表页两个「新建」按钮决定（?type=content|article_list），不可再转换
     const t = route.query.type
     if (t === 'content' || t === 'article_list') form.value.type = t
-    showSettings.value = true // 新建默认展开设置抽屉（标题等在抽屉内）
+    showSettings.value = true
+  }
+  takeSnapshot()
+  window.addEventListener('beforeunload', beforeUnload)
+})
+
+onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
+
+onBeforeRouteLeave(async () => {
+  if (!dirty.value || justSaved) return true
+  try {
+    await ElMessageBox.confirm('有未保存的修改，确定离开吗？', '放弃修改', {
+      type: 'warning',
+      confirmButtonText: '放弃',
+      cancelButtonText: '继续编辑',
+    })
+    return true
+  } catch (e) {
+    return false
   }
 })
 
 async function save() {
-  if (!form.value.title.trim()) {
-    error.value = '标题不能为空'
+  try {
+    await formRef.value.validate()
+  } catch (e) {
     showSettings.value = true
+    ElMessage.warning('请完善必填项')
     return
   }
   saving.value = true
-  error.value = ''
   try {
     const payload = { ...form.value }
     if (publishAt.value) payload.created_at = new Date(publishAt.value).toISOString()
@@ -99,9 +136,11 @@ async function save() {
     } else {
       await pagesApi.create(payload)
     }
+    justSaved = true
+    ElMessage.success('已保存')
     router.push('/admin/pages')
   } catch (e) {
-    error.value = '保存失败，请重试'
+    /* 拦截器已提示 */
   } finally {
     saving.value = false
   }
@@ -113,76 +152,72 @@ async function save() {
     <div class="edit-topbar">
       <h1 class="doc-title">{{ form.title || '未命名页面' }}</h1>
       <div class="actions">
-        <span class="badge">{{ isList ? '文章列表页' : '内容页' }}</span>
-        <button @click="showSettings = true">设置</button>
-        <button class="primary" :disabled="saving" @click="save">
-          {{ saving ? '保存中…' : '保存' }}
-        </button>
+        <el-tag type="info" effect="light">{{ isList ? '文章列表页' : '内容页' }}</el-tag>
+        <el-button :icon="Setting" @click="showSettings = true">设置</el-button>
+        <el-button type="primary" :loading="saving" @click="save">保存</el-button>
       </div>
     </div>
 
-    <p v-if="error" class="error">{{ error }}</p>
-
     <!-- 内容页：Markdown 编辑器为核心 -->
-    <MdEditor
-      v-if="!isList"
-      v-model="form.content"
-      language="zh-CN"
-      :preview="true"
-      class="editor"
-    />
+    <MdEditor v-if="!isList" v-model="form.content" language="zh-CN" :preview="true" class="editor" />
 
     <!-- 文章列表页：展示该分类下的文章 -->
-    <div v-else class="card list-panel">
+    <el-card v-else shadow="never" class="list-panel">
       <div class="list-head">
-        <h2>本栏目下的文章<span v-if="catLoaded" class="count">（{{ catTotal }} 篇）</span></h2>
+        <span class="list-title">
+          本栏目下的文章<span v-if="catLoaded" class="count">（{{ catTotal }} 篇）</span>
+        </span>
         <RouterLink to="/admin/articles" class="manage-link">去文章管理 →</RouterLink>
       </div>
-      <p v-if="!isEdit" class="muted">保存后即可在此查看分配到本栏目的文章。</p>
-      <p v-else-if="catLoaded && catArticles.length === 0" class="muted">
-        还没有文章归属到本栏目。在文章设置里把文章的「所属列表页」设为本页即可。
-      </p>
+      <el-empty v-if="!isEdit" description="保存后即可在此查看分配到本栏目的文章" :image-size="80" />
+      <el-empty
+        v-else-if="catLoaded && catArticles.length === 0"
+        description="还没有文章归属到本栏目。在文章设置里把「所属列表页」设为本页即可"
+        :image-size="80"
+      />
       <ul v-else class="cat-list">
         <li v-for="a in catArticles" :key="a.id">
           <RouterLink :to="`/admin/articles/${a.id}/edit`">{{ a.title }}</RouterLink>
-          <span :class="['badge', a.published ? 'pub' : 'draft']">
+          <el-tag :type="a.published ? 'success' : 'info'" size="small" effect="light">
             {{ a.published ? '已发布' : '草稿' }}
-          </span>
+          </el-tag>
         </li>
       </ul>
-    </div>
+    </el-card>
 
     <!-- 右侧设置抽屉 -->
-    <SettingsDrawer v-model="showSettings" title="页面设置">
-      <label>标题</label>
-      <input v-model="form.title" placeholder="页面标题" />
-
-      <label>类型</label>
-      <input :value="isList ? '文章列表页（充当分类）' : '内容页（Markdown）'" disabled />
-      <p class="field-hint">类型在创建时确定，不可转换。</p>
-
-      <label>路径 slug</label>
-      <input v-model="form.slug" placeholder="url-friendly-slug" />
-      <p class="field-hint">访问地址：<code>{{ slugPreview }}</code></p>
-
-      <label>页面摘要 / 描述（可选，用于 SEO 与列表说明）</label>
-      <input v-model="form.description" placeholder="一句话描述这个页面" />
-
-      <label>发布时间</label>
-      <input type="datetime-local" v-model="publishAt" />
-      <p class="field-hint">前台展示与排序用此时间；留空则用当前时间。</p>
-
-      <label class="checkbox">
-        <input type="checkbox" v-model="form.nav_visible" />
-        显示在导航栏
-      </label>
-
+    <el-drawer v-model="showSettings" title="页面设置" size="360px">
+      <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
+        <el-form-item label="标题" prop="title">
+          <el-input v-model="form.title" placeholder="页面标题" />
+        </el-form-item>
+        <el-form-item label="类型">
+          <el-input :value="isList ? '文章列表页（充当分类）' : '内容页（Markdown）'" disabled />
+          <div class="field-hint">类型在创建时确定，不可转换。</div>
+        </el-form-item>
+        <el-form-item label="路径 slug">
+          <el-input v-model="form.slug" placeholder="url-friendly-slug" />
+          <div class="field-hint">访问地址：<code>{{ slugPreview }}</code></div>
+        </el-form-item>
+        <el-form-item label="页面描述（SEO / 列表说明，可选）">
+          <el-input v-model="form.description" type="textarea" :rows="2" placeholder="一句话描述这个页面" />
+        </el-form-item>
+        <el-form-item label="发布时间">
+          <el-date-picker
+            v-model="publishAt"
+            type="datetime"
+            placeholder="留空则用当前时间"
+            class="w-full"
+          />
+        </el-form-item>
+        <el-form-item>
+          <el-switch v-model="form.nav_visible" active-text="显示在导航栏" />
+        </el-form-item>
+      </el-form>
       <template #footer>
-        <button class="primary block" :disabled="saving" @click="save">
-          {{ saving ? '保存中…' : '保存' }}
-        </button>
+        <el-button type="primary" :loading="saving" class="w-full" @click="save">保存</el-button>
       </template>
-    </SettingsDrawer>
+    </el-drawer>
   </div>
 </template>
 
@@ -214,28 +249,6 @@ async function save() {
   align-items: center;
   gap: 10px;
 }
-.field-hint {
-  margin: 6px 0 0;
-  font-size: 0.82rem;
-  color: var(--muted);
-}
-.field-hint code {
-  background: #f0f1f3;
-  padding: 0.1em 0.4em;
-  border-radius: 4px;
-}
-.checkbox {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--fg);
-}
-.checkbox input {
-  width: auto;
-}
-.block {
-  width: 100%;
-}
 .editor {
   flex: 1;
   min-height: 360px;
@@ -249,11 +262,11 @@ async function save() {
   justify-content: space-between;
   margin-bottom: 8px;
 }
-.list-panel h2 {
-  margin: 0;
+.list-title {
   font-size: 1.05rem;
+  font-weight: 600;
 }
-.list-panel .count {
+.count {
   color: var(--muted);
   font-weight: 400;
   font-size: 0.9rem;
@@ -285,7 +298,18 @@ async function save() {
 .cat-list a:hover {
   color: var(--accent);
 }
-.muted {
+.field-hint {
+  margin-top: 6px;
+  font-size: 0.82rem;
   color: var(--muted);
+  line-height: 1.5;
+}
+.field-hint code {
+  background: #f0f1f3;
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+}
+.w-full {
+  width: 100%;
 }
 </style>

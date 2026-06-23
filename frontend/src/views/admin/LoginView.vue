@@ -1,27 +1,38 @@
 <script setup>
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { authApi } from '../../api'
 import { auth } from '../../store/auth'
 
 const route = useRoute()
 const router = useRouter()
 
-const username = ref('')
-const password = ref('')
-const error = ref('')
+const formRef = ref(null)
+const form = ref({ username: '', password: '' })
 const loading = ref(false)
 
+const rules = {
+  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
+  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+}
+
 async function submit() {
-  error.value = ''
+  if (!formRef.value) return
+  try {
+    await formRef.value.validate()
+  } catch (e) {
+    return // 校验未通过
+  }
   loading.value = true
   try {
-    const { data } = await authApi.login(username.value, password.value)
+    const { data } = await authApi.login(form.value.username, form.value.password)
     auth.setToken(data.access_token)
-    const redirect = route.query.redirect || '/admin/articles'
+    ElMessage.success('登录成功')
+    const redirect = route.query.redirect || '/admin'
     router.push(redirect)
   } catch (e) {
-    error.value = e.response?.status === 401 ? '用户名或密码错误' : '登录失败'
+    ElMessage.error(e.response?.status === 401 ? '用户名或密码错误' : '登录失败，请稍后重试')
   } finally {
     loading.value = false
   }
@@ -30,20 +41,34 @@ async function submit() {
 
 <template>
   <div class="login-page">
-    <div class="login-card">
+    <el-card class="login-card" shadow="never">
       <img src="/logo.svg" alt="dawnop" class="login-logo" />
       <h1>dawnop 后台</h1>
-      <form @submit.prevent="submit">
-        <label for="u">用户名</label>
-        <input id="u" v-model="username" autocomplete="username" />
-        <label for="p">密码</label>
-        <input id="p" v-model="password" type="password" autocomplete="current-password" />
-        <p v-if="error" class="error">{{ error }}</p>
-        <button class="primary submit" type="submit" :disabled="loading">
-          {{ loading ? '登录中…' : '登录' }}
-        </button>
-      </form>
-    </div>
+      <el-form
+        ref="formRef"
+        :model="form"
+        :rules="rules"
+        label-position="top"
+        @submit.prevent="submit"
+      >
+        <el-form-item label="用户名" prop="username">
+          <el-input v-model="form.username" autocomplete="username" placeholder="请输入用户名" />
+        </el-form-item>
+        <el-form-item label="密码" prop="password">
+          <el-input
+            v-model="form.password"
+            type="password"
+            show-password
+            autocomplete="current-password"
+            placeholder="请输入密码"
+            @keyup.enter="submit"
+          />
+        </el-form-item>
+        <el-button type="primary" class="submit" :loading="loading" @click="submit">
+          登录
+        </el-button>
+      </el-form>
+    </el-card>
   </div>
 </template>
 
@@ -56,17 +81,14 @@ async function submit() {
   background: #f1f5f9;
 }
 .login-card {
-  width: 340px;
-  background: #fff;
-  padding: 32px 28px;
+  width: 360px;
   border-radius: 12px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
 }
 .login-logo {
   display: block;
   width: 56px;
   height: 56px;
-  margin: 0 auto 12px;
+  margin: 4px auto 12px;
 }
 .login-card h1 {
   margin: 0 0 18px;
@@ -74,12 +96,7 @@ async function submit() {
   text-align: center;
 }
 .submit {
-  margin-top: 22px;
   width: 100%;
-}
-.error {
-  color: #b91c1c;
-  font-size: 0.9rem;
-  margin: 12px 0 0;
+  margin-top: 4px;
 }
 </style>
