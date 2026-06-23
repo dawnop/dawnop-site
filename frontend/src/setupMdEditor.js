@@ -9,7 +9,7 @@
 //  - 深色代码块底色由 admin.css 覆盖 --md-theme-code-* 变量为浅色。
 import { config as mdConfig } from 'md-editor-v3'
 import katexLib from 'katex'
-import hljs from 'highlight.js'
+import hljs from './hljs'
 import 'md-editor-v3/lib/style.css'
 import 'highlight.js/styles/github.css'
 import 'katex/dist/katex.min.css'

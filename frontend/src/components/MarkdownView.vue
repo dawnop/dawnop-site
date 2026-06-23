@@ -2,7 +2,7 @@
 import { computed, ref, watch, onMounted, nextTick } from 'vue'
 import MarkdownIt from 'markdown-it'
 import { katex } from '@mdit/plugin-katex'
-import hljs from 'highlight.js'
+import hljs from '../hljs'
 import 'highlight.js/styles/github.css'
 import 'katex/dist/katex.min.css'
 
