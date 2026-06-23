@@ -1,0 +1,20 @@
+{
+  "name": "gpu-viz",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "用交互式 3D 模型讲解 GPU 线程模型/分块/流水线/缓存/PTX，部署在 dawnop.com/gpu/",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.169.0",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^6.0.7"
+  }
+}
