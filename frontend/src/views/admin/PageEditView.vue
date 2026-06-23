@@ -1,9 +1,9 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave, RouterLink } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { Setting } from '@element-plus/icons-vue'
 import { MdEditor } from 'md-editor-v3'
+import '../../setupMdEditor'
 import { pagesApi } from '../../api'
 
 const route = useRoute()

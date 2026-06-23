@@ -1,7 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Upload, EditPen } from '@element-plus/icons-vue'
 import { articlesApi, pagesApi } from '../../api'
 

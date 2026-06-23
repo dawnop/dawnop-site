@@ -1,7 +1,6 @@
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { Rank, Document, Collection } from '@element-plus/icons-vue'
 import Sortable from 'sortablejs'
 import { pagesApi } from '../../api'

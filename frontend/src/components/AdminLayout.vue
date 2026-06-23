@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { RouterView, useRouter, useRoute } from 'vue-router'
-import { Fold, Expand } from '@element-plus/icons-vue'
+import { Fold, Expand, House, Document, Collection, FolderOpened } from '@element-plus/icons-vue'
 import { auth } from '../store/auth'
 
 const router = useRouter()
@@ -14,17 +14,17 @@ function toggle() {
   localStorage.setItem('dawnop_admin_collapsed', collapsed.value ? '1' : '0')
 }
 
-// 分组导航（icon 用 Element 图标全局组件名）
+// 分组导航（icon 用按需导入的图标组件引用）
 const groups = [
-  { label: '总览', items: [{ to: '/admin', label: '首页', icon: 'House' }] },
+  { label: '总览', items: [{ to: '/admin', label: '首页', icon: House }] },
   {
     label: '内容',
     items: [
-      { to: '/admin/articles', label: '文章管理', icon: 'Document' },
-      { to: '/admin/pages', label: '页面管理', icon: 'Collection' },
+      { to: '/admin/articles', label: '文章管理', icon: Document },
+      { to: '/admin/pages', label: '页面管理', icon: Collection },
     ],
   },
-  { label: '存储', items: [{ to: '/admin/files', label: '文件管理', icon: 'FolderOpened' }] },
+  { label: '存储', items: [{ to: '/admin/files', label: '文件管理', icon: FolderOpened }] },
 ]
 
 // 当前高亮项：首页精确匹配，其余匹配前缀（子路由如 /admin/articles/new 仍高亮文章管理）

@@ -4,6 +4,7 @@ import MarkdownIt from 'markdown-it'
 import { katex } from '@mdit/plugin-katex'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github.css'
+import 'katex/dist/katex.min.css'
 
 const props = defineProps({
   source: { type: String, default: '' },
