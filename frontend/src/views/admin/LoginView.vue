@@ -1,7 +1,6 @@
 <script setup>
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import { authApi } from '../../api'
 import { auth } from '../../store/auth'
 

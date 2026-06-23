@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import 'element-plus/theme-chalk/el-message.css'
 import { auth } from '../store/auth'
 
 // 统一的 axios 实例：自动带 token；401 登出并跳登录页；其余错误统一 toast。
