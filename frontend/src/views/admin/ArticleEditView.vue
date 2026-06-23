@@ -1,9 +1,10 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Setting } from '@element-plus/icons-vue'
 import { MdEditor } from 'md-editor-v3'
 import { articlesApi, pagesApi } from '../../api'
-import SettingsDrawer from '../../components/SettingsDrawer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -11,6 +12,7 @@ const router = useRouter()
 const id = computed(() => route.params.id)
 const isEdit = computed(() => !!id.value)
 
+const formRef = ref(null)
 const form = ref({
   title: '',
   slug: '',
@@ -19,25 +21,40 @@ const form = ref({
   published: false,
   page_id: null,
 })
-const publishAt = ref('') // datetime-local 字符串；对应 created_at（发布时间）
+const publishAt = ref(null) // Date | null，对应 created_at（发布时间）
 const listPages = ref([])
 const showSettings = ref(false)
 const saving = ref(false)
-const error = ref('')
 
-// ISO/带时区时间 → datetime-local 输入值（本地时区，YYYY-MM-DDTHH:mm）
-function toLocalInput(v) {
-  if (!v) return ''
-  const d = new Date(v)
-  if (isNaN(d)) return ''
-  const p = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+const rules = {
+  title: [{ required: true, message: '请输入标题', trigger: 'blur' }],
 }
 
 const slugPreview = computed(() => {
   const s = form.value.slug.trim()
-  return s ? `/article/${s}` : '/article/（留空将根据标题自动生成）'
+  return s ? `/article/${s}` : '/article/（留空将按标题自动生成）'
 })
+
+// ---- 未保存离开拦截：用快照对比判断脏 ----
+let snapshot = ''
+let justSaved = false
+function takeSnapshot() {
+  snapshot = serialize()
+}
+function serialize() {
+  return JSON.stringify({
+    ...form.value,
+    publishAt: publishAt.value ? publishAt.value.getTime() : null,
+  })
+}
+const dirty = computed(() => serialize() !== snapshot)
+
+function beforeUnload(e) {
+  if (dirty.value && !justSaved) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+}
 
 onMounted(async () => {
   const { data: allPages } = await pagesApi.listAll()
@@ -53,20 +70,39 @@ onMounted(async () => {
       published: data.published,
       page_id: data.page_id,
     }
-    publishAt.value = toLocalInput(data.created_at)
+    publishAt.value = data.created_at ? new Date(data.created_at) : null
   } else {
-    showSettings.value = true // 新建默认展开设置抽屉（标题等在抽屉内）
+    showSettings.value = true // 新建默认展开设置抽屉
+  }
+  takeSnapshot()
+  window.addEventListener('beforeunload', beforeUnload)
+})
+
+onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
+
+onBeforeRouteLeave(async () => {
+  if (!dirty.value || justSaved) return true
+  try {
+    await ElMessageBox.confirm('有未保存的修改，确定离开吗？', '放弃修改', {
+      type: 'warning',
+      confirmButtonText: '放弃',
+      cancelButtonText: '继续编辑',
+    })
+    return true
+  } catch (e) {
+    return false
   }
 })
 
 async function save() {
-  if (!form.value.title.trim()) {
-    error.value = '标题不能为空'
+  try {
+    await formRef.value.validate()
+  } catch (e) {
     showSettings.value = true
+    ElMessage.warning('请完善必填项')
     return
   }
   saving.value = true
-  error.value = ''
   try {
     const payload = { ...form.value }
     if (publishAt.value) payload.created_at = new Date(publishAt.value).toISOString()
@@ -75,9 +111,11 @@ async function save() {
     } else {
       await articlesApi.create(payload)
     }
+    justSaved = true
+    ElMessage.success('已保存')
     router.push('/admin/articles')
   } catch (e) {
-    error.value = '保存失败'
+    /* 拦截器已提示 */
   } finally {
     saving.value = false
   }
@@ -89,53 +127,51 @@ async function save() {
     <div class="edit-topbar">
       <h1 class="doc-title">{{ form.title || '未命名文章' }}</h1>
       <div class="actions">
-        <span v-if="form.published" class="badge pub">已发布</span>
-        <span v-else class="badge draft">草稿</span>
-        <button @click="showSettings = true">设置</button>
-        <button class="primary" :disabled="saving" @click="save">
-          {{ saving ? '保存中…' : '保存' }}
-        </button>
+        <el-tag :type="form.published ? 'success' : 'info'" effect="light">
+          {{ form.published ? '已发布' : '草稿' }}
+        </el-tag>
+        <el-button :icon="Setting" @click="showSettings = true">设置</el-button>
+        <el-button type="primary" :loading="saving" @click="save">保存</el-button>
       </div>
     </div>
 
-    <p v-if="error" class="error">{{ error }}</p>
-
-    <!-- 核心：Markdown 编辑器（满区，设置抽屉覆盖右侧、不挤压） -->
     <MdEditor v-model="form.content" language="zh-CN" :preview="true" class="editor" />
 
     <!-- 右侧设置抽屉 -->
-    <SettingsDrawer v-model="showSettings" title="文章设置">
-      <label>标题</label>
-      <input v-model="form.title" placeholder="文章标题" />
-
-      <label>Slug</label>
-      <input v-model="form.slug" placeholder="url-friendly-slug" />
-      <p class="field-hint">访问地址：<code>{{ slugPreview }}</code></p>
-
-      <label>所属列表页（分类，可不选）</label>
-      <select v-model="form.page_id">
-        <option :value="null">— 不分配 —</option>
-        <option v-for="p in listPages" :key="p.id" :value="p.id">{{ p.title }}</option>
-      </select>
-
-      <label>摘要</label>
-      <input v-model="form.summary" placeholder="一句话摘要（可选）" />
-
-      <label>发布时间</label>
-      <input type="datetime-local" v-model="publishAt" />
-      <p class="field-hint">前台显示与排序用此时间；留空则用当前时间。</p>
-
-      <label class="checkbox">
-        <input type="checkbox" v-model="form.published" />
-        立即发布
-      </label>
-
+    <el-drawer v-model="showSettings" title="文章设置" size="360px">
+      <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
+        <el-form-item label="标题" prop="title">
+          <el-input v-model="form.title" placeholder="文章标题" />
+        </el-form-item>
+        <el-form-item label="Slug">
+          <el-input v-model="form.slug" placeholder="url-friendly-slug" />
+          <div class="field-hint">访问地址：<code>{{ slugPreview }}</code></div>
+        </el-form-item>
+        <el-form-item label="所属列表页（分类）">
+          <el-select v-model="form.page_id" placeholder="未分类" clearable class="w-full">
+            <el-option v-for="p in listPages" :key="p.id" :label="p.title" :value="p.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="摘要">
+          <el-input v-model="form.summary" type="textarea" :rows="2" placeholder="一句话摘要（可选）" />
+        </el-form-item>
+        <el-form-item label="发布时间">
+          <el-date-picker
+            v-model="publishAt"
+            type="datetime"
+            placeholder="留空则用当前时间"
+            class="w-full"
+          />
+          <div class="field-hint">前台显示与排序用此时间。</div>
+        </el-form-item>
+        <el-form-item>
+          <el-switch v-model="form.published" active-text="立即发布" />
+        </el-form-item>
+      </el-form>
       <template #footer>
-        <button class="primary block" :disabled="saving" @click="save">
-          {{ saving ? '保存中…' : '保存' }}
-        </button>
+        <el-button type="primary" :loading="saving" class="w-full" @click="save">保存</el-button>
       </template>
-    </SettingsDrawer>
+    </el-drawer>
   </div>
 </template>
 
@@ -167,33 +203,25 @@ async function save() {
   align-items: center;
   gap: 10px;
 }
-.field-hint {
-  margin: 6px 0 0;
-  font-size: 0.82rem;
-  color: var(--muted);
-}
-.field-hint code {
-  background: #f0f1f3;
-  padding: 0.1em 0.4em;
-  border-radius: 4px;
-}
-.checkbox {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--fg);
-}
-.checkbox input {
-  width: auto;
-}
-.block {
-  width: 100%;
-}
 .editor {
   flex: 1;
   min-height: 360px;
   border-radius: var(--radius);
   overflow: hidden;
   box-shadow: var(--shadow-card);
+}
+.field-hint {
+  margin-top: 6px;
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.field-hint code {
+  background: #f0f1f3;
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+}
+.w-full {
+  width: 100%;
 }
 </style>

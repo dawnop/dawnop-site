@@ -1,24 +1,26 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
-import draggable from 'vuedraggable'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Rank, Document, Collection } from '@element-plus/icons-vue'
+import Sortable from 'sortablejs'
 import { pagesApi } from '../../api'
 
 const router = useRouter()
 const pages = ref([])
 const loading = ref(true)
-const error = ref('')
 const counts = ref({}) // page.id -> 文章数（仅文章列表页）
+const tableRef = ref(null)
+let sortable = null
 
 async function load() {
   loading.value = true
-  error.value = ''
   try {
     const { data } = await pagesApi.listAll()
     pages.value = data
     loadCounts()
   } catch (e) {
-    error.value = '加载失败，请确认后端已启动并已登录。'
+    /* 拦截器已提示 */
   } finally {
     loading.value = false
   }
@@ -42,13 +44,19 @@ async function loadCounts() {
 function newPage(type) {
   router.push({ path: '/admin/pages/new', query: { type } })
 }
-function edit(p) {
-  router.push(`/admin/pages/${p.id}/edit`)
-}
 
 async function remove(p) {
-  if (!confirm(`确定删除页面「${p.title}」？其下文章会解除归属。`)) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除页面「${p.title}」？其下文章会解除归属。`,
+      '删除页面',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' },
+    )
+  } catch (e) {
+    return
+  }
   await pagesApi.remove(p.id)
+  ElMessage.success('已删除')
   load()
 }
 
@@ -56,13 +64,36 @@ function fmtDate(s) {
   return new Date(s).toLocaleDateString('zh-CN')
 }
 
-// 拖拽排序：vuedraggable(SortableJS) 提供平滑动画/手柄/占位，拖完提交顺序
-async function onReorderEnd() {
-  const { data } = await pagesApi.reorder(pages.value.map((p) => p.id))
-  pages.value = data
+// 行拖拽排序：sortablejs 绑定到 el-table 内部 tbody，拖完同步数据并提交顺序
+function initSortable() {
+  const el = tableRef.value?.$el?.querySelector('.el-table__body-wrapper tbody')
+  if (!el || sortable) return
+  sortable = Sortable.create(el, {
+    handle: '.drag-handle',
+    animation: 180,
+    ghostClass: 'drag-ghost',
+    onEnd: async ({ oldIndex, newIndex }) => {
+      if (oldIndex === newIndex) return
+      const arr = pages.value.slice()
+      const [moved] = arr.splice(oldIndex, 1)
+      arr.splice(newIndex, 0, moved)
+      pages.value = arr
+      try {
+        const { data } = await pagesApi.reorder(arr.map((p) => p.id))
+        pages.value = data
+        ElMessage.success('顺序已保存')
+      } catch (e) {
+        load()
+      }
+    },
+  })
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  await nextTick()
+  initSortable()
+})
 </script>
 
 <template>
@@ -70,82 +101,89 @@ onMounted(load)
     <div class="page-head">
       <h1>页面管理</h1>
       <div class="actions">
-        <button @click="newPage('content')">新建内容页</button>
-        <button class="primary" @click="newPage('article_list')">新建文章列表页</button>
+        <el-button :icon="Document" @click="newPage('content')">新建内容页</el-button>
+        <el-button type="primary" :icon="Collection" @click="newPage('article_list')">
+          新建文章列表页
+        </el-button>
       </div>
     </div>
-    <p class="hint">拖动行首 ⠿ 调整导航顺序；首页固定在最前，不在此列。</p>
+    <p class="hint">拖动行首图标调整导航顺序；首页固定在最前，不在此列。</p>
 
-    <div class="card">
-      <p v-if="error" class="error">{{ error }}</p>
-      <p v-else-if="loading" class="muted">加载中…</p>
-      <p v-else-if="pages.length === 0" class="empty">还没有页面，点右上角「新建页面」。</p>
-      <table v-else class="data-grid">
-        <thead>
-          <tr>
-            <th class="drag-col"></th>
-            <th>标题</th>
-            <th>类型</th>
-            <th>路径</th>
-            <th>文章数</th>
-            <th>导航</th>
-            <th>更新于</th>
-            <th class="ops">操作</th>
-          </tr>
-        </thead>
-        <draggable
-          v-model="pages"
-          tag="tbody"
-          item-key="id"
-          handle=".drag-handle"
-          animation="180"
-          ghost-class="drag-ghost"
-          @end="onReorderEnd"
-        >
-          <template #item="{ element: p }">
-            <tr>
-              <td class="drag-handle" title="拖动排序">⠿</td>
-              <td>{{ p.title }}</td>
-              <td class="muted">{{ p.type === 'content' ? '内容页' : '文章列表' }}</td>
-              <td class="muted">/p/{{ p.slug }}</td>
-              <td class="muted">
-                {{ p.type === 'article_list' ? (counts[p.id] ?? '…') : '—' }}
-              </td>
-              <td>
-                <span :class="['badge', p.nav_visible ? 'on' : 'off']">
-                  {{ p.nav_visible ? '显示' : '隐藏' }}
-                </span>
-              </td>
-              <td class="muted">{{ fmtDate(p.updated_at) }}</td>
-              <td class="ops">
-                <a @click.prevent="edit(p)">编辑</a>
-                <a class="danger" @click.prevent="remove(p)">删除</a>
-              </td>
-            </tr>
+    <el-card shadow="never">
+      <el-table ref="tableRef" v-loading="loading" :data="pages" row-key="id" empty-text="还没有页面">
+        <el-table-column width="48">
+          <template #default>
+            <el-icon class="drag-handle" title="拖动排序"><Rank /></el-icon>
           </template>
-        </draggable>
-      </table>
-    </div>
+        </el-table-column>
+        <el-table-column prop="title" label="标题" min-width="160" show-overflow-tooltip />
+        <el-table-column label="类型" width="110">
+          <template #default="{ row }">
+            <span class="muted">{{ row.type === 'content' ? '内容页' : '文章列表' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="路径" min-width="140">
+          <template #default="{ row }"><span class="muted">/p/{{ row.slug }}</span></template>
+        </el-table-column>
+        <el-table-column label="文章数" width="90">
+          <template #default="{ row }">
+            <span class="muted">{{ row.type === 'article_list' ? (counts[row.id] ?? '…') : '—' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="导航" width="90">
+          <template #default="{ row }">
+            <el-tag :type="row.nav_visible ? 'success' : 'info'" size="small" effect="light">
+              {{ row.nav_visible ? '显示' : '隐藏' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="更新于" width="120">
+          <template #default="{ row }"><span class="muted">{{ fmtDate(row.updated_at) }}</span></template>
+        </el-table-column>
+        <el-table-column label="操作" width="130" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="router.push(`/admin/pages/${row.id}/edit`)">
+              编辑
+            </el-button>
+            <el-button link type="danger" @click="remove(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
   </div>
 </template>
 
 <style scoped>
-.hint {
-  margin: -8px 0 16px;
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
 }
-.drag-col {
-  width: 28px;
+.page-head h1 {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+.actions {
+  display: flex;
+  gap: 10px;
+}
+.hint {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.muted {
+  color: var(--muted);
 }
 .drag-handle {
   cursor: grab;
-  color: #c9cdd4;
-  text-align: center;
-  user-select: none;
+  color: #c0c4cc;
 }
 .drag-handle:active {
   cursor: grabbing;
 }
-/* SortableJS 拖拽占位行样式 */
 .drag-ghost {
   opacity: 0.5;
   background: var(--accent-soft);

@@ -42,9 +42,9 @@ onMounted(load)
 
 <template>
   <div>
-    <p v-if="loading" class="muted">加载中…</p>
-    <p v-else-if="error" class="muted">{{ error }}</p>
-    <p v-else-if="items.length === 0" class="muted">还没有文章。</p>
+    <el-skeleton v-if="loading" :rows="5" animated />
+    <el-empty v-else-if="error" :description="error" />
+    <el-empty v-else-if="items.length === 0" description="还没有文章" />
 
     <ul v-else class="post-list">
       <li v-for="a in items" :key="a.id" class="post">
@@ -59,9 +59,14 @@ onMounted(load)
     </ul>
 
     <div v-if="total > size" class="pager">
-      <button :disabled="page <= 1" @click="go(page - 1)">上一页</button>
-      <span class="muted">第 {{ page }} 页</span>
-      <button :disabled="page * size >= total" @click="go(page + 1)">下一页</button>
+      <el-pagination
+        background
+        layout="prev, pager, next"
+        :total="total"
+        :page-size="size"
+        :current-page="page"
+        @current-change="go"
+      />
     </div>
   </div>
 </template>
@@ -106,13 +111,8 @@ onMounted(load)
   margin: 0 8px;
   color: #c9cdd4;
 }
-.muted {
-  color: #8b949e;
-}
 .pager {
   display: flex;
-  gap: 14px;
-  align-items: center;
   justify-content: center;
   margin-top: 28px;
 }

@@ -1,10 +1,15 @@
 <script setup>
-import { ref, onMounted } from 'vue'
-import { RouterLink } from 'vue-router'
+import { ref, computed, onMounted } from 'vue'
+import { useRoute, RouterLink } from 'vue-router'
 import { pagesApi } from '../api'
+
+const route = useRoute()
 
 // 导航 = 固定「首页」+ 后台「显示在导航」的页面（按顺序）
 const navPages = ref([])
+
+// el-menu 高亮：精确到当前路径（文章详情页不属于任何导航项，则均不高亮）
+const activePath = computed(() => route.path)
 
 onMounted(async () => {
   try {
@@ -23,12 +28,18 @@ onMounted(async () => {
         <img src="/logo.svg" alt="dawnop" class="logo" />
         <span>dawnop</span>
       </RouterLink>
-      <nav class="nav">
-        <RouterLink to="/">首页</RouterLink>
-        <RouterLink v-for="p in navPages" :key="p.id" :to="`/p/${p.slug}`">
+      <el-menu
+        mode="horizontal"
+        :router="true"
+        :default-active="activePath"
+        :ellipsis="false"
+        class="nav"
+      >
+        <el-menu-item index="/">首页</el-menu-item>
+        <el-menu-item v-for="p in navPages" :key="p.id" :index="`/p/${p.slug}`">
           {{ p.title }}
-        </RouterLink>
-      </nav>
+        </el-menu-item>
+      </el-menu>
     </div>
   </header>
 </template>
@@ -66,19 +77,15 @@ onMounted(async () => {
   height: 28px;
   display: block;
 }
-.nav {
-  display: flex;
-  gap: 18px;
-  align-items: center;
-  flex-wrap: wrap;
+/* el-menu 调成轻量横向导航：透明底、无自身下边框（边框在 header 上）、贴右 */
+.nav.el-menu--horizontal {
+  border-bottom: none;
+  background: transparent;
+  height: 55px;
 }
-.nav a {
-  color: #57606a;
-  text-decoration: none;
+.nav.el-menu--horizontal > .el-menu-item {
   font-size: 0.95rem;
-}
-.nav a:hover,
-.nav a.router-link-exact-active {
-  color: #1a1a1a;
+  height: 55px;
+  line-height: 55px;
 }
 </style>

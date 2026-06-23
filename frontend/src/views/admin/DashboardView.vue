@@ -1,9 +1,17 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { RouterLink } from 'vue-router'
+import { useRouter } from 'vue-router'
+import { Edit, Collection, FolderOpened, TopRight } from '@element-plus/icons-vue'
 import { articlesApi, pagesApi } from '../../api'
 
+const router = useRouter()
 const stats = ref({ articles: null, drafts: null, pages: null })
+
+const cards = [
+  { key: 'articles', label: '文章总数', to: '/admin/articles' },
+  { key: 'drafts', label: '草稿', to: '/admin/articles' },
+  { key: 'pages', label: '页面', to: '/admin/pages' },
+]
 
 onMounted(async () => {
   try {
@@ -18,7 +26,7 @@ onMounted(async () => {
       pages: pages.data.length,
     }
   } catch (e) {
-    /* 占位：拉取失败也不影响首页展示 */
+    /* 拉取失败也不影响首页展示 */
   }
 })
 </script>
@@ -29,39 +37,40 @@ onMounted(async () => {
       <h1>首页</h1>
     </div>
 
-    <div class="card welcome">
+    <el-card class="welcome" shadow="never">
       <h2>欢迎回来 👋</h2>
-      <p class="muted">这里是 dawnop 控制台。先放点占位内容，后续可扩展为数据概览。</p>
-    </div>
+      <p class="muted">这里是 dawnop 控制台，可在左侧管理文章、页面与文件。</p>
+    </el-card>
 
-    <div class="stat-grid">
-      <RouterLink to="/admin/articles" class="card stat">
-        <div class="num">{{ stats.articles ?? '—' }}</div>
-        <div class="label">文章总数</div>
-      </RouterLink>
-      <RouterLink to="/admin/articles" class="card stat">
-        <div class="num">{{ stats.drafts ?? '—' }}</div>
-        <div class="label">草稿</div>
-      </RouterLink>
-      <RouterLink to="/admin/pages" class="card stat">
-        <div class="num">{{ stats.pages ?? '—' }}</div>
-        <div class="label">页面</div>
-      </RouterLink>
-    </div>
+    <el-row :gutter="16" class="stat-row">
+      <el-col v-for="c in cards" :key="c.label" :span="8">
+        <el-card class="stat" shadow="hover" @click="router.push(c.to)">
+          <el-statistic :value="stats[c.key] ?? 0" :title="c.label" />
+        </el-card>
+      </el-col>
+    </el-row>
 
-    <div class="card quick">
-      <h3>快捷入口</h3>
+    <el-card class="quick" shadow="never">
+      <template #header><span class="quick-title">快捷入口</span></template>
       <div class="links">
-        <RouterLink to="/admin/articles/new">写文章</RouterLink>
-        <RouterLink to="/admin/pages">页面管理</RouterLink>
-        <RouterLink to="/admin/files">文件管理</RouterLink>
-        <a href="/" target="_blank" rel="noopener">查看站点 ↗</a>
+        <el-button :icon="Edit" @click="router.push('/admin/articles/new')">写文章</el-button>
+        <el-button :icon="Collection" @click="router.push('/admin/pages')">页面管理</el-button>
+        <el-button :icon="FolderOpened" @click="router.push('/admin/files')">文件管理</el-button>
+        <el-button :icon="TopRight" tag="a" href="/" target="_blank" rel="noopener">查看站点</el-button>
       </div>
-    </div>
+    </el-card>
   </div>
 </template>
 
 <style scoped>
+.page-head {
+  margin-bottom: 16px;
+}
+.page-head h1 {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 600;
+}
 .welcome {
   margin-bottom: 16px;
 }
@@ -72,45 +81,21 @@ onMounted(async () => {
 .welcome p {
   margin: 0;
 }
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
+.muted {
+  color: var(--muted);
+}
+.stat-row {
   margin-bottom: 16px;
 }
 .stat {
-  text-decoration: none;
-  color: var(--fg);
-  transition: box-shadow 0.15s, transform 0.15s;
+  cursor: pointer;
 }
-.stat:hover {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
-  transform: translateY(-2px);
+.quick-title {
+  font-weight: 600;
 }
-.stat .num {
-  font-size: 2rem;
-  font-weight: 650;
-  color: var(--accent);
-}
-.stat .label {
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-.quick h3 {
-  margin: 0 0 12px;
-  font-size: 1.02rem;
-}
-.quick .links {
+.links {
   display: flex;
   flex-wrap: wrap;
-  gap: 18px;
-}
-.quick .links a {
-  color: var(--accent);
-  text-decoration: none;
-}
-.quick .links a:hover {
-  text-decoration: underline;
+  gap: 12px;
 }
 </style>
