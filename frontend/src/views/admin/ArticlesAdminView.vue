@@ -6,7 +6,7 @@ import { articlesApi, pagesApi } from '../../api'
 const items = ref([])
 const total = ref(0)
 const page = ref(1)
-const size = 20
+const size = 12
 const loading = ref(true)
 const error = ref('')
 const importing = ref(false)
@@ -53,6 +53,10 @@ async function load() {
 function applyFilters() {
   page.value = 1
   load()
+}
+function setStatus(v) {
+  fStatus.value = v
+  applyFilters()
 }
 function resetFilters() {
   fStatus.value = ''
@@ -121,19 +125,24 @@ onMounted(load)
       </div>
     </div>
 
-    <div class="filter-bar">
-      <input v-model="fq" class="search" placeholder="搜索标题…" @keyup.enter="applyFilters" />
-      <select v-model="fStatus" @change="applyFilters">
-        <option value="">全部状态</option>
-        <option value="published">已发布</option>
-        <option value="draft">草稿</option>
-      </select>
-      <select v-model="fPageId" @change="applyFilters">
+    <div class="card toolbar">
+      <div class="search-box">
+        <svg class="ico" viewBox="0 0 24 24" width="16" height="16">
+          <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2" />
+          <path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+        </svg>
+        <input v-model="fq" placeholder="搜索标题…" @keyup.enter="applyFilters" />
+      </div>
+      <div class="seg">
+        <button :class="{ on: fStatus === '' }" @click="setStatus('')">全部</button>
+        <button :class="{ on: fStatus === 'published' }" @click="setStatus('published')">已发布</button>
+        <button :class="{ on: fStatus === 'draft' }" @click="setStatus('draft')">草稿</button>
+      </div>
+      <select v-model="fPageId" class="cat" @change="applyFilters">
         <option value="">全部分类</option>
         <option v-for="p in listPages" :key="p.id" :value="p.id">{{ p.title }}</option>
       </select>
-      <button @click="applyFilters">搜索</button>
-      <button v-if="fStatus || fPageId || fq" @click="resetFilters">重置</button>
+      <a v-if="fStatus || fPageId || fq" class="reset" @click.prevent="resetFilters">重置</a>
     </div>
 
     <div class="card">
@@ -186,19 +195,67 @@ onMounted(load)
 </template>
 
 <style scoped>
-.filter-bar {
+/* 搜索/筛选工具条（Ant Pro 风：图标搜索框 + 分段状态 + 分类下拉 + 重置） */
+.toolbar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
   align-items: center;
-  margin-bottom: 14px;
+  gap: 12px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
 }
-.filter-bar .search {
-  width: 220px;
+.search-box {
+  position: relative;
+  flex: 0 0 260px;
 }
-.filter-bar select {
+.search-box .ico {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+.search-box input {
+  padding-left: 32px;
+}
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.seg button {
+  border: none;
+  border-radius: 0;
+  border-right: 1px solid var(--border-strong);
+  background: #fff;
+  color: var(--muted);
+  padding: 6px 14px;
+}
+.seg button:last-child {
+  border-right: none;
+}
+.seg button:hover {
+  color: var(--accent);
+  background: #fff;
+}
+.seg button.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+.cat {
   width: auto;
-  min-width: 120px;
+  min-width: 130px;
+}
+.reset {
+  margin-left: auto;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.reset:hover {
+  color: var(--accent);
 }
 .link-cell {
   font-size: 0.85rem;
