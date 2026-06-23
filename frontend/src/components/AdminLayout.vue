@@ -128,8 +128,10 @@ function logout() {
 </template>
 
 <style scoped>
+/* 锁定视口高度，内部只让 .view 滚动，消除全局/body 滚动条 */
 .admin {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   background: var(--layout-bg);
@@ -303,7 +305,11 @@ function logout() {
 .breadcrumb .crumb {
   color: #1f2329;
 }
+/* 唯一的滚动区：内容超高时只有这里出现滚动条 */
 .view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: 20px 28px 32px;
 }
 /* 文件管理满铺 */

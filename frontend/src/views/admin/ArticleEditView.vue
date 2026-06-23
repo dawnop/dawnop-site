@@ -143,6 +143,7 @@ async function save() {
 .edit-wrap {
   display: flex;
   flex-direction: column;
+  height: 100%;
 }
 .edit-topbar {
   display: flex;
@@ -189,8 +190,8 @@ async function save() {
   width: 100%;
 }
 .editor {
-  height: calc(100vh - 168px);
-  min-height: 440px;
+  flex: 1;
+  min-height: 360px;
   border-radius: var(--radius);
   overflow: hidden;
   box-shadow: var(--shadow-card);
