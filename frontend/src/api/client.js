@@ -2,11 +2,13 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import 'element-plus/theme-chalk/el-message.css'
 import { auth } from '../store/auth'
+import { progressStart, progressDone } from '../progress'
 
-// 统一的 axios 实例：自动带 token；401 登出并跳登录页；其余错误统一 toast。
+// 统一的 axios 实例：自动带 token；顶部进度条；401 登出并跳登录页；其余错误统一 toast。
 const client = axios.create({ baseURL: '/api' })
 
 client.interceptors.request.use((config) => {
+  progressStart()
   if (auth.token) {
     config.headers.Authorization = `Bearer ${auth.token}`
   }
@@ -14,8 +16,12 @@ client.interceptors.request.use((config) => {
 })
 
 client.interceptors.response.use(
-  (resp) => resp,
+  (resp) => {
+    progressDone()
+    return resp
+  },
   (error) => {
+    progressDone()
     const { response, config } = error
     const status = response?.status
     // 登录接口的错误交由登录页自行提示，避免「登录已过期」误报

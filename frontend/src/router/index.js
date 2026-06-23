@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { auth } from '../store/auth'
+import { progressStart, progressDone } from '../progress'
 import PublicLayout from '../components/PublicLayout.vue'
 import AdminLayout from '../components/AdminLayout.vue'
 
@@ -90,9 +91,17 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
+  progressStart()
   if (to.matched.some((r) => r.meta.requiresAuth) && !auth.isAuthenticated) {
+    // 本次导航将被重定向中止（不会触发 afterEach），先平衡掉计数；
+    // 重定向到登录页会再次触发 beforeEach 重新计数。
+    progressDone()
     return { name: 'admin-login', query: { redirect: to.fullPath } }
   }
 })
+
+// afterEach 在导航完成（含被「未保存」守卫取消的失败导航）后都会触发，保证收尾
+router.afterEach(() => progressDone())
+router.onError(() => progressDone())
 
 export default router

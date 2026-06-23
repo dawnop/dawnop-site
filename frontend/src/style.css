@@ -32,6 +32,15 @@ a {
   color: var(--accent);
 }
 
+/* 顶部加载进度条（NProgress）配色：钉到 Ant 蓝 */
+#nprogress .bar {
+  background: var(--accent);
+  height: 2px;
+}
+#nprogress .peg {
+  box-shadow: 0 0 10px var(--accent), 0 0 5px var(--accent);
+}
+
 /* 原生控件（button/input/select/textarea/label）样式已交由 Element Plus 接管，
    不再在此定义全局规则，避免高特指度覆盖 .el-* 组件。md-editor-v3 / VueFinder
    自带样式，不受影响。 */
