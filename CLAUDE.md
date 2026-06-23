@@ -160,7 +160,7 @@ dawnop-site/
 
 ## 8. 部署目标环境
 
-- 机器：4 核 4G；登录：`ssh <user>@<server>`；**80 端口已开放**。
+- 机器：4 核 4G；登录：`ssh <user>@<server>`（真实地址见本地私有记录，不入库）；**80 端口已开放**。
 - 验证：可用公网域名 `dawnop.com` 测试。
 - 形态：Nginx 监听 80，托管 `frontend/dist` 静态文件，并将 `/api` 反向代理到本地 uvicorn；
   uvicorn 由 systemd（`deploy/dawnop-backend.service`）守护。
