@@ -2,7 +2,9 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.schemas.article import _clean_slug, _clean_title
 
 PageType = Literal["content", "article_list"]
 
@@ -17,6 +19,16 @@ class PageCreate(BaseModel):
     slug: str | None = Field(default=None, max_length=255)
     created_at: datetime | None = None
 
+    @field_validator("title")
+    @classmethod
+    def _strip_title(cls, v):
+        return _clean_title(v)
+
+    @field_validator("slug")
+    @classmethod
+    def _strip_slug(cls, v):
+        return _clean_slug(v)
+
 
 class PageUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
@@ -27,6 +39,16 @@ class PageUpdate(BaseModel):
     nav_visible: bool | None = None
     nav_order: int | None = None
     created_at: datetime | None = None
+
+    @field_validator("title")
+    @classmethod
+    def _strip_title(cls, v):
+        return _clean_title(v)
+
+    @field_validator("slug")
+    @classmethod
+    def _strip_slug(cls, v):
+        return _clean_slug(v)
 
 
 class PageOut(BaseModel):

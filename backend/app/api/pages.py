@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
+from app.core.crud import drop_null_created_at, get_or_404
+from app.core.pagination import paginate
 from app.core.slug import unique_slug
 from app.deps import get_current_user, get_db
 from app.models.article import Article
@@ -18,7 +20,11 @@ router = APIRouter()
 
 
 def _get_or_404(db: Session, page_id: int) -> Page:
-    page = db.get(Page, page_id)
+    return get_or_404(db, Page, page_id, "页面不存在")
+
+
+def _get_by_slug_or_404(db: Session, slug: str) -> Page:
+    page = db.query(Page).filter(Page.slug == slug).first()
     if page is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "页面不存在")
     return page
@@ -27,7 +33,7 @@ def _get_or_404(db: Session, page_id: int) -> Page:
 # ---------- 公开 ----------
 
 
-@router.get("/nav", response_model=list[NavItem])
+@router.get("/nav", response_model=list[NavItem], summary="导航栏页面（公开）")
 def nav(db: Session = Depends(get_db)):
     return (
         db.query(Page)
@@ -40,14 +46,12 @@ def nav(db: Session = Depends(get_db)):
 # ---------- 受保护：管理 ----------
 
 
-@router.get("/admin", response_model=list[PageOut])
-def list_all(
-    db: Session = Depends(get_db), _: User = Depends(get_current_user)
-):
+@router.get("/admin", response_model=list[PageOut], summary="全部页面（管理）")
+def list_all(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
     return db.query(Page).order_by(Page.nav_order, Page.id).all()
 
 
-@router.post("", response_model=PageOut, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=PageOut, status_code=status.HTTP_201_CREATED, summary="创建页面")
 def create_page(
     payload: PageCreate,
     db: Session = Depends(get_db),
@@ -70,13 +74,20 @@ def create_page(
     return page
 
 
-@router.post("/reorder", response_model=list[PageOut])
+@router.post("/reorder", response_model=list[PageOut], summary="按 id 列表重排导航顺序")
 def reorder(
     payload: ReorderRequest,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    for order, pid in enumerate(payload.ids):
+    # 去重并保序，避免重复 id 造成的无意义写入
+    seen: set[int] = set()
+    ordered_ids: list[int] = []
+    for pid in payload.ids:
+        if pid not in seen:
+            seen.add(pid)
+            ordered_ids.append(pid)
+    for order, pid in enumerate(ordered_ids):
         page = db.get(Page, pid)
         if page is not None:
             page.nav_order = order
@@ -84,7 +95,7 @@ def reorder(
     return db.query(Page).order_by(Page.nav_order, Page.id).all()
 
 
-@router.put("/{page_id}", response_model=PageOut)
+@router.put("/{page_id}", response_model=PageOut, summary="更新页面")
 def update_page(
     page_id: int,
     payload: PageUpdate,
@@ -92,9 +103,7 @@ def update_page(
     _: User = Depends(get_current_user),
 ):
     page = _get_or_404(db, page_id)
-    data = payload.model_dump(exclude_unset=True)
-    if data.get("created_at") is None:
-        data.pop("created_at", None)
+    data = drop_null_created_at(payload.model_dump(exclude_unset=True))
     if "slug" in data:
         base = data["slug"] or data.get("title") or page.title
         page.slug = unique_slug(db, base, exclude_id=page.id, _model=Page)
@@ -106,7 +115,7 @@ def update_page(
     return page
 
 
-@router.delete("/{page_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{page_id}", status_code=status.HTTP_204_NO_CONTENT, summary="删除页面")
 def delete_page(
     page_id: int,
     db: Session = Depends(get_db),
@@ -125,33 +134,22 @@ def delete_page(
 # ---------- 公开：按 slug 取页面 / 列表页文章（放在最后）----------
 
 
-@router.get("/{slug}", response_model=PageOut)
+@router.get("/{slug}", response_model=PageOut, summary="按 slug 取页面（公开）")
 def get_page(slug: str, db: Session = Depends(get_db)):
-    page = db.query(Page).filter(Page.slug == slug).first()
-    if page is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "页面不存在")
-    return page
+    return _get_by_slug_or_404(db, slug)
 
 
-@router.get("/{slug}/articles", response_model=ArticleListResponse)
+@router.get("/{slug}/articles", response_model=ArticleListResponse, summary="列表页下的已发布文章")
 def list_page_articles(
     slug: str,
     page: int = Query(1, ge=1),
     size: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
-    page_obj = db.query(Page).filter(Page.slug == slug).first()
-    if page_obj is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "页面不存在")
-
-    query = db.query(Article).filter(
-        Article.page_id == page_obj.id, Article.published.is_(True)
+    page_obj = _get_by_slug_or_404(db, slug)
+    query = (
+        db.query(Article)
+        .filter(Article.page_id == page_obj.id, Article.published.is_(True))
+        .order_by(Article.created_at.desc())
     )
-    total = query.count()
-    items = (
-        query.order_by(Article.created_at.desc())
-        .offset((page - 1) * size)
-        .limit(size)
-        .all()
-    )
-    return ArticleListResponse(total=total, page=page, size=size, items=items)
+    return paginate(query, page, size)

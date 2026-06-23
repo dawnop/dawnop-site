@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import articles, auth, fm, pages
 from app.config import settings
+from app.core.errors import register_error_handlers
 from app.database import init_db
 
 
@@ -16,6 +17,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+# 统一异常 → {"detail": ...} JSON 响应
+register_error_handlers(app)
 
 app.add_middleware(
     CORSMiddleware,
