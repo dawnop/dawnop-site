@@ -67,3 +67,23 @@ def test_delete_page_unassigns_articles(client, auth_headers):
     assert client.delete(f"/api/pages/{page['id']}", headers=auth_headers).status_code == 204
     got = client.get(f"/api/articles/admin/{art['id']}", headers=auth_headers).json()
     assert got["page_id"] is None
+
+
+def test_create_rejects_blank_title(client, auth_headers):
+    resp = _new_page(client, auth_headers, title="  ")
+    assert resp.status_code == 422
+    assert isinstance(resp.json()["detail"], str)
+
+
+def test_reorder_dedup_and_unknown_ids(client, auth_headers):
+    a = _new_page(client, auth_headers, title="A").json()
+    b = _new_page(client, auth_headers, title="B").json()
+    # 含重复与不存在的 id，应被去重/忽略而不报错
+    resp = client.post(
+        "/api/pages/reorder",
+        json={"ids": [b["id"], b["id"], a["id"], 99999]},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    nav = client.get("/api/pages/nav").json()
+    assert [n["title"] for n in nav] == ["B", "A"]

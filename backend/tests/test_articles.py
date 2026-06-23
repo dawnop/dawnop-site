@@ -98,3 +98,36 @@ def test_import_and_export_markdown(client, auth_headers):
     assert exported.status_code == 200
     assert exported.text == md
     assert "attachment" in exported.headers["content-disposition"]
+
+
+def test_create_rejects_blank_title(client, auth_headers):
+    resp = _create(client, auth_headers, title="   ")
+    assert resp.status_code == 422
+    assert isinstance(resp.json()["detail"], str)
+
+
+def test_create_rejects_unknown_page_id(client, auth_headers):
+    resp = _create(client, auth_headers, page_id=9999)
+    assert resp.status_code == 400
+
+
+def test_create_rejects_content_page_id(client, auth_headers):
+    # 内容页不能作为文章所属列表页
+    page = client.post(
+        "/api/pages", json={"title": "关于", "type": "content"}, headers=auth_headers
+    ).json()
+    resp = _create(client, auth_headers, page_id=page["id"])
+    assert resp.status_code == 400
+
+
+def test_update_rejects_content_page_id(client, auth_headers):
+    art = _create(client, auth_headers).json()
+    page = client.post(
+        "/api/pages", json={"title": "随笔", "type": "content"}, headers=auth_headers
+    ).json()
+    resp = client.put(
+        f"/api/articles/{art['id']}",
+        json={"page_id": page["id"]},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 400

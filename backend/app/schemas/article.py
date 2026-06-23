@@ -1,7 +1,27 @@
 """文章相关的请求/响应模型。"""
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.schemas.common import PageResponse
+
+
+def _clean_title(v: str | None) -> str | None:
+    """去首尾空白；用于创建时非空校验与更新时的规整。"""
+    if v is None:
+        return None
+    v = v.strip()
+    if not v:
+        raise ValueError("标题不能为空")
+    return v
+
+
+def _clean_slug(v: str | None) -> str | None:
+    """空白 slug 视为未提供（交由后端按标题生成）。"""
+    if v is None:
+        return None
+    v = v.strip()
+    return v or None
 
 
 class ArticleBase(BaseModel):
@@ -11,12 +31,22 @@ class ArticleBase(BaseModel):
     published: bool = False
     page_id: int | None = None
 
+    @field_validator("title")
+    @classmethod
+    def _strip_title(cls, v):
+        return _clean_title(v)
+
 
 class ArticleCreate(ArticleBase):
     # 不传则由后端按 title 生成
     slug: str | None = Field(default=None, max_length=255)
     # 发布时间（前台显示/排序用）；不传则用当前时间
     created_at: datetime | None = None
+
+    @field_validator("slug")
+    @classmethod
+    def _strip_slug(cls, v):
+        return _clean_slug(v)
 
 
 class ArticleUpdate(BaseModel):
@@ -27,6 +57,16 @@ class ArticleUpdate(BaseModel):
     published: bool | None = None
     page_id: int | None = None
     created_at: datetime | None = None
+
+    @field_validator("title")
+    @classmethod
+    def _strip_title(cls, v):
+        return _clean_title(v)
+
+    @field_validator("slug")
+    @classmethod
+    def _strip_slug(cls, v):
+        return _clean_slug(v)
 
 
 class ArticleOut(BaseModel):
@@ -60,8 +100,5 @@ class ArticleListItem(BaseModel):
     updated_at: datetime
 
 
-class ArticleListResponse(BaseModel):
-    total: int
-    page: int
-    size: int
-    items: list[ArticleListItem]
+class ArticleListResponse(PageResponse[ArticleListItem]):
+    """文章分页响应（沿用统一的 PageResponse 形状）。"""
