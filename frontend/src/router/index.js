@@ -74,6 +74,21 @@ const routes = [
         component: () => import('../views/admin/PageEditView.vue'),
       },
       {
+        path: 'viz',
+        name: 'admin-viz',
+        component: () => import('../views/admin/VizAdminView.vue'),
+      },
+      {
+        path: 'viz/new',
+        name: 'admin-viz-new',
+        component: () => import('../views/admin/VizEditView.vue'),
+      },
+      {
+        path: 'viz/:id/edit',
+        name: 'admin-viz-edit',
+        component: () => import('../views/admin/VizEditView.vue'),
+      },
+      {
         path: 'files',
         name: 'admin-files',
         component: () => import('../views/admin/FilesAdminView.vue'),

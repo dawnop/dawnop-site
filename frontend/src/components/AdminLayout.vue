@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { RouterView, useRouter, useRoute } from 'vue-router'
-import { Fold, Expand, House, Document, Collection, FolderOpened } from '@element-plus/icons-vue'
+import { Fold, Expand, House, Document, Collection, FolderOpened, MagicStick } from '@element-plus/icons-vue'
 import { auth } from '../store/auth'
 
 const router = useRouter()
@@ -22,13 +22,14 @@ const groups = [
     items: [
       { to: '/admin/articles', label: '文章管理', icon: Document },
       { to: '/admin/pages', label: '页面管理', icon: Collection },
+      { to: '/admin/viz', label: '可视化', icon: MagicStick },
     ],
   },
   { label: '存储', items: [{ to: '/admin/files', label: '文件管理', icon: FolderOpened }] },
 ]
 
 // 当前高亮项：首页精确匹配，其余匹配前缀（子路由如 /admin/articles/new 仍高亮文章管理）
-const navTos = ['/admin/articles', '/admin/pages', '/admin/files']
+const navTos = ['/admin/articles', '/admin/pages', '/admin/viz', '/admin/files']
 const activeMenu = computed(() => {
   if (route.path === '/admin') return '/admin'
   return navTos.find((t) => route.path === t || route.path.startsWith(t + '/')) || route.path
@@ -45,6 +46,9 @@ const crumbs = computed(() => {
     'admin-pages': [home, { label: '页面管理' }],
     'admin-page-new': [home, { label: '页面管理', to: '/admin/pages' }, { label: '新建页面' }],
     'admin-page-edit': [home, { label: '页面管理', to: '/admin/pages' }, { label: '编辑页面' }],
+    'admin-viz': [home, { label: '可视化' }],
+    'admin-viz-new': [home, { label: '可视化', to: '/admin/viz' }, { label: '新建可视化' }],
+    'admin-viz-edit': [home, { label: '可视化', to: '/admin/viz' }, { label: '编辑可视化' }],
     'admin-files': [home, { label: '文件管理' }],
   }
   return map[route.name] || []

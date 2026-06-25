@@ -85,3 +85,22 @@ export const pagesApi = {
     return client.post('/pages/reorder', { ids })
   },
 }
+
+// ---- 动态可视化组件（后台可编辑的交互 viz）----
+export const vizApi = {
+  listAll() {
+    return client.get('/viz')
+  },
+  get(slug) {
+    return client.get(`/viz/${slug}`)
+  },
+  create(data) {
+    return client.post('/viz', data)
+  },
+  update(id, data) {
+    return client.put(`/viz/${id}`, data)
+  },
+  remove(id) {
+    return client.delete(`/viz/${id}`)
+  },
+}

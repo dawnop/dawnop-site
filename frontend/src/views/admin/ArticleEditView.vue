@@ -1,10 +1,15 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
-import { Setting } from '@element-plus/icons-vue'
+import { Setting, MagicStick, ArrowDown } from '@element-plus/icons-vue'
 import { MdEditor } from 'md-editor-v3'
 import '../../setupMdEditor'
-import { articlesApi, pagesApi } from '../../api'
+import { articlesApi, pagesApi, vizApi } from '../../api'
+import { builtinIds } from '../../viz/registry'
+import { useEditorPreviewIslands } from '../../viz/editorPreview'
+
+// 编辑器预览里把 ```viz 占位渲染成真实交互组件（类 mermaid）
+const { onHtmlChanged } = useEditorPreviewIslands('article-editor-preview')
 
 const route = useRoute()
 const router = useRouter()
@@ -13,6 +18,8 @@ const id = computed(() => route.params.id)
 const isEdit = computed(() => !!id.value)
 
 const formRef = ref(null)
+const editorRef = ref(null)
+const vizOptions = ref([]) // 可插入的可视化标识（内置 + 后台动态）
 const form = ref({
   title: '',
   slug: '',
@@ -21,6 +28,16 @@ const form = ref({
   published: false,
   page_id: null,
 })
+
+// 在光标处插入 ```viz <slug>``` 围栏
+function insertViz(slug) {
+  editorRef.value?.insert(() => ({
+    targetValue: `\n\`\`\`viz\n${slug}\n\`\`\`\n`,
+    select: false,
+    deviationStart: 0,
+    deviationEnd: 0,
+  }))
+}
 const publishAt = ref(null) // Date | null，对应 created_at（发布时间）
 const listPages = ref([])
 const showSettings = ref(false)
@@ -59,6 +76,14 @@ function beforeUnload(e) {
 onMounted(async () => {
   const { data: allPages } = await pagesApi.listAll()
   listPages.value = allPages.filter((p) => p.type === 'article_list')
+
+  // 可插入的可视化：内置 + 后台动态组件（去重）
+  try {
+    const { data: vizList } = await vizApi.listAll()
+    vizOptions.value = [...new Set([...builtinIds(), ...vizList.map((v) => v.slug)])]
+  } catch (e) {
+    vizOptions.value = builtinIds()
+  }
 
   if (isEdit.value) {
     const { data } = await articlesApi.getForEdit(id.value)
@@ -130,12 +155,31 @@ async function save() {
         <el-tag :type="form.published ? 'success' : 'info'" effect="light">
           {{ form.published ? '已发布' : '草稿' }}
         </el-tag>
+        <el-dropdown trigger="click" @command="insertViz">
+          <el-button :icon="MagicStick">
+            插入可视化<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-if="!vizOptions.length" disabled>暂无可视化</el-dropdown-item>
+              <el-dropdown-item v-for="s in vizOptions" :key="s" :command="s">{{ s }}</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-button :icon="Setting" @click="showSettings = true">设置</el-button>
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
       </div>
     </div>
 
-    <MdEditor v-model="form.content" language="zh-CN" :preview="true" class="editor" />
+    <MdEditor
+      ref="editorRef"
+      v-model="form.content"
+      editor-id="article-editor"
+      language="zh-CN"
+      :preview="true"
+      class="editor"
+      @on-html-changed="onHtmlChanged"
+    />
 
     <!-- 右侧设置抽屉 -->
     <el-drawer v-model="showSettings" title="文章设置" size="360px">
