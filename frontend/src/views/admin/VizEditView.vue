@@ -5,6 +5,7 @@ import { vizApi } from '../../api'
 import { compileSfc } from '../../viz/compileSfc'
 import { buildComponent, acquireStyle } from '../../viz/runtime'
 import { invalidateViz } from '../../viz/registry'
+import HelpTip from '../../components/HelpTip.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -215,15 +216,16 @@ async function save() {
     </div>
 
     <el-form ref="formRef" :model="form" :rules="rules" inline class="meta">
-      <el-form-item label="标识" prop="slug">
+      <el-form-item prop="slug">
+        <template #label>
+          标识
+          <HelpTip>文章里用 <code>```viz {{ form.slug || 'my-viz' }}```</code> 引用</HelpTip>
+        </template>
         <el-input v-model="form.slug" placeholder="如 my-viz" style="width: 220px" />
       </el-form-item>
       <el-form-item label="名称">
         <el-input v-model="form.name" placeholder="便于识别的名字（可选）" style="width: 260px" />
       </el-form-item>
-      <span class="usage">
-        文章里用 <code>```viz {{ form.slug || 'my-viz' }}```</code> 引用
-      </span>
     </el-form>
 
     <div class="split">
@@ -283,12 +285,6 @@ async function save() {
 .meta :deep(.el-form-item) {
   margin-bottom: 0;
 }
-.usage {
-  color: var(--muted);
-  font-size: 0.85rem;
-  line-height: 32px;
-}
-.usage code,
 .pane-title code {
   background: #f0f1f3;
   padding: 0.1em 0.4em;
