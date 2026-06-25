@@ -268,8 +268,20 @@ async function save() {
   display: flex;
   gap: 10px;
 }
+/* 元信息独立背景框：与下方编辑/预览分区在视觉上分开 */
 .meta {
-  margin-bottom: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 20px;
+  margin-bottom: 14px;
+  padding: 14px 18px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.meta :deep(.el-form-item) {
+  margin-bottom: 0;
 }
 .usage {
   color: var(--muted);
