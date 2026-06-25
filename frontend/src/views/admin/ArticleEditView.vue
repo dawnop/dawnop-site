@@ -7,6 +7,7 @@ import '../../setupMdEditor'
 import { articlesApi, pagesApi, vizApi } from '../../api'
 import { builtinIds } from '../../viz/registry'
 import { useEditorPreviewIslands } from '../../viz/editorPreview'
+import HelpTip from '../../components/HelpTip.vue'
 
 // 编辑器预览里把 ```viz 占位渲染成真实交互组件（类 mermaid）
 const { onHtmlChanged } = useEditorPreviewIslands('article-editor-preview')
@@ -187,9 +188,12 @@ async function save() {
         <el-form-item label="标题" prop="title">
           <el-input v-model="form.title" placeholder="文章标题" />
         </el-form-item>
-        <el-form-item label="Slug">
+        <el-form-item>
+          <template #label>
+            Slug
+            <HelpTip>访问地址 <code>{{ slugPreview }}</code></HelpTip>
+          </template>
           <el-input v-model="form.slug" placeholder="url-friendly-slug" />
-          <div class="field-hint">访问地址：<code>{{ slugPreview }}</code></div>
         </el-form-item>
         <el-form-item label="所属列表页（分类）">
           <el-select v-model="form.page_id" placeholder="未分类" clearable class="w-full">

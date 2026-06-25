@@ -6,6 +6,7 @@ import { MdEditor } from 'md-editor-v3'
 import '../../setupMdEditor'
 import { pagesApi } from '../../api'
 import { useEditorPreviewIslands } from '../../viz/editorPreview'
+import HelpTip from '../../components/HelpTip.vue'
 
 // 内容页编辑器预览里把 ```viz 占位渲染成真实交互组件（类 mermaid）
 const { onHtmlChanged } = useEditorPreviewIslands('page-editor-preview')
@@ -207,9 +208,12 @@ async function save() {
           <el-input :value="isList ? '文章列表页（充当分类）' : '内容页（Markdown）'" disabled />
           <div class="field-hint">类型在创建时确定，不可转换。</div>
         </el-form-item>
-        <el-form-item label="路径 slug">
+        <el-form-item>
+          <template #label>
+            路径 slug
+            <HelpTip>访问地址 <code>{{ slugPreview }}</code></HelpTip>
+          </template>
           <el-input v-model="form.slug" placeholder="url-friendly-slug" />
-          <div class="field-hint">访问地址：<code>{{ slugPreview }}</code></div>
         </el-form-item>
         <el-form-item label="页面描述（SEO / 列表说明，可选）">
           <el-input v-model="form.description" type="textarea" :rows="2" placeholder="一句话描述这个页面" />
