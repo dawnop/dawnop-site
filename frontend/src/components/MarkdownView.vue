@@ -1,8 +1,10 @@
 <script setup>
-import { computed, ref, watch, onMounted, nextTick } from 'vue'
+import { computed, ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import MarkdownIt from 'markdown-it'
 import { katex } from '@mdit/plugin-katex'
 import hljs from '../hljs'
+import { registerVizFence } from '../viz/fence'
+import { createIslandManager } from '../viz/islands'
 import 'highlight.js/styles/github.css'
 import 'katex/dist/katex.min.css'
 
@@ -31,6 +33,9 @@ const md = new MarkdownIt({
     return '<pre class="hljs"><code>' + md.utils.escapeHtml(str) + '</code></pre>'
   },
 }).use(katex)
+
+// ```viz 围栏 → 占位 <div data-viz="id">，渲染后挂载真正的交互组件（见 viz/fence.js）
+registerVizFence(md)
 
 // 把标题文本转成 url 友好的 id（保留中英文数字）
 function slugify(text) {
@@ -146,8 +151,24 @@ function onClick(e) {
   })
 }
 
-onMounted(() => nextTick(enhance))
-watch(html, () => nextTick(enhance))
+// 「岛屿」挂载：把 ```viz 占位换成真正的交互组件（内置懒加载 / 后端动态，见 viz/islands.js）
+const islands = createIslandManager()
+
+onMounted(() =>
+  nextTick(() => {
+    enhance()
+    islands.mount(root.value)
+  })
+)
+// 内容变化：v-html 会替换旧 DOM，先卸载旧岛屿再挂新的，避免内存泄漏
+watch(html, () => {
+  islands.unmountAll()
+  nextTick(() => {
+    enhance()
+    islands.mount(root.value)
+  })
+})
+onBeforeUnmount(() => islands.unmountAll())
 </script>
 
 <template>

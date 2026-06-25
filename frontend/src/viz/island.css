@@ -1,0 +1,13 @@
+/* 交互可视化「岛屿」占位/降级样式。全局引入（islands.js 作为副作用导入），
+   使文章页、文章编辑器预览、组件编辑器预览处的占位观感一致。 */
+.viz-island {
+  margin: 1.6em 0;
+}
+.viz-island--error {
+  padding: 1em;
+  border: 1px dashed #d0d7de;
+  border-radius: 8px;
+  color: #6b7280;
+  font-size: 0.9rem;
+  text-align: center;
+}

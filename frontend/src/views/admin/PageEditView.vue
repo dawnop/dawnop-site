@@ -5,6 +5,10 @@ import { Setting } from '@element-plus/icons-vue'
 import { MdEditor } from 'md-editor-v3'
 import '../../setupMdEditor'
 import { pagesApi } from '../../api'
+import { useEditorPreviewIslands } from '../../viz/editorPreview'
+
+// 内容页编辑器预览里把 ```viz 占位渲染成真实交互组件（类 mermaid）
+const { onHtmlChanged } = useEditorPreviewIslands('page-editor-preview')
 
 const route = useRoute()
 const router = useRouter()
@@ -159,7 +163,15 @@ async function save() {
     </div>
 
     <!-- 内容页：Markdown 编辑器为核心 -->
-    <MdEditor v-if="!isList" v-model="form.content" language="zh-CN" :preview="true" class="editor" />
+    <MdEditor
+      v-if="!isList"
+      v-model="form.content"
+      editor-id="page-editor"
+      language="zh-CN"
+      :preview="true"
+      class="editor"
+      @on-html-changed="onHtmlChanged"
+    />
 
     <!-- 文章列表页：展示该分类下的文章 -->
     <el-card v-else shadow="never" class="list-panel">

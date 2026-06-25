@@ -22,6 +22,9 @@ export default defineConfig({
         // 只把极少变动的框架拆成 vendor；Element Plus 保持按需自动分包（勿强行合并，
         // 否则会把后台专用组件也拽进首屏 eager chunk）。
         manualChunks(id) {
+          // @vue/compiler-sfc（后台浏览器内编译 viz 用）须留在自己的懒加载 chunk，
+          // 绝不能并进首屏 eager 的 vendor，否则把数百 KB 编译器推给所有读者。
+          if (id.includes('compiler-sfc')) return
           if (/[\\/]node_modules[\\/](vue|vue-router|@vue|axios)[\\/]/.test(id)) {
             return 'vendor'
           }

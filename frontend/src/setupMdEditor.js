@@ -10,13 +10,21 @@
 import { config as mdConfig } from 'md-editor-v3'
 import katexLib from 'katex'
 import hljs from './hljs'
+import { registerVizFence } from './viz/fence'
 import 'md-editor-v3/lib/style.css'
 import 'highlight.js/styles/github.css'
 import 'katex/dist/katex.min.css'
+import './viz/island.css'
 
 mdConfig({
   editorExtensions: {
     katex: { instance: katexLib },
     highlight: { instance: hljs },
+  },
+  // 像 mermaid/echarts 那样,把 ```viz 拦成「裸占位 div」(无代码块头部)。
+  // 关键:markdownItConfig 在 md-editor 自带插件之前运行会被覆盖,故必须用 markdownItPlugins
+  // 追加到最后,包住 md-editor 的代码块渲染链。占位随后由编辑器预览的 island 挂载器渲染成真组件。
+  markdownItPlugins(plugins) {
+    return [...plugins, { type: 'viz', plugin: (md) => registerVizFence(md), options: {} }]
   },
 })

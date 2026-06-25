@@ -168,3 +168,8 @@
   --md-theme-code-inline-bg-color: #f0f1f3;
   --md-theme-code-inline-color: #24292f;
 }
+/* md-editor 代码块吸顶头部默认 z-index:10000，会盖住 Element 抽屉/弹层（overlay ~2003）。
+   降到极小值即可：吸顶只需压住其下方未定位的代码行，无需如此高层级。 */
+.admin .md-editor .md-editor-code-head {
+  z-index: 1 !important;
+}
