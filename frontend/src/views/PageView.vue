@@ -1,13 +1,20 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { useRoute, RouterLink } from 'vue-router'
 import { pagesApi } from '../api'
 import MarkdownView from '../components/MarkdownView.vue'
+import { stripFirstH1 } from '../utils/markdownTitle'
 
 const route = useRoute()
 const page = ref(null)
 const loading = ref(true)
 const notFound = ref(false)
+
+// 标题取自正文 H1 时，渲染前剥离那行，避免与页面标题重复（存储仍是完整原文）
+const displayContent = computed(() => {
+  if (!page.value) return ''
+  return page.value.auto_title ? stripFirstH1(page.value.content) : page.value.content
+})
 
 // 列表页文章
 const items = ref([])
@@ -79,7 +86,7 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
     <p v-if="page.description" class="page-desc">{{ page.description }}</p>
 
     <!-- 内容页 -->
-    <MarkdownView v-if="page.type === 'content'" :source="page.content" />
+    <MarkdownView v-if="page.type === 'content'" :source="displayContent" />
 
     <!-- 文章列表页 -->
     <template v-else>

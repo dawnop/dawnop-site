@@ -14,6 +14,7 @@ class PageCreate(BaseModel):
     type: PageType = "content"
     description: str = ""
     content: str = ""
+    auto_title: bool = False
     nav_visible: bool = True
     nav_order: int = 0
     slug: str | None = Field(default=None, max_length=255)
@@ -36,6 +37,7 @@ class PageUpdate(BaseModel):
     type: PageType | None = None
     description: str | None = None
     content: str | None = None
+    auto_title: bool | None = None
     nav_visible: bool | None = None
     nav_order: int | None = None
     created_at: datetime | None = None
@@ -60,6 +62,7 @@ class PageOut(BaseModel):
     type: str
     description: str
     content: str
+    auto_title: bool
     nav_visible: bool
     nav_order: int
     created_at: datetime

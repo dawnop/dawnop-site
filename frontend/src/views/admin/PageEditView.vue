@@ -1,11 +1,12 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave, RouterLink } from 'vue-router'
 import { Setting } from '@element-plus/icons-vue'
 import { MdEditor } from 'md-editor-v3'
 import '../../setupMdEditor'
 import { pagesApi } from '../../api'
 import { useEditorPreviewIslands } from '../../viz/editorPreview'
+import { firstH1 } from '../../utils/markdownTitle'
 import HelpTip from '../../components/HelpTip.vue'
 
 // 内容页编辑器预览里把 ```viz 占位渲染成真实交互组件（类 mermaid）
@@ -24,8 +25,17 @@ const form = ref({
   type: 'content',
   description: '',
   content: '',
+  auto_title: false, // 内容页：标题取正文第一个 # 一级标题
   nav_visible: true,
 })
+
+// 内容页开启「用正文 H1 作标题」时，标题跟随正文第一个一级标题
+watch(
+  [() => form.value.auto_title, () => form.value.content],
+  ([auto, content]) => {
+    if (auto && form.value.type === 'content') form.value.title = firstH1(content)
+  }
+)
 const publishAt = ref(null) // Date | null，对应 created_at
 const showSettings = ref(false)
 const saving = ref(false)
@@ -37,7 +47,20 @@ const catLoaded = ref(false)
 
 const isList = computed(() => form.value.type === 'article_list')
 const rules = {
-  title: [{ required: true, message: '请输入标题', trigger: 'blur' }],
+  title: [
+    {
+      validator: (_rule, value, cb) => {
+        if (!isList.value && form.value.auto_title) {
+          if (!firstH1(form.value.content)) {
+            cb(new Error('已开启「用正文标题」，但正文里没有 # 一级标题'))
+          } else cb()
+        } else if (!value || !value.trim()) {
+          cb(new Error('请输入标题'))
+        } else cb()
+      },
+      trigger: 'blur',
+    },
+  ],
 }
 const slugPreview = computed(() => {
   const s = form.value.slug.trim()
@@ -94,6 +117,7 @@ onMounted(async () => {
       type: p.type,
       description: p.description || '',
       content: p.content || '',
+      auto_title: p.auto_title,
       nav_visible: p.nav_visible,
     }
     publishAt.value = p.created_at ? new Date(p.created_at) : null
@@ -155,7 +179,10 @@ async function save() {
 <template>
   <div class="edit-wrap">
     <div class="edit-topbar">
-      <h1 class="doc-title">{{ form.title || '未命名页面' }}</h1>
+      <h1 class="doc-title">
+        {{ form.title || (form.auto_title ? '（正文暂无 # 标题）' : '未命名页面') }}
+        <span v-if="form.auto_title && !isList" class="title-from">取自正文</span>
+      </h1>
       <div class="actions">
         <el-tag type="info" effect="light">{{ isList ? '文章列表页' : '内容页' }}</el-tag>
         <el-button :icon="Setting" @click="showSettings = true">设置</el-button>
@@ -202,7 +229,18 @@ async function save() {
     <el-drawer v-model="showSettings" title="页面设置" size="360px">
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
         <el-form-item label="标题" prop="title">
-          <el-input v-model="form.title" placeholder="页面标题" />
+          <el-input
+            v-model="form.title"
+            :disabled="!isList && form.auto_title"
+            :placeholder="!isList && form.auto_title ? '取自正文第一个 # 标题' : '页面标题'"
+          />
+          <el-checkbox v-if="!isList" v-model="form.auto_title" size="small" class="auto-title-chk">
+            用正文第一个 # 标题作为标题
+            <HelpTip>
+              开启后标题自动取正文里第一个一级标题（<code># 标题</code>），
+              页面渲染时会隐藏正文那行以免重复；正文按原文完整保存。
+            </HelpTip>
+          </el-checkbox>
         </el-form-item>
         <el-form-item label="类型">
           <el-input :value="isList ? '文章列表页（充当分类）' : '内容页（Markdown）'" disabled />
@@ -259,6 +297,19 @@ async function save() {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.title-from {
+  margin-left: 8px;
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--muted);
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  padding: 1px 6px;
+  vertical-align: middle;
+}
+.auto-title-chk {
+  margin-top: 6px;
 }
 .actions {
   display: flex;

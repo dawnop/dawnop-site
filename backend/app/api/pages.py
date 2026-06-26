@@ -63,6 +63,7 @@ def create_page(
         type=payload.type,
         description=payload.description,
         content=payload.content,
+        auto_title=payload.auto_title,
         nav_visible=payload.nav_visible,
         nav_order=payload.nav_order,
     )

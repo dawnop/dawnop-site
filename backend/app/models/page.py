@@ -6,7 +6,7 @@ type:
 """
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -21,6 +21,10 @@ class Page(Base):
     type: Mapped[str] = mapped_column(String(32), default="content")  # content | article_list
     description: Mapped[str] = mapped_column(Text, default="")  # 页面摘要 / SEO 描述
     content: Mapped[str] = mapped_column(Text, default="")  # 仅内容页使用
+    # 是否用正文首个 H1 作标题（前端开关，仅内容页有意义）：为真时页面渲染隐藏正文那行 H1
+    auto_title: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("0"), nullable=False
+    )
     nav_visible: Mapped[bool] = mapped_column(Boolean, default=True)
     nav_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
     created_at: Mapped[datetime] = mapped_column(

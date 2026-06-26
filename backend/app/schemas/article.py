@@ -29,6 +29,7 @@ class ArticleBase(BaseModel):
     summary: str = ""
     content: str = ""
     published: bool = False
+    auto_title: bool = False
     page_id: int | None = None
 
     @field_validator("title")
@@ -55,6 +56,7 @@ class ArticleUpdate(BaseModel):
     summary: str | None = None
     content: str | None = None
     published: bool | None = None
+    auto_title: bool | None = None
     page_id: int | None = None
     created_at: datetime | None = None
 
@@ -78,6 +80,7 @@ class ArticleOut(BaseModel):
     summary: str
     content: str
     published: bool
+    auto_title: bool
     page_id: int | None
     word_count: int
     created_at: datetime

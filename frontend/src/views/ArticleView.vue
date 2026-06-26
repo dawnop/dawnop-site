@@ -3,6 +3,7 @@ import { ref, watch, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { articlesApi } from '../api'
 import MarkdownView from '../components/MarkdownView.vue'
+import { stripFirstH1 } from '../utils/markdownTitle'
 
 const route = useRoute()
 const article = ref(null)
@@ -37,6 +38,14 @@ function fmtDate(s) {
 const readMinutes = computed(() =>
   article.value ? Math.max(1, Math.round((article.value.word_count || 0) / 300)) : 0
 )
+
+// 标题取自正文 H1 时，渲染前剥离那行，避免与上方标题重复（存储仍是完整原文）
+const displayContent = computed(() => {
+  if (!article.value) return ''
+  return article.value.auto_title
+    ? stripFirstH1(article.value.content)
+    : article.value.content
+})
 
 // 目录：取 h1~h3
 const toc = computed(() => headings.value.filter((h) => h.level <= 3))
@@ -99,7 +108,7 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
           <span>约 {{ readMinutes }} 分钟</span>
         </div>
       </header>
-      <MarkdownView :source="article.content" @headings="onHeadings" />
+      <MarkdownView :source="displayContent" @headings="onHeadings" />
     </article>
 
     <aside v-if="article && toc.length > 1" class="toc">
