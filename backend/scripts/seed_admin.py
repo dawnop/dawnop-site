@@ -5,6 +5,7 @@
 
 账号取自 .env 的 ADMIN_USERNAME / ADMIN_PASSWORD。已存在则跳过。
 """
+import json
 import sys
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from app.core.security import hash_password  # noqa: E402
 from app.database import SessionLocal, init_db  # noqa: E402
 from app.models.page import Page  # noqa: E402
 from app.models.user import User  # noqa: E402
+from app.models.viz import VizComponent  # noqa: E402
 
 
 def _seed_admin(db) -> None:
@@ -57,12 +59,43 @@ def _seed_pages(db) -> None:
     print("已创建默认页面：博客（列表页）、关于（内容页）。")
 
 
+def _seed_viz(db) -> None:
+    """初始化内置可视化组件（种子数据由 frontend/scripts/gen-viz-seed.mjs 生成）。
+
+    已编译产物随 seed_viz.json 提交，部署只需跑本脚本、无需 Node。按 slug 幂等：已存在则跳过。
+    """
+    seed_file = Path(__file__).resolve().parent / "seed_viz.json"
+    if not seed_file.exists():
+        return
+    items = json.loads(seed_file.read_text(encoding="utf-8"))
+    created = 0
+    for it in items:
+        if db.query(VizComponent).filter(VizComponent.slug == it["slug"]).first():
+            continue
+        db.add(
+            VizComponent(
+                slug=it["slug"],
+                name=it.get("name", ""),
+                source=it["source"],
+                compiled=it["compiled"],
+                style=it.get("style", ""),
+            )
+        )
+        created += 1
+    if created:
+        db.commit()
+        print(f"已初始化 {created} 个内置可视化组件。")
+    else:
+        print("内置可视化组件已存在，跳过。")
+
+
 def main() -> None:
     init_db()
     db = SessionLocal()
     try:
         _seed_admin(db)
         _seed_pages(db)
+        _seed_viz(db)
     finally:
         db.close()
 

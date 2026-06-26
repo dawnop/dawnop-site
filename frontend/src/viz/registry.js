@@ -2,9 +2,10 @@
 // 二者共存：重型/常用的可放内置；随手写的交互在后台编辑、存库、动态加载。
 import { buildComponent } from './runtime'
 
-const builtin = {
-  coalescing: () => import('./MatmulAccessSVG.vue').then((m) => m.default),
-}
+// 内置组件：随博客构建打包、懒加载（重型/想随代码版本管理的可放这里）。
+// 注意：内置优先级高于数据库，同名 slug 会遮蔽数据库版本。
+// 示例 coalescing 已改为「种子数据」初始化进数据库（backend/scripts/seed_viz.json），故此处为空。
+const builtin = {}
 
 export function builtinIds() {
   return Object.keys(builtin)
