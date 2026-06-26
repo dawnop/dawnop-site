@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { MagicStick } from '@element-plus/icons-vue'
 import { vizApi } from '../../api'
+import HelpTip from '../../components/HelpTip.vue'
 
 const router = useRouter()
 const items = ref([])
@@ -51,7 +52,13 @@ onMounted(load)
       </el-button>
     </div>
     <p class="hint">
-      在后台直接写 Vue 组件、实时预览、保存即生效；文章里用 <code>```viz 标识```</code> 围栏引用。
+      在后台直接写 Vue 组件、实时预览、保存即生效。引用格式
+      <HelpTip>
+        <div>文章里用如下围栏引用（标识单独成行）：</div>
+        <pre style="margin: 6px 0 0; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre;">```viz
+标识
+```</pre>
+      </HelpTip>
     </p>
 
     <el-card shadow="never">
