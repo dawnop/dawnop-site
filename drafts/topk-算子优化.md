@@ -1,247 +1,113 @@
-# TopK 算子优化：从硬件约束推导算法选择
+# TopK 算子优化
 
-> 本文面向具备 GPU 优化经验、但未系统接触过 TopK 算法的读者。文中不再解释 warp、shared memory、原子操作、访存合并、占用率等基础概念，而是以这些硬件约束为出发点，推导 TopK 几类主流算法的设计动机，并辅以可交互图示建立直觉。
+本文面向具备 GPU 优化经验、但未系统接触过 TopK 算法的读者。不再解释 warp、shared memory、atomic、coalescing、occupancy 等基础概念，而是从这些硬件约束出发，推导 TopK 几类主流算法的设计动机，并辅以可交互图示建立直觉。每一流派的实现细节与工程优化，单独成篇深入展开（文中给出链接）。
 
-## 0. 问题背景
+## 1. selection，而非 sort
 
-TopK——从 $n$ 个元素中选出最大（或最小）的 $k$ 个——是高性能计算中出现频率极高的算子，典型场景包括：
+一种常见的默认实现是先排序再取前 $k$ 个：`argsort` 得到全序，再切片。它的问题在于：为获取前 $k$ 个，同时对其余 $n-k$ 个完成了排序，而后者的顺序与结果无关。
 
-- **大语言模型采样**：每生成一个 token，需在词表（规模常达 $10^5$）上执行 top-k / top-p；
-- **近似最近邻检索（ANN）**：查询向量与库内千万级向量计算相似度后取最近的 $k$ 个；
-- **推荐与广告排序**：粗排打分后取 TopN 进入精排；
-- **稀疏化训练**：梯度或激活仅保留 top-k，其余置零。
+从复杂度看，"选出最大的 $k$ 个"是 **selection** 问题，下界为 $O(n)$——至少需检视每个元素一次，但无需达到 sort 的 $O(n\log n)$。这给出本文的出发点：
 
-这些场景的 $n$、$k$ 与 batch 规模差异极大，而 TopK 的最优实现强依赖于这些参数。更值得注意的是，其朴素实现的性能瓶颈恰好集中于 GPU 优化中最受关注的若干环节：原子竞争、分支发散、不规则访存与占用率。因此 TopK 并非"调用一个 API"即可了事的平凡算子，理解其算法谱系对 GPU 工程实践具有实际价值。
+> 应尽量避免 sort；理想的 TopK 只需单遍扫描数据。
 
-## 1. 第一性原理：选择问题，而非排序问题
+对 GPU，这一原则更具体：**理想的 TopK 是访存受限（memory-bound）的单遍扫描**。若实测吞吐显著低于显存带宽，通常意味着在做多余的工作。
 
-一个常见的默认实现如下：
+但"单遍选出 top-k"在 GPU 上并不容易，难点恰好落在 GPU 优化最敏感的几处：**branch divergence、atomic 竞争、不规则访存、occupancy**。后文三类算法，本质上是针对不同参数区间、绕开不同硬件痛点的三种答案。决定选哪一种的，主要是三个量：$k$ 的量级（能否把候选结构放进片上）、单条长向量还是海量短向量（并行粒度）、需要精确还是可接受近似。
 
-```python
-sorted_idx = argsort(a)      # O(n log n)
-topk = sorted_idx[:k]
-```
+## 2. 为什么不能照搬 CPU 算法
 
-该实现可用，但存在本质浪费：为获取前 $k$ 个元素，它同时对其余 $n-k$ 个元素完成了排序，而后者的顺序与结果无关。
+CPU 上 TopK 有两个标准解，移植到 GPU 都不顺。
 
-从计算复杂度看，"选出最大的 $k$ 个"属于**选择**（selection）问题，其下界为 $O(n)$——至少需检视每个元素一次，但无需达到排序的 $O(n\log n)$。这是本文所有优化的出发点：
+**最小堆（min-heap）**：维护容量为 $k$ 的 min-heap，遍历时大于堆顶则替换下沉，$O(n\log k)$。但 heap 是串行、依赖前序状态的结构，每次替换是一串有依赖的比较与交换。GPU 上成千上万线程要么争抢同一个 heap（atomic 噩梦），要么各维护局部 heap 再归并——heap 的串行性与 SIMT 的大规模并行天生不合。
 
-> **第一性原理：应尽量避免排序；理想的 TopK 仅需单遍扫描数据。**
+**Quickselect**：用 partition 把数据按 pivot 分成两部分，只递归包含第 $k$ 个元素的一侧，期望 $O(n)$，是 `nth_element` 的内核。但它的划分方向数据相关——在 SIMT 下，一个 warp 内线程分流不一致就要两条路径都走一遍（branch divergence）；partition 的数据搬移也不规则，破坏 coalescing。
 
-对 GPU 工程而言，这一原则可进一步具体化为：**理想的 TopK 实现应是访存受限（memory-bound）的单遍扫描**。若实测吞吐显著低于显存带宽上限，通常意味着存在多余计算（多为排序）。
+结论：GPU 需要的是**数据无关、访存规则、atomic 少**的算法。下面三类各自从一个硬件约束切入，先用一张表把它们并排放在一起，后文逐一展开：
 
-在讨论具体算法前，需明确 TopK 实为一族问题。下列四个维度共同决定算法选择：
+| 维度 | Bitonic Top-K | Radix Select | 二分阈值 |
+|---|---|---|---|
+| 切入约束 | branch divergence | 片上容量（大 $k$） | 并行粒度（短向量） |
+| 数据结构 | 容量 $k$ 的有序序列（sorting network） | $2^d$ histogram | 无，二分一个阈值 |
+| 片上占用 | 随 $k$ 增长（register/shared） | 常数 $\sim1$ KB、与 $k$ 无关 | 行长 $R$ 的 register 数组 |
+| 对 $k$ 的依赖 | $O(k\log^2 k)$，强 | 近似无关 | 无关（受 $R$） |
+| 并行粒度 | warp/block 维护一段 top-k | grid 多趟、全数组 | 一 warp 一行 |
+| 最佳区间 | 小 $k$（$\lesssim 256$） | 任意 / 大 $k$、median | 海量短行、各自小 $k$ |
+| 主瓶颈 → 优化 | 喂数带宽 → vectorized load | atomic → hierarchical / write buffer | warp 计数 → ballot + popc |
 
-| 维度 | 取值 | 影响 |
-|------|------|------|
-| $k$ 的量级 | $k\le128$ / $k\le2048$ / $k\to n$ | 决定片上能否容纳"候选结构" |
-| 单条 vs 批量 | 单条长向量 / 海量短向量 | 决定并行粒度（多核协作一条 vs 一 warp 一条） |
-| 精确 vs 近似 | 须精确 / 容忍误差 | 近似可换取数倍加速 |
-| 是否需有序 | 仅需集合 / 需有序 | 多数场景仅需集合 |
+## 3. 流派一 · Bitonic Top-K（数据无关，适合小 $k$）
 
-后文每讨论一类算法，均将回到此表对照其适用区间。
+**切入的约束：GPU 不利于数据相关的 branch。** 既然如此，就用一种比较位置完全固定、与数据无关的排序——**sorting network**，具体是 **bitonic sort**。
 
-## 2. 朴素实现的开销分析：带宽视角
-
-设 $n = 2^{20}$ 个 float（4 MB），$k=100$。
-
-- **全排序方案**：GPU 上的 radix sort 通常需对数据执行 $O(\log n)$ 趟读写，并伴随大量中间缓冲的全局内存往返；对数 MB 级数据，等效全量读写可达数十次。
-- **理想选择方案**：读入 4 MB 一次，筛出 100 个元素，写出量极小。
-
-二者差距在一个数量级以上。这解释了为何成熟的 TopK 实现普遍规避全排序。
-
-下文以"GPU 的硬件约束"为线索，依次推导三类主流算法。先在 CPU 视角下厘清概念——概念在 CPU 上最为清晰，同时可揭示其在 GPU 上的局限。
-
-## 3. 算法基础：堆与 Quickselect
-
-### 3.1 最小堆
-
-维护一个容量为 $k$ 的最小堆（堆顶为当前 top-k 中的最小值）：
-
-1. 以前 $k$ 个元素建堆；
-2. 其后每读入一个元素，与堆顶比较——小于堆顶则丢弃，大于堆顶则替换堆顶并下沉调整。
-
-遍历结束后，堆内即为 top-k。复杂度 $O(n\log k)$，空间 $O(k)$，且天然支持流式数据。当 $k\ll n$ 时效率较高，是 CPU 实现（如 `heapq.nlargest`）的常见选择。
-
-其在 GPU 上的局限在于：堆是串行且依赖前序状态的数据结构，每次替换需 $O(\log k)$ 次具有依赖关系的比较与交换。在 GPU 上，大量线程或争抢同一个堆（引发严重原子竞争），或各自维护局部堆（需额外归并）。堆的串行性与 SIMT 的大规模并行不相适配。
-
-### 3.2 Quickselect
-
-借鉴快速排序的 partition 操作：选定 pivot，将数据划分为"大于 pivot"与"小于 pivot"两部分，随后仅对包含第 $k$ 个元素的一侧递归：
-
-- 较大一侧恰含 $k$ 个元素：完成；
-- 多于 $k$ 个：top-k 全部位于该侧，仅递归该侧；
-- 少于 $k$ 个：该侧全部入选，再于另一侧寻找剩余元素。
-
-每次仅递归单侧，期望复杂度 $O(n)$（最坏 $O(n^2)$，采用中位数的中位数法可保证最坏 $O(n)$）。这是 CPU 实现 `nth_element` 的内核。
-
-其在 GPU 上存在两点局限，恰为 GPU 优化所敏感：
-
-- **分支发散**：划分方向（向左或向右）依赖于数据。在 SIMT 模型下，同一 warp 内 32 个线程若分流方向不一致，两条路径需串行执行，产生发散开销；
-- **不规则访存**：partition 的数据搬移依赖比较结果，破坏访存合并。
-
-因此 quickselect 虽在 CPU 上表现优异，移植至 GPU 时效率受限。GPU 更适配的是数据无关、访存规则、原子操作少的算法——这正是下述三类算法各自的设计切入点。
-
-## 4. 第一类 · 基于归并：Bitonic Top-K
-
-**设计动机**：GPU 不利于数据相关分支，故需一种完全数据无关、无分支的排序机制——即**排序网络（sorting network）**，此处采用 **bitonic（双调）排序**。
-
-排序网络的核心特征是：比较-交换的位置预先固定，与数据内容无关。无论输入如何，执行的比较步骤完全一致，不存在数据相关分支，访存规则，契合 SIMT 模型。
-
-Bitonic Top-K 的策略是：在片上（寄存器 / shared memory）维护一个容量为 $k$ 的有序序列，将输入分块，每块与该序列执行 bitonic merge，仅保留最大的 $k$ 个。扫描完整输入后，片上序列即为 top-k。整个过程无原子操作、无分支发散。
-
-下图展示 8 路 bitonic 排序网络的比较器级联：每一列为一组同时进行的比较-交换，箭头方向固定、与数据无关。点击"步进"可逐列观察，调节随机数据可验证网络结构不随数据改变：
+sorting network 由一组预先确定的 compare-exchange 构成：无论输入是什么，执行的比较步骤完全一致，没有数据相关的 branch。下图是 8 路 bitonic network，每一列是一组同时进行、方向固定的 compare-exchange；点"步进"逐列观察，换随机数据可验证 network 结构不随数据改变：
 
 ```viz
 topk-bitonic
 ```
 
-**适用区间分析**：如图所示，网络的比较器数量为 $O(k\log^2 k)$，且容量为 $k$ 的有序序列须常驻片上。当 $k$ 增大时，寄存器与 shared memory 无法容纳。因此 bitonic top-k 适用于较小的 $k$（典型 $k\le 256$，实现上限通常 $k\le 2048$）。在此区间其效率显著：经典工作报告，对 $k\le256$ 相比全排序可快约 15 倍。
+Bitonic Top-K 的做法：在片上维护一个容量为 $k$ 的有序序列，将输入分块，每块与该序列做 bitonic merge、只保留较大的 $k$ 个，扫完即得 top-k。整个过程在 register / shared memory 内完成，**无 atomic、无 branch divergence**，warp 内的 compare-exchange 直接用 shuffle 指令实现，这正是它在小 $k$ 下极快的原因。
 
-> 对照第 1 节表格：bitonic top-k 适用于小 $k$、单条或中等规模、精确、片上无原子。
+**适用区间**：network 的 comparator 数量为 $O(k\log^2 k)$，且容量 $k$ 的有序序列要常驻 register/shared，$k$ 一大就放不下。深入篇按 A100 量化：高占用区间约 $k\lesssim 256$，寄存器硬上限约 $k\le 3680$（再大溢出 local memory）。
 
-## 5. 第二类 · 基于分布：Radix Select
+> 实现细节与完整 kernel（sorting network 构造、warp shuffle register 内排序、分块 merge、vectorized load 喂数）见深入篇：[《Bitonic Top-K：register-resident 的无分支并行选择》](/article/topk-bitonic-select)。
 
-**设计动机**：bitonic 的局限在于片上须容纳 $O(k)$ 的结构。当 $k$ 很大（如词表规模），则不再维护任何有序结构，转而以**直方图统计**定位第 $k$ 大的元素（pivot），片上仅需常数大小的计数器。
+## 4. 流派二 · Radix Select（histogram 定位，适合任意 $k$）
 
-此即 **Radix Select**，其思想与 radix sort 同源，但仅执行选择而不排序：
+**切入的约束：大 $k$ 时片上放不下候选结构。** 那就不维护任何有序结构，改用 **histogram** 定位第 $k$ 大的元素，片上只需常数大小的计数器。
 
-1. 将数值视为比特串，自最高位起，取 $d$ 个 bit 构成一个"数字"（digit），对应 $2^d$ 个 bin；
-2. 扫描数据，统计各 bin 的元素数（即一个 $2^d$ 大小的直方图）；
-3. 自最高 bin 向下累加计数，确定第 $k$ 大元素所在的 bin——该位由此确定；
-4. 仅保留该 bin 内的元素，进入下一组 $d$ 个 bit，重复上述过程。
-
-每轮将候选集合缩减约 $1/2^d$，经 $O(\text{位宽}/d)$ 轮后定位到精确的第 $k$ 大值，最后扫描一遍取出所有不小于该值的元素。
-
-下图演示逐轮缩桶过程：上方直方图为当前候选元素按高位 bit 的分布，点击"下一轮"将锁定包含第 $k$ 大元素的 bin、排除其余，右侧计数显示候选规模的下降：
+Radix Select 与 radix sort 同源，但只 select 不 sort：把数值看作比特串，从最高位起每次取 $d$ 个 bit（对应 $2^d$ 个 bin），统计 histogram，从高 bin 向下累加找到第 $k$ 大所在的 bin，只对该 bin 进入下一组 bit。下图演示这一逐轮缩桶：更高的 bin 整段进 top-k，pivot bin 含边界、只对它递归，其余排除，候选每轮缩约 $1/2^d$：
 
 ```viz
 topk-radix
 ```
 
-**适用区间分析**：片上仅需一个 $2^d$ 的直方图（如 $d=8$ 即 256 个计数器），与 $k$ 无关。因此即便 $k$ 等于 $n/2$（求中位数）或任意分位数亦可胜任。对大规模数据优势显著：float 向量长度超过 $2^{24}$ 时相比 GPU 全排序约快 6 倍，double 向量长度 $2^{28}$ 时可达约 19 倍。
+片上只需一个 $2^d$ 的 histogram（如 $d=8$ 即 256 个计数器、约 $1$ KB），**与 $k$ 无关**——成本对 $k$ 近似平坦，因此 $k$ 取到 $n/2$（median）乃至任意分位数都从容。总读量是几何级数 $\approx n$（首趟主导），算法带宽受限。
 
-其代价在于原子操作：统计直方图时大量线程需对同一组 bin 计数器累加。这一问题将在第 7 节讨论（层级化原子即为缓解此竞争而设计）。此外，当 $k$ 很小时该方法并不经济——为少量结果须扫描整个直方图，固定开销偏高。
-
-> 对照第 1 节表格：radix select 适用于任意 $k$（尤其大 $k$）、单条大规模数据、精确，代价为原子竞争。
-
-## 6. 第三类 · 基于阈值：二分阈值法
-
-前两类算法均针对单条向量。另有一类场景与之显著不同：**海量短向量，每条各自求 top-k**（在 GNN、推荐中常见，如每个节点对其邻居打分后取 top-k）。此时单条 $n$ 不大（常小于 1024），但条数极多。
-
-**设计动机**：单条向量过短，拆分至多个 block 并不划算，因此采用**一条向量由一个 warp 处理**，由 32 个线程协作。在 warp 内部高效求 top-k 的途径之一是：不直接定位第 $k$ 大元素，而是**二分一个阈值** $\tau$，使得"不小于 $\tau$ 的元素个数恰为 $k$"。
-
-代表性工作 RTop-K（ICLR 2025）的流程为：
-
-1. warp 内以 shuffle 归约求得该向量的最小、最大值，作为二分上下界；
-2. 取中值 $\tau$，以 `__ballot_sync` 与 `__popc`（投票与计数）无分支地统计不小于 $\tau$ 的元素数；
-3. 计数大于 $k$ 则提高 $\tau$，小于 $k$ 则降低 $\tau$，二分收窄；
-4. 收敛后扫描一遍收集结果。
-
-整个过程几乎不写入中间结果、寄存器占用低，充分利用 warp 原语。下图展示阈值在数轴上的逼近过程，实时显示当前计数与目标 $k$ 的关系：
-
-```viz
-topk-threshold
-```
-
-**近似变体**：上述二分若要求计数严格等于 $k$，可能需较多轮次。但在稀疏化训练等场景中，结果多一个或少一个元素并无实质影响。据此可**固定迭代轮数**（如仅二分若干轮）提前终止，接受近似的 $k$。RTop-K 报告该近似的平均相对误差不超过 5%，对 GNN 训练精度几乎无损甚至略有提升，同时获得数倍加速（精确版约 3.9 倍，近似版 4.2 至 9.5 倍，相对 PyTorch 的 row-wise 实现）。上图中可切换 early-stop 开关以观察精度与速度的权衡。
-
-> 对照第 1 节表格：二分阈值法适用于小至中等 $k$、海量短向量批量、可精确可近似、一 warp 一条。
-
-## 7. 工程优化：与算法正交，可叠加
-
-至此三类算法已讨论完毕。然而从论文算法到生产可用之间，尚存一层"贴合硬件"的工程手法。这些技巧与具体算法正交，可叠加于上述任一算法之上。
-
-### 7.1 层级化原子
-
-第 5 节指出 radix select 的瓶颈在于直方图的原子竞争。其解法是构建三级层级，使原子操作尽量在代价较低的层级完成：
-
-| 层级 | 介质 | 手段 | 代价 |
-|------|------|------|------|
-| warp | 寄存器 | shuffle / ballot 归约 | 最低 |
-| block | shared memory | 块内局部直方图 + shared 原子 | 中 |
-| grid | global memory | 仅在合并时执行常数次全局原子 | 最高 |
-
-每个 block 先在 shared memory 内聚合出局部直方图，最后以常数次全局原子合并至全局直方图。全局原子的竞争由"每元素一次"降至"每 block 数次"。
-
-下图对比"朴素全局原子"与"三级聚合"两种方式的冲突情况——其思想与访存合并一致，均为将竞争转移至代价更低的层级：
+它的代价是 **atomic**：统计 histogram 时大量线程要往同一组计数器累加。这里就要引入第一项与该算法绑定的工程优化——**hierarchical atomics**：把 atomic 尽量留在便宜的层级，warp 内先用 shuffle/ballot reduction、block 内在 shared memory 聚出局部 histogram，最后才以常数次 global atomic 合并。下图对比朴素 global atomic 与三级聚合的冲突：
 
 ```viz
 topk-atomics
 ```
 
-### 7.2 写缓冲
+围绕 radix 还有一系列工程优化：**write buffer**（筛出的元素攒够一批再写 global）、**task rescheduling**（批量场景横向对齐迭代以保 occupancy）、**adaptive scaling**（高位 bit 聚集时减去随机元素打散分布）、**vectorized load**。这些都在深入篇展开。
 
-筛选出的元素若逐个写入全局内存，将对写带宽与原子造成压力。改进方式是在 shared memory 中设置缓冲区，累积一批后统一写出。一种实现是将缓冲容量设为 $2\times\text{BLOCK}$、占用超过 $\text{BLOCK}$ 时才写出，使写出次数下降约 $2^d$，而缓冲仅多占一倍 shared memory。
+> 逐位 select 的完整 kernel、hierarchical atomics / write buffer / task rescheduling / adaptive scaling 的实现，见深入篇：[《Radix Select：与 k 无关的多趟分桶选择》](/article/topk-radix-select)。
 
-### 7.3 任务重排
+## 5. 流派三 · 二分阈值（一 warp 一条，适合海量短向量）
 
-批量 TopK 若令各任务独立迭代至收敛，将出现尾部低占用：少数尚未收敛的任务占用若干 SM，其余 SM 空闲。解法是横向对齐——所有任务先共同执行第一轮，再共同执行第二轮，直至全部收敛，从而维持高占用。
+**切入的约束：并行粒度。** 当输入是海量短向量、每条各自求 top-k（每条长度常小于 1024），把一条拆给多个 block 并不划算，于是**让一个 warp 处理一条向量**，32 个线程协作。
 
-### 7.4 自适应缩放
+在 warp 内求 top-k 的高效途径，不是定位具体的第 $k$ 大元素，而是**二分一个阈值（threshold）** $\tau$，使"不小于 $\tau$ 的元素恰好 $k$ 个"。下图展示 threshold 在数轴上的逼近：
 
-radix select 在一种输入下表现欠佳：所有元素高位 bit 高度相同（如集中于某一窄区间），此时前几轮直方图难以有效划分。一种解法是随机选取一个元素 $a_s$，将所有元素减去它，从而打散数值的指数位分布，使原本高位难以区分的元素在前几轮即可分离。RadiK 报告在对抗性分布上由此获得约 2.7 倍提升。
+```viz
+topk-threshold
+```
 
-### 7.5 向量化访存与双缓冲
+关键在于计数这一步：warp 内用 `__ballot_sync` + `__popc`（投票 + 数 1 的个数）一条指令数出有多少元素过线，**无 branch**；上下界用 shuffle reduction 求得。整个过程几乎不写中间结果、register 占用极低。
 
-采用 `float4` 等向量化指令一次加载 16 字节以提升带宽利用；并以双缓冲实现软件流水，在处理第 $N$ 块的同时预取第 $N{+}1$ 块，将访存延迟与计算重叠。相关工作报告，长序列下向量化访存可带来约 55% 的提升。
+进一步，**early-stop 近似**把二分固定为若干轮提前停手，接受一个近似的 $k$——在容忍误差的场景下用很小的精度换数倍速度，且所有 warp 轮数一致、无尾部发散。这一路的成本与 $k$ 无关，受限的是**行长 $R$**（$R/32$ 的 register 数组撑占寄存器），最佳区间是 $R\lesssim 1024$、batch 极多的 row-wise 场景。
 
-## 8. 自适应算法选择
+> warp 内 ballot/popcount 计数的完整实现、early-stop 与精度权衡，见深入篇：[《二分阈值 Top-K：count-based、无排序的 warp 选择》](/article/topk-binary-threshold)。
 
-由前文可见，没有单一算法在 $k$ 的全部区间上均为最优：小 $k$ 时 bitonic 优于 radix（后者直方图的固定开销偏高）；大 $k$ 时 bitonic 因片上容量受限而无法适用。若固定使用某一算法，跨越特定 $k$ 时会出现性能骤降（即"性能悬崖"）。
+## 6. 自适应选型：消除 performance cliff
 
-生产级方案（如 AMD 的 AdaptiveTopK）据此按 $k$ 动态选择算法：
+没有单一算法在 $k$ 的全区间上都最优：小 $k$ 时 bitonic 优于 radix（后者 histogram 的固定开销偏高），大 $k$ 时 bitonic 放不下片上、只能 radix。固定用一个算法，跨越某个 $k$ 就会撞上性能骤降（performance cliff）。下图把这件事画出来——固定 $n$，Bitonic 的成本随 $k$ 凸增、到寄存器墙后不可行，Radix 对 $k$ 近似平坦；取两者**下包络**（更低即更快）即逐点最优。拖动 $n$ 滑杆，交叉点 $k^*$ 随之右移：
 
-- $k \le 128$：采用 bitonic（BlockTopK），于寄存器内执行、规避 shared memory 原子，复杂度 $O(n + k\log^2 k)$；
-- $k > 128$：切换至 radix，复杂度 $O(3n)$、与 $k$ 无关。
+```viz
+topk-selection-map
+```
 
-切换阈值依数据规模 $n$ 由经验公式确定（下式为某型号 GPU 上的示例）：
+生产级实现按 $k$ 动态选择：小 $k$（如 $\le128$）走 bitonic、在 register 内完成并避开 shared memory atomic；大 $k$ 走 radix、复杂度与 $k$ 无关。切换阈值随数据规模 $n$ 由经验公式确定，例如
 
 $$\text{Factor}(n) = \frac{1}{3} + \frac{1.6}{\log_2 n - 9.5}$$
 
-例如 $n=8192$ 时阈值约为 $k\approx195$，$n=131072$ 时约为 $k\approx878$。如此可在整个 $k$ 区间上贴近逐点最优，自动规避性能悬崖。
+在 $n=8192$ 时约 $k\approx195$、$n=131072$ 时约 $k\approx878$。如此在整个 $k$ 区间贴近逐点最优，自动规避 cliff。
 
-## 9. 实践：选型决策
+## 7. 结语
 
-将全文归纳为可操作的选型建议：
+把三类算法放在一起看，它们其实是同一种思路的三次应用：**先确定当前的硬件约束，再据此选择数据结构**。
 
-1. **首先判断是否需要有序**——多数场景仅需集合，应避免全排序。
-2. **CPU**：小 $k$ 采用最小堆（$O(n\log k)$）；大 $k$ 采用 `std::nth_element`（quickselect）。
-3. **GPU 单条向量**：小 $k$（约 $\le256$）采用 bitonic top-k；大 $k$ 或求分位数采用 radix select。
-4. **GPU 批量短向量**（GNN、推荐等 row-wise 场景）：一 warp 一条 + 二分阈值法；可容忍误差时启用 early-stop。
-5. **大语言模型采样 / 词表规模大 $k$**：radix select 配合层级原子与写缓冲。
-6. **不希望手动调参**：采用自适应选择（按 $k$ 在 bitonic 与 radix 间切换）。
-7. **可普遍叠加的工程优化**：层级化原子、写缓冲、任务重排、自适应缩放、向量化访存与双缓冲。
+- 约束是 branch divergence → 用数据无关的 sorting network（bitonic，小 $k$）；
+- 约束是片上容量 → 用与 $k$ 无关的 histogram 定位（radix，任意 $k$）；
+- 约束是并行粒度 → 一 warp 一条 + threshold 二分（短向量批量）。
 
-### 现有实现
-
-在自行编写 kernel 前，应优先评估现有库是否满足需求：
-
-- **CUB**：`cub::DeviceRadixSort`（全排序）、`cub::DeviceSelect` 及其 segmented 版本，工业级、模板化、性能良好；
-- **Thrust**：`thrust::sort` 后取前 $k$，适合快速原型；
-- **PyTorch**：`torch.topk`，框架内首选；
-- **FAISS**：向量检索场景下高度优化的 TopK（含 GPU 实现）。
-
-当现有 API 无法覆盖特定形状（极端的 batch × k 组合、需与上游 kernel 融合、需以精度换速度）时，方有必要依本文思路自行实现。
-
-## 10. 结语
-
-TopK 看似平凡，其难点却恰好落在 GPU 工程最受关注的若干环节。理清之后，整套知识可由若干条原则贯通：
-
-- TopK 是选择问题，下界 $O(n)$，理想实现为访存受限的单遍扫描；
-- GPU 不利于分支，故 bitonic 采用数据无关的排序网络（适用小 $k$）；
-- 大 $k$ 无法容纳于片上，故 radix select 以直方图定位（适用任意 $k$，代价为原子）；
-- 海量短向量场景，采用一 warp 一条 + 二分阈值（可近似）；
-- 原子竞争是普遍瓶颈，故采用层级化（寄存器 → shared → global）；
-- 不存在通用最优，故按 $k$ 自适应选择以规避性能悬崖。
-
----
-
-## 参考资料
-
-- [RadiK: Scalable and Optimized GPU-Parallel Radix Top-K Selection (arXiv 2501.14336)](https://arxiv.org/html/2501.14336v1)
-- [RTop-K: Ultra-Fast Row-Wise Top-K Algorithm and GPU Implementation (arXiv 2409.00822, ICLR 2025)](https://arxiv.org/html/2409.00822v1)
-- [Adaptive Top-K Selection: Eliminating Performance Cliffs Across All K Values on AMD GPUs (ROCm Blogs)](https://rocm.blogs.amd.com/software-tools-optimization/adaptive-topk/README.html)
-- [Fast k-Selection Algorithms for Graphics Processing Units (Alabi et al., 2012)](https://www.researchgate.net/publication/262353105_Fast_k-Selection_Algorithms_for_Graphics_Processing_Units)
-- Shanbhag et al., *Efficient Top-K Query Processing on Massively Parallel Hardware* (SIGMOD 2018) — bitonic top-k
-- Zhang et al., *AIR Top-k / GridSelect* (2023)
+而工程优化并不独立于算法，它依附于具体算法的瓶颈：radix 的瓶颈是 atomic，于是有 hierarchical atomics 与 write buffer；threshold 法的瓶颈是 warp 内计数，于是有 ballot/popcount；bitonic 的优势本就在 register 内无 atomic，工程重点转向喂数的带宽。换言之，**算法决定了瓶颈在哪里，工程优化决定了把这个瓶颈压到多低**。三篇深入文章会沿着各自的瓶颈，给出可落地的 CUDA 实现，并在 A100 上把各自的边界量化到寄存器 / occupancy / 带宽，与上节的选型图相互印证。
