@@ -41,7 +41,12 @@ def test_draft_not_public_but_admin_sees_it(client, auth_headers):
     resp = _create(client, auth_headers, title="Secret", published=False)
     slug = resp.json()["slug"]
 
+    # 匿名按 slug 取草稿 → 404；登录后凭直链可预览 → 200
     assert client.get(f"/api/articles/{slug}").status_code == 404
+    preview = client.get(f"/api/articles/{slug}", headers=auth_headers)
+    assert preview.status_code == 200
+    assert preview.json()["title"] == "Secret"
+
     admin = client.get("/api/articles/admin", headers=auth_headers)
     assert admin.json()["total"] == 1
 
@@ -79,18 +84,9 @@ def test_delete_article(client, auth_headers):
     )
 
 
-def test_import_and_export_markdown(client, auth_headers):
+def test_export_markdown(client, auth_headers):
     md = "# Imported Title\n\nbody with $\\alpha$"
-    resp = client.post(
-        "/api/articles/import",
-        files={"file": ("my-note.md", md.encode("utf-8"), "text/markdown")},
-        data={"published": "true"},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 201
-    art = resp.json()
-    assert art["title"] == "Imported Title"
-    assert art["slug"] == "my-note"
+    art = _create(client, auth_headers, title="Imported Title", content=md).json()
 
     exported = client.get(
         f"/api/articles/{art['id']}/export", headers=auth_headers
@@ -98,6 +94,37 @@ def test_import_and_export_markdown(client, auth_headers):
     assert exported.status_code == 200
     assert exported.text == md
     assert "attachment" in exported.headers["content-disposition"]
+
+
+def test_import_endpoint_removed(client, auth_headers):
+    # 导入已下线（改前端复用新建流程）
+    resp = client.post(
+        "/api/articles/import",
+        files={"file": ("x.md", b"# X", "text/markdown")},
+        headers=auth_headers,
+    )
+    assert resp.status_code in (404, 405)
+
+
+def test_auto_title_flag_roundtrip(client, auth_headers):
+    # auto_title 仅作为标志存取；正文完整保留（前端负责派生标题与渲染去重）
+    md = "# 标题来自正文\n\n正文段落"
+    resp = _create(
+        client, auth_headers, title="标题来自正文", content=md, auto_title=True
+    )
+    assert resp.status_code == 201
+    art = resp.json()
+    assert art["auto_title"] is True
+    assert art["content"] == md  # 后端不剥离正文
+
+    got = client.get(f"/api/articles/{art['slug']}", headers=auth_headers).json()
+    assert got["auto_title"] is True
+
+    # 关闭开关
+    upd = client.put(
+        f"/api/articles/{art['id']}", json={"auto_title": False}, headers=auth_headers
+    )
+    assert upd.json()["auto_title"] is False
 
 
 def test_create_rejects_blank_title(client, auth_headers):

@@ -11,7 +11,6 @@ const total = ref(0)
 const page = ref(1)
 const size = 12
 const loading = ref(true)
-const importing = ref(false)
 const fileInput = ref(null)
 const pageMap = ref({}) // page_id -> title
 const listPages = ref([]) // 文章列表页（用于分类筛选）
@@ -89,20 +88,18 @@ function pickImport() {
   fileInput.value.click()
 }
 
+// 导入复用「新建文章」流程：读出 .md 文本，存入 sessionStorage，跳到新建页预填、预览后再保存
 async function onImport(e) {
   const file = e.target.files[0]
   if (!file) return
-  importing.value = true
   try {
-    await articlesApi.importMarkdown(file, false)
-    ElMessage.success('导入成功')
+    const text = await file.text()
+    sessionStorage.setItem('dawnop_import_md', text)
     e.target.value = ''
-    page.value = 1
-    load()
+    router.push('/admin/articles/new')
   } catch (err) {
-    /* 拦截器已提示 */
-  } finally {
-    importing.value = false
+    ElMessage.error('读取文件失败，请确认是 UTF-8 文本')
+    e.target.value = ''
   }
 }
 
@@ -134,7 +131,7 @@ onMounted(load)
       <h1>文章管理</h1>
       <div class="actions">
         <input ref="fileInput" type="file" accept=".md,text/markdown" hidden @change="onImport" />
-        <el-button :icon="Upload" :loading="importing" @click="pickImport">导入 .md</el-button>
+        <el-button :icon="Upload" @click="pickImport">导入 .md</el-button>
         <el-button type="primary" :icon="EditPen" @click="router.push('/admin/articles/new')">
           写文章
         </el-button>
@@ -174,13 +171,13 @@ onMounted(load)
         <el-table-column label="链接" min-width="180">
           <template #default="{ row }">
             <a
-              v-if="row.published"
               :href="articleUrl(row.slug)"
               target="_blank"
               rel="noopener"
               class="slug-link"
+              :title="row.published ? '' : '草稿：仅登录后凭直链可预览，前台列表不可见'"
             >/article/{{ row.slug }}</a>
-            <span v-else class="muted" title="草稿未发布，前台不可见">/article/{{ row.slug }}</span>
+            <span v-if="!row.published" class="draft-tag">草稿预览</span>
           </template>
         </el-table-column>
         <el-table-column label="所属页面" min-width="120">
@@ -261,6 +258,15 @@ onMounted(load)
 .slug-link {
   font-size: 0.85rem;
   text-decoration: none;
+}
+.draft-tag {
+  margin-left: 6px;
+  font-size: 0.7rem;
+  color: var(--muted);
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  padding: 0 5px;
+  white-space: nowrap;
 }
 .pager {
   display: flex;

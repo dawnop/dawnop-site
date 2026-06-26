@@ -43,12 +43,6 @@ export const articlesApi = {
   remove(id) {
     return client.delete(`/articles/${id}`)
   },
-  importMarkdown(file, published = false) {
-    const form = new FormData()
-    form.append('file', file)
-    form.append('published', published)
-    return client.post('/articles/import', form)
-  },
   // 导出接口需鉴权，故用带 token 的请求取 blob，再触发下载
   exportMarkdown(id) {
     return client.get(`/articles/${id}/export`, { responseType: 'blob' })

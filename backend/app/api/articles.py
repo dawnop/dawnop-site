@@ -1,20 +1,19 @@
-"""文章接口：公开只读 + 受保护的增删改、Markdown 导入/导出。
+"""文章接口：公开只读 + 受保护的增删改、Markdown 导出。
 
-路由声明顺序很重要：静态路径（/admin、/import）与带前缀的整型路径需先于
+路由声明顺序很重要：静态路径（/admin）与带前缀的整型路径需先于
 GET /{slug} 声明，避免被 slug 通配吞掉。
 """
-from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.core.crud import drop_null_created_at, get_or_404
 from app.core.pagination import paginate
-from app.core.slug import slugify, unique_slug
-from app.deps import get_current_user, get_db
+from app.core.slug import unique_slug
+from app.deps import get_current_user, get_current_user_optional, get_db
 from app.models.article import Article
 from app.models.page import Page
 from app.models.user import User
@@ -109,6 +108,7 @@ def create_article(
         summary=payload.summary,
         content=payload.content,
         published=payload.published,
+        auto_title=payload.auto_title,
         page_id=payload.page_id,
     )
     if payload.created_at is not None:
@@ -158,44 +158,8 @@ def delete_article(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-# ---------- 受保护：Markdown 导入 / 导出 ----------
-
-
-@router.post(
-    "/import",
-    response_model=ArticleOut,
-    status_code=status.HTTP_201_CREATED,
-    summary="导入 Markdown 文件为文章",
-)
-async def import_markdown(
-    file: UploadFile = File(...),
-    published: bool = Form(False),
-    db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
-):
-    try:
-        raw = (await file.read()).decode("utf-8")
-    except UnicodeDecodeError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "文件不是 UTF-8 文本，无法导入")
-    stem = Path(file.filename).stem if file.filename else ""
-
-    # 标题优先取首个 H1，否则用文件名
-    title = stem or "untitled"
-    lines = raw.splitlines()
-    if lines and lines[0].startswith("# "):
-        title = lines[0][2:].strip() or title
-
-    article = Article(
-        title=title,
-        slug=unique_slug(db, slugify(stem or title)),
-        content=raw,
-        summary="",
-        published=published,
-    )
-    db.add(article)
-    db.commit()
-    db.refresh(article)
-    return article
+# ---------- 受保护：Markdown 导出 ----------
+# 导入已改为前端读取文件 + 复用「新建文章」流程（更便于预览/微调），故不再提供导入接口。
 
 
 @router.get("/{article_id}/export", summary="导出文章为 Markdown 文件")
@@ -217,13 +181,14 @@ def export_markdown(
 # ---------- 公开：按 slug 取单篇（须放在最后）----------
 
 
-@router.get("/{slug}", response_model=ArticleOut, summary="按 slug 取已发布文章")
-def get_published(slug: str, db: Session = Depends(get_db)):
-    article = (
-        db.query(Article)
-        .filter(Article.slug == slug, Article.published.is_(True))
-        .first()
-    )
-    if article is None:
+@router.get("/{slug}", response_model=ArticleOut, summary="按 slug 取单篇（已发布公开；草稿仅登录可见）")
+def get_published(
+    slug: str,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user_optional),
+):
+    """草稿不进公开列表，但管理员凭直链（带有效 token）可直接预览；匿名访问草稿仍 404。"""
+    article = db.query(Article).filter(Article.slug == slug).first()
+    if article is None or (not article.published and user is None):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "文章不存在")
     return article

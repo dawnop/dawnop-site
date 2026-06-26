@@ -2,7 +2,7 @@
 import re
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -21,6 +21,10 @@ class Article(Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     content: Mapped[str] = mapped_column(Text, default="")
     published: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # 是否用正文首个 H1 作标题（前端开关）：为真时文章页渲染会隐藏正文那行 H1，避免与标题重复
+    auto_title: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("0"), nullable=False
+    )
     # 一对多：文章归属一个文章列表页（=分类）；删除页面时置空
     page_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("pages.id", ondelete="SET NULL"), nullable=True, index=True

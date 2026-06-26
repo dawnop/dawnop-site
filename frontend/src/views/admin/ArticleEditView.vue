@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
 import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { Setting, MagicStick, ArrowDown } from '@element-plus/icons-vue'
 import { MdEditor } from 'md-editor-v3'
@@ -7,7 +7,10 @@ import '../../setupMdEditor'
 import { articlesApi, pagesApi, vizApi } from '../../api'
 import { builtinIds } from '../../viz/registry'
 import { useEditorPreviewIslands } from '../../viz/editorPreview'
+import { firstH1 } from '../../utils/markdownTitle'
 import HelpTip from '../../components/HelpTip.vue'
+
+const IMPORT_KEY = 'dawnop_import_md' // 导入 .md 时由列表页写入、本页读取后清除
 
 // 编辑器预览里把 ```viz 占位渲染成真实交互组件（类 mermaid）
 const { onHtmlChanged } = useEditorPreviewIslands('article-editor-preview')
@@ -27,8 +30,17 @@ const form = ref({
   summary: '',
   content: '',
   published: false,
+  auto_title: false, // 开启后标题取正文第一个 # 一级标题
   page_id: null,
 })
+
+// 开启「用正文 H1 作标题」时，标题跟随正文第一个一级标题
+watch(
+  [() => form.value.auto_title, () => form.value.content],
+  ([auto, content]) => {
+    if (auto) form.value.title = firstH1(content)
+  }
+)
 
 // 在光标处插入 ```viz <slug>``` 围栏
 function insertViz(slug) {
@@ -45,7 +57,20 @@ const showSettings = ref(false)
 const saving = ref(false)
 
 const rules = {
-  title: [{ required: true, message: '请输入标题', trigger: 'blur' }],
+  title: [
+    {
+      validator: (_rule, value, cb) => {
+        if (form.value.auto_title) {
+          if (!firstH1(form.value.content)) {
+            cb(new Error('已开启「用正文标题」，但正文里没有 # 一级标题'))
+          } else cb()
+        } else if (!value || !value.trim()) {
+          cb(new Error('请输入标题'))
+        } else cb()
+      },
+      trigger: 'blur',
+    },
+  ],
 }
 
 const slugPreview = computed(() => {
@@ -94,13 +119,25 @@ onMounted(async () => {
       summary: data.summary,
       content: data.content,
       published: data.published,
+      auto_title: data.auto_title,
       page_id: data.page_id,
     }
     publishAt.value = data.created_at ? new Date(data.created_at) : null
+    takeSnapshot()
   } else {
     showSettings.value = true // 新建默认展开设置抽屉
+    // 「导入 .md」：列表页把文件内容存入 sessionStorage，这里读出预填并默认开启「用正文标题」
+    const imported = sessionStorage.getItem(IMPORT_KEY)
+    if (imported) {
+      sessionStorage.removeItem(IMPORT_KEY)
+      form.value.content = imported
+      form.value.auto_title = true
+      form.value.title = firstH1(imported)
+      // 不对导入内容建快照 → 呈「未保存」，提醒保存后再离开
+    } else {
+      takeSnapshot()
+    }
   }
-  takeSnapshot()
   window.addEventListener('beforeunload', beforeUnload)
 })
 
@@ -151,7 +188,10 @@ async function save() {
 <template>
   <div class="edit-wrap">
     <div class="edit-topbar">
-      <h1 class="doc-title">{{ form.title || '未命名文章' }}</h1>
+      <h1 class="doc-title">
+        {{ form.title || (form.auto_title ? '（正文暂无 # 标题）' : '未命名文章') }}
+        <span v-if="form.auto_title" class="title-from">取自正文</span>
+      </h1>
       <div class="actions">
         <el-tag :type="form.published ? 'success' : 'info'" effect="light">
           {{ form.published ? '已发布' : '草稿' }}
@@ -186,7 +226,18 @@ async function save() {
     <el-drawer v-model="showSettings" title="文章设置" size="360px">
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
         <el-form-item label="标题" prop="title">
-          <el-input v-model="form.title" placeholder="文章标题" />
+          <el-input
+            v-model="form.title"
+            :disabled="form.auto_title"
+            :placeholder="form.auto_title ? '取自正文第一个 # 标题' : '文章标题'"
+          />
+          <el-checkbox v-model="form.auto_title" size="small" class="auto-title-chk">
+            用正文第一个 # 标题作为标题
+            <HelpTip>
+              开启后标题自动取正文里第一个一级标题（<code># 标题</code>），
+              文章页渲染时会隐藏正文那行以免重复；正文按原文完整保存。
+            </HelpTip>
+          </el-checkbox>
         </el-form-item>
         <el-form-item>
           <template #label>
@@ -245,6 +296,19 @@ async function save() {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.title-from {
+  margin-left: 8px;
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--muted);
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  padding: 1px 6px;
+  vertical-align: middle;
+}
+.auto-title-chk {
+  margin-top: 6px;
 }
 .actions {
   display: flex;

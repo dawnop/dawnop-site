@@ -79,3 +79,21 @@ def get_current_user_flexible(
         if header.startswith("Bearer "):
             raw = header[7:]
     return _resolve_user(raw, db)
+
+
+def get_current_user_optional(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> User | None:
+    """尝试解析当前用户：带有效凭证返回 User，否则返回 None（不报错）。
+
+    供「公开接口但登录后可见更多」的场景使用，例如管理员凭直链预览未发布文章。
+    """
+    header = request.headers.get("Authorization", "")
+    raw = header[7:] if header.startswith("Bearer ") else None
+    if not raw:
+        return None
+    try:
+        return _resolve_user(raw, db)
+    except HTTPException:
+        return None
