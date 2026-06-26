@@ -1,10 +1,10 @@
+<!-- viz-name: 访存合并（内存事务） -->
 <script setup>
 import { ref, computed } from 'vue'
 
-// 最小「可解释动画」示例：纯内联 SVG + ref 状态 + CSS transition，无任何动画库。
-// 演示一个 warp 的 8 个线程访问显存：合并访问(落在 1 个事务) vs 跨步访问(散到 4 个事务)。
-const W = 8 // 简化为 8 线程
-const MEM = 32 // 显存单元
+// 一个 warp 的 8 个线程访问显存：合并访问(落在 1 个事务) vs 跨步访问(散到 4 个事务)。
+const W = 8
+const MEM = 32
 const SEG = 8 // 一个内存事务覆盖的连续单元数 → 共 4 段
 const STRIDE = 4
 const padX = 30
@@ -18,10 +18,10 @@ const threads = [...Array(W).keys()]
 const cells = [...Array(MEM).keys()]
 const segs = [...Array(MEM / SEG).keys()]
 
+// 每个线程一个色相，便于把线程和它命中的显存单元对应起来
 const hue = (i) => Math.round((i / (W - 1)) * 280)
 const targetOf = (i) => (mode.value === 'coalesced' ? i : (i * STRIDE) % MEM)
 
-// cellIndex -> 命中它的线程号（用于高亮配色）
 const hitMap = computed(() => {
   const m = {}
   threads.forEach((i) => (m[targetOf(i)] = i))
@@ -58,10 +58,10 @@ const threadCX = (i) => padX + (i + 0.5) * ((MEM * cellW) / W)
           width="44"
           height="26"
           rx="5"
-          :fill="`hsl(${hue(i)},70%,22%)`"
-          :stroke="`hsl(${hue(i)},70%,55%)`"
+          :fill="`hsl(${hue(i)},70%,93%)`"
+          :stroke="`hsl(${hue(i)},55%,58%)`"
         />
-        <text :x="threadCX(i)" y="37" class="lbl">T{{ i }}</text>
+        <text :x="threadCX(i)" y="37" class="lbl" :fill="`hsl(${hue(i)},45%,35%)`">T{{ i }}</text>
       </g>
       <text :x="padX" y="14" class="cap-lbl">一个 warp（简化为 8 线程）</text>
 
@@ -88,9 +88,7 @@ const threadCX = (i) => padX + (i + 0.5) * ((MEM * cellW) / W)
         :width="cellW - 3"
         :height="cellH"
         rx="2"
-        :style="{
-          fill: c in hitMap ? `hsl(${hue(hitMap[c])},70%,55%)` : '#1b2336',
-        }"
+        :style="{ fill: c in hitMap ? `hsl(${hue(hitMap[c])},65%,60%)` : '#e9edf3' }"
       />
       <text :x="padX" :y="memY + cellH + 22" class="cap-lbl">显存地址（连续）→</text>
 
@@ -101,7 +99,7 @@ const threadCX = (i) => padX + (i + 0.5) * ((MEM * cellW) / W)
         class="marker"
         :style="{ transform: `translate(${markerX(i)}px, ${memY - 16}px)` }"
       >
-        <circle r="5" :fill="`hsl(${hue(i)},70%,60%)`" />
+        <circle r="5" :fill="`hsl(${hue(i)},65%,52%)`" />
       </g>
     </svg>
 
@@ -117,7 +115,7 @@ const threadCX = (i) => padX + (i + 0.5) * ((MEM * cellW) / W)
   max-width: 680px;
   margin: 0 auto;
   font-family: -apple-system, 'PingFang SC', sans-serif;
-  color: #d7dce5;
+  color: #1f2329;
 }
 .bar {
   display: flex;
@@ -128,9 +126,9 @@ const threadCX = (i) => padX + (i + 0.5) * ((MEM * cellW) / W)
 .seg-btns button {
   font: inherit;
   cursor: pointer;
-  background: #161b2b;
-  color: #d7dce5;
-  border: 1px solid #232a3d;
+  background: #fff;
+  color: #1f2329;
+  border: 1px solid #d9dee5;
   padding: 6px 14px;
   font-size: 0.85rem;
 }
@@ -142,41 +140,41 @@ const threadCX = (i) => padX + (i + 0.5) * ((MEM * cellW) / W)
   border-left: none;
 }
 .seg-btns button.on {
-  background: rgba(118, 185, 0, 0.16);
-  border-color: #76b900;
-  color: #d9f29b;
+  background: rgba(22, 119, 255, 0.1);
+  border-color: #1677ff;
+  color: #1677ff;
 }
 .metrics {
   font-size: 0.85rem;
-  color: #8b93a7;
+  color: #8a909c;
 }
 .metrics b {
-  color: #76b900;
+  color: #1677ff;
   font-size: 1.05rem;
   transition: color 0.4s;
 }
 .metrics b.bad {
-  color: #ff7a7a;
+  color: #cf1322;
 }
 .metrics .sep {
   margin: 0 8px;
 }
 .stage {
   width: 100%;
-  background: #0f1320;
-  border: 1px solid #232a3d;
+  background: #f8fafc;
+  border: 1px solid #e2e6ed;
   border-radius: 10px;
 }
 .lbl {
   text-anchor: middle;
   font-size: 11px;
-  fill: #d7dce5;
+  font-weight: 600;
 }
 .cap-lbl {
   font-size: 11px;
-  fill: #8b93a7;
+  fill: #8a909c;
 }
-/* 关键：CSS transition 把状态变化自动变成动画，无需任何动画库 */
+/* CSS transition 把状态变化自动变成动画，无需任何动画库 */
 .cell {
   transition: fill 0.45s ease;
 }
@@ -185,23 +183,23 @@ const threadCX = (i) => padX + (i + 0.5) * ((MEM * cellW) / W)
 }
 .seg-box {
   fill: transparent;
-  stroke: #2a3450;
+  stroke: #cbd2dc;
   stroke-dasharray: 4 4;
-  opacity: 0.5;
+  opacity: 0.7;
   transition: opacity 0.45s, stroke 0.45s;
 }
 .seg-box.active {
-  stroke: #76b900;
+  stroke: #1677ff;
   stroke-dasharray: none;
-  opacity: 0.9;
+  opacity: 1;
 }
 .cap {
   font-size: 0.85rem;
   line-height: 1.7;
-  color: #a9b1c2;
+  color: #5c6370;
   margin-top: 10px;
 }
 .cap b {
-  color: #76b900;
+  color: #1677ff;
 }
 </style>
