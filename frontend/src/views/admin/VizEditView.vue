@@ -219,7 +219,12 @@ async function save() {
       <el-form-item prop="slug">
         <template #label>
           标识
-          <HelpTip>文章里用 <code>```viz {{ form.slug || 'my-viz' }}```</code> 引用</HelpTip>
+          <HelpTip>
+            <div>文章里用如下围栏引用（标识单独成行）：</div>
+            <pre style="margin: 6px 0 0; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre;">```viz
+{{ form.slug || 'my-viz' }}
+```</pre>
+          </HelpTip>
         </template>
         <el-input v-model="form.slug" placeholder="如 my-viz" style="width: 220px" />
       </el-form-item>
