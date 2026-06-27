@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search, Upload, EditPen } from '@element-plus/icons-vue'
 import { articlesApi, pagesApi } from '../../api'
+import { parseFrontmatter } from '../../utils/frontmatter'
 
 const router = useRouter()
 
@@ -94,7 +95,10 @@ async function onImport(e) {
   if (!file) return
   try {
     const text = await file.text()
-    sessionStorage.setItem('dawnop_import_md', text)
+    const { meta, body } = parseFrontmatter(text)
+    sessionStorage.setItem('dawnop_import_md', body)
+    sessionStorage.setItem('dawnop_import_meta', JSON.stringify(meta))
+    sessionStorage.setItem('dawnop_import_name', file.name)
     e.target.value = ''
     router.push('/admin/articles/new')
   } catch (err) {

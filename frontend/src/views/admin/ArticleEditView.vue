@@ -11,6 +11,8 @@ import { firstH1 } from '../../utils/markdownTitle'
 import HelpTip from '../../components/HelpTip.vue'
 
 const IMPORT_KEY = 'dawnop_import_md' // 导入 .md 时由列表页写入、本页读取后清除
+const META_KEY = 'dawnop_import_meta' // 导入 .md 的 front matter 元数据（同上）
+const NAME_KEY = 'dawnop_import_name' // 导入 .md 的文件名（无 title/H1 时兜底当标题）
 
 // 编辑器预览里把 ```viz 占位渲染成真实交互组件（类 mermaid）
 const { onHtmlChanged } = useEditorPreviewIslands('article-editor-preview')
@@ -126,13 +128,24 @@ onMounted(async () => {
     takeSnapshot()
   } else {
     showSettings.value = true // 新建默认展开设置抽屉
-    // 「导入 .md」：列表页把文件内容存入 sessionStorage，这里读出预填并默认开启「用正文标题」
+    // 「导入 .md」：列表页已解析 front matter，正文与元数据分别存入 sessionStorage，这里读出预填
     const imported = sessionStorage.getItem(IMPORT_KEY)
-    if (imported) {
+    if (imported !== null) {
       sessionStorage.removeItem(IMPORT_KEY)
+      const metaRaw = sessionStorage.getItem(META_KEY)
+      sessionStorage.removeItem(META_KEY)
+      const fileName = sessionStorage.getItem(NAME_KEY)
+      sessionStorage.removeItem(NAME_KEY)
+      const meta = metaRaw ? JSON.parse(metaRaw) : {}
       form.value.content = imported
-      form.value.auto_title = true
-      form.value.title = firstH1(imported)
+      // 标题优先级：front matter title → 文件名（去 .md）；导入一律不开启 auto_title。
+      // H1 逻辑仅在用户手动勾选「用正文标题」开关时生效（见顶部 watch）。
+      const fname = (fileName || '').replace(/\.(md|markdown)$/i, '').trim()
+      form.value.title = (meta.title ? String(meta.title) : '') || fname
+      form.value.auto_title = false
+      if (meta.summary != null) form.value.summary = String(meta.summary)
+      if (meta.slug != null) form.value.slug = String(meta.slug)
+      if (typeof meta.published === 'boolean') form.value.published = meta.published
       // 不对导入内容建快照 → 呈「未保存」，提醒保存后再离开
     } else {
       takeSnapshot()
@@ -225,7 +238,16 @@ async function save() {
     <!-- 右侧设置抽屉 -->
     <el-drawer v-model="showSettings" title="文章设置" size="360px">
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
-        <el-form-item label="标题" prop="title">
+        <el-form-item prop="title">
+          <template #label>
+            标题
+            <HelpTip>
+              导入 .md 时，标题按优先级确定（默认不开启下方开关）：<br />
+              ① front matter 的 <code>title:</code>；<br />
+              ② 否则用文件名（去掉 <code>.md</code>）。<br />
+              勾选下方开关后，标题改取正文第一个 <code># 标题</code> 并跟随它。
+            </HelpTip>
+          </template>
           <el-input
             v-model="form.title"
             :disabled="form.auto_title"
