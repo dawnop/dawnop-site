@@ -1,10 +1,11 @@
 ---
 title: 【TopK 优化系列 2】Radix
+summary: 上一篇的 bitonic 在小 k 下很爽，可 k 一大片上就放不下了。这一篇换思路：不维护任何有序结构，改用 histogram 逐位定位第 k 大——片上只要一个 256-bin 计数器、跟 k 完全无关，连 median、任意分位数都扛得住。我会把浮点比特键变换、逐位 select 的完整 kernel，以及跟它绑死的四项优化（hierarchical atomics、write buffer、task rescheduling、adaptive scaling）一个个写清楚。
 ---
 
 > **TopK 优化系列**：[0 总览](/article/topk-optimization) · [1 Bitonic](/article/topk-bitonic-select) · **2 Radix（本篇）** · [3 二分阈值](/article/topk-binary-threshold)
 
-本文是 TopK 优化系列第 2 篇，讲流派二 **Radix Select：与 k 无关的多趟分桶选择**。前置结论：大 $k$ 时片上放不下有序候选结构，于是改用 **histogram** 定位第 $k$ 大的元素，片上只需常数大小的计数器，与 $k$ 无关。下面把比特键变换、逐位 select、以及与该算法绑定的几项工程优化（hierarchical atomics、write buffer、task rescheduling、adaptive scaling）讲清楚，并给出核心 kernel。
+系列第 2 篇。上一篇的 bitonic 在小 $k$ 下很爽，但 $k$ 一大，片上就放不下那个有序结构了。这一篇换个思路：**不维护任何有序结构**，改用 histogram 去定位第 $k$ 大，片上只要常数大小的计数器、跟 $k$ 完全无关。我会把比特键变换、逐位 select、还有跟这算法绑死的几项工程优化（hierarchical atomics、write buffer、task rescheduling、adaptive scaling）一个个讲清楚，并给出能跑的 kernel。
 
 ```viz
 topk-radix
@@ -12,7 +13,7 @@ topk-radix
 
 ## 1. 让浮点数可按比特比较
 
-radix select 把数值当无符号整数逐位处理，这要求**比特序与数值序一致**。`int`/`uint` 本就如此（有符号数需翻转符号位）。IEEE-754 `float` 需要一次单调（monotonic）键变换：正数翻转符号位、负数全位取反，使整型比较等价于浮点比较。
+先解决一个前提问题：radix select 要把数值当无符号整数逐位处理，这就要求**比特序与数值序一致**。`int`/`uint` 本就如此（有符号数需翻转符号位）。麻烦的是 IEEE-754 `float`，得做一次单调（monotonic）键变换：正数翻转符号位、负数全位取反，使整型比较等价于浮点比较。
 
 ```cpp
 __device__ __forceinline__ uint32_t f2u_order(float f) {
@@ -27,7 +28,7 @@ __device__ __forceinline__ float u2f_order(uint32_t u) {
 }
 ```
 
-变换后，求"最大的 $k$ 个 float"等价于"最大的 $k$ 个 uint"，可逐位 radix select。取几个值验证：
+变换之后，求"最大的 $k$ 个 float"就等价于"最大的 $k$ 个 uint"，可以逐位 radix select 了。随手取几个值验证一下：
 
 | 值 | raw `__float_as_uint`（符号位） | ordered key（变换后） |
 |---|---|---|
@@ -37,11 +38,11 @@ __device__ __forceinline__ float u2f_order(uint32_t u) {
 | $+1.0$ | `0x3F800000`（0） | `0xBF800000` |
 | $+3.0$ | `0x40400000`（0） | `0xC0400000` |
 
-ordered key 按无符号升序排列，恰好还原 $-2<-0<+0<+1<+3$ 的数值序。两条规则的来由：正数（符号位 0）彼此本就按 uint 有序，只需置符号位让它们整体大于负数；负数（符号位 1）**指数/尾数越大、数值反而越小**，序相反，全位取反同时翻转符号位与高低序。有符号 `int` 更简单——只翻符号位（`u ^ 0x80000000`）；`uint` 无需变换。注意必须 **MSB 优先**逐位处理：高位定序、低位细分。
+ordered key 按无符号升序排列，恰好还原 $-2<-0<+0<+1<+3$ 的数值序。两条规则的来由我也想了一下：正数（符号位 0）彼此本就按 uint 有序，只需置符号位让它们整体大于负数；负数（符号位 1）**指数/尾数越大、数值反而越小**，序是反的，全位取反正好同时翻转符号位与高低序。有符号 `int` 更省事——只翻符号位（`u ^ 0x80000000`）；`uint` 无需变换。一个要点：必须 **MSB 优先**逐位处理，高位定序、低位细分。
 
 ## 2. 逐位 select：完整多趟算法
 
-取 $D=8$（每趟 256 个 bin）。维护三样东西：已确定的高位 `prefix`、还需选出的个数 `kCur`、当前候选缓冲 `cand`（初始为全部 $n$ 个 ordered key）。每一趟（pass）做四步：① 对 `cand` 按当前 8 bit 统计 histogram；② 从最高 bin 向下累加，定位累计首次达到 `kCur` 的 bin（pivot）；③ pivot 之上的 bin 整段进 top-k，更新 `kCur`、把 pivot 拼入 `prefix`；④ 用 filter 把落在 pivot bin 的候选紧凑写入下一趟的 `cand`，候选规模随之 $\times\tfrac{1}{256}$ 缩小。host 侧驱动这条循环：
+取 $D=8$（每趟 256 个 bin）。我维护三样东西：已确定的高位 `prefix`、还需选出的个数 `kCur`、当前候选缓冲 `cand`（一开始是全部 $n$ 个 ordered key）。每一趟（pass）四步：① 对 `cand` 按当前 8 bit 统计 histogram；② 从最高 bin 往下累加，定位累计首次够到 `kCur` 的 bin（pivot）；③ pivot 之上的 bin 整段进 top-k，更新 `kCur`、把 pivot 拼进 `prefix`；④ 用 filter 把落在 pivot bin 的候选紧凑写进下一趟的 `cand`，候选规模随之 $\times\tfrac{1}{256}$ 缩小。host 侧驱动这条循环：
 
 ```cpp
 // host 驱动：把 ordered key（已 f2u_order）选出 top-k。device kernel 见下与 §3。
@@ -71,7 +72,7 @@ for (int shift = 32 - D; shift >= 0; shift -= D) {       // 至多 32/D = 4 趟
 collect_kernel<<<grid, block>>>(d_keys, n, prefix, d_out, d_outcount);
 ```
 
-filter 把命中当前 prefix 的候选紧凑搬到 `d_next`，用一次 `atomicAdd` 取写出位置（与 §4 的 write buffer 同型，可换 buffer 版减 atomic）：
+filter 把命中当前 prefix 的候选紧凑搬到 `d_next`，用一次 `atomicAdd` 取写出位置（跟 §4 的 write buffer 同型，回头可换 buffer 版减 atomic）：
 
 ```cpp
 template <int D>
@@ -88,7 +89,7 @@ __global__ void filter_kernel(const uint32_t* in, int n, uint32_t prefix, int sh
 }
 ```
 
-收尾的 collect 与 filter 同型，只是判据换成「ordered key $\ge$ 阈值」，写出原始下标：
+收尾的 collect 跟 filter 同型，只是判据换成「ordered key $\ge$ 阈值」，写出原始下标：
 
 ```cpp
 __global__ void collect_kernel(const uint32_t* keys, int n, uint32_t thr,
@@ -100,11 +101,11 @@ __global__ void collect_kernel(const uint32_t* keys, int n, uint32_t thr,
 }
 ```
 
-每趟候选规模缩约 $1/256$，至多 $32/8=4$ 趟即定位精确的第 $k$ 大值。片上只占一个 256 元素的 histogram，**与 $k$ 无关**——这是 radix 能扛 median / 任意分位数的根本。三步里最吃成本的是 histogram 的 atomic 与 collect 的 global 写，下面逐项优化。
+每趟候选缩约 $1/256$，至多 $32/8=4$ 趟就能精确定位第 $k$ 大。片上自始至终只占一个 256 元素的 histogram，**跟 $k$ 无关**——这就是 radix 能扛 median / 任意分位数的根本。三步里最吃成本的是 histogram 的 atomic 和 collect 的 global 写，下面逐项收拾。
 
 ## 3. 瓶颈与第一项优化：hierarchical atomics
 
-histogram 的痛点是大量线程往同一组计数器累加，global atomic 争抢严重。解法是把 atomic 留在尽量便宜的层级：
+histogram 的痛点很明确：一堆线程往同一组计数器上撞，global atomic 抢得厉害。我的解法是把 atomic 尽量留在便宜的层级：
 
 ```cpp
 // 三级层级：每个 block 在 shared 内聚出局部 histogram，最后一次性合并到 global。
@@ -132,13 +133,13 @@ __global__ void histogram_kernel(const uint32_t* keys, int n,
 }
 ```
 
-下图直观对比：朴素做法每个线程一次 global atomic；hierarchical 聚合后 global atomic 降到「每 block 几次」。
+下图把两种做法摆一起：朴素做法每个线程一次 global atomic；hierarchical 聚合后 global atomic 降到「每 block 几次」。
 
 ```viz
 topk-atomics
 ```
 
-warp 内还可再降一层：先用 `__match_any_sync` 把同一 warp 内落入同一 bin 的线程合并计数，再由其中一个 lane 做 shared atomic——把"每元素一次 shared atomic"降到"每 warp 每 bin 一次"：
+warp 内还能再降一层：先用 `__match_any_sync` 把同一 warp 里落入同一 bin 的线程合并计数，再由其中一个 lane 做 shared atomic——把"每元素一次 shared atomic"降到"每 warp 每 bin 一次"：
 
 ```cpp
 // 替换内层的 atomicAdd(&s_hist[bin], 1)：
@@ -149,11 +150,11 @@ if ((threadIdx.x & 31) == leader)
     atomicAdd(&s_hist[bin], cnt);                      // 每 warp 每 bin 仅一次 shared atomic
 ```
 
-`__match_any_sync` 是 sm_70+ 的指令，按值把 warp 内线程分组，恰好天然契合「按 bin 归并」。
+`__match_any_sync` 是 sm_70+ 的指令，按值给 warp 内线程分组，恰好天然契合「按 bin 归并」，用在这儿很顺手。
 
 ## 4. write buffer：减少最终过滤的 global 写
 
-定位到 pivot 后要扫一遍取出 $\ge$ pivot 的元素。逐个 `atomicAdd` 取输出位置再写 global，atomic 与写带宽都吃紧。改为在 shared 内攒一个 buffer，攒够一批再用一次 `atomicAdd` 申请连续区间、合并写出：
+定位到 pivot 后要扫一遍取出 $\ge$ pivot 的元素。要是逐个 `atomicAdd` 取位置再写 global，atomic 和写带宽都吃紧。换个做法：在 shared 里攒一个 buffer，攒够一批再用一次 `atomicAdd` 申请连续区间、合并写出：
 
 ```cpp
 // collect 的 write-buffer 版：shared 内攒批，满则一次 atomicAdd 申请连续区间再 coalesced 写出。
@@ -185,11 +186,11 @@ __global__ void collect_buffered(const uint32_t* keys, int n, uint32_t thr,
 }
 ```
 
-容量设 `2*BLOCK`、超过 `BLOCK` 才 flush（每次 stride 迭代至多新增 `BLOCK` 个，故不溢出），可把 global atomic / 写的次数降约一个 $2^D$ 因子，而 shared 仅多占一倍。
+容量设 `2*BLOCK`、超过 `BLOCK` 才 flush（每次 stride 迭代至多新增 `BLOCK` 个，所以不会溢出），能把 global atomic / 写的次数压低约一个 $2^D$ 因子，而 shared 只多占一倍。
 
 ## 5. task rescheduling：批量场景保 occupancy
 
-批量 TopK（许多独立的小输入各求 top-k）若令每个任务各自迭代到收敛，会出现尾部低 occupancy：少数没收敛的任务占着几个 SM、其余空转。解法是**横向对齐**——所有任务先一起跑第 1 趟 histogram，再一起跑第 2 趟……由一个调度 kernel 统一推进趟次，使每一趟都占满 SM，直到全部收敛。实现上把 per-task 的进度打平成数组，每趟对所有未完成 task 并行处理：
+再说个批量场景。批量 TopK（一堆独立的小输入各求 top-k）如果让每个任务各自迭代到收敛，会出现尾部低 occupancy：少数没收敛的任务占着几个 SM、其余全空转。我的解法是**横向对齐**——所有任务先一起跑第 1 趟 histogram，再一起跑第 2 趟……由一个调度 kernel 统一推进趟次，让每一趟都占满 SM，直到全部收敛。实现上把 per-task 的进度打平成数组，每趟对所有没完成的 task 并行处理：
 
 ```cpp
 struct RadixTask {
@@ -211,11 +212,11 @@ __global__ void schedule_round(RadixTask* tasks, int numTasks) {
 // host：while (未全部 done) schedule_round<<<numTasks, block>>>(tasks, numTasks);
 ```
 
-每趟所有 block 同时在跑、负载齐头并进，避免了「各自为战」时的尾部空转；趟数被所有 task 中最深的那个界定（仍 $\le 4$）。
+这样每趟所有 block 同时在跑、负载齐头并进，避免了「各自为战」时的尾部空转；趟数被所有 task 里最深的那个界定（还是 $\le 4$）。
 
 ## 6. adaptive scaling：对抗坏分布
 
-radix 怕一种输入：所有元素高位 bit 高度雷同（数值挤在一个窄区间），前几轮 histogram 切不动、白跑。对策是随机取一个元素 $a_s$，把所有元素减去它：
+radix 有个怕的输入：所有元素高位 bit 高度雷同（数值挤在一个窄区间），前几轮 histogram 切不动、白跑。对策挺巧——随机抓一个元素 $a_s$，把所有元素都减掉它：
 
 ```cpp
 float as = values[hash(seed) % n];   // 随机基准
@@ -223,7 +224,7 @@ float as = values[hash(seed) % n];   // 随机基准
 // 但打散了指数位，使原本高位难区分的元素在前几轮就分开。
 ```
 
-减去一个基准不改变 top-k 的相对顺序，却让数值的指数位重新散开，前几轮 histogram 就能有效划分。对抗性分布上可有明显加速。
+减一个基准不改变 top-k 的相对顺序，却把数值的指数位重新散开，前几轮 histogram 就能有效划分了。对抗性分布上能有明显加速。
 
 ## 7. 算法总览图
 
@@ -235,14 +236,14 @@ topk-radix-pipeline
 
 ## 8. 成本模型与适用边界
 
-**访存形态。** histogram 与 filter / collect 都是顺序扫描，用 `uint4` vectorized load 提升带宽利用；prefix 匹配判断 `(key & pmask) == prefix` 无数据相关 branch（编译为掩码比较），不破坏 warp 一致性。
+**访存形态。** histogram 和 filter / collect 都是顺序扫描，用 `uint4` vectorized load 提带宽利用；prefix 匹配判断 `(key & pmask) == prefix` 没有数据相关 branch（编译成掩码比较），不破坏 warp 一致性。
 
-**趟数与读量。** 32-bit key、$D=8$ 时至多 $\lceil 32/D\rceil=4$ 趟。设每趟候选规模缩约 $1/2^D=1/256$，总读量是几何级数
+**趟数与读量。** 32-bit key、$D=8$ 时至多 $\lceil 32/D\rceil=4$ 趟。设每趟候选缩约 $1/2^D=1/256$，总读量是个几何级数
 
 $$n+\frac{n}{256}+\frac{n}{256^2}+\cdots\approx n\cdot\frac{256}{255}\approx n,$$
 
 即**首趟（读全量 $n$）主导**，后续趟几乎免费。算法因此**带宽受限**：理想耗时 $\approx\dfrac{(n+|\text{top-k}|)\times 4\text{B}}{\text{带宽}}$，A100 HBM2e 约 $1.9$ TB/s。histogram 的 atomic 经 hierarchical + warp 聚合降到「每 block 每 bin 常数次」、collect 的 global 写经 write buffer 合并，两者都不再是瓶颈。
 
-**与 $k$ 无关。** 片上只一个 256-bin histogram（$1$ KB shared），计数器与 $k$ 无关，所以 occupancy 不随 $k$ 退化——这是 radix 对比 bitonic 的根本差异，也使它能直接求 median / 任意分位数（把 `kCur` 设成 $n/2$ 或任意名次即可）。
+**与 $k$ 无关。** 片上只一个 256-bin histogram（$1$ KB shared），计数器跟 $k$ 无关，所以 occupancy 不随 $k$ 退化——这是 radix 对比 bitonic 的根本差异，也让它能直接求 median / 任意分位数（把 `kCur` 设成 $n/2$ 或任意名次就行）。
 
-**交叉点。** [Bitonic Top-K](/article/topk-bitonic-select) 受寄存器限制（A100 上高占用区间 $k\lesssim 256$、硬上限约 $k\le 3680$），其代价随 $k$ 增长；radix select 的成本对 $k$ 近似平坦，故 $k$ 增大到约 $1024$ 以上时 radix 反超，而小 $k$（如 $k\le 256$）下 bitonic 的全寄存器、无 atomic 更快。这一交叉正是主文「自适应选型」按 $k$ 切换算法的依据。
+**交叉点。** [Bitonic Top-K](/article/topk-bitonic-select) 受寄存器限制（A100 上高占用区间 $k\lesssim 256$、硬上限约 $k\le 3680$），代价随 $k$ 涨；radix 的成本对 $k$ 近似平坦，所以 $k$ 大到约 $1024$ 以上时 radix 反超，而小 $k$（如 $k\le 256$）下 bitonic 全寄存器、无 atomic 更快。这个交叉点，就是导言里「自适应选型」按 $k$ 切换的依据。
