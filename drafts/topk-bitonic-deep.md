@@ -1,6 +1,10 @@
-# Bitonic Top-K：register-resident 的无分支并行选择
+---
+title: 【TopK 优化系列 1】Bitonic
+---
 
-本文是《TopK 算子优化》流派一的展开。前置结论：GPU 不利于数据相关的 branch，因此用比较位置完全固定的 **sorting network** 来求 top-k；具体用 bitonic sort。下面把 network 构造、warp 内的 register 实现、以及如何扩展到 block 级与喂数优化讲清楚，并给出可运行的核心 kernel。
+> **TopK 优化系列**：[0 总览](/article/topk-optimization) · **1 Bitonic（本篇）** · [2 Radix](/article/topk-radix-select) · [3 二分阈值](/article/topk-binary-threshold)
+
+本文是 TopK 优化系列第 1 篇，讲流派一 **Bitonic Top-K：register-resident 的无分支并行选择**。前置结论：GPU 不利于数据相关的 branch，因此用比较位置完全固定的 **sorting network** 来求 top-k；具体用 bitonic sort。下面把 network 构造、warp 内的 register 实现、以及如何扩展到 block 级与喂数优化讲清楚，并给出可运行的核心 kernel。
 
 ```viz
 topk-bitonic

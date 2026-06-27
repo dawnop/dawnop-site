@@ -1,6 +1,10 @@
-# Radix Select：与 k 无关的多趟分桶选择
+---
+title: 【TopK 优化系列 2】Radix
+---
 
-本文是《TopK 算子优化》流派二的展开。前置结论：大 $k$ 时片上放不下有序候选结构，于是改用 **histogram** 定位第 $k$ 大的元素，片上只需常数大小的计数器，与 $k$ 无关。下面把比特键变换、逐位 select、以及与该算法绑定的几项工程优化（hierarchical atomics、write buffer、task rescheduling、adaptive scaling）讲清楚，并给出核心 kernel。
+> **TopK 优化系列**：[0 总览](/article/topk-optimization) · [1 Bitonic](/article/topk-bitonic-select) · **2 Radix（本篇）** · [3 二分阈值](/article/topk-binary-threshold)
+
+本文是 TopK 优化系列第 2 篇，讲流派二 **Radix Select：与 k 无关的多趟分桶选择**。前置结论：大 $k$ 时片上放不下有序候选结构，于是改用 **histogram** 定位第 $k$ 大的元素，片上只需常数大小的计数器，与 $k$ 无关。下面把比特键变换、逐位 select、以及与该算法绑定的几项工程优化（hierarchical atomics、write buffer、task rescheduling、adaptive scaling）讲清楚，并给出核心 kernel。
 
 ```viz
 topk-radix
