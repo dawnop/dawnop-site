@@ -86,14 +86,35 @@ def test_delete_article(client, auth_headers):
 
 def test_export_markdown(client, auth_headers):
     md = "# Imported Title\n\nbody with $\\alpha$"
-    art = _create(client, auth_headers, title="Imported Title", content=md).json()
+    art = _create(
+        client, auth_headers, title="Imported Title", summary="sum", content=md
+    ).json()
 
     exported = client.get(
         f"/api/articles/{art['id']}/export", headers=auth_headers
     )
     assert exported.status_code == 200
-    assert exported.text == md
+    text = exported.text
+    assert text.startswith("---\n")              # 顶部生成 front matter
+    assert "title: Imported Title" in text       # auto_title=False → 写 title
+    assert "summary: sum" in text
+    assert f"slug: {art['slug']}" in text
+    assert "published: true" in text
+    assert text.endswith(md)                      # 正文原样在末尾
     assert "attachment" in exported.headers["content-disposition"]
+
+
+def test_export_omits_title_when_auto_title(client, auth_headers):
+    md = "# Auto Heading\n\nbody"
+    art = _create(
+        client, auth_headers, title="Auto Heading", content=md, auto_title=True
+    ).json()
+    text = client.get(
+        f"/api/articles/{art['id']}/export", headers=auth_headers
+    ).text
+    assert "title:" not in text                   # auto_title=True → 不写 title（标题取自正文 H1）
+    assert f"slug: {art['slug']}" in text
+    assert text.endswith(md)
 
 
 def test_import_endpoint_removed(client, auth_headers):

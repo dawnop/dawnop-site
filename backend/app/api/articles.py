@@ -3,6 +3,7 @@
 路由声明顺序很重要：静态路径（/admin）与带前缀的整型路径需先于
 GET /{slug} 声明，避免被 slug 通配吞掉。
 """
+import re
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -162,6 +163,27 @@ def delete_article(
 # 导入已改为前端读取文件 + 复用「新建文章」流程（更便于预览/微调），故不再提供导入接口。
 
 
+def _yaml_scalar(s: str) -> str:
+    """极简标量序列化：含特殊字符或首尾空白就双引号包裹转义，否则裸写。"""
+    if s == "" or s[0] in " -" or s[-1] == " " or re.search(r"""[:#\[\]{}>|*&!%@`"'\n]""", s):
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return s
+
+
+def _build_frontmatter(a: Article) -> str:
+    """从文章字段反生成 YAML front matter（与前端 parseFrontmatter 对称）。
+    auto_title 时标题取自正文 H1，故不写 title——保证「导出→导入」闭环不丢失该状态。
+    """
+    lines = []
+    if not a.auto_title:
+        lines.append(f"title: {_yaml_scalar(a.title)}")
+    if a.summary:
+        lines.append(f"summary: {_yaml_scalar(a.summary)}")
+    lines.append(f"slug: {a.slug}")
+    lines.append(f"published: {'true' if a.published else 'false'}")
+    return "---\n" + "\n".join(lines) + "\n---\n\n"
+
+
 @router.get("/{article_id}/export", summary="导出文章为 Markdown 文件")
 def export_markdown(
     article_id: int,
@@ -172,7 +194,7 @@ def export_markdown(
     filename = f"{article.slug}.md"
     disposition = f"attachment; filename*=UTF-8''{quote(filename)}"
     return Response(
-        content=article.content,
+        content=_build_frontmatter(article) + article.content,
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": disposition},
     )
