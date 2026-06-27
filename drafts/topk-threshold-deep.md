@@ -1,6 +1,10 @@
-# 二分阈值 Top-K：count-based、无排序的 warp 选择
+---
+title: 【TopK 优化系列 3】二分阈值
+---
 
-本文是《TopK 算子优化》流派三的展开。前置场景：海量短向量、每条各自求 top-k（每条长度常小于 1024）。把一条拆给多个 block 不划算，于是**一个 warp 处理一条向量**。求 top-k 不靠定位第 $k$ 大元素，而是**二分一个 threshold** $\tau$，使"不小于 $\tau$ 的元素恰好 $k$ 个"。下面给出完整的 warp 内实现与近似变体。
+> **TopK 优化系列**：[0 总览](/article/topk-optimization) · [1 Bitonic](/article/topk-bitonic-select) · [2 Radix](/article/topk-radix-select) · **3 二分阈值（本篇）**
+
+本文是 TopK 优化系列第 3 篇，讲流派三 **二分阈值 Top-K：count-based、无排序的 warp 选择**。前置场景：海量短向量、每条各自求 top-k（每条长度常小于 1024）。把一条拆给多个 block 不划算，于是**一个 warp 处理一条向量**。求 top-k 不靠定位第 $k$ 大元素，而是**二分一个 threshold** $\tau$，使"不小于 $\tau$ 的元素恰好 $k$ 个"。下面给出完整的 warp 内实现与近似变体。
 
 ```viz
 topk-threshold
