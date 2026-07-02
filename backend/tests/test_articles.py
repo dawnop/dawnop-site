@@ -196,3 +196,18 @@ def test_views_not_counted_for_draft(client, auth_headers):
     # 草稿被管理员预览不应计数（匿名访问草稿本就 404）
     slug = _create(client, auth_headers, title="Draft", published=False).json()["slug"]
     assert client.get(f"/api/articles/{slug}", headers=auth_headers).json()["views"] == 0
+
+
+def test_admin_stats_requires_auth(client):
+    assert client.get("/api/articles/admin/stats").status_code == 401
+
+
+def test_admin_stats(client, auth_headers):
+    p1 = _create(client, auth_headers, title="P1", published=True).json()["slug"]
+    _create(client, auth_headers, title="P2", published=True)
+    _create(client, auth_headers, title="D1", published=False)
+    client.get(f"/api/articles/{p1}")  # 两次匿名浏览
+    client.get(f"/api/articles/{p1}")
+
+    body = client.get("/api/articles/admin/stats", headers=auth_headers).json()
+    assert body == {"total": 3, "published": 2, "drafts": 1, "total_views": 2}

@@ -5,25 +5,23 @@ import { Edit, Collection, FolderOpened, TopRight } from '@element-plus/icons-vu
 import { articlesApi, pagesApi } from '../../api'
 
 const router = useRouter()
-const stats = ref({ articles: null, drafts: null, pages: null })
+const stats = ref({ articles: null, drafts: null, pages: null, views: null })
 
 const cards = [
   { key: 'articles', label: '文章总数', to: '/admin/articles' },
   { key: 'drafts', label: '草稿', to: '/admin/articles' },
   { key: 'pages', label: '页面', to: '/admin/pages' },
+  { key: 'views', label: '总浏览量', to: '/admin/articles' },
 ]
 
 onMounted(async () => {
   try {
-    const [all, draft, pages] = await Promise.all([
-      articlesApi.listAll(1, 1),
-      articlesApi.listAll(1, 1, { published: false }),
-      pagesApi.listAll(),
-    ])
+    const [s, pages] = await Promise.all([articlesApi.stats(), pagesApi.listAll()])
     stats.value = {
-      articles: all.data.total,
-      drafts: draft.data.total,
+      articles: s.data.total,
+      drafts: s.data.drafts,
       pages: pages.data.length,
+      views: s.data.total_views,
     }
   } catch (e) {
     /* 拉取失败也不影响首页展示 */
@@ -43,7 +41,7 @@ onMounted(async () => {
     </el-card>
 
     <el-row :gutter="16" class="stat-row">
-      <el-col v-for="c in cards" :key="c.label" :span="8">
+      <el-col v-for="c in cards" :key="c.label" :span="6">
         <el-card class="stat" shadow="hover" @click="router.push(c.to)">
           <el-statistic :value="stats[c.key] ?? 0" :title="c.label" />
         </el-card>

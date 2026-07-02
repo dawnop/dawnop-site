@@ -9,6 +9,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import status
 from fastapi.responses import Response
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.crud import drop_null_created_at, get_or_404
@@ -82,6 +83,24 @@ def list_all(
         query = query.filter(Article.title.ilike(f"%{q.strip()}%"))
     query = query.order_by(Article.created_at.desc())
     return paginate(query, page, size)
+
+
+@router.get("/admin/stats", summary="后台统计（文章数/草稿/总浏览量）")
+def admin_stats(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    total = db.query(func.count(Article.id)).scalar() or 0
+    published = (
+        db.query(func.count(Article.id)).filter(Article.published.is_(True)).scalar() or 0
+    )
+    total_views = db.query(func.coalesce(func.sum(Article.views), 0)).scalar() or 0
+    return {
+        "total": total,
+        "published": published,
+        "drafts": total - published,
+        "total_views": int(total_views),
+    }
 
 
 @router.get("/admin/{article_id}", response_model=ArticleOut, summary="取单篇（编辑用，含草稿）")

@@ -34,6 +34,9 @@ export const articlesApi = {
   getForEdit(id) {
     return client.get(`/articles/admin/${id}`)
   },
+  stats() {
+    return client.get('/articles/admin/stats')
+  },
   create(data) {
     return client.post('/articles', data)
   },
