@@ -22,6 +22,11 @@ const routes = [
         name: 'page',
         component: () => import('../views/PageView.vue'),
       },
+      {
+        path: 'tag/:slug',
+        name: 'tag',
+        component: () => import('../views/TagView.vue'),
+      },
     ],
   },
 

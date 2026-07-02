@@ -12,12 +12,14 @@ from fastapi.responses import Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.api.tags import resolve_tags
 from app.core.crud import drop_null_created_at, get_or_404
 from app.core.pagination import paginate
 from app.core.slug import unique_slug
 from app.deps import get_current_user, get_current_user_optional, get_db
 from app.models.article import Article
 from app.models.page import Page
+from app.models.tag import Tag
 from app.models.user import User
 from app.schemas.article import (
     ArticleCreate,
@@ -51,13 +53,13 @@ def _validate_page_ref(db: Session, page_id: int | None) -> None:
 def list_published(
     page: int = Query(1, ge=1),
     size: int = Query(10, ge=1, le=100),
+    tag: str | None = Query(None, description="按标签 slug 筛选"),
     db: Session = Depends(get_db),
 ):
-    query = (
-        db.query(Article)
-        .filter(Article.published.is_(True))
-        .order_by(Article.created_at.desc())
-    )
+    query = db.query(Article).filter(Article.published.is_(True))
+    if tag:
+        query = query.filter(Article.tags.any(Tag.slug == tag))
+    query = query.order_by(Article.created_at.desc())
     return paginate(query, page, size)
 
 
@@ -131,6 +133,7 @@ def create_article(
         auto_title=payload.auto_title,
         page_id=payload.page_id,
     )
+    article.tags = resolve_tags(db, payload.tags)
     if payload.created_at is not None:
         article.created_at = payload.created_at
     db.add(article)
@@ -151,6 +154,9 @@ def update_article(
 
     if "page_id" in data:
         _validate_page_ref(db, data["page_id"])
+
+    if "tags" in data:
+        article.tags = resolve_tags(db, data.pop("tags") or [])
 
     if "slug" in data:
         # 显式传 slug 时重算唯一 slug；以 slug 优先，否则用新/旧标题

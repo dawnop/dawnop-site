@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import articles, auth, fm, pages, viz
+from app.api import articles, auth, fm, pages, tags, viz
 from app.config import settings
 from app.core.errors import register_error_handlers
 from app.database import init_db
@@ -39,4 +39,5 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(articles.router, prefix="/api/articles", tags=["articles"])
 app.include_router(fm.router, prefix="/api/fm", tags=["files"])
 app.include_router(pages.router, prefix="/api/pages", tags=["pages"])
+app.include_router(tags.router, prefix="/api/tags", tags=["tags"])
 app.include_router(viz.router, prefix="/api/viz", tags=["viz"])

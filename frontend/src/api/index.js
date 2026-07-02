@@ -16,8 +16,10 @@ export const authApi = {
 
 // ---- 文章 ----
 export const articlesApi = {
-  listPublished(page = 1, size = 10) {
-    return client.get('/articles', { params: { page, size } })
+  listPublished(page = 1, size = 10, tag = null) {
+    const params = { page, size }
+    if (tag) params.tag = tag
+    return client.get('/articles', { params })
   },
   getBySlug(slug) {
     return client.get(`/articles/${slug}`)
@@ -54,6 +56,18 @@ export const articlesApi = {
 
 // 文件管理改用 VueFinder + 其内置 RemoteDriver（见 api/vuefinderDriver.js），
 // 直接对接 /api/fm，不再走这里的 axios 封装。
+
+// ---- 标签 ----
+export const tagsApi = {
+  // 公开：仅含已发布文章的标签（带文章数，降序）
+  list() {
+    return client.get('/tags')
+  },
+  // 后台：全量标签，供编辑器补全
+  listAll() {
+    return client.get('/tags/admin')
+  },
+}
 
 // ---- 页面 ----
 export const pagesApi = {

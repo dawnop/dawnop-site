@@ -108,6 +108,14 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
           <span class="dot">·</span>
           <span>约 {{ readMinutes }} 分钟</span>
         </div>
+        <div v-if="article.tags && article.tags.length" class="tags">
+          <RouterLink
+            v-for="t in article.tags"
+            :key="t.slug"
+            :to="`/tag/${t.slug}`"
+            class="tag"
+          >#{{ t.name }}</RouterLink>
+        </div>
       </header>
       <MarkdownView :source="displayContent" @headings="onHeadings" />
     </article>
@@ -163,6 +171,25 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
 .meta .dot {
   margin: 0 8px;
   color: #c9cdd4;
+}
+.tags {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tag {
+  font-size: 0.82rem;
+  color: var(--muted);
+  background: #f4f5f7;
+  border-radius: 6px;
+  padding: 2px 10px;
+  text-decoration: none;
+  transition: color 0.15s, background 0.15s;
+}
+.tag:hover {
+  color: var(--accent);
+  background: #eef2ff;
 }
 
 /* 目录：宽屏固定在右侧留白区，窄屏隐藏 */

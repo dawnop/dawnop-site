@@ -1,11 +1,15 @@
 """Article 模型：博客文章，正文为 Markdown 文本。"""
 import re
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func, text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+if TYPE_CHECKING:
+    from app.models.tag import Tag
 
 # 中文按字符、英文/数字按词计数，作为字数与阅读时间的粗略估算（含少量 Markdown 标记，可接受）
 _CJK = re.compile(r"[一-鿿]")
@@ -32,6 +36,10 @@ class Article(Base):
     # 一对多：文章归属一个文章列表页（=分类）；删除页面时置空
     page_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("pages.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # 多对多：标签。selectin 预加载避免 N+1；按名排序稳定输出
+    tags: Mapped[list["Tag"]] = relationship(
+        "Tag", secondary="article_tags", lazy="selectin", order_by="Tag.name"
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

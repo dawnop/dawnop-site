@@ -4,6 +4,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.common import PageResponse
+from app.schemas.tag import TagOut
 
 
 def _clean_title(v: str | None) -> str | None:
@@ -31,6 +32,7 @@ class ArticleBase(BaseModel):
     published: bool = False
     auto_title: bool = False
     page_id: int | None = None
+    tags: list[str] = []
 
     @field_validator("title")
     @classmethod
@@ -58,6 +60,7 @@ class ArticleUpdate(BaseModel):
     published: bool | None = None
     auto_title: bool | None = None
     page_id: int | None = None
+    tags: list[str] | None = None
     created_at: datetime | None = None
 
     @field_validator("title")
@@ -84,6 +87,7 @@ class ArticleOut(BaseModel):
     page_id: int | None
     word_count: int
     views: int
+    tags: list[TagOut] = []
     created_at: datetime
     updated_at: datetime
 
@@ -101,6 +105,7 @@ class ArticleListItem(BaseModel):
     page_id: int | None
     word_count: int
     views: int
+    tags: list[TagOut] = []
     created_at: datetime
     updated_at: datetime
 

@@ -4,7 +4,7 @@ import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { Setting, MagicStick, ArrowDown } from '@element-plus/icons-vue'
 import { MdEditor } from 'md-editor-v3'
 import '../../setupMdEditor'
-import { articlesApi, pagesApi, vizApi } from '../../api'
+import { articlesApi, pagesApi, tagsApi, vizApi } from '../../api'
 import { builtinIds } from '../../viz/registry'
 import { useEditorPreviewIslands } from '../../viz/editorPreview'
 import { firstH1 } from '../../utils/markdownTitle'
@@ -34,7 +34,10 @@ const form = ref({
   published: false,
   auto_title: false, // 开启后标题取正文第一个 # 一级标题
   page_id: null,
+  tags: [], // 标签名数组（保存时后端按名取/建）
 })
+
+const allTags = ref([]) // 已有标签名，供输入补全
 
 // 开启「用正文 H1 作标题」时，标题跟随正文第一个一级标题
 watch(
@@ -113,6 +116,13 @@ onMounted(async () => {
     vizOptions.value = builtinIds()
   }
 
+  try {
+    const { data: tagList } = await tagsApi.listAll()
+    allTags.value = tagList.map((t) => t.name)
+  } catch (e) {
+    /* 补全用，失败不影响 */
+  }
+
   if (isEdit.value) {
     const { data } = await articlesApi.getForEdit(id.value)
     form.value = {
@@ -123,6 +133,7 @@ onMounted(async () => {
       published: data.published,
       auto_title: data.auto_title,
       page_id: data.page_id,
+      tags: (data.tags || []).map((t) => t.name),
     }
     publishAt.value = data.created_at ? new Date(data.created_at) : null
     takeSnapshot()
@@ -275,6 +286,20 @@ async function save() {
         </el-form-item>
         <el-form-item label="摘要">
           <el-input v-model="form.summary" type="textarea" :rows="2" placeholder="一句话摘要（可选）" />
+        </el-form-item>
+        <el-form-item label="标签">
+          <el-select
+            v-model="form.tags"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            :reserve-keyword="false"
+            placeholder="输入后回车添加，可复用已有标签"
+            class="w-full"
+          >
+            <el-option v-for="t in allTags" :key="t" :label="t" :value="t" />
+          </el-select>
         </el-form-item>
         <el-form-item label="发布时间">
           <el-date-picker

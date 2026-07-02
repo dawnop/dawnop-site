@@ -2,7 +2,8 @@
 from app.models.article import Article
 from app.models.file_object import FileObject
 from app.models.page import Page
+from app.models.tag import Tag
 from app.models.user import User
 from app.models.viz import VizComponent
 
-__all__ = ["User", "Article", "FileObject", "Page", "VizComponent"]
+__all__ = ["User", "Article", "FileObject", "Page", "Tag", "VizComponent"]
