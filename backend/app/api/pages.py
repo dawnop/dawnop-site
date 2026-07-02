@@ -105,6 +105,9 @@ def update_page(
 ):
     page = _get_or_404(db, page_id)
     data = drop_null_created_at(payload.model_dump(exclude_unset=True))
+    if page.type == "builtin":
+        # 内置页只放开导航相关字段；slug/type/content 是路由与渲染的根基，不可改
+        data = {k: v for k, v in data.items() if k in {"title", "nav_visible", "nav_order"}}
     if "slug" in data:
         base = data["slug"] or data.get("title") or page.title
         page.slug = unique_slug(db, base, exclude_id=page.id, _model=Page)
@@ -123,6 +126,8 @@ def delete_page(
     _: User = Depends(get_current_user),
 ):
     page = _get_or_404(db, page_id)
+    if page.type == "builtin":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "内置页面不可删除，可在导航中隐藏")
     # 解除文章对本页的归属
     db.query(Article).filter(Article.page_id == page.id).update(
         {Article.page_id: None}
@@ -137,7 +142,11 @@ def delete_page(
 
 @router.get("/{slug}", response_model=PageOut, summary="按 slug 取页面（公开）")
 def get_page(slug: str, db: Session = Depends(get_db)):
-    return _get_by_slug_or_404(db, slug)
+    page = _get_by_slug_or_404(db, slug)
+    if page.type == "builtin":
+        # 内置页是 SPA 固定路由，不作为内容页对外提供
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "页面不存在")
+    return page
 
 
 @router.get("/{slug}/articles", response_model=ArticleListResponse, summary="列表页下的已发布文章")

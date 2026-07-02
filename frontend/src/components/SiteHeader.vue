@@ -5,8 +5,10 @@ import { pagesApi } from '../api'
 
 const route = useRoute()
 
-// 导航 = 固定「首页」+ 后台「显示在导航」的页面（按顺序）
-const navPages = ref([])
+// 导航完全由后台「页面管理」驱动（含内置的首页/标签页），每项自带跳转 path。
+// 接口返回前先放一个首页兜底，避免首屏导航空白。
+const FALLBACK = [{ id: 0, title: '首页', path: '/' }]
+const navPages = ref(FALLBACK)
 
 // el-menu 高亮：精确到当前路径（文章详情页不属于任何导航项，则均不高亮）
 const activePath = computed(() => route.path)
@@ -14,9 +16,9 @@ const activePath = computed(() => route.path)
 onMounted(async () => {
   try {
     const { data } = await pagesApi.nav()
-    navPages.value = data
+    if (data.length) navPages.value = data
   } catch (e) {
-    navPages.value = []
+    /* 保留兜底导航 */
   }
 })
 </script>
@@ -35,11 +37,9 @@ onMounted(async () => {
         :ellipsis="false"
         class="nav"
       >
-        <el-menu-item index="/">首页</el-menu-item>
-        <el-menu-item v-for="p in navPages" :key="p.id" :index="`/p/${p.slug}`">
+        <el-menu-item v-for="p in navPages" :key="p.id" :index="p.path">
           {{ p.title }}
         </el-menu-item>
-        <el-menu-item index="/tags">标签</el-menu-item>
       </el-menu>
     </div>
   </header>

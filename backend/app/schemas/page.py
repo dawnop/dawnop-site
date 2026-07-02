@@ -60,6 +60,7 @@ class PageOut(BaseModel):
     title: str
     slug: str
     type: str
+    path: str  # 前台访问路径（内置页为固定路由，其余 /p/{slug}），来自模型属性
     description: str
     content: str
     auto_title: bool
@@ -78,6 +79,7 @@ class NavItem(BaseModel):
     title: str
     slug: str
     type: str
+    path: str  # 直接可用的跳转路径，前端不必自行拼接
     nav_order: int
 
 

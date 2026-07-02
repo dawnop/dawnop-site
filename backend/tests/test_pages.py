@@ -87,3 +87,60 @@ def test_reorder_dedup_and_unknown_ids(client, auth_headers):
     assert resp.status_code == 200
     nav = client.get("/api/pages/nav").json()
     assert [n["title"] for n in nav] == ["B", "A"]
+
+
+# ---------- 内置页（首页/标签页） ----------
+
+
+def _seed_builtin(db_session):
+    from app.core.bootstrap import ensure_builtin_pages
+
+    ensure_builtin_pages(db_session())
+
+
+def test_builtin_seed_idempotent(client, db_session, auth_headers):
+    _seed_builtin(db_session)
+    _seed_builtin(db_session)  # 重复执行不重复建
+    pages = client.get("/api/pages/admin", headers=auth_headers).json()
+    builtins = [p for p in pages if p["type"] == "builtin"]
+    assert sorted(p["slug"] for p in builtins) == ["home", "tags"]
+
+
+def test_builtin_nav_paths_and_order(client, db_session, auth_headers):
+    _seed_builtin(db_session)
+    _new_page(client, auth_headers, title="技术")
+    nav = client.get("/api/pages/nav").json()
+    assert [n["path"] for n in nav] == ["/", "/p/技术", "/tags"]  # 首页最前、标签页最后
+    assert nav[0]["title"] == "首页"
+
+
+def test_builtin_delete_rejected(client, db_session, auth_headers):
+    _seed_builtin(db_session)
+    home = next(
+        p for p in client.get("/api/pages/admin", headers=auth_headers).json()
+        if p["slug"] == "home"
+    )
+    assert client.delete(f"/api/pages/{home['id']}", headers=auth_headers).status_code == 400
+
+
+def test_builtin_update_whitelist(client, db_session, auth_headers):
+    _seed_builtin(db_session)
+    home = next(
+        p for p in client.get("/api/pages/admin", headers=auth_headers).json()
+        if p["slug"] == "home"
+    )
+    resp = client.put(
+        f"/api/pages/{home['id']}",
+        json={"title": "主页", "nav_visible": False, "slug": "hacked", "content": "x"},
+        headers=auth_headers,
+    )
+    body = resp.json()
+    assert body["title"] == "主页"          # 导航名可改
+    assert body["nav_visible"] is False     # 显隐可改
+    assert body["slug"] == "home"           # slug 不可改
+    assert body["content"] == ""            # 内容不可改
+
+
+def test_builtin_not_served_as_content_page(client, db_session):
+    _seed_builtin(db_session)
+    assert client.get("/api/pages/home").status_code == 404

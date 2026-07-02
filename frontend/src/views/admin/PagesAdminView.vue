@@ -44,6 +44,33 @@ function newPage(type) {
   router.push({ path: '/admin/pages/new', query: { type } })
 }
 
+const TYPE_LABELS = { content: '内容页', article_list: '文章列表', builtin: '内置' }
+
+// 内置页（首页/标签页）：只能改导航名与显隐，不可删、无内容可编辑
+async function renameBuiltin(p) {
+  let value
+  try {
+    ;({ value } = await ElMessageBox.prompt('导航中显示的名称', `重命名「${p.title}」`, {
+      inputValue: p.title,
+      inputValidator: (v) => (v && v.trim() ? true : '名称不能为空'),
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+    }))
+  } catch (e) {
+    return // 取消
+  }
+  if (value.trim() === p.title) return
+  await pagesApi.update(p.id, { title: value.trim() })
+  ElMessage.success('已重命名')
+  load()
+}
+
+async function toggleNav(p) {
+  await pagesApi.update(p.id, { nav_visible: !p.nav_visible })
+  ElMessage.success(p.nav_visible ? '已从导航隐藏' : '已在导航显示')
+  load()
+}
+
 async function remove(p) {
   try {
     await ElMessageBox.confirm(
@@ -106,7 +133,7 @@ onMounted(async () => {
         </el-button>
       </div>
     </div>
-    <p class="hint">拖动行首图标调整导航顺序；首页固定在最前，不在此列。</p>
+    <p class="hint">拖动行首图标调整导航顺序；「首页」「标签」为内置页，可改名、隐藏，不可删除。</p>
 
     <el-card shadow="never">
       <el-table ref="tableRef" v-loading="loading" :data="pages" row-key="id" empty-text="还没有页面">
@@ -118,11 +145,11 @@ onMounted(async () => {
         <el-table-column prop="title" label="标题" min-width="160" show-overflow-tooltip />
         <el-table-column label="类型" width="110">
           <template #default="{ row }">
-            <span class="muted">{{ row.type === 'content' ? '内容页' : '文章列表' }}</span>
+            <span class="muted">{{ TYPE_LABELS[row.type] || row.type }}</span>
           </template>
         </el-table-column>
         <el-table-column label="路径" min-width="140">
-          <template #default="{ row }"><span class="muted">/p/{{ row.slug }}</span></template>
+          <template #default="{ row }"><span class="muted">{{ row.path }}</span></template>
         </el-table-column>
         <el-table-column label="文章数" width="90">
           <template #default="{ row }">
@@ -139,12 +166,20 @@ onMounted(async () => {
         <el-table-column label="更新于" width="120">
           <template #default="{ row }"><span class="muted">{{ fmtDate(row.updated_at) }}</span></template>
         </el-table-column>
-        <el-table-column label="操作" width="130" fixed="right">
+        <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="router.push(`/admin/pages/${row.id}/edit`)">
-              编辑
-            </el-button>
-            <el-button link type="danger" @click="remove(row)">删除</el-button>
+            <template v-if="row.type === 'builtin'">
+              <el-button link type="primary" @click="renameBuiltin(row)">重命名</el-button>
+              <el-button link type="primary" @click="toggleNav(row)">
+                {{ row.nav_visible ? '隐藏' : '显示' }}
+              </el-button>
+            </template>
+            <template v-else>
+              <el-button link type="primary" @click="router.push(`/admin/pages/${row.id}/edit`)">
+                编辑
+              </el-button>
+              <el-button link type="danger" @click="remove(row)">删除</el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>

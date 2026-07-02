@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import articles, auth, fm, pages, tags, viz
 from app.config import settings
+from app.core.bootstrap import ensure_builtin_pages
 from app.core.errors import register_error_handlers
 from app.database import init_db
 
@@ -13,6 +14,7 @@ from app.database import init_db
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    ensure_builtin_pages()
     yield
 
 
