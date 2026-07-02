@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { RouterView, useRouter, useRoute } from 'vue-router'
-import { Fold, Expand, House, Document, Collection, FolderOpened, MagicStick } from '@element-plus/icons-vue'
+import { Fold, Expand, House, Document, Collection, FolderOpened, MagicStick, PriceTag } from '@element-plus/icons-vue'
 import { auth } from '../store/auth'
 
 const router = useRouter()
@@ -21,6 +21,7 @@ const groups = [
     label: '内容',
     items: [
       { to: '/admin/articles', label: '文章管理', icon: Document },
+      { to: '/admin/tags', label: '标签管理', icon: PriceTag },
       { to: '/admin/pages', label: '页面管理', icon: Collection },
       { to: '/admin/viz', label: '可视化', icon: MagicStick },
     ],
@@ -29,7 +30,7 @@ const groups = [
 ]
 
 // 当前高亮项：首页精确匹配，其余匹配前缀（子路由如 /admin/articles/new 仍高亮文章管理）
-const navTos = ['/admin/articles', '/admin/pages', '/admin/viz', '/admin/files']
+const navTos = ['/admin/articles', '/admin/tags', '/admin/pages', '/admin/viz', '/admin/files']
 const activeMenu = computed(() => {
   if (route.path === '/admin') return '/admin'
   return navTos.find((t) => route.path === t || route.path.startsWith(t + '/')) || route.path
@@ -43,6 +44,7 @@ const crumbs = computed(() => {
     'admin-articles': [home, { label: '文章管理' }],
     'admin-article-new': [home, { label: '文章管理', to: '/admin/articles' }, { label: '写文章' }],
     'admin-article-edit': [home, { label: '文章管理', to: '/admin/articles' }, { label: '编辑文章' }],
+    'admin-tags': [home, { label: '标签管理' }],
     'admin-pages': [home, { label: '页面管理' }],
     'admin-page-new': [home, { label: '页面管理', to: '/admin/pages' }, { label: '新建页面' }],
     'admin-page-edit': [home, { label: '页面管理', to: '/admin/pages' }, { label: '编辑页面' }],

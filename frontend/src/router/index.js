@@ -23,6 +23,12 @@ const routes = [
         component: () => import('../views/PageView.vue'),
       },
       {
+        path: 'tags',
+        name: 'tags',
+        meta: { title: '标签' },
+        component: () => import('../views/TagsView.vue'),
+      },
+      {
         path: 'tag/:slug',
         name: 'tag',
         component: () => import('../views/TagView.vue'),
@@ -62,6 +68,11 @@ const routes = [
         path: 'articles/:id/edit',
         name: 'admin-article-edit',
         component: () => import('../views/admin/ArticleEditView.vue'),
+      },
+      {
+        path: 'tags',
+        name: 'admin-tags',
+        component: () => import('../views/admin/TagsAdminView.vue'),
       },
       {
         path: 'pages',

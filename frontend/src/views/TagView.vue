@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { articlesApi } from '../api'
+import { articlesApi, tagsApi } from '../api'
 
 const route = useRoute()
 const items = ref([])
@@ -17,15 +17,17 @@ async function load() {
   error.value = ''
   const slug = route.params.slug
   try {
-    const { data } = await articlesApi.listPublished(page.value, size, slug)
-    items.value = data.items
-    total.value = data.total
-    // 从文章标签里解析出该 slug 的展示名，取不到就退回 slug
-    const match = data.items.flatMap((a) => a.tags || []).find((t) => t.slug === slug)
-    tagName.value = match ? match.name : slug
+    // 标签名走独立接口，空标签/全草稿标签也能正确显示名字
+    const [tagResp, listResp] = await Promise.all([
+      tagsApi.get(slug),
+      articlesApi.listPublished(page.value, size, slug),
+    ])
+    tagName.value = tagResp.data.name
+    items.value = listResp.data.items
+    total.value = listResp.data.total
     document.title = `#${tagName.value} · dawnop`
   } catch (e) {
-    error.value = '加载失败'
+    error.value = e?.response?.status === 404 ? '标签不存在' : '加载失败'
   } finally {
     loading.value = false
   }
@@ -48,7 +50,7 @@ watch(() => route.params.slug, () => { page.value = 1; load() }, { immediate: tr
 <template>
   <div>
     <div class="tag-head">
-      <RouterLink to="/" class="back">← 首页</RouterLink>
+      <RouterLink to="/tags" class="back">← 全部标签</RouterLink>
       <h1 class="tag-title">
         <span class="hash">#</span>{{ tagName }}
         <span v-if="!loading" class="count">{{ total }} 篇</span>

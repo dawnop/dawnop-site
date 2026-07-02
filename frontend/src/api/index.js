@@ -63,9 +63,26 @@ export const tagsApi = {
   list() {
     return client.get('/tags')
   },
-  // 后台：全量标签，供编辑器补全
+  // 公开：按 slug 取单个标签（count 为已发布文章数）
+  get(slug) {
+    return client.get(`/tags/${slug}`)
+  },
+  // 后台：全量标签（带文章数，草稿也计入），供管理页与编辑器补全
   listAll() {
     return client.get('/tags/admin')
+  },
+  rename(id, name) {
+    return client.put(`/tags/${id}`, { name })
+  },
+  remove(id) {
+    return client.delete(`/tags/${id}`)
+  },
+  merge(sourceId, targetId) {
+    return client.post('/tags/merge', { source_id: sourceId, target_id: targetId })
+  },
+  // 删除所有零文章标签，返回 {deleted}
+  cleanup() {
+    return client.post('/tags/cleanup')
   },
 }
 

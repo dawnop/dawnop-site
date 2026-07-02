@@ -39,6 +39,7 @@ onMounted(async () => {
         <el-menu-item v-for="p in navPages" :key="p.id" :index="`/p/${p.slug}`">
           {{ p.title }}
         </el-menu-item>
+        <el-menu-item index="/tags">标签</el-menu-item>
       </el-menu>
     </div>
   </header>
