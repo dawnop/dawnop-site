@@ -115,8 +115,15 @@ router.beforeEach((to) => {
   }
 })
 
-// afterEach 在导航完成（含被「未保存」守卫取消的失败导航）后都会触发，保证收尾
-router.afterEach(() => progressDone())
+const BASE_TITLE = 'dawnop'
+
+// afterEach 在导航完成（含被「未保存」守卫取消的失败导航）后都会触发，保证收尾。
+// 顺带兜底页面标题：动态页（文章/内容页）会在数据加载后自设更具体的标题，此处先按
+// meta.title 或站点名重置，避免从某页跳到无动态标题的页面时残留上一页的标题。
+router.afterEach((to) => {
+  progressDone()
+  document.title = to.meta?.title ? `${to.meta.title} · ${BASE_TITLE}` : BASE_TITLE
+})
 router.onError(() => progressDone())
 
 export default router

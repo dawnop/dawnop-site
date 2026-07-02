@@ -24,6 +24,7 @@ async function load(slug) {
   try {
     const { data } = await articlesApi.getBySlug(slug)
     article.value = data
+    document.title = `${data.title} · dawnop`
   } catch (e) {
     notFound.value = true
   } finally {
