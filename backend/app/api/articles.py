@@ -205,6 +205,8 @@ def _build_frontmatter(a: Article) -> str:
     if a.summary:
         lines.append(f"summary: {_yaml_scalar(a.summary)}")
     lines.append(f"slug: {a.slug}")
+    if a.tags:
+        lines.append("tags: [" + ", ".join(_yaml_scalar(t.name) for t in a.tags) + "]")
     lines.append(f"published: {'true' if a.published else 'false'}")
     return "---\n" + "\n".join(lines) + "\n---\n\n"
 

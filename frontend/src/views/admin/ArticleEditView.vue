@@ -157,6 +157,12 @@ onMounted(async () => {
       if (meta.summary != null) form.value.summary = String(meta.summary)
       if (meta.slug != null) form.value.slug = String(meta.slug)
       if (typeof meta.published === 'boolean') form.value.published = meta.published
+      // tags: [a, b] 数组；单个裸字符串也宽容接受
+      if (Array.isArray(meta.tags)) {
+        form.value.tags = meta.tags.map((t) => String(t).trim()).filter(Boolean)
+      } else if (typeof meta.tags === 'string' && meta.tags.trim()) {
+        form.value.tags = [meta.tags.trim()]
+      }
       // 不对导入内容建快照 → 呈「未保存」，提醒保存后再离开
     } else {
       takeSnapshot()
