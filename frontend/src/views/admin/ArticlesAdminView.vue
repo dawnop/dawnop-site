@@ -194,6 +194,9 @@ onMounted(load)
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column prop="views" label="浏览量" width="90" sortable>
+          <template #default="{ row }"><span class="muted">{{ row.views ?? 0 }}</span></template>
+        </el-table-column>
         <el-table-column label="更新时间" width="120">
           <template #default="{ row }"><span class="muted">{{ fmtDate(row.updated_at) }}</span></template>
         </el-table-column>

@@ -83,6 +83,7 @@ class ArticleOut(BaseModel):
     auto_title: bool
     page_id: int | None
     word_count: int
+    views: int
     created_at: datetime
     updated_at: datetime
 
@@ -99,6 +100,7 @@ class ArticleListItem(BaseModel):
     published: bool
     page_id: int | None
     word_count: int
+    views: int
     created_at: datetime
     updated_at: datetime
 

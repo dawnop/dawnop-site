@@ -179,3 +179,20 @@ def test_update_rejects_content_page_id(client, auth_headers):
         headers=auth_headers,
     )
     assert resp.status_code == 400
+
+
+def test_views_increment_on_anonymous_read(client, auth_headers):
+    slug = _create(client, auth_headers, title="Counted").json()["slug"]
+
+    # 匿名读三次 → views 逐次递增，且响应里带 views
+    for expected in (1, 2, 3):
+        assert client.get(f"/api/articles/{slug}").json()["views"] == expected
+
+    # 管理员带 token 的预览不计数
+    assert client.get(f"/api/articles/{slug}", headers=auth_headers).json()["views"] == 3
+
+
+def test_views_not_counted_for_draft(client, auth_headers):
+    # 草稿被管理员预览不应计数（匿名访问草稿本就 404）
+    slug = _create(client, auth_headers, title="Draft", published=False).json()["slug"]
+    assert client.get(f"/api/articles/{slug}", headers=auth_headers).json()["views"] == 0

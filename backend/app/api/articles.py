@@ -213,4 +213,9 @@ def get_published(
     article = db.query(Article).filter(Article.slug == slug).first()
     if article is None or (not article.published and user is None):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "文章不存在")
+    # 仅统计匿名访客对已发布文章的访问（排除管理员带 token 的预览）
+    if user is None and article.published:
+        article.views = (article.views or 0) + 1
+        db.commit()
+        db.refresh(article)
     return article

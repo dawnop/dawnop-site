@@ -25,6 +25,10 @@ class Article(Base):
     auto_title: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("0"), nullable=False
     )
+    # 浏览量：匿名访客成功读取「已发布」文章时 +1（后台展示，前端暂不显示）
+    views: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
     # 一对多：文章归属一个文章列表页（=分类）；删除页面时置空
     page_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("pages.id", ondelete="SET NULL"), nullable=True, index=True
