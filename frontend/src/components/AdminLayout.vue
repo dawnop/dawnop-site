@@ -197,19 +197,20 @@ function logout() {
   flex-direction: column;
   min-width: 0;
 }
+/* 主区留白随窗口宽度自适应：窄屏收紧，宽屏保持 28px */
 .breadcrumb {
-  padding: 14px 28px 0;
+  padding: 14px clamp(14px, 2.2vw, 28px) 0;
   flex-shrink: 0;
 }
 .view {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 20px 28px 32px;
+  padding: 20px clamp(14px, 2.2vw, 28px) 32px;
 }
 /* 文件管理满铺 */
 .view.fluid {
-  padding: 20px 28px 24px;
+  padding: 20px clamp(14px, 2.2vw, 28px) 24px;
   display: flex;
   flex-direction: column;
 }

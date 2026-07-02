@@ -190,8 +190,8 @@ onMounted(load)
 
     <el-card shadow="never">
       <el-table v-loading="loading" :data="items" empty-text="还没有文章">
-        <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
-        <el-table-column label="链接" min-width="180">
+        <el-table-column prop="title" label="标题" min-width="150" show-overflow-tooltip />
+        <el-table-column label="链接" min-width="110" show-overflow-tooltip>
           <template #default="{ row }">
             <a
               :href="articleUrl(row.slug)"
@@ -203,10 +203,10 @@ onMounted(load)
             <span v-if="!row.published" class="draft-tag">草稿预览</span>
           </template>
         </el-table-column>
-        <el-table-column label="所属页面" min-width="120">
+        <el-table-column label="所属页面" min-width="90">
           <template #default="{ row }"><span class="muted">{{ pageName(row.page_id) }}</span></template>
         </el-table-column>
-        <el-table-column label="标签" min-width="200">
+        <el-table-column label="标签" min-width="150">
           <template #default="{ row }">
             <el-select
               v-model="row.tagNames"
@@ -226,20 +226,20 @@ onMounted(load)
             </el-select>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="状态" width="80">
           <template #default="{ row }">
             <el-tag :type="row.published ? 'success' : 'info'" size="small" effect="light">
               {{ row.published ? '已发布' : '草稿' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="views" label="浏览量" width="90" sortable>
+        <el-table-column prop="views" label="浏览量" width="84" sortable>
           <template #default="{ row }"><span class="muted">{{ row.views ?? 0 }}</span></template>
         </el-table-column>
-        <el-table-column label="更新时间" width="120">
+        <el-table-column label="更新时间" width="92">
           <template #default="{ row }"><span class="muted">{{ fmtDate(row.updated_at) }}</span></template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="操作" width="210" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="router.push(`/admin/articles/${row.id}/edit`)">
               编辑

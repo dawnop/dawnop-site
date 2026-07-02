@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { articlesApi, tagsApi } from '../api'
+import PostList from '../components/PostList.vue'
 
 const route = useRoute()
 const items = ref([])
@@ -33,12 +34,6 @@ async function load() {
   }
 }
 
-function fmtDate(s) {
-  return new Date(s).toLocaleDateString('zh-CN')
-}
-function readMinutes(wc) {
-  return Math.max(1, Math.round((wc || 0) / 300))
-}
 function go(p) {
   page.value = p
   load()
@@ -61,17 +56,7 @@ watch(() => route.params.slug, () => { page.value = 1; load() }, { immediate: tr
     <el-empty v-else-if="error" :description="error" />
     <el-empty v-else-if="items.length === 0" description="该标签下暂无文章" />
 
-    <ul v-else class="post-list">
-      <li v-for="a in items" :key="a.id" class="post">
-        <RouterLink :to="`/article/${a.slug}`" class="post-title">{{ a.title }}</RouterLink>
-        <p v-if="a.summary" class="post-summary">{{ a.summary }}</p>
-        <div class="post-meta">
-          <span>{{ fmtDate(a.created_at) }}</span>
-          <span class="dot">·</span>
-          <span>约 {{ readMinutes(a.word_count) }} 分钟</span>
-        </div>
-      </li>
-    </ul>
+    <PostList v-else :items="items" class="post-list-wrap" />
 
     <div v-if="total > size" class="pager">
       <el-pagination
@@ -113,41 +98,8 @@ watch(() => route.params.slug, () => { page.value = 1; load() }, { immediate: tr
   color: var(--muted);
   margin-left: 10px;
 }
-.post-list {
-  list-style: none;
-  padding: 0;
-  margin: 8px 0 0;
-}
-.post {
-  padding: 28px 0;
-  border-bottom: 1px solid var(--border);
-}
-.post-title {
-  display: inline-block;
-  font-size: 1.45rem;
-  font-weight: 650;
-  line-height: 1.35;
-  letter-spacing: -0.01em;
-  text-decoration: none;
-  color: var(--fg);
-  transition: color 0.15s;
-}
-.post-title:hover {
-  color: var(--accent);
-}
-.post-summary {
-  color: var(--muted);
-  margin: 10px 0 0;
-  line-height: 1.7;
-}
-.post-meta {
-  color: #8b949e;
-  font-size: 0.85rem;
-  margin-top: 12px;
-}
-.post-meta .dot {
-  margin: 0 8px;
-  color: #c9cdd4;
+.post-list-wrap {
+  margin-top: 8px;
 }
 .pager {
   display: flex;

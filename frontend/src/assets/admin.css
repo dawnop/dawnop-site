@@ -173,3 +173,10 @@
 .admin .md-editor .md-editor-code-head {
   z-index: 1 !important;
 }
+
+/* ---- 表格间距自适应 ----
+   后台各管理页的 el-table 单元格左右留白随窗口宽度缩放：窄屏更紧凑（减少横向滚动），
+   宽屏恢复舒展。列宽本身用 min-width（文本列，可伸展）+ 紧凑固定宽（状态/数字列）。 */
+.admin .el-table .cell {
+  padding: 0 clamp(6px, 0.8vw, 12px);
+}

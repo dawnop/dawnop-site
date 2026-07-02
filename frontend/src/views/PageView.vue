@@ -1,8 +1,9 @@
 <script setup>
 import { ref, watch, computed } from 'vue'
-import { useRoute, RouterLink } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { pagesApi } from '../api'
 import MarkdownView from '../components/MarkdownView.vue'
+import PostList from '../components/PostList.vue'
 import { stripFirstH1 } from '../utils/markdownTitle'
 
 const route = useRoute()
@@ -61,10 +62,6 @@ function go(p) {
   loadArticles(route.params.slug)
 }
 
-function fmtDate(s) {
-  return new Date(s).toLocaleDateString('zh-CN')
-}
-
 watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true })
 </script>
 
@@ -91,13 +88,7 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
     <!-- 文章列表页 -->
     <template v-else>
       <el-empty v-if="items.length === 0" description="该栏目下还没有文章" />
-      <ul v-else class="post-list">
-        <li v-for="a in items" :key="a.id" class="post">
-          <RouterLink :to="`/article/${a.slug}`" class="post-title">{{ a.title }}</RouterLink>
-          <div class="post-meta">{{ fmtDate(a.created_at) }}</div>
-          <p v-if="a.summary" class="post-summary">{{ a.summary }}</p>
-        </li>
-      </ul>
+      <PostList v-else :items="items" />
       <div v-if="total > size" class="pager">
         <el-pagination
           background
@@ -122,33 +113,6 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
   color: var(--muted);
   font-size: 1.02rem;
   line-height: 1.6;
-}
-.post-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-}
-.post {
-  padding: 20px 0;
-  border-bottom: 1px solid var(--border);
-}
-.post-title {
-  font-size: 1.3rem;
-  font-weight: 600;
-  text-decoration: none;
-  color: var(--fg);
-}
-.post-title:hover {
-  color: var(--accent);
-}
-.post-meta {
-  color: #8b949e;
-  font-size: 0.85rem;
-  margin-top: 4px;
-}
-.post-summary {
-  color: var(--muted);
-  margin: 10px 0 0;
 }
 .pager {
   display: flex;
