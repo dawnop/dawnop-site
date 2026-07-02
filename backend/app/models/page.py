@@ -16,10 +16,11 @@ from app.database import Base
 # 内置页注册表：slug → 前端固定路由。新增系统页（如搜索）时在此登记并补 BUILTIN_PAGES。
 BUILTIN_PATHS = {"home": "/", "tags": "/tags"}
 
-# 启动注入的内置页初始值；nav_order 取极值让首页默认最前、标签页默认最后
+# 启动注入的内置页初始值；nav_order 取极值让首页默认最前、标签页默认最后。
+# 标签页默认不进导航，需要时在页面管理里手动「显示」。
 BUILTIN_PAGES = [
     {"slug": "home", "title": "首页", "nav_order": -1000},
-    {"slug": "tags", "title": "标签", "nav_order": 1000},
+    {"slug": "tags", "title": "标签", "nav_order": 1000, "nav_visible": False},
 ]
 
 

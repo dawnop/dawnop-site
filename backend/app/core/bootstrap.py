@@ -23,7 +23,7 @@ def ensure_builtin_pages(db: Session | None = None) -> None:
                     title=spec["title"],
                     slug=spec["slug"],
                     type="builtin",
-                    nav_visible=True,
+                    nav_visible=spec.get("nav_visible", True),
                     nav_order=spec["nav_order"],
                 )
             )

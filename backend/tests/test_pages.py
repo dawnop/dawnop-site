@@ -110,8 +110,20 @@ def test_builtin_nav_paths_and_order(client, db_session, auth_headers):
     _seed_builtin(db_session)
     _new_page(client, auth_headers, title="技术")
     nav = client.get("/api/pages/nav").json()
-    assert [n["path"] for n in nav] == ["/", "/p/技术", "/tags"]  # 首页最前、标签页最后
+    # 首页最前；标签页默认隐藏，不进导航
+    assert [n["path"] for n in nav] == ["/", "/p/技术"]
     assert nav[0]["title"] == "首页"
+
+
+def test_builtin_tags_hidden_by_default_but_can_show(client, db_session, auth_headers):
+    _seed_builtin(db_session)
+    tags_page = next(
+        p for p in client.get("/api/pages/admin", headers=auth_headers).json()
+        if p["slug"] == "tags"
+    )
+    assert tags_page["nav_visible"] is False
+    client.put(f"/api/pages/{tags_page['id']}", json={"nav_visible": True}, headers=auth_headers)
+    assert "/tags" in [n["path"] for n in client.get("/api/pages/nav").json()]
 
 
 def test_builtin_delete_rejected(client, db_session, auth_headers):
