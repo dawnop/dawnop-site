@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search, Upload, EditPen } from '@element-plus/icons-vue'
-import { articlesApi, pagesApi } from '../../api'
+import { articlesApi, pagesApi, tagsApi } from '../../api'
 import { parseFrontmatter } from '../../utils/frontmatter'
 
 const router = useRouter()
@@ -15,6 +15,7 @@ const loading = ref(true)
 const fileInput = ref(null)
 const pageMap = ref({}) // page_id -> title
 const listPages = ref([]) // 文章列表页（用于分类筛选）
+const allTags = ref([]) // 已有标签名，供内联编辑补全
 
 // 筛选条件
 const fStatus = ref('') // '' | 'published' | 'draft'
@@ -36,18 +37,36 @@ async function load() {
     if (fStatus.value) filters.published = fStatus.value === 'published'
     if (fPageId.value) filters.page_id = Number(fPageId.value)
     if (fq.value.trim()) filters.q = fq.value.trim()
-    const [arts, pages] = await Promise.all([
+    const [arts, pages, tags] = await Promise.all([
       articlesApi.listAll(page.value, size, filters),
       pagesApi.listAll(),
+      tagsApi.listAll(),
     ])
-    items.value = arts.data.items
+    // 给每行挂一个 tagNames（标签名数组），供内联 el-select 双向绑定
+    items.value = arts.data.items.map((a) => ({
+      ...a,
+      tagNames: (a.tags || []).map((t) => t.name),
+    }))
     total.value = arts.data.total
     pageMap.value = Object.fromEntries(pages.data.map((p) => [p.id, p.title]))
     listPages.value = pages.data.filter((p) => p.type === 'article_list')
+    allTags.value = tags.data.map((t) => t.name)
   } catch (e) {
     /* 错误已由 axios 拦截器统一提示 */
   } finally {
     loading.value = false
+  }
+}
+
+// 内联改标签：改完即存；成功后刷新补全候选（可能新建了标签）
+async function saveTags(row) {
+  try {
+    await articlesApi.update(row.id, { tags: row.tagNames })
+    ElMessage.success('标签已更新')
+    const { data } = await tagsApi.listAll()
+    allTags.value = data.map((t) => t.name)
+  } catch (e) {
+    load() // 失败回滚显示
   }
 }
 
@@ -187,6 +206,26 @@ onMounted(load)
         <el-table-column label="所属页面" min-width="120">
           <template #default="{ row }"><span class="muted">{{ pageName(row.page_id) }}</span></template>
         </el-table-column>
+        <el-table-column label="标签" min-width="200">
+          <template #default="{ row }">
+            <el-select
+              v-model="row.tagNames"
+              multiple
+              filterable
+              allow-create
+              default-first-option
+              collapse-tags
+              collapse-tags-tooltip
+              :reserve-keyword="false"
+              size="small"
+              placeholder="加标签"
+              class="tag-cell"
+              @change="saveTags(row)"
+            >
+              <el-option v-for="t in allTags" :key="t" :label="t" :value="t" />
+            </el-select>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="90">
           <template #default="{ row }">
             <el-tag :type="row.published ? 'success' : 'info'" size="small" effect="light">
@@ -261,6 +300,9 @@ onMounted(load)
 }
 .muted {
   color: var(--muted);
+}
+.tag-cell {
+  width: 100%;
 }
 .slug-link {
   font-size: 0.85rem;
