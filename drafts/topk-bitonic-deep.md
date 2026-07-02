@@ -65,6 +65,33 @@ selp.f32            %f1, %f3, %f4, %p1;    // 谓词选择，无 branch
 
 想要最大的若干个，排成升序后末尾就是最大；想让 top-k 在前，把最后一列方向取反、或直接读高 lane 即可。
 
+**那两层循环其实是分治被拍平的结果。** 第一次读 `(k, j)` 双重循环我总觉得不直观——它到底在分治什么、为什么这样取方向，得在脑子里把循环重新折叠回递归才看得清。所以这里补一份等价的递归版（CPU、按下标寻址），它读起来就是 bitonic sort 的定义本身：
+
+```cpp
+// 把 a[lo .. lo+cnt-1] 排成 dir 方向（升序 dir=true）。整段升序排序即 bitonicSort(a, 0, n, true)。
+void bitonicSort(float* a, int lo, int cnt, bool dir) {
+    if (cnt <= 1) return;
+    int m = cnt / 2;
+    bitonicSort(a, lo,     m, true);   // 前半排成升序
+    bitonicSort(a, lo + m, m, false);  // 后半排成降序 → 前升后降，整段成 bitonic
+    bitonicMerge(a, lo, cnt, dir);     // 再把这个 bitonic 段 merge 成 dir 序
+}
+
+// 前提：a[lo .. lo+cnt-1] 已是 bitonic；把它 merge 成 dir 序。
+void bitonicMerge(float* a, int lo, int cnt, bool dir) {
+    if (cnt <= 1) return;
+    int m = cnt / 2;
+    for (int i = lo; i < lo + m; i++)      // half-cleaner：i 与 i+m 比较
+        if ((a[i] > a[i + m]) == dir) std::swap(a[i], a[i + m]);
+    bitonicMerge(a, lo,     m, dir);       // 劈成的两半各自仍是 bitonic，递归 merge
+    bitonicMerge(a, lo + m, m, dir);
+}
+```
+
+正确性顺着这两个函数读一遍就出来了，分三层：①`bitonicMerge` 里那个 for 循环是一次 **half-cleaner**——对一个长 `2m` 的 bitonic 段，把 `i` 与 `i+m` 比较、小的留前半，结果两半各自仍是 bitonic 且「前半全部 ≤ 后半全部」；②于是对两半递归 `bitonicMerge` 各自排好，拼起来整段有序——这就证明了 `bitonicMerge` 把任意 bitonic 段排成了有序；③`bitonicSort` 把前半排升、后半排降，「升 ++ 降」正好是一个 bitonic 段，再交给已证正确的 `bitonicMerge`——对 `cnt` 做归纳（`cnt=1` 平凡）即得整体正确。
+
+递归版与上面的 warp 版对 2 的幂长度产生**逐个相同**的比较序列，只是寻址方式不同：递归的「分哪半」靠调用栈、「什么方向」靠 `dir` 参数显式传；warp 版把它们全编码进 lane 号的位运算——`lane ^ j` 代替「算左右半下标」，`(lane & k) == 0` 代替「dir 一路传下来」。理解和证明看递归版，真上 GPU 跑则要循环展开版：SIMT 下一个 warp 的 32 个 lane 必须锁步执行同一条指令，没有 per-element 的调用栈可递归，而同一深度的那些递归调用本就独立同构、会塌缩成「所有 lane 并行做一拍 `__shfl_xor_sync`」——这正是循环里的一个 `(k, j)` 阶段。
+
 ## 3. 从 sort 到 Top-K：分块 merge
 
 但全 sort 还是浪费——我要的只是前 $k$ 个。更聪明的办法是**维护一个容量 $k$ 的有序序列**，不断把新数据并进来、只留最大的 $k$ 个。这又用到 bitonic 的另一条性质：
