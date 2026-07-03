@@ -217,3 +217,31 @@ def test_rename_conflict(client, auth_headers, stub_qiniu):
                     json={"path": "qiniu://", "item": "qiniu://a", "name": "b"},
                     headers=auth_headers)
     assert r.status_code == 409
+
+
+def test_stats(client, auth_headers, stub_qiniu, monkeypatch):
+    # 七牛统计 API 打桩为不可用 → used 回落到本地元数据求和
+    monkeypatch.setattr(
+        qiniu_client, "bucket_space",
+        lambda: (_ for _ in ()).throw(RuntimeError("no stats")),
+    )
+    import app.api.fm as fm_mod
+    monkeypatch.setitem(fm_mod._space_cache, "at", 0.0)
+
+    assert client.get("/api/fm/stats").status_code == 401
+    _upload(client, auth_headers, "qiniu://", "a.txt", b"12345")
+    _upload(client, auth_headers, "qiniu://docs", "b.txt", b"123")
+    r = client.get("/api/fm/stats", headers=auth_headers).json()
+    assert r["used"] == r["used_local"] == 8
+    assert r["used_remote"] is None
+    assert r["files"] == 2 and r["dirs"] == 1
+    assert r["quota"] > 0
+
+
+def test_stats_prefers_remote_when_larger(client, auth_headers, stub_qiniu, monkeypatch):
+    monkeypatch.setattr(qiniu_client, "bucket_space", lambda: 10**9)
+    import app.api.fm as fm_mod
+    monkeypatch.setitem(fm_mod._space_cache, "at", 0.0)
+    _upload(client, auth_headers, "qiniu://", "a.txt", b"12345")
+    r = client.get("/api/fm/stats", headers=auth_headers).json()
+    assert r["used"] == 10**9 and r["used_local"] == 5

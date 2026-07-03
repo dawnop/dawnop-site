@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     qiniu_bucket: str = ""
     qiniu_domain: str = ""
     qiniu_token_expires: int = 3600
+    # 存储配额（GB），仅文件管理侧栏用量条展示用；七牛标准存储免费额度 10GB
+    storage_quota_gb: int = 10
 
     # 初始管理员（仅 seed_admin.py 使用）
     admin_username: str = "admin"

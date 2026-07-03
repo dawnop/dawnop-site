@@ -17,6 +17,7 @@
 私有空间：preview/download 由后端拉取签名 URL 再回传，避免跨域并隐藏签名。
 """
 import mimetypes
+import time
 import uuid
 from datetime import datetime
 
@@ -33,9 +34,11 @@ from fastapi import (
 )
 import requests
 from fastapi.responses import RedirectResponse, StreamingResponse
+from sqlalchemy import func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
+from app.api.settings import get_setting
 from app.core import qiniu_client
 from app.deps import get_current_user, get_current_user_flexible, get_db
 from app.models.file_object import FileObject
@@ -184,6 +187,45 @@ def list_dir(
     _: object = Depends(get_current_user),
 ):
     return _fs_data(db, _split(path))
+
+
+# 七牛空间统计缓存：统计 API 有小时级延迟且没必要每次列目录都打
+_space_cache: dict = {"at": 0.0, "value": None}
+
+
+@router.get("/stats")
+def stats(
+    db: Session = Depends(get_db),
+    _: object = Depends(get_current_user),
+):
+    """存储用量统计（文件管理侧栏用量条）。
+
+    used 取「本地元数据求和」与「七牛统计 API」的较大者：本地求和实时但
+    看不到孤儿对象；七牛统计权威但有小时级延迟。quota 来自全局配置，仅展示。
+    """
+    db_used = int(
+        db.query(func.coalesce(func.sum(FileObject.size), 0))
+        .filter(FileObject.is_dir.is_(False))
+        .scalar()
+    )
+    now = time.time()
+    if now - _space_cache["at"] > 600:
+        try:
+            _space_cache["value"] = qiniu_client.bucket_space()
+        except RuntimeError:
+            _space_cache["value"] = None  # 未配置/失败则只用本地求和
+        _space_cache["at"] = now
+    remote = _space_cache["value"]
+    files = db.query(func.count()).filter(FileObject.is_dir.is_(False)).scalar()
+    dirs = db.query(func.count()).filter(FileObject.is_dir.is_(True)).scalar()
+    return {
+        "used": max(db_used, remote or 0),
+        "used_local": db_used,
+        "used_remote": remote,
+        "files": int(files),
+        "dirs": int(dirs),
+        "quota": int(get_setting(db, "storage_quota_gb")) * 1024**3,
+    }
 
 
 # ---------------- 直传：签凭证 + 登记（省后端流量）----------------

@@ -7,7 +7,7 @@ from functools import lru_cache
 from urllib.parse import quote
 
 import requests
-from qiniu import Auth, BucketManager, put_data
+from qiniu import Auth, BucketManager, QiniuMacAuth, put_data
 
 from app.config import settings
 
@@ -101,3 +101,49 @@ def copy(src_key: str, dst_key: str) -> None:
     ret, info = _bucket_manager().copy(bucket, src_key, bucket, dst_key, force="true")
     if info.status_code != 200:
         raise RuntimeError(f"七牛复制失败: {info}")
+
+
+# 统计 API 调用忽略代理环境变量（开发机本机代理对七牛时好时坏，服务端直连即可）
+_plain_http = requests.Session()
+_plain_http.trust_env = False
+
+
+def bucket_space() -> int:
+    """空间当前存储量（字节），来自七牛统计 API（GET api.qiniuapi.com/v6/space）。
+
+    鉴权用 Qiniu 签名（QiniuMacAuth，非 QBox）。统计延迟约 5 分钟、按天出点，
+    取最近 7 天里最后一个非空点。注意它统计的是**空间实际对象**，会包含
+    register 失败等产生的孤儿对象，可能大于本地元数据求和。
+    未配置密钥或调用失败抛 RuntimeError，由上层决定兜底。
+    """
+    from datetime import datetime, timedelta
+
+    if not settings.qiniu_access_key or not settings.qiniu_secret_key:
+        raise RuntimeError("未配置 QINIU_ACCESS_KEY / QINIU_SECRET_KEY")
+    now = datetime.now()
+    begin = (now - timedelta(days=7)).strftime("%Y%m%d000000")
+    end = now.strftime("%Y%m%d%H%M%S")
+    host = "api.qiniuapi.com"
+    url = f"http://{host}/v6/space?bucket={settings.qiniu_bucket}&begin={begin}&end={end}&g=day"
+    mac = QiniuMacAuth(settings.qiniu_access_key, settings.qiniu_secret_key)
+    token = mac.token_of_request(
+        method="GET",
+        host=host,
+        url=url,
+        qheaders="",
+        content_type="application/x-www-form-urlencoded",
+    )
+    r = _plain_http.get(
+        url,
+        headers={
+            "Authorization": f"Qiniu {token}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        timeout=10,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"七牛空间统计失败: {r.status_code}")
+    datas = [v for v in (r.json().get("datas") or []) if v]
+    if not datas:
+        raise RuntimeError("七牛空间统计无数据")
+    return int(datas[-1])
