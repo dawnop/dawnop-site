@@ -180,3 +180,31 @@
 .admin .el-table .cell {
   padding: 0 clamp(6px, 0.8vw, 12px);
 }
+
+/* ---- 表格列宽可拖拽 + 表头样式 ----
+   el-table 只有开 border 才能拖表头分隔线调列宽。border 附带的正文竖线/外框
+   与极简观感冲突，这里保留功能、只留表头的竖向分界：表头单元格边界清晰
+   （也是「可拖拽」的提示），正文竖线隐藏，表格外框线去掉。
+   表头文字：居中、加粗、比正文略大。 */
+.admin .el-table--border .el-table__header .cell {
+  text-align: center;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--el-text-color-primary);
+}
+.admin .el-table--border th.el-table__cell {
+  border-right-color: var(--el-table-border-color);
+  background: #fafbfc;
+}
+.admin .el-table--border td.el-table__cell {
+  border-right-color: transparent;
+}
+.admin .el-table--border::before,
+.admin .el-table--border::after,
+.admin .el-table--border .el-table__inner-wrapper::after,
+.admin .el-table--border .el-table__border-left-patch {
+  display: none;
+}
+.admin .el-table--border .el-table__inner-wrapper {
+  border: none;
+}

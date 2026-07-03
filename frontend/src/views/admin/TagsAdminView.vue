@@ -2,6 +2,9 @@
 import { ref, computed, onMounted } from 'vue'
 import { Search, Delete } from '@element-plus/icons-vue'
 import { tagsApi } from '../../api'
+import { useColWidths } from '../../utils/colWidths'
+
+const { colW, onHeaderDrag } = useColWidths('dawnop_colw_tags')
 
 const items = ref([])
 const loading = ref(true)
@@ -146,26 +149,26 @@ onMounted(load)
         <span class="muted total">共 {{ items.length }} 个标签</span>
       </div>
 
-      <el-table v-loading="loading" :data="filtered" empty-text="还没有标签，去文章里打上第一个吧">
-        <el-table-column label="名称" width="220" show-overflow-tooltip>
+      <el-table v-loading="loading" :data="filtered" border empty-text="还没有标签，去文章里打上第一个吧" @header-dragend="onHeaderDrag">
+        <el-table-column label="名称" :width="colW['名称'] || 220" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="tag-name"><span class="hash">#</span>{{ row.name }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="标签页" width="220" show-overflow-tooltip>
+        <el-table-column label="标签页" :width="colW['标签页'] || 220" show-overflow-tooltip>
           <template #default="{ row }">
             <a :href="`/tag/${row.slug}`" target="_blank" rel="noopener" class="slug-link">
               /tag/{{ row.slug }}
             </a>
           </template>
         </el-table-column>
-        <el-table-column prop="count" label="文章数" width="120" sortable>
+        <el-table-column prop="count" label="文章数" :width="colW.count || 120" sortable>
           <template #default="{ row }">
             <span :class="row.count === 0 ? 'orphan' : 'muted'">{{ row.count }}</span>
           </template>
         </el-table-column>
         <el-table-column />
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" :width="colW['操作'] || 200" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="rename(row)">重命名</el-button>
             <el-button link type="primary" :disabled="items.length < 2" @click="openMerge(row)">

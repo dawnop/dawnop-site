@@ -4,6 +4,9 @@ import { useRouter } from 'vue-router'
 import { Rank, Document, Collection } from '@element-plus/icons-vue'
 import Sortable from 'sortablejs'
 import { pagesApi } from '../../api'
+import { useColWidths } from '../../utils/colWidths'
+
+const { colW, onHeaderDrag } = useColWidths('dawnop_colw_pages')
 
 const router = useRouter()
 const pages = ref([])
@@ -136,38 +139,38 @@ onMounted(async () => {
     <p class="hint">拖动行首图标调整导航顺序；「首页」「标签」为内置页，可改名、隐藏，不可删除。</p>
 
     <el-card shadow="never">
-      <el-table ref="tableRef" v-loading="loading" :data="pages" row-key="id" empty-text="还没有页面">
+      <el-table ref="tableRef" v-loading="loading" :data="pages" row-key="id" border empty-text="还没有页面" @header-dragend="onHeaderDrag">
         <el-table-column width="48">
           <template #default>
             <el-icon class="drag-handle" title="拖动排序"><Rank /></el-icon>
           </template>
         </el-table-column>
-        <el-table-column prop="title" label="标题" width="240" show-overflow-tooltip />
-        <el-table-column label="类型" width="96">
+        <el-table-column prop="title" label="标题" :width="colW.title || 240" show-overflow-tooltip />
+        <el-table-column label="类型" :width="colW['类型'] || 96">
           <template #default="{ row }">
             <span class="muted">{{ TYPE_LABELS[row.type] || row.type }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="路径" width="180" show-overflow-tooltip>
+        <el-table-column label="路径" :width="colW['路径'] || 180" show-overflow-tooltip>
           <template #default="{ row }"><span class="muted">{{ row.path }}</span></template>
         </el-table-column>
-        <el-table-column label="文章数" width="90">
+        <el-table-column label="文章数" :width="colW['文章数'] || 90">
           <template #default="{ row }">
             <span class="muted">{{ row.type === 'article_list' ? (counts[row.id] ?? '…') : '—' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="导航" width="90">
+        <el-table-column label="导航" :width="colW['导航'] || 90">
           <template #default="{ row }">
             <el-tag :type="row.nav_visible ? 'success' : 'info'" size="small" effect="light">
               {{ row.nav_visible ? '显示' : '隐藏' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="更新于" width="110">
+        <el-table-column label="更新于" :width="colW['更新于'] || 110">
           <template #default="{ row }"><span class="muted">{{ fmtDate(row.updated_at) }}</span></template>
         </el-table-column>
         <el-table-column />
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" :width="colW['操作'] || 150" fixed="right">
           <template #default="{ row }">
             <template v-if="row.type === 'builtin'">
               <el-button link type="primary" @click="renameBuiltin(row)">重命名</el-button>
