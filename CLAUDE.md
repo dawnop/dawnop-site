@@ -31,7 +31,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Markdown 编辑器 | **md-editor-v3**（CodeMirror6 内核） | 后台写/编辑文章共用；分屏预览、工具栏、暗色 |
 | LaTeX | **KaTeX**（编辑器内置 + 文章页 `@mdit/plugin-katex`） | 编辑器与文章页同款渲染；本地实例(不依赖 CDN) |
 | 代码高亮 | `highlight.js` | 文章代码块 |
-| 文件管理 UI | **VueFinder 4**（内置 `RemoteDriver`） | 类资源管理器：文件夹树/面包屑/右键菜单/预览，后端无关 |
+| 文件管理 UI | **自建**（Element Plus + `qiniu-js`） | SVAR 观感：目录树/面包屑/右键菜单/多选/拖拽上传/预览编辑/传输列表 |
 | 部署 | **Nginx**（80 端口）+ systemd 托管 uvicorn | 4 核 4G 足够 |
 
 > 这些是推荐默认值。若你（用户）更倾向 Flask / React 等，请在动工前提出，我会相应调整计划。
@@ -66,9 +66,9 @@ dawnop-site/
 │   └── scripts/seed_admin.py    # 初始化管理员账号
 ├── frontend/
 │   ├── src/
-│   │   ├── views/               # Home, Article, Page(内容/列表); admin/{Login,Articles,ArticleEdit,Pages,Files(VueFinder)}
+│   │   ├── views/               # Home, Article, Page(内容/列表); admin/{Login,Articles,ArticleEdit,Pages,FilesLab,Settings}
 │   │   ├── components/          # PublicLayout, AdminLayout, SiteHeader, MarkdownView(md+katex)
-│   │   ├── api/                 # axios 封装(统一带 token) + vuefinderDriver.js(QiniuDriver)
+│   │   ├── api/                 # axios 封装(统一带 token) + fmApi.js(文件管理对接层)
 │   │   ├── router/              # 公开路由 + 后台受保护路由
 │   │   └── store/               # 登录态
 │   ├── package.json
@@ -104,28 +104,33 @@ dawnop-site/
 - 文章：`GET /api/articles`（公开，分页）、`GET /api/articles/{slug}`（公开）、
   `POST/PUT/DELETE /api/articles`（需鉴权）、`POST /api/articles/import`（上传 .md）、
   `GET /api/articles/{id}/export`（下载 .md）。
-- 文件（`/api/fm`，对接 VueFinder `RemoteDriver`，全部需鉴权）：
+- 文件（`/api/fm`，全部需鉴权；对接前端自建文件管理器 `FilesLabView` + `api/fmApi.js`）：
   `GET ""`（列目录，`?path=qiniu://dir`）、`POST /upload-token`+`POST /register`（**前端直传**，见下）、
   `POST /delete|/rename|/move|/copy`、`POST /create-folder|/create-file`、`POST /save`（文本编辑）、
-  `GET /search`、`GET /preview`、`GET /download`、`GET /sign`（返回签名 URL，供文本预览直连）。
+  `GET /search`、`GET /preview`、`GET /download`、`GET /sign`（返回签名 URL，供直连取字节）、
+  `GET /content`（后端代理回传字节，直连被 CORS 拦时的兜底）、`GET /stats`（存储用量）。
   还有 `POST /upload`（后端代理上传，备用 / 其他客户端）。
-  返回体匹配 VueFinder 的 `FsData`/`DirEntry` 形状。
+  返回体沿用 VueFinder 的 `FsData`/`DirEntry` 线格式（历史选型遗留，字段够用未改）。
 
 > **上传 = 前端直传七牛**（省后端流量）：`/upload-token` 下发**限定到具体 key、短时效**的上传凭证
-> （SecretKey 不出后端）+ 上传域名（v4/query 解析），浏览器 Uppy 直接 POST 到七牛，成功后 `/register`
-> 登记 path↔key。前端用 VueFinder 的 `customUploader`（`api/qiniuUploader.js`）接管 Uppy 实现。
+> （SecretKey 不出后端），前端用官方 `qiniu-js` 直传（≤4MB 表单直传、>4MB 自动分片 v2 +
+> 断点续传），成功后 `/register` 登记 path↔key。同时上传多文件的并发数走后台「全局设置」。
 >
 > **预览/下载 = 302 重定向到签名 URL**（不经后端中转，省流量）：后端校验登录后 302 跳到
 > 七牛私有签名 URL，浏览器随后**直连七牛**取字节；下载用 `?attname=` 强制附件名。这两个 GET
 > 由浏览器 `<img>`/下载链接直接发起、带不上 Authorization 头，故支持 `?token=`
-> （`deps.get_current_user_flexible`）；前端 `QiniuDriver` 子类在 `getPreviewUrl/getDownloadUrl`
-> 追加 token。**文本在线预览/编辑**不能走 302（跨域重定向会把 Origin 变 null，命不中七牛 CORS），
-> 故 `QiniuDriver` 覆写 `getContent`：先 `GET /sign` 拿签名 URL，再**直连七牛** `fetch`（Origin 正常）。
+> （`deps.get_current_user_flexible`）；前端 `fmApi.previewUrl/downloadUrl` 追加 token。
+> **文本在线预览/编辑与带进度下载**不能走 302（跨域重定向会把 Origin 变 null，命不中七牛 CORS），
+> 故先 `GET /sign` 拿签名 URL 再**直连七牛** `fetch`；直连被 CORS 拦（如本地开发走七牛测试域名，
+> 测试域名配不了 CORS）时自动回退 `GET /fm/content` 后端代理，进度不丢。
 >
 > **需在七牛空间配置 CORS** 才能用文本预览（图片 `<img>`/下载不需要）：允许来源要**逐字匹配**
 > （`http://localhost:5173` 与 `http://127.0.0.1:5173` 是两个来源，按需各加；生产加 `https://dawnop.com`），
 > 方法 GET/HEAD。生产环境还需把私有空间**绑定自定义 HTTPS 域名**（测试域名 http 且限速，https 站点下混合内容会被拦）。
 > 七牛无压缩能力，archive/unarchive 已禁用。
+
+- 全局设置：`GET/PUT /api/settings`（需鉴权）→ key-value 存 `settings` 表与 DEFAULTS 合并；
+  现有项：上传/下载并发、存储配额(GB, 用量条展示)、文本预览大小上限(KB)。后台「系统 → 全局设置」页编辑。
 
 - 页面：`GET /api/pages/nav`（公开，导航项）、`GET /api/pages/{slug}`（公开）、
   `GET /api/pages/{slug}/articles`（公开，列表页文章分页）、`GET /api/pages/admin`（需鉴权，全部）、
