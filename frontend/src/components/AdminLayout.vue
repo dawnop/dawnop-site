@@ -26,11 +26,17 @@ const groups = [
       { to: '/admin/viz', label: '可视化', icon: MagicStick },
     ],
   },
-  { label: '存储', items: [{ to: '/admin/files', label: '文件管理', icon: FolderOpened }] },
+  {
+    label: '存储',
+    items: [
+      { to: '/admin/files', label: '文件管理', icon: FolderOpened },
+      { to: '/admin/files-lab', label: '文件管理(新)', icon: FolderOpened },
+    ],
+  },
 ]
 
 // 当前高亮项：首页精确匹配，其余匹配前缀（子路由如 /admin/articles/new 仍高亮文章管理）
-const navTos = ['/admin/articles', '/admin/tags', '/admin/pages', '/admin/viz', '/admin/files']
+const navTos = ['/admin/articles', '/admin/tags', '/admin/pages', '/admin/viz', '/admin/files-lab', '/admin/files']
 const activeMenu = computed(() => {
   if (route.path === '/admin') return '/admin'
   return navTos.find((t) => route.path === t || route.path.startsWith(t + '/')) || route.path
@@ -57,7 +63,7 @@ const crumbs = computed(() => {
 })
 
 // 文件管理满铺（无面包屑、无内边距）
-const fluid = computed(() => route.name === 'admin-files')
+const fluid = computed(() => route.name === 'admin-files' || route.name === 'admin-files-lab')
 
 function logout() {
   auth.logout()

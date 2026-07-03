@@ -115,6 +115,11 @@ const routes = [
         name: 'admin-files',
         component: () => import('../views/admin/FilesAdminView.vue'),
       },
+      {
+        path: 'files-lab',
+        name: 'admin-files-lab',
+        component: () => import('../views/admin/FilesLabView.vue'),
+      },
     ],
   },
 ]
