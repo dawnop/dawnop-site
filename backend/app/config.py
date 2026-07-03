@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     # 数据库
     database_url: str = "sqlite:///./dawnop.db"
 
+    # 中文分词扩展（wangfenjin/simple）路径，可不带后缀（sqlite 自动补 .so/.dylib）。
+    # 留空则用默认 backend/extensions/libsimple；文件不存在时静默跳过、搜索退回 trigram/LIKE。
+    simple_extension_path: str = ""
+
     # CORS：逗号分隔的来源列表
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 

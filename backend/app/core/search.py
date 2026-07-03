@@ -1,12 +1,16 @@
-"""全站搜索：SQLite FTS5（trigram 分词，兼顾中英文子串匹配）+ LIKE 兜底。
+"""全站搜索：SQLite FTS5 + LIKE 兜底。
 
-设计要点：
-- FTS5 用「外部内容表」(content='articles')，索引不额外存正文，靠触发器与
-  articles 表保持同步；启动时 rebuild 一次，兜住「引入 FTS 前已存在的文章」。
-- trigram 分词要求匹配词 >=3 字符：故 <3 字符的查询（如 2 字中文词、"AI"）走
-  LIKE 兜底；FTS 不可用（旧 SQLite 无 trigram / 测试内存库未建 FTS）时也自动兜底。
+分词器优先级（启动时自动择优，见 ensure_article_fts）：
+- **simple**（wangfenjin/simple 扩展，若已加载）：字级 + 拼音，2 字中文词也能进
+  bm25 排序、支持拼音/首字母检索。查询直接交给 `simple_query()` 组装 MATCH 表达式。
+  只用 simple_query（不启用 jieba），几乎零内存开销。
+- **trigram**（内置）：扩展不可用时退回；子串匹配，<3 字符查询走 LIKE。
+- 都没有（旧 SQLite / 测试内存库未建 FTS）：整体退化为 LIKE。
+
+其余设计：
+- FTS5 用「外部内容表」(content='articles')，靠触发器与 articles 同步；启动 rebuild 一次。
 - 高亮在后端生成「安全 HTML」：先 HTML 转义正文，再把关键词包成 <mark>，前端可直接
-  v-html，无 XSS 面（正文本就是管理员本人撰写，双保险）。
+  v-html（正文本就是管理员本人撰写，双保险）。拼音查询不高亮中文（已知的小取舍）。
 """
 import html
 import re
@@ -17,15 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.models.article import Article
 
-# FTS5 虚拟表 + 触发器 DDL（均 IF NOT EXISTS，可反复执行）
-_CREATE_TABLE = """
-CREATE VIRTUAL TABLE IF NOT EXISTS article_fts USING fts5(
-    title, summary, content,
-    content='articles',
-    content_rowid='id',
-    tokenize='trigram'
-)
-"""
+_TRIGGER_NAMES = ("articles_fts_ai", "articles_fts_ad", "articles_fts_au")
 
 _CREATE_TRIGGERS = [
     """
@@ -51,21 +47,51 @@ _CREATE_TRIGGERS = [
 ]
 
 
-def ensure_article_fts(engine) -> None:
-    """建 FTS5 虚拟表 + 同步触发器，并 rebuild 一次。
+def _simple_available(conn) -> bool:
+    """simple 扩展是否已加载（能否调用 simple_query）。"""
+    try:
+        conn.exec_driver_sql("SELECT simple_query('x')")
+        return True
+    except Exception:
+        return False
 
-    幂等；若运行环境的 SQLite 不支持 fts5/trigram（或非 SQLite），静默跳过，
-    搜索届时自动退化为 LIKE。
+
+def ensure_article_fts(engine) -> None:
+    """建 FTS5 虚拟表 + 同步触发器并 rebuild；分词器自动择优（simple > trigram）。
+
+    幂等：已存在但分词器与本次选定不一致时，先 drop 再按新分词器重建（索引由 articles
+    表 rebuild 而来，drop 无损）。运行环境完全不支持 FTS 时静默跳过 → 搜索退化为 LIKE。
     """
     try:
         with engine.begin() as conn:
-            conn.exec_driver_sql(_CREATE_TABLE)
+            desired = "simple" if _simple_available(conn) else "trigram"
+            row = conn.exec_driver_sql(
+                "SELECT sql FROM sqlite_master WHERE name = 'article_fts'"
+            ).fetchone()
+            if row and row[0] and f"'{desired}'" not in row[0]:
+                for trig in _TRIGGER_NAMES:
+                    conn.exec_driver_sql(f"DROP TRIGGER IF EXISTS {trig}")
+                conn.exec_driver_sql("DROP TABLE IF EXISTS article_fts")
+            conn.exec_driver_sql(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS article_fts USING fts5("
+                "title, summary, content, content='articles', content_rowid='id', "
+                f"tokenize='{desired}')"
+            )
             for ddl in _CREATE_TRIGGERS:
                 conn.exec_driver_sql(ddl)
             conn.exec_driver_sql("INSERT INTO article_fts(article_fts) VALUES('rebuild')")
     except Exception:
-        # 环境不支持则跳过；不影响应用启动
         pass
+
+
+def _fts_tokenizer(db: Session) -> str | None:
+    """探测当前库里 article_fts 用的分词器（无表则 None）。每次查询一次，开销可忽略。"""
+    row = db.execute(
+        text("SELECT sql FROM sqlite_master WHERE name = 'article_fts'")
+    ).fetchone()
+    if not row or not row[0]:
+        return None
+    return "simple" if "'simple'" in row[0] else "trigram"
 
 
 # ---------- 关键词高亮（生成安全 HTML）----------
@@ -125,10 +151,35 @@ def _excerpt_html(content: str, summary: str, terms: list[str], width: int = 150
     return pre + _mark(html.escape(seg), terms) + suf
 
 
-# ---------- 取匹配文章 id（FTS 优先，LIKE 兜底）----------
+# ---------- 取匹配文章 id（simple / trigram FTS 优先，LIKE 兜底）----------
 
 
-def _fts_query(db: Session, match: str, offset: int, size: int) -> tuple[list[int], int]:
+def _simple_query(db: Session, q: str, offset: int, size: int) -> tuple[list[int], int]:
+    total = (
+        db.execute(
+            text(
+                "SELECT count(*) FROM article_fts "
+                "JOIN articles a ON a.id = article_fts.rowid "
+                "WHERE article_fts MATCH simple_query(:q) AND a.published = 1"
+            ),
+            {"q": q},
+        ).scalar()
+        or 0
+    )
+    rows = db.execute(
+        text(
+            "SELECT a.id FROM article_fts "
+            "JOIN articles a ON a.id = article_fts.rowid "
+            "WHERE article_fts MATCH simple_query(:q) AND a.published = 1 "
+            "ORDER BY bm25(article_fts, 10.0, 4.0, 1.0) "
+            "LIMIT :lim OFFSET :off"
+        ),
+        {"q": q, "lim": size, "off": offset},
+    ).all()
+    return [r[0] for r in rows], total
+
+
+def _trigram_query(db: Session, match: str, offset: int, size: int) -> tuple[list[int], int]:
     total = (
         db.execute(
             text(
@@ -145,7 +196,6 @@ def _fts_query(db: Session, match: str, offset: int, size: int) -> tuple[list[in
             "SELECT a.id FROM article_fts "
             "JOIN articles a ON a.id = article_fts.rowid "
             "WHERE article_fts MATCH :m AND a.published = 1 "
-            # 列权重：标题 > 摘要 > 正文（bm25 越小越相关，升序）
             "ORDER BY bm25(article_fts, 10.0, 4.0, 1.0) "
             "LIMIT :lim OFFSET :off"
         ),
@@ -185,6 +235,28 @@ def _like_query(db: Session, terms: list[str], offset: int, size: int) -> tuple[
     return [r[0] for r in rows], total
 
 
+def _collect_ids(db: Session, q: str, terms: list[str], offset: int, size: int):
+    """按当前分词器取匹配文章 id；FTS 出错时复位会话并退回 LIKE。"""
+    tok = _fts_tokenizer(db)
+    if tok == "simple":
+        try:
+            return _simple_query(db, q, offset, size)
+        except OperationalError:
+            db.rollback()
+            return _like_query(db, terms, offset, size)
+    if tok == "trigram":
+        fts_terms = [t for t in terms if len(t) >= 3]
+        if fts_terms:
+            match = " AND ".join('"%s"' % t.replace('"', '""') for t in fts_terms)
+            try:
+                return _trigram_query(db, match, offset, size)
+            except OperationalError:
+                db.rollback()
+                return _like_query(db, terms, offset, size)
+        return _like_query(db, terms, offset, size)
+    return _like_query(db, terms, offset, size)
+
+
 def search_published(db: Session, q: str, page: int, size: int) -> dict:
     """搜索已发布文章，返回统一分页形状（items 含高亮 title_html/excerpt_html）。"""
     q = (q or "").strip()
@@ -193,17 +265,7 @@ def search_published(db: Session, q: str, page: int, size: int) -> dict:
         return {"total": 0, "page": page, "size": size, "query": q, "items": []}
 
     offset = (page - 1) * size
-    fts_terms = [t for t in terms if len(t) >= 3]
-
-    if fts_terms:
-        match = " AND ".join('"%s"' % t.replace('"', '""') for t in fts_terms)
-        try:
-            ids, total = _fts_query(db, match, offset, size)
-        except OperationalError:
-            db.rollback()  # FTS 不可用：复位会话后走 LIKE
-            ids, total = _like_query(db, terms, offset, size)
-    else:
-        ids, total = _like_query(db, terms, offset, size)
+    ids, total = _collect_ids(db, q, terms, offset, size)
 
     if not ids:
         return {"total": total, "page": page, "size": size, "query": q, "items": []}

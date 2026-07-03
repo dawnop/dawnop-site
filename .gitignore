@@ -9,6 +9,9 @@ backend/.env
 *.sqlite
 *.sqlite3
 
+# ---- 中文分词扩展二进制（各平台自行下载，见 backend/extensions/README.md）----
+backend/extensions/libsimple.*
+
 # ---- Python ----
 __pycache__/
 *.py[cod]

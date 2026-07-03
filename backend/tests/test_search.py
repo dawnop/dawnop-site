@@ -1,7 +1,21 @@
 """搜索接口测试：FTS 路径（带 fts 夹具建虚拟表）+ LIKE 兜底路径。"""
+from pathlib import Path
+
 import pytest
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.core import search as search_mod
+from app.core.search import ensure_article_fts, search_published
+from app.database import Base
+from app.models.article import Article
+
+_EXT = Path(__file__).resolve().parents[1] / "extensions" / "libsimple"
+
+
+def _ext_present() -> bool:
+    return any(_EXT.with_suffix(s).exists() for s in (".so", ".dylib", ".dll"))
 
 
 @pytest.fixture
@@ -117,3 +131,31 @@ def test_tags_included_in_results(client, auth_headers, fts):
     data = _search(client, "bitonic")
     names = {t["name"] for t in data["items"][0]["tags"]}
     assert names == {"算法", "GPU"}
+
+
+@pytest.mark.skipif(not _ext_present(), reason="simple 扩展未下载（scripts/fetch_simple_ext.py）")
+def test_simple_tokenizer_short_cjk_and_pinyin():
+    """扩展在位时走 simple 分词：2 字中文词与拼音都应命中（trigram 做不到）。"""
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+
+    @event.listens_for(engine, "connect")
+    def _load(dbapi_conn, _rec):
+        dbapi_conn.enable_load_extension(True)
+        dbapi_conn.load_extension(str(_EXT))
+        dbapi_conn.enable_load_extension(False)
+
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    db.add(Article(title="CUDA 内存模型笔记", slug="m", content="内存层级与合并访问", published=True))
+    db.commit()
+
+    ensure_article_fts(engine)  # 应择优选中 simple 并 rebuild
+    assert search_mod._fts_tokenizer(db) == "simple"
+
+    assert search_published(db, "内存", 1, 10)["total"] == 1  # 2 字中文
+    assert search_published(db, "neicun", 1, 10)["total"] == 1  # 全拼
+    assert search_published(db, "nc", 1, 10)["total"] == 1  # 首字母
+    db.close()
