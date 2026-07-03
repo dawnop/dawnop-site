@@ -130,6 +130,14 @@ dawnop-site/
 - 页面：`GET /api/pages/nav`（公开，导航项）、`GET /api/pages/{slug}`（公开）、
   `GET /api/pages/{slug}/articles`（公开，列表页文章分页）、`GET /api/pages/admin`（需鉴权，全部）、
   `POST/PUT/DELETE /api/pages`（需鉴权）、`POST /api/pages/reorder`（需鉴权，按 id 列表排序）。
+- 搜索：`GET /api/search?q=&page=&size=`（公开，只搜 `published=1`，size≤50）→ `{total,page,size,query,items[]}`，
+  每项含服务端算好的高亮 `title_html`/`excerpt_html`（转义后包 `<mark>`）、`tags`、`word_count`。
+
+> **全站搜索 = SQLite FTS5**（`core/search.py`）+ wangfenjin/simple 扩展做中文分词（字级 + 拼音，只用
+> `simple_query` 不启用 jieba）；前端是 ⌘K 命令面板（`components/SearchModal.vue`）。分词器启动时择优、
+> 逐级降级 `simple → trigram → LIKE`，缺扩展不影响启动。**选型理由、详细设计、部署坑详见
+> [`docs/search.md`](docs/search.md)**——尤其：simple 的 `.so` 不入库，**生产需手动下载 linux 版再 scp**
+> （fetch 脚本在服务器上连不上 GitHub），rsync 后端要排除 `extensions/libsimple.*`。
 
 > **前端结构**：单应用双布局——`PublicLayout`(前台) 与 `AdminLayout`(后台侧边栏)。登录页在 `/admin/login`，
 > 前台不含登录/管理入口。后台路由 `meta.requiresAuth`，401 自动跳 `/admin/login`。首页 `/` 独立保留，
