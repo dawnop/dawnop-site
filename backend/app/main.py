@@ -4,17 +4,19 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import articles, auth, fm, pages, tags, viz
+from app.api import articles, auth, fm, pages, search, tags, viz
 from app.config import settings
 from app.core.bootstrap import ensure_builtin_pages
 from app.core.errors import register_error_handlers
-from app.database import init_db
+from app.core.search import ensure_article_fts
+from app.database import engine, init_db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     ensure_builtin_pages()
+    ensure_article_fts(engine)
     yield
 
 
@@ -41,5 +43,6 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(articles.router, prefix="/api/articles", tags=["articles"])
 app.include_router(fm.router, prefix="/api/fm", tags=["files"])
 app.include_router(pages.router, prefix="/api/pages", tags=["pages"])
+app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(tags.router, prefix="/api/tags", tags=["tags"])
 app.include_router(viz.router, prefix="/api/viz", tags=["viz"])

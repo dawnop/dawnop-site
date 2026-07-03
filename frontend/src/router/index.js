@@ -29,6 +29,12 @@ const routes = [
         component: () => import('../views/TagsView.vue'),
       },
       {
+        path: 'search',
+        name: 'search',
+        meta: { title: '搜索' },
+        component: () => import('../views/SearchView.vue'),
+      },
+      {
         path: 'tag/:slug',
         name: 'tag',
         component: () => import('../views/TagView.vue'),

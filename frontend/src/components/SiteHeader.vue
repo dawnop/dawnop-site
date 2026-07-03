@@ -1,9 +1,11 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRoute, RouterLink } from 'vue-router'
+import { useRoute, useRouter, RouterLink } from 'vue-router'
+import { Search } from '@element-plus/icons-vue'
 import { pagesApi } from '../api'
 
 const route = useRoute()
+const router = useRouter()
 
 // 导航完全由后台「页面管理」驱动（含内置的首页/标签页），每项自带跳转 path。
 // 接口返回前先放一个首页兜底，避免首屏导航空白。
@@ -12,6 +14,15 @@ const navPages = ref(FALLBACK)
 
 // el-menu 高亮：精确到当前路径（文章详情页不属于任何导航项，则均不高亮）
 const activePath = computed(() => route.path)
+
+// 顶栏搜索：回车跳到搜索结果页
+const kw = ref('')
+function doSearch() {
+  const q = kw.value.trim()
+  if (!q) return
+  router.push({ name: 'search', query: { q } })
+  kw.value = ''
+}
 
 onMounted(async () => {
   try {
@@ -30,17 +41,28 @@ onMounted(async () => {
         <img src="/logo.svg" alt="dawnop" class="logo" />
         <span>dawnop</span>
       </RouterLink>
-      <el-menu
-        mode="horizontal"
-        :router="true"
-        :default-active="activePath"
-        :ellipsis="false"
-        class="nav"
-      >
-        <el-menu-item v-for="p in navPages" :key="p.id" :index="p.path">
-          {{ p.title }}
-        </el-menu-item>
-      </el-menu>
+      <div class="right">
+        <el-menu
+          mode="horizontal"
+          :router="true"
+          :default-active="activePath"
+          :ellipsis="false"
+          class="nav"
+        >
+          <el-menu-item v-for="p in navPages" :key="p.id" :index="p.path">
+            {{ p.title }}
+          </el-menu-item>
+        </el-menu>
+        <form class="search" @submit.prevent="doSearch">
+          <el-input
+            v-model="kw"
+            size="small"
+            placeholder="搜索"
+            :prefix-icon="Search"
+            @keyup.enter="doSearch"
+          />
+        </form>
+      </div>
     </div>
   </header>
 </template>
@@ -78,6 +100,11 @@ onMounted(async () => {
   height: 28px;
   display: block;
 }
+.right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 /* el-menu 调成轻量横向导航：透明底、无自身下边框（边框在 header 上）、贴右 */
 .nav.el-menu--horizontal {
   border-bottom: none;
@@ -88,5 +115,13 @@ onMounted(async () => {
   font-size: 0.95rem;
   height: 55px;
   line-height: 55px;
+}
+.search {
+  width: 140px;
+}
+@media (max-width: 560px) {
+  .search {
+    width: 96px;
+  }
 }
 </style>

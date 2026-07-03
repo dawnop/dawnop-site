@@ -86,6 +86,13 @@ export const tagsApi = {
   },
 }
 
+// ---- 全站搜索 ----
+export const searchApi = {
+  query(q, page = 1, size = 10) {
+    return client.get('/search', { params: { q, page, size } })
+  },
+}
+
 // ---- 页面 ----
 export const pagesApi = {
   nav() {
