@@ -10,6 +10,6 @@ import router from './router'
 // 重依赖均不在首屏入口：
 //  - md-editor-v3 + KaTeX + 完整 hljs → setupMdEditor.js，由懒加载编辑器视图导入；
 //  - 前台文章渲染由 MarkdownView（懒加载）自带 hljs/katex；
-//  - VueFinder（含其 CSS 与插件）→ 由懒加载的 FilesAdminView 按需安装。
+//  - 文件管理（含 qiniu-js）→ 懒加载的 FilesLabView 按需引入。
 
 createApp(App).use(router).mount('#app')

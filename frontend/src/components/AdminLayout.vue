@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { RouterView, useRouter, useRoute } from 'vue-router'
-import { Fold, Expand, House, Document, Collection, FolderOpened, MagicStick, PriceTag } from '@element-plus/icons-vue'
+import { Fold, Expand, House, Document, Collection, FolderOpened, MagicStick, PriceTag, Setting } from '@element-plus/icons-vue'
 import { auth } from '../store/auth'
 
 const router = useRouter()
@@ -28,15 +28,16 @@ const groups = [
   },
   {
     label: '存储',
-    items: [
-      { to: '/admin/files', label: '文件管理', icon: FolderOpened },
-      { to: '/admin/files-lab', label: '文件管理(新)', icon: FolderOpened },
-    ],
+    items: [{ to: '/admin/files', label: '文件管理', icon: FolderOpened }],
+  },
+  {
+    label: '系统',
+    items: [{ to: '/admin/settings', label: '全局设置', icon: Setting }],
   },
 ]
 
 // 当前高亮项：首页精确匹配，其余匹配前缀（子路由如 /admin/articles/new 仍高亮文章管理）
-const navTos = ['/admin/articles', '/admin/tags', '/admin/pages', '/admin/viz', '/admin/files-lab', '/admin/files']
+const navTos = ['/admin/articles', '/admin/tags', '/admin/pages', '/admin/viz', '/admin/files', '/admin/settings']
 const activeMenu = computed(() => {
   if (route.path === '/admin') return '/admin'
   return navTos.find((t) => route.path === t || route.path.startsWith(t + '/')) || route.path
@@ -58,12 +59,13 @@ const crumbs = computed(() => {
     'admin-viz-new': [home, { label: '可视化', to: '/admin/viz' }, { label: '新建可视化' }],
     'admin-viz-edit': [home, { label: '可视化', to: '/admin/viz' }, { label: '编辑可视化' }],
     'admin-files': [home, { label: '文件管理' }],
+    'admin-settings': [home, { label: '全局设置' }],
   }
   return map[route.name] || []
 })
 
 // 文件管理满铺（无面包屑、无内边距）
-const fluid = computed(() => route.name === 'admin-files' || route.name === 'admin-files-lab')
+const fluid = computed(() => route.name === 'admin-files')
 
 function logout() {
   auth.logout()

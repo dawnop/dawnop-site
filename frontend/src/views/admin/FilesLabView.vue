@@ -10,6 +10,7 @@ import {
   ArrowDown, ArrowUp,
 } from '@element-plus/icons-vue'
 import * as fm from '../../api/fmApi'
+import { settingsApi } from '../../api'
 
 // ---------- 状态 ----------
 const cwd = ref('') // 当前目录相对路径，''=根
@@ -22,6 +23,19 @@ const selectedPath = ref('') // 预览用的单选
 const selPaths = ref([]) // 多选（批量操作用）
 const previewText = ref('')
 const previewErr = ref('')
+
+// 存储用量（侧栏用量条）与全局配置（并发数、文本预览上限）
+const drive = ref(null)
+const conf = reactive({ upload_concurrency: 3, download_concurrency: 3, text_preview_max_kb: 512 })
+const drivePct = computed(() =>
+  drive.value?.quota ? Math.min(100, Math.round((drive.value.used / drive.value.quota) * 100)) : 0,
+)
+async function loadStats() {
+  try { drive.value = await fm.stats() } catch { /* 用量条展示失败不打扰 */ }
+}
+async function loadConf() {
+  try { Object.assign(conf, (await settingsApi.get()).data) } catch { /* 用默认值 */ }
+}
 
 // 传输列表：上传/下载每个文件一条任务，带各自进度
 const tasks = ref([])
@@ -80,6 +94,7 @@ async function loadCwd() {
   } finally {
     loading.value = false
   }
+  loadStats() // 每次目录变动/增删改后顺带刷新用量条（不阻塞列表）
 }
 function goto(path) {
   cwd.value = path
@@ -111,6 +126,7 @@ function clearSel() {
 watch(viewMode, clearSel) // 列表/网格的选中态不互通，切换时清空
 
 // ---------- 行为 ----------
+function textTooLarge(row) { return row.size > conf.text_preview_max_kb * 1024 }
 async function selectFile(row) {
   selectedPath.value = row.path
   if (row.is_dir) return
@@ -118,6 +134,10 @@ async function selectFile(row) {
   previewText.value = ''
   previewErr.value = ''
   if (isText(row)) {
+    if (textTooLarge(row)) {
+      previewErr.value = `文件超过 ${conf.text_preview_max_kb} KB，请下载查看`
+      return
+    }
     try { previewText.value = await fm.textContent(row.path) }
     catch (e) { previewErr.value = e.message || '预览失败' }
   }
@@ -161,6 +181,10 @@ async function openModal(row) {
   modal.editing = false
   modal.show = true
   if (isText(row)) {
+    if (textTooLarge(row)) {
+      modal.err = `文件超过 ${conf.text_preview_max_kb} KB，请下载查看`
+      return
+    }
     try {
       modal.text = await fm.textContent(row.path)
       modal.loaded = true
@@ -233,7 +257,7 @@ async function doDownload(row) {
     a.remove()
   }
 }
-// 批量下载：3 路并发
+// 批量下载：并发数走全局配置
 async function doDownloadMany(rows) {
   const files = rows.filter((r) => !r.is_dir)
   if (!files.length) return ElMessage.warning('选中项里没有可下载的文件')
@@ -245,7 +269,7 @@ async function doDownloadMany(rows) {
       await doDownload(files[i])
     }
   }
-  await Promise.all(Array.from({ length: Math.min(3, files.length) }, worker))
+  await Promise.all(Array.from({ length: Math.min(conf.download_concurrency, files.length) }, worker))
 }
 
 async function newFolder() {
@@ -414,7 +438,7 @@ async function onFilesPicked(ev) {
 }
 
 // list: [{file, name}]，name 为相对 cwd 的路径（含子目录时后端自动建目录）。
-// 3 路并发，每个文件在传输列表里一条任务、独立进度，失败不中断其余。
+// 并发数走全局配置，每个文件在传输列表里一条任务、独立进度，失败不中断其余。
 async function uploadMany(list) {
   const dir = cwd.value
   const items = list.map((x) => ({ ...x, task: addTask('up', x.name || x.file.name) }))
@@ -436,7 +460,7 @@ async function uploadMany(list) {
       }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(3, items.length) }, worker))
+  await Promise.all(Array.from({ length: Math.min(conf.upload_concurrency, items.length) }, worker))
   if (failed) ElMessage.warning(`上传完成，${failed} 个失败（详见传输列表）`)
   else ElMessage.success(`上传完成（${items.length} 个）`)
   const hadFolder = list.some((x) => (x.name || '').includes('/'))
@@ -537,6 +561,7 @@ function fmtDate(ms) {
 
 onMounted(() => {
   loadCwd()
+  loadConf()
   document.addEventListener('click', closeCtx)
   document.addEventListener('keydown', onGlobalKey)
 })
@@ -587,8 +612,14 @@ onUnmounted(() => {
         </div>
 
         <div class="fm-drive">
-          <el-progress :percentage="42" :stroke-width="6" :show-text="false" />
-          <div class="fm-drive-t">已用 2.1 GB / 5 GB（占位）</div>
+          <el-progress :percentage="drivePct" :stroke-width="6" :show-text="false" />
+          <div class="fm-drive-t">
+            <template v-if="drive">
+              已用 {{ drive.used ? fmtSize(drive.used) : '0 B' }} / {{ fmtSize(drive.quota) }}
+              · {{ drive.files }} 个文件
+            </template>
+            <template v-else>用量统计加载中…</template>
+          </div>
         </div>
       </aside>
 

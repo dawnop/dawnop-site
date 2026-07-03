@@ -142,24 +142,6 @@
   margin-top: 20px;
 }
 
-/* ---- VueFinder 精简 ----
-   保留 treeview 侧边栏；去掉顶部菜单栏（文件/编辑/视图…，其功能在工具栏与右键菜单里都有）；
-   隐藏底部状态栏的存储下拉（只有七牛一个空间，多余）；工具栏图标默认 32px 偏大，缩到 22px。
-   showMenuBar 是 VueFinder 内部设置项而非组件 prop，故用 CSS 隐藏。 */
-.admin .vuefinder__menubar {
-  display: none;
-}
-/* 只隐藏存储下拉本体（图标+select+箭头）；计数「N 个项目」在其同级 __info 里，勿连带隐藏 */
-.admin .vuefinder__status-bar__storage-container {
-  display: none;
-}
-/* 激活态用 .vf-toolbar-icon、禁用态用 .vf-toolbar-icon-disabled，两者都要缩，否则大小不一 */
-.admin .vuefinder .vf-toolbar-icon,
-.admin .vuefinder .vf-toolbar-icon-disabled {
-  width: 22px;
-  height: 22px;
-}
-
 /* md-editor 预览代码块默认是内置深色底（--md-theme-code-* 变量），覆盖成 github 浅色，
    与前台文章页一致（语法着色由全局 github.css 提供）。特指度高于其 .md-editor .md-editor-preview。 */
 .admin .md-editor .md-editor-preview {

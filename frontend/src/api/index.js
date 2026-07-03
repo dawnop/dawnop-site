@@ -54,8 +54,7 @@ export const articlesApi = {
   },
 }
 
-// 文件管理改用 VueFinder + 其内置 RemoteDriver（见 api/vuefinderDriver.js），
-// 直接对接 /api/fm，不再走这里的 axios 封装。
+// 文件管理的接口封装在 api/fmApi.js（自建文件管理器专用，直接对接 /api/fm）。
 
 // ---- 标签 ----
 export const tagsApi = {
@@ -137,5 +136,15 @@ export const vizApi = {
   },
   remove(id) {
     return client.delete(`/viz/${id}`)
+  },
+}
+
+// ---- 后台全局配置 ----
+export const settingsApi = {
+  get() {
+    return client.get('/settings')
+  },
+  update(payload) {
+    return client.put('/settings', payload)
   },
 }

@@ -1,6 +1,7 @@
 // 自建文件管理器的后端对接层（复用后端现成的 /api/fm 那套接口）。
 // 后端路径用 `qiniu://<rel>` 前缀；本层对外一律用「相对路径 rel」（根为空串），
 // 只在跟后端通信时转成 qiniu:// 形式，组件里不必关心存储前缀。
+import * as qiniuJs from 'qiniu-js'
 import client from './client'
 import { auth } from '../store/auth'
 
@@ -113,25 +114,27 @@ export const move = (rel, destRel, srcRels) =>
 export const copy = (rel, destRel, srcRels) =>
   client.post('/fm/copy', { path: toFull(rel), destination: toFull(destRel), sources: srcRels.map(toFull) })
 
-// 上传 = 前端直传七牛：要凭证 → POST 到七牛 → 登记。
+// 上传 = 前端直传七牛：要凭证 → qiniu-js 直传 → 登记。
+// qiniu-js 自动按文件大小选通道：≤4MB 表单直传，>4MB 分片上传（v2，4MB/片、
+// 分片并发、localStorage 断点续传），大文件不再受表单上传 1GB 上限约束。
 // 文件夹上传时把相对子路径塞进 name（后端 _ensure_dirs 会重建目录）。
 // nameOverride：拖拽文件夹上传时 File 没有 webkitRelativePath，由调用方遍历目录树后显式传入。
 export async function uploadFile(rel, file, onProgress, nameOverride) {
   const name = nameOverride || file.webkitRelativePath || file.name
   const { data: tk } = await client.post('/fm/upload-token', { path: toFull(rel), name })
   await new Promise((resolve, reject) => {
-    const form = new FormData()
-    form.append('token', tk.token)
-    form.append('key', tk.key)
-    form.append('file', file)
-    const xhr = new XMLHttpRequest()
-    xhr.open('POST', tk.up_host)
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total)
-    }
-    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`上传失败: ${xhr.status}`)))
-    xhr.onerror = () => reject(new Error('上传网络错误'))
-    xhr.send(form)
+    const observable = qiniuJs.upload(
+      file, tk.key, tk.token,
+      { fname: name.split('/').pop() },
+      { useCdnDomain: true },
+    )
+    observable.subscribe({
+      next: (res) => {
+        if (onProgress && res?.total) onProgress(res.total.percent / 100)
+      },
+      error: (err) => reject(new Error(err?.message || '上传失败')),
+      complete: () => resolve(),
+    })
   })
   await client.post('/fm/register', {
     path: tk.path,
@@ -139,4 +142,10 @@ export async function uploadFile(rel, file, onProgress, nameOverride) {
     size: file.size,
     content_type: file.type || '',
   })
+}
+
+// 存储用量（侧栏用量条）：{used, used_local, used_remote, files, dirs, quota}
+export async function stats() {
+  const { data } = await client.get('/fm/stats')
+  return data
 }
