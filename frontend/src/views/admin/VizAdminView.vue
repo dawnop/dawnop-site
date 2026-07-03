@@ -63,10 +63,10 @@ onMounted(load)
 
     <el-card shadow="never">
       <el-table v-loading="loading" :data="items" row-key="id" empty-text="还没有可视化组件">
-        <el-table-column prop="slug" label="标识" min-width="160">
+        <el-table-column prop="slug" label="标识" width="240" show-overflow-tooltip>
           <template #default="{ row }"><code class="slug">{{ row.slug }}</code></template>
         </el-table-column>
-        <el-table-column prop="name" label="名称" min-width="160" show-overflow-tooltip>
+        <el-table-column prop="name" label="名称" width="240" show-overflow-tooltip>
           <template #default="{ row }">
             <span :class="{ muted: !row.name }">{{ row.name || '（未命名）' }}</span>
           </template>
@@ -74,6 +74,7 @@ onMounted(load)
         <el-table-column label="更新于" width="130">
           <template #default="{ row }"><span class="muted">{{ fmtDate(row.updated_at) }}</span></template>
         </el-table-column>
+        <el-table-column />
         <el-table-column label="操作" width="130" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="router.push(`/admin/viz/${row.id}/edit`)">

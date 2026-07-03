@@ -142,13 +142,13 @@ onMounted(async () => {
             <el-icon class="drag-handle" title="拖动排序"><Rank /></el-icon>
           </template>
         </el-table-column>
-        <el-table-column prop="title" label="标题" min-width="160" show-overflow-tooltip />
-        <el-table-column label="类型" width="110">
+        <el-table-column prop="title" label="标题" width="240" show-overflow-tooltip />
+        <el-table-column label="类型" width="96">
           <template #default="{ row }">
             <span class="muted">{{ TYPE_LABELS[row.type] || row.type }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="路径" min-width="140">
+        <el-table-column label="路径" width="180" show-overflow-tooltip>
           <template #default="{ row }"><span class="muted">{{ row.path }}</span></template>
         </el-table-column>
         <el-table-column label="文章数" width="90">
@@ -163,9 +163,10 @@ onMounted(async () => {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="更新于" width="120">
+        <el-table-column label="更新于" width="110">
           <template #default="{ row }"><span class="muted">{{ fmtDate(row.updated_at) }}</span></template>
         </el-table-column>
+        <el-table-column />
         <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
             <template v-if="row.type === 'builtin'">

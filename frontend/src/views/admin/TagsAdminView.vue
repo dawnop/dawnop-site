@@ -147,23 +147,24 @@ onMounted(load)
       </div>
 
       <el-table v-loading="loading" :data="filtered" empty-text="还没有标签，去文章里打上第一个吧">
-        <el-table-column label="名称" min-width="160">
+        <el-table-column label="名称" width="220" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="tag-name"><span class="hash">#</span>{{ row.name }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="标签页" min-width="160">
+        <el-table-column label="标签页" width="220" show-overflow-tooltip>
           <template #default="{ row }">
             <a :href="`/tag/${row.slug}`" target="_blank" rel="noopener" class="slug-link">
               /tag/{{ row.slug }}
             </a>
           </template>
         </el-table-column>
-        <el-table-column prop="count" label="文章数" width="110" sortable>
+        <el-table-column prop="count" label="文章数" width="120" sortable>
           <template #default="{ row }">
             <span :class="row.count === 0 ? 'orphan' : 'muted'">{{ row.count }}</span>
           </template>
         </el-table-column>
+        <el-table-column />
         <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="rename(row)">重命名</el-button>
