@@ -1,9 +1,15 @@
-"""只读 WebDAV 适配层：把 FileObject 的 path↔key 树以标准 WebDAV 暴露，
-供 Finder / RaiDrive / rclone / Mountain Duck 等挂载浏览、预览、下载。
+"""可读写 WebDAV 适配层：把 FileObject 的 path↔key 树以标准 WebDAV 暴露，
+供 Finder / RaiDrive / rclone / Mountain Duck 等挂载浏览、预览、下载、编辑。
 
-只实现读方法（OPTIONS / PROPFIND / HEAD / GET），只广播 DAV class 1（无 LOCK），
-客户端据此把挂载识别为**只读**；写方法（PUT/DELETE/MKCOL/MOVE/COPY/LOCK…）
-未在路由里注册，Starlette 自动回 405。写入留待后续阶段。
+读方法：OPTIONS / PROPFIND / HEAD / GET。
+写方法：PUT（新建/覆盖文件）/ DELETE / MKCOL（建目录）/ MOVE（移动/重命名）/
+COPY（复制）/ LOCK / UNLOCK。广播 DAV class 1,2（含 LOCK，macOS Finder 据此把
+挂载当**可写**；否则只读挂载）。写操作复用 fm 的原语（proxy_upload/delete/copy/
+_reparent/_ensure_dirs），语义与网页文件管理器一致：改名/移动只改 path 不动七牛
+对象，复制才真正复制；覆盖走「写新 key + 删旧 key」避七牛 CDN 缓存。
+
+LOCK 是**假锁**（单管理员场景无并发写冲突）：总是授予、回一个 opaquelocktoken，
+不真正追踪——只为让 macOS webdavfs 认为可写。
 
 **取字节的两条路**（与网页端 302 直连的取舍不同，见 CLAUDE.md）：
   - UA 命中「会跟随 302」的成熟客户端（rclone/Cyberduck/Mountain Duck/RaiDrive）
@@ -17,8 +23,9 @@
 import base64
 import hashlib
 import time
+import uuid
 from email.utils import formatdate
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlparse
 from xml.sax.saxutils import escape
 
 import requests
@@ -26,10 +33,22 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.api.fm import _children, _get, _ts
+from app.api.fm import (
+    _basename,
+    _children,
+    _ensure_dirs,
+    _ext,
+    _get,
+    _guess_mime,
+    _parent_rel,
+    _reparent,
+    _subtree,
+    _ts,
+)
 from app.core import qiniu_client
 from app.core.security import verify_password
 from app.deps import get_db
+from app.models.file_object import FileObject
 from app.models.user import User
 
 router = APIRouter()
@@ -229,9 +248,162 @@ def _get_or_head(request: Request, db: Session, rel: str, head: bool) -> Respons
     )
 
 
-# ---------------- 路由（读方法；写方法未注册 → 自动 405） ----------------
+# ---------------- 写方法（PUT / DELETE / MKCOL / MOVE / COPY） ----------------
+
+
+def _dest_rel(request: Request) -> str:
+    """解析 MOVE/COPY 的 Destination 头（形如 https://host/dav/新/路径）为相对路径。"""
+    dest = request.headers.get("Destination")
+    if not dest:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "缺少 Destination")
+    path = urlparse(dest).path
+    if path.startswith(DAV_PREFIX):
+        path = path[len(DAV_PREFIX):]
+    return unquote(path).strip("/")
+
+
+def _require_parent(db: Session, rel: str) -> None:
+    """WebDAV 语义：写入路径的父目录必须已存在，否则 409（客户端应先 MKCOL）。"""
+    parent = _parent_rel(rel)
+    if parent and _get(db, parent) is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "父目录不存在")
+
+
+def _purge_subtree(db: Session, rel: str) -> None:
+    """删除 rel 及其后代（含七牛对象）；调用方负责 commit/flush。"""
+    for node in _subtree(db, rel):
+        if not node.is_dir and node.key:
+            try:
+                qiniu_client.delete(node.key)
+            except RuntimeError:
+                pass  # 清理失败不阻断删除本身
+        db.delete(node)
+
+
+async def _put(request: Request, db: Session, rel: str) -> Response:
+    if not rel:
+        raise HTTPException(status.HTTP_405_METHOD_NOT_ALLOWED, "不能写入根")
+    existing = _get(db, rel)
+    if existing and existing.is_dir:
+        raise HTTPException(status.HTTP_405_METHOD_NOT_ALLOWED, "目标是目录")
+    _require_parent(db, rel)
+
+    data = await request.body()
+    mime = _guess_mime(_basename(rel))
+    # 覆盖也写新 key、再删旧 key：七牛 CDN 按 URL 缓存，同 key 覆盖读回旧缓存
+    ext = ("." + _ext(rel)) if _ext(rel) else ""
+    key = f"{uuid.uuid4().hex}{ext}"
+    try:
+        qiniu_client.proxy_upload(key, data, mime)
+    except RuntimeError as e:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+
+    old_key = existing.key if existing else None
+    if existing:
+        existing.key, existing.size, existing.content_type = key, len(data), mime
+    else:
+        db.add(FileObject(
+            path=rel, is_dir=False, key=key, content_type=mime, size=len(data)
+        ))
+    db.commit()
+    if old_key and old_key != key:
+        try:
+            qiniu_client.delete(old_key)
+        except RuntimeError:
+            pass
+    return Response(status_code=204 if existing else 201)
+
+
+def _delete(db: Session, rel: str) -> Response:
+    if not rel:
+        raise HTTPException(status.HTTP_405_METHOD_NOT_ALLOWED, "不能删除根")
+    if _get(db, rel) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "资源不存在")
+    _purge_subtree(db, rel)
+    db.commit()
+    return Response(status_code=204)
+
+
+def _mkcol(db: Session, rel: str) -> Response:
+    if not rel:
+        raise HTTPException(status.HTTP_405_METHOD_NOT_ALLOWED, "根已存在")
+    if _get(db, rel) is not None:
+        raise HTTPException(status.HTTP_405_METHOD_NOT_ALLOWED, "已存在同名项")
+    _require_parent(db, rel)
+    db.add(FileObject(path=rel, is_dir=True, key=None, size=0))
+    db.commit()
+    return Response(status_code=201)
+
+
+def _move_or_copy(request: Request, db: Session, rel: str, is_move: bool) -> Response:
+    if not rel:
+        raise HTTPException(status.HTTP_405_METHOD_NOT_ALLOWED, "不能操作根")
+    if _get(db, rel) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "源不存在")
+    dst_rel = _dest_rel(request)
+    if not dst_rel:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "非法目标")
+    if dst_rel == rel or dst_rel.startswith(rel + "/"):
+        raise HTTPException(status.HTTP_409_CONFLICT, "不能移动/复制到自身或子目录")
+
+    existing = _get(db, dst_rel)
+    if existing is not None:
+        overwrite = request.headers.get("Overwrite", "T").upper() != "F"
+        if not overwrite:
+            raise HTTPException(status.HTTP_412_PRECONDITION_FAILED, "目标已存在")
+        _purge_subtree(db, dst_rel)
+        db.flush()
+    _require_parent(db, dst_rel)
+
+    if is_move:
+        _reparent(db, rel, dst_rel)
+    else:
+        for o in _subtree(db, rel):
+            dst_path = dst_rel + o.path[len(rel):]
+            if o.is_dir:
+                db.add(FileObject(path=dst_path, is_dir=True, key=None, size=0))
+            else:
+                new_key = uuid.uuid4().hex
+                try:
+                    qiniu_client.copy(o.key, new_key)
+                except RuntimeError as e:
+                    raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+                db.add(FileObject(
+                    path=dst_path, is_dir=False, key=new_key,
+                    content_type=o.content_type, size=o.size,
+                ))
+    db.commit()
+    return Response(status_code=204 if existing is not None else 201)
+
+
+def _lock(rel: str) -> Response:
+    """假锁：总是授予并回 opaquelocktoken（单管理员无写并发，仅让 Finder 认为可写）。"""
+    token = f"opaquelocktoken:{uuid.uuid4()}"
+    body = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<D:prop xmlns:D="DAV:"><D:lockdiscovery><D:activelock>'
+        "<D:locktype><D:write/></D:locktype>"
+        "<D:lockscope><D:exclusive/></D:lockscope>"
+        "<D:depth>infinity</D:depth>"
+        "<D:timeout>Second-3600</D:timeout>"
+        f"<D:locktoken><D:href>{token}</D:href></D:locktoken>"
+        f"<D:lockroot><D:href>{escape(_href(rel, False))}</D:href></D:lockroot>"
+        "</D:activelock></D:lockdiscovery></D:prop>"
+    )
+    return Response(
+        content=body,
+        status_code=200,
+        media_type='application/xml; charset="utf-8"',
+        headers={"Lock-Token": f"<{token}>"},
+    )
+
+
+# ---------------- 路由 ----------------
 
 _READ_METHODS = ["OPTIONS", "PROPFIND", "HEAD", "GET"]
+_WRITE_METHODS = ["PUT", "DELETE", "MKCOL", "MOVE", "COPY", "LOCK", "UNLOCK"]
+
+_ALLOW = ", ".join(_READ_METHODS + _WRITE_METHODS)
 
 
 @router.api_route("", methods=_READ_METHODS, include_in_schema=False)
@@ -245,8 +417,8 @@ def dav_entry(
         return Response(
             status_code=200,
             headers={
-                "DAV": "1",
-                "Allow": "OPTIONS, PROPFIND, HEAD, GET",
+                "DAV": "1, 2",
+                "Allow": _ALLOW,
                 "MS-Author-Via": "DAV",
                 "Content-Length": "0",
             },
@@ -257,3 +429,29 @@ def dav_entry(
     if request.method == "PROPFIND":
         return _propfind(request, db, rel)
     return _get_or_head(request, db, rel, head=(request.method == "HEAD"))
+
+
+@router.api_route("", methods=_WRITE_METHODS, include_in_schema=False)
+@router.api_route("/{dav_path:path}", methods=_WRITE_METHODS, include_in_schema=False)
+async def dav_write(
+    request: Request,
+    dav_path: str = "",
+    db: Session = Depends(get_db),
+) -> Response:
+    _dav_user(request, db)
+    rel = dav_path.strip("/")
+    method = request.method
+    if method == "PUT":
+        return await _put(request, db, rel)
+    if method == "DELETE":
+        return _delete(db, rel)
+    if method == "MKCOL":
+        return _mkcol(db, rel)
+    if method == "MOVE":
+        return _move_or_copy(request, db, rel, is_move=True)
+    if method == "COPY":
+        return _move_or_copy(request, db, rel, is_move=False)
+    if method == "LOCK":
+        return _lock(rel)
+    # UNLOCK
+    return Response(status_code=204)

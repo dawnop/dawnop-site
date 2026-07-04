@@ -1,4 +1,4 @@
-"""只读 WebDAV 适配层测试。"""
+"""可读写 WebDAV 适配层测试。"""
 import base64
 
 import pytest
@@ -23,8 +23,16 @@ def stub_qiniu(monkeypatch):
     def fake_private_url(key, expires=None, attname=None, fop=None):
         return f"https://cdn.example.com/{key}?e=1&token=sig"
 
+    def fake_delete(key):
+        store.pop(key, None)
+
+    def fake_copy(src, dst):
+        store[dst] = store.get(src, (b"", "application/octet-stream"))
+
     monkeypatch.setattr(qiniu_client, "proxy_upload", fake_proxy_upload)
     monkeypatch.setattr(qiniu_client, "private_url", fake_private_url)
+    monkeypatch.setattr(qiniu_client, "delete", fake_delete)
+    monkeypatch.setattr(qiniu_client, "copy", fake_copy)
     return store
 
 
@@ -37,14 +45,14 @@ def _upload(client, headers, path, name, data=b"x", mime="text/plain"):
     )
 
 
-def test_options_advertises_dav_class1(client):
+def test_options_advertises_dav_class2_and_write(client):
     r = client.request("OPTIONS", "/dav/")
     assert r.status_code == 200
-    assert "1" in r.headers.get("DAV", "")
+    dav = r.headers.get("DAV", "")
+    assert "1" in dav and "2" in dav  # class 2 = LOCK，Finder 据此可写挂载
     allow = r.headers.get("Allow", "")
-    assert "PROPFIND" in allow and "GET" in allow
-    # 只读：不广播写方法
-    assert "PUT" not in allow and "DELETE" not in allow
+    for m in ("PROPFIND", "GET", "PUT", "DELETE", "MKCOL", "MOVE", "COPY", "LOCK"):
+        assert m in allow
 
 
 def test_requires_basic_auth(client):
@@ -153,7 +161,107 @@ def test_get_on_directory_405(client, auth_headers, stub_qiniu):
     assert r.status_code == 405
 
 
-def test_write_methods_not_allowed(client, stub_qiniu):
-    for method in ("PUT", "DELETE", "MKCOL", "MOVE", "COPY", "LOCK"):
-        r = client.request(method, "/dav/x.txt", headers=_basic())
-        assert r.status_code == 405, f"{method} should be 405"
+def test_write_requires_auth(client, stub_qiniu):
+    r = client.request("PUT", "/dav/x.txt", content=b"hi")
+    assert r.status_code == 401
+
+
+def test_put_creates_file(client, stub_qiniu):
+    r = client.request("PUT", "/dav/note.txt", headers=_basic(), content=b"hello dav")
+    assert r.status_code == 201
+    # 落地：能 PROPFIND 看到、能 GET 回读（默认 UA 走后端代理）
+    r = client.request("PROPFIND", "/dav/", headers={**_basic(), "Depth": "1"})
+    assert "/dav/note.txt" in r.text
+    assert "<D:getcontentlength>9</D:getcontentlength>" in r.text
+
+
+def test_put_overwrite_returns_204(client, stub_qiniu):
+    client.request("PUT", "/dav/a.txt", headers=_basic(), content=b"v1")
+    r = client.request("PUT", "/dav/a.txt", headers=_basic(), content=b"v2-longer")
+    assert r.status_code == 204
+    r = client.request("PROPFIND", "/dav/a.txt", headers={**_basic(), "Depth": "0"})
+    assert "<D:getcontentlength>9</D:getcontentlength>" in r.text
+
+
+def test_put_missing_parent_409(client, stub_qiniu):
+    r = client.request("PUT", "/dav/nope/x.txt", headers=_basic(), content=b"x")
+    assert r.status_code == 409
+
+
+def test_mkcol_creates_dir(client, stub_qiniu):
+    r = client.request("MKCOL", "/dav/docs", headers=_basic())
+    assert r.status_code == 201
+    r = client.request("PROPFIND", "/dav/", headers={**_basic(), "Depth": "1"})
+    assert "/dav/docs/" in r.text and "<D:collection/>" in r.text
+
+
+def test_mkcol_existing_405(client, stub_qiniu):
+    client.request("MKCOL", "/dav/docs", headers=_basic())
+    r = client.request("MKCOL", "/dav/docs", headers=_basic())
+    assert r.status_code == 405
+
+
+def test_delete_removes_subtree(client, stub_qiniu):
+    client.request("MKCOL", "/dav/docs", headers=_basic())
+    client.request("PUT", "/dav/docs/a.txt", headers=_basic(), content=b"a")
+    r = client.request("DELETE", "/dav/docs", headers=_basic())
+    assert r.status_code == 204
+    r = client.request("PROPFIND", "/dav/docs", headers={**_basic(), "Depth": "0"})
+    assert r.status_code == 404
+
+
+def test_delete_missing_404(client, stub_qiniu):
+    r = client.request("DELETE", "/dav/ghost.txt", headers=_basic())
+    assert r.status_code == 404
+
+
+def test_move_renames(client, stub_qiniu):
+    client.request("PUT", "/dav/old.txt", headers=_basic(), content=b"data")
+    r = client.request(
+        "MOVE", "/dav/old.txt",
+        headers={**_basic(), "Destination": "http://testserver/dav/new.txt"},
+    )
+    assert r.status_code == 201
+    assert client.request("PROPFIND", "/dav/old.txt", headers={**_basic(), "Depth": "0"}).status_code == 404
+    assert client.request("PROPFIND", "/dav/new.txt", headers={**_basic(), "Depth": "0"}).status_code == 207
+
+
+def test_move_overwrite_flag(client, stub_qiniu):
+    client.request("PUT", "/dav/a.txt", headers=_basic(), content=b"a")
+    client.request("PUT", "/dav/b.txt", headers=_basic(), content=b"b")
+    # Overwrite: F → 已存在则 412
+    r = client.request(
+        "MOVE", "/dav/a.txt",
+        headers={**_basic(), "Destination": "http://testserver/dav/b.txt", "Overwrite": "F"},
+    )
+    assert r.status_code == 412
+    # 默认覆盖 → 204
+    r = client.request(
+        "MOVE", "/dav/a.txt",
+        headers={**_basic(), "Destination": "http://testserver/dav/b.txt"},
+    )
+    assert r.status_code == 204
+
+
+def test_copy_duplicates(client, stub_qiniu):
+    client.request("PUT", "/dav/src.txt", headers=_basic(), content=b"payload")
+    r = client.request(
+        "COPY", "/dav/src.txt",
+        headers={**_basic(), "Destination": "http://testserver/dav/dst.txt"},
+    )
+    assert r.status_code == 201
+    # 源仍在、副本也在
+    assert client.request("PROPFIND", "/dav/src.txt", headers={**_basic(), "Depth": "0"}).status_code == 207
+    assert client.request("PROPFIND", "/dav/dst.txt", headers={**_basic(), "Depth": "0"}).status_code == 207
+
+
+def test_lock_grants_token(client, stub_qiniu):
+    r = client.request("LOCK", "/dav/whatever.txt", headers=_basic())
+    assert r.status_code == 200
+    assert r.headers.get("Lock-Token", "").startswith("<opaquelocktoken:")
+    assert "<D:write/>" in r.text
+
+
+def test_unlock_204(client, stub_qiniu):
+    r = client.request("UNLOCK", "/dav/whatever.txt", headers=_basic())
+    assert r.status_code == 204

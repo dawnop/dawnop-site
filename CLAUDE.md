@@ -144,8 +144,12 @@ dawnop-site/
 > 七牛无压缩能力，archive/unarchive 已禁用。
 
 - **WebDAV（只读，`/dav`，`api/webdav.py`）**：把 `FileObject` 的 path↔key 树以标准 WebDAV 暴露，
-  供 Finder / RaiDrive / rclone / Mountain Duck 挂载浏览/预览/下载。只实现 `OPTIONS/PROPFIND/HEAD/GET`、
-  只广播 **DAV class 1**（无 LOCK → 客户端识别为只读）；写方法未注册 → Starlette 自动 405（写入留待后续）。
+  供 Finder / RaiDrive / rclone / Mountain Duck 挂载浏览/预览/下载/**编辑**。读方法 `OPTIONS/PROPFIND/HEAD/GET`，
+  写方法 `PUT`(新建/覆盖) / `DELETE` / `MKCOL`(建目录) / `MOVE`(移动改名) / `COPY` / `LOCK`+`UNLOCK`；
+  广播 **DAV class 1,2**（含 LOCK → macOS Finder 据此可写挂载，否则只读）。写操作复用 fm 原语
+  （`proxy_upload/delete/copy/_reparent/_ensure_dirs`），语义同网页管理器：改名/移动只改 path 不动七牛对象、
+  复制才真复制、覆盖走「写新 key + 删旧 key」避 CDN 缓存；父目录不存在的写入回 409（客户端应先 MKCOL）。
+  `LOCK` 是**假锁**（单管理员无写并发，总是授予、回 opaquelocktoken 不真追踪，仅为让 webdavfs 认为可写）。
   鉴权 **HTTP Basic**（管理员账号，bcrypt 结果带 TTL 缓存挡住挂载高频请求）。
   取字节两条路：**UA 命中会跟随 302 的客户端**（rclone/cyberduck/mountain duck/raidrive）→ 302 直连七牛省流量；
   **其余**（含 macOS webdavfs、Windows mini-redirector，跨域 302 不可靠）→ 后端代理并**透传 Range**
