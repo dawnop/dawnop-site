@@ -35,8 +35,13 @@ function withToken(url) {
   const t = auth.token
   return t ? `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(t)}` : url
 }
-export function previewUrl(rel) {
-  return withToken(`/api/fm/preview?path=${encodeURIComponent(toFull(rel))}`)
+// opts: { w, h, mode }（缩略图；光栅图才生效，svg 等原样）。不传则取原图。
+export function previewUrl(rel, opts) {
+  let url = `/api/fm/preview?path=${encodeURIComponent(toFull(rel))}`
+  if (opts?.w) url += `&w=${opts.w}`
+  if (opts?.h) url += `&h=${opts.h}`
+  if (opts?.mode) url += `&mode=${opts.mode}`
+  return withToken(url)
 }
 export function downloadUrl(rel) {
   return withToken(`/api/fm/download?path=${encodeURIComponent(toFull(rel))}`)

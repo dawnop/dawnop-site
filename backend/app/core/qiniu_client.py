@@ -66,17 +66,27 @@ def proxy_upload(key: str, data: bytes, mime: str | None = None) -> dict:
 
 
 def private_url(
-    key: str, expires: int | None = None, attname: str | None = None
+    key: str,
+    expires: int | None = None,
+    attname: str | None = None,
+    fop: str | None = None,
 ) -> str:
     """生成私有空间的带签名下载/预览 URL。
 
     attname 不为空时通过七牛 `?attname=` 强制以附件（指定文件名）下载；
     为空则浏览器内联预览。
+    fop 不为空时（如 `imageView2/2/w/320/format/webp`）追加图片处理指令，
+    生成缩略图——**必须先拼 fop 再签名**（fop 是被签名 URL 的一部分）。
     """
     domain = settings.qiniu_domain.rstrip("/")
     base_url = f"{domain}/{key}"
+    query = []
+    if fop:
+        query.append(fop)
     if attname:
-        base_url += f"?attname={quote(attname)}"
+        query.append(f"attname={quote(attname)}")
+    if query:
+        base_url += "?" + "&".join(query)
     return _auth().private_download_url(base_url, expires=_expires(expires))
 
 

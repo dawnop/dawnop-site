@@ -888,7 +888,7 @@ onUnmounted(() => {
               @drop="onRowDrop($event, row)"
             >
               <div class="cell-thumb">
-                <img v-if="isImage(row)" :src="fm.previewUrl(row.path)" class="cell-img" loading="lazy" alt="" />
+                <img v-if="isImage(row)" :src="fm.previewUrl(row.path, { w: 320, h: 200, mode: 'fill' })" class="cell-img" loading="lazy" alt="" />
                 <el-icon v-else class="cell-ico" :style="{ color: tintOf(row) }"><component :is="iconOf(row)" /></el-icon>
               </div>
               <div class="cell-name">{{ row.name }}</div>
@@ -915,7 +915,7 @@ onUnmounted(() => {
           <template v-if="selected && !selected.is_dir">
             <div class="fm-preview">
               <div v-if="isImage(selected)" class="pv-img-wrap" title="点击放大" @click="openImgViewer(selected)">
-                <img :src="fm.previewUrl(selected.path)" class="pv-img" alt="" />
+                <img :src="fm.previewUrl(selected.path, { w: 900, mode: 'fit' })" class="pv-img" alt="" />
               </div>
               <pre v-else-if="isText(selected)" class="pv-text">{{ previewErr || previewText || '加载中…' }}</pre>
               <div v-else class="pv-file">

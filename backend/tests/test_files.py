@@ -13,9 +13,14 @@ def stub_qiniu(monkeypatch):
         store[key] = (data, mime or "application/octet-stream")
         return {"key": key, "hash": "fakehash"}
 
-    def fake_private_url(key, expires=None, attname=None):
-        suffix = f"&attname={attname}" if attname else ""
-        return f"https://cdn.example.com/{key}?e=123&token=sig{suffix}"
+    def fake_private_url(key, expires=None, attname=None, fop=None):
+        parts = []
+        if fop:
+            parts.append(fop)
+        if attname:
+            parts.append(f"attname={attname}")
+        q = ("?" + "&".join(parts)) if parts else ""
+        return f"https://cdn.example.com/{key}{q}{'&' if q else '?'}e=123&token=sig"
 
     def fake_delete(key):
         store.pop(key, None)
@@ -155,6 +160,51 @@ def test_preview_via_header_and_token_query(client, auth_headers, stub_qiniu):
     # /sign 返回签名 URL（供文本预览直连七牛）
     s = client.get("/api/fm/sign?path=qiniu://hi.txt", headers=auth_headers)
     assert s.status_code == 200 and "token=sig" in s.json()["url"]
+
+
+def test_preview_thumbnail_fop(client, auth_headers, stub_qiniu):
+    big = b"\x89PNG" + b"x" * (80 * 1024)  # >50KB，值得缩略
+    _upload(client, auth_headers, "qiniu://", "pic.png", big, "image/png")
+    _upload(client, auth_headers, "qiniu://", "small.png", b"\x89PNG-tiny", "image/png")
+    _upload(client, auth_headers, "qiniu://", "logo.svg", b"<svg/>", "image/svg+xml")
+    token = auth_headers["Authorization"].split()[1]
+
+    # 大光栅图 + w/h/mode=fill → 302 到带 imageView2 裁剪缩略图指令的签名 URL
+    r = client.get(
+        f"/api/fm/preview?path=qiniu://pic.png&w=320&h=200&mode=fill&token={token}",
+        follow_redirects=False,
+    )
+    loc = r.headers["location"]
+    assert r.status_code == 302
+    assert "imageView2/1/w/320/h/200/format/webp" in loc
+
+    # 默认 fit（等比缩放，code=2）
+    r2 = client.get(
+        f"/api/fm/preview?path=qiniu://pic.png&w=900&token={token}",
+        follow_redirects=False,
+    )
+    assert "imageView2/2/w/900/format/webp" in r2.headers["location"]
+
+    # 原图很小（<50KB）→ 不套 fop，直接原图
+    r_small = client.get(
+        f"/api/fm/preview?path=qiniu://small.png&w=320&token={token}",
+        follow_redirects=False,
+    )
+    assert "imageView2" not in r_small.headers["location"]
+
+    # svg（矢量）即使够大/给了尺寸也不套 fop，取原图
+    r3 = client.get(
+        f"/api/fm/preview?path=qiniu://logo.svg&w=320&token={token}",
+        follow_redirects=False,
+    )
+    assert "imageView2" not in r3.headers["location"]
+
+    # 不给尺寸 → 原图（无 fop）
+    r4 = client.get(
+        f"/api/fm/preview?path=qiniu://pic.png&token={token}",
+        follow_redirects=False,
+    )
+    assert "imageView2" not in r4.headers["location"]
 
 
 def test_search_and_save(client, auth_headers, stub_qiniu):

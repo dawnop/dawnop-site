@@ -127,6 +127,13 @@ dawnop-site/
 > 七牛私有签名 URL，浏览器随后**直连七牛**取字节；下载用 `?attname=` 强制附件名。这两个 GET
 > 由浏览器 `<img>`/下载链接直接发起、带不上 Authorization 头，故支持 `?token=`
 > （`deps.get_current_user_flexible`）；前端 `fmApi.previewUrl/downloadUrl` 追加 token。
+>
+> **图片缩略图（省流量）**：`GET /preview?w=&h=&mode=fit|fill` 对**光栅图**（jpg/png/webp/gif/bmp/tiff，
+> svg 等矢量排除）拼七牛 `imageView2` fop（`fit`=等比 `/2`、`fill`=裁剪铺满 `/1`，统一转 webp `q/82`）
+> **再签名**（fop 是被签名 URL 的一部分），302 直连七牛取缩略图。网格用 `w320/h200/fill`、侧栏预览用
+> `w900/fit`、点开放大查看器仍取**原图**。原图 `size ≤ 50KB`（`_THUMB_MIN_BYTES`）不缩略（省一次处理、
+> 缩略图未必更小）。实测 416KB PNG→2.3KB webp。**本地开发七牛测试域名按 path 缓存、忽略 query，
+> 无法生效（同它配不了 CORS 的原因），只在生产 storage.dawnop.com 起效**——本地图片仍能显示（回落原图）。
 > **文本在线预览/编辑与带进度下载**不能走 302（跨域重定向会把 Origin 变 null，命不中七牛 CORS），
 > 故先 `GET /sign` 拿签名 URL 再**直连七牛** `fetch`；直连被 CORS 拦（如本地开发走七牛测试域名，
 > 测试域名配不了 CORS）时自动回退 `GET /fm/content` 后端代理，进度不丢。

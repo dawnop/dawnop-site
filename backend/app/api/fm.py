@@ -532,6 +532,46 @@ def _redirect(url: str) -> RedirectResponse:
     return RedirectResponse(url, status_code=status.HTTP_302_FOUND)
 
 
+# 七牛 imageView2 能处理的光栅格式；svg（矢量）等原样返回，不套缩略图
+_THUMBABLE = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/bmp",
+    "image/x-ms-bmp",
+    "image/tiff",
+}
+
+# 原图已足够小（字节数）就不生成缩略图：省一次图片处理、且缩略图未必更小
+_THUMB_MIN_BYTES = 50 * 1024
+
+
+def _thumb_fop(
+    content_type: str | None,
+    size: int | None,
+    w: int | None,
+    h: int | None,
+    mode: str,
+) -> str | None:
+    """按目标尺寸构造 imageView2 指令；非光栅图/未给尺寸/原图已很小时返回 None（走原图）。"""
+    if not w and not h:
+        return None
+    if (content_type or "") not in _THUMBABLE:
+        return None
+    if (size or 0) <= _THUMB_MIN_BYTES:
+        return None
+    code = "1" if mode == "fill" else "2"  # 1=裁剪铺满, 2=等比缩放
+    parts = [f"imageView2/{code}"]
+    if w:
+        parts.append(f"w/{w}")
+    if h:
+        parts.append(f"h/{h}")
+    parts.append("format/webp")
+    parts.append("q/82")
+    return "/".join(parts)
+
+
 @router.get("/sign")
 def sign(
     path: str = Query(...),
@@ -583,12 +623,17 @@ def content(
 @router.get("/preview")
 def preview(
     path: str = Query(...),
+    w: int | None = Query(None, ge=1, le=2000, description="缩略图目标宽度"),
+    h: int | None = Query(None, ge=1, le=2000, description="缩略图目标高度"),
+    mode: str = Query("fit", pattern="^(fit|fill)$", description="fit=等比, fill=裁剪铺满"),
     db: Session = Depends(get_db),
     _: object = Depends(get_current_user_flexible),
 ):
+    """图片/文件预览。给了 w/h 且为光栅图时，302 到七牛 imageView2 缩略图（省流量）。"""
     o = _file_or_404(db, path)
+    fop = _thumb_fop(o.content_type, o.size, w, h, mode)
     try:
-        return _redirect(qiniu_client.private_url(o.key))
+        return _redirect(qiniu_client.private_url(o.key, fop=fop))
     except RuntimeError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
 
