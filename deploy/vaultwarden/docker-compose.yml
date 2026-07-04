@@ -1,0 +1,28 @@
+# Vaultwarden（自建 Bitwarden 兼容密码管理服务）
+# 与 dawnop-site 完全独立：单独的 Docker 容器，nginx 用子域名 vault.dawnop.com 反代。
+# 只监听 127.0.0.1，不直接暴露公网——公网入口一律走 nginx（HTTPS 终止 + 通配符证书）。
+#
+# 真实密钥放同目录 .env（不提交，见 .env.example）。首次部署见 README.md。
+
+services:
+  vaultwarden:
+    image: vaultwarden/server:1.36.0-alpine   # 固定版本便于复现；升级时改这里再 pull
+    container_name: vaultwarden
+    restart: unless-stopped
+    environment:
+      # 必填：外部访问域名（WebAuthn/2FA、附件 URL 都依赖它，必须与实际访问地址一致）
+      DOMAIN: "https://vault.dawnop.com"
+      # 注册开关：首次注册完自己的账号后，改 .env 里 SIGNUPS_ALLOWED=false 再 `up -d` 重建
+      SIGNUPS_ALLOWED: "${SIGNUPS_ALLOWED:-false}"
+      # /admin 管理面板令牌（argon2 哈希，见 README；不设则关闭 /admin）
+      ADMIN_TOKEN: "${ADMIN_TOKEN:-}"
+      # 已在 nginx 后面，信任其转发的真实客户端 IP（用于登录限流/日志）
+      IP_HEADER: "X-Real-IP"
+      # WebSocket 通知（同端口 /notifications/hub，默认已开，显式写明）
+      WEBSOCKET_ENABLED: "true"
+      # 时区（日志时间）
+      TZ: "Asia/Shanghai"
+    volumes:
+      - ./data:/data          # 数据库(db.sqlite3)、附件、rsa keys、attachments 全在这里 → 备份此目录即可
+    ports:
+      - "127.0.0.1:8222:80"   # 仅本机；nginx 反代到这里
