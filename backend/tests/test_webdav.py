@@ -20,6 +20,11 @@ def stub_qiniu(monkeypatch):
         store[key] = (data, mime or "application/octet-stream")
         return {"key": key, "hash": "h"}
 
+    def fake_proxy_upload_file(key, filepath, mime=None):
+        with open(filepath, "rb") as f:
+            store[key] = (f.read(), mime or "application/octet-stream")
+        return {"key": key, "hash": "h"}
+
     def fake_private_url(key, expires=None, attname=None, fop=None):
         return f"https://cdn.example.com/{key}?e=1&token=sig"
 
@@ -30,6 +35,7 @@ def stub_qiniu(monkeypatch):
         store[dst] = store.get(src, (b"", "application/octet-stream"))
 
     monkeypatch.setattr(qiniu_client, "proxy_upload", fake_proxy_upload)
+    monkeypatch.setattr(qiniu_client, "proxy_upload_file", fake_proxy_upload_file)
     monkeypatch.setattr(qiniu_client, "private_url", fake_private_url)
     monkeypatch.setattr(qiniu_client, "delete", fake_delete)
     monkeypatch.setattr(qiniu_client, "copy", fake_copy)
@@ -247,6 +253,17 @@ def test_put_creates_file(client, stub_qiniu):
     r = client.request("PROPFIND", "/dav/", headers={**_basic(), "Depth": "1"})
     assert "/dav/note.txt" in r.text
     assert "<D:getcontentlength>9</D:getcontentlength>" in r.text
+
+
+def test_put_streams_body_intact(client, stub_qiniu):
+    # 多块 body 走临时文件流式上传，逐字节应与上传内容一致
+    payload = b"streamed-body-" * 5000
+    r = client.request("PUT", "/dav/big.txt", headers=_basic(), content=payload)
+    assert r.status_code == 201
+    assert any(data == payload for data, _ in stub_qiniu.values())
+    # PROPFIND 的 size 也应等于实际字节数
+    r = client.request("PROPFIND", "/dav/big.txt", headers={**_basic(), "Depth": "0"})
+    assert f"<D:getcontentlength>{len(payload)}</D:getcontentlength>" in r.text
 
 
 def test_put_overwrite_returns_204(client, stub_qiniu):

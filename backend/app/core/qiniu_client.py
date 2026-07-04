@@ -7,7 +7,7 @@ from functools import lru_cache
 from urllib.parse import quote
 
 import requests
-from qiniu import Auth, BucketManager, QiniuMacAuth, put_data
+from qiniu import Auth, BucketManager, QiniuMacAuth, put_data, put_file
 
 from app.config import settings
 
@@ -55,10 +55,30 @@ def upload_host() -> str:
 
 
 def proxy_upload(key: str, data: bytes, mime: str | None = None) -> dict:
-    """服务端代理上传字节流到七牛，返回七牛响应 ret。"""
+    """服务端代理上传字节流到七牛，返回七牛响应 ret。
+
+    整块 bytes 一次性上传，适合小内容（create-file 空文件、/save 文本编辑等）。
+    大文件走 proxy_upload_file（磁盘流式、自动分片续传），避免内存峰值。
+    """
     token = _auth().upload_token(settings.qiniu_bucket, key, 3600)
     ret, info = put_data(
         token, key, data, mime_type=mime or "application/octet-stream"
+    )
+    if ret is None or info.status_code != 200:
+        raise RuntimeError(f"七牛上传失败: {info}")
+    return ret
+
+
+def proxy_upload_file(key: str, filepath: str, mime: str | None = None) -> dict:
+    """从**本地文件**上传到七牛（内存恒定）。
+
+    put_file 按大小自动选择：小文件表单直传、大文件分片续传（从磁盘按块读、
+    可 seek 重试），故上传任意大小都不会把整个文件读进内存。WebDAV PUT 用它：
+    先把请求体流式落到临时文件，再交此函数上传。
+    """
+    token = _auth().upload_token(settings.qiniu_bucket, key, 3600)
+    ret, info = put_file(
+        token, key, filepath, mime_type=mime or "application/octet-stream"
     )
     if ret is None or info.status_code != 200:
         raise RuntimeError(f"七牛上传失败: {info}")
