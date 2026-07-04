@@ -7,10 +7,11 @@ import {
   Folder, FolderOpened, FolderAdd, Document, Picture, Files, Upload,
   Search, Grid, List, MoreFilled, Download, EditPen, Delete,
   View, Close, Loading, RefreshRight, Right, CopyDocument,
-  ArrowDown, ArrowUp,
+  ArrowDown, ArrowUp, Plus, Select,
 } from '@element-plus/icons-vue'
 import * as fm from '../../api/fmApi'
 import { settingsApi } from '../../api'
+import { useIsMobile } from '../../composables/useIsMobile'
 
 // ---------- 状态 ----------
 const cwd = ref('') // 当前目录相对路径，''=根
@@ -23,6 +24,13 @@ const selectedPath = ref('') // 预览用的单选
 const selPaths = ref([]) // 多选（批量操作用）
 const previewText = ref('')
 const previewErr = ref('')
+
+// ---------- 移动端 ----------
+const isMobile = useIsMobile()
+const selectMode = ref(false) // 移动端多选模式（替代框选）
+const sheet = reactive({ show: false, row: null }) // 底部操作弹层（替代右键菜单 + 右侧预览面板）
+// 移动端强制网格视图（表格在窄屏太挤）
+const effectiveView = computed(() => (isMobile.value ? 'grid' : viewMode.value))
 
 // 存储用量（侧栏用量条）与全局配置（并发数、文本预览上限）
 const drive = ref(null)
@@ -246,6 +254,37 @@ function onCellClick(row, ev) {
   onRowClick(row)
 }
 
+// 移动端：点卡片 = 打开（文件夹进入 / 文件预览）；选择模式下 = 勾选
+function onCellTap(row, ev) {
+  if (!isMobile.value) return onCellClick(row, ev)
+  if (selectMode.value) return toggleCheck(row)
+  if (row.is_dir) goto(row.path)
+  else if (isImage(row)) openImgViewer(row)
+  else openModal(row)
+}
+function toggleCheck(row) {
+  const i = selPaths.value.indexOf(row.path)
+  if (i >= 0) selPaths.value = selPaths.value.filter((p) => p !== row.path)
+  else selPaths.value = [...selPaths.value, row.path]
+}
+function toggleSelectMode() {
+  selectMode.value = !selectMode.value
+  if (!selectMode.value) clearSel()
+}
+// 底部操作弹层
+function openSheet(row) { sheet.row = row; sheet.show = true }
+function sheetDo(action) {
+  const row = sheet.row
+  sheet.show = false
+  if (!row) return
+  if (action === 'preview') { if (isImage(row)) openImgViewer(row); else openModal(row) }
+  else if (action === 'download') doDownload(row)
+  else if (action === 'rename') doRename(row)
+  else if (action === 'move') startMoveCopy('move', [row])
+  else if (action === 'copy') startMoveCopy('copy', [row])
+  else if (action === 'delete') doDelete(row)
+}
+
 // 下载：直连七牛流式取字节（传输列表里显示进度），失败回退 302 浏览器直接下载
 async function doDownload(row) {
   const t = addTask('down', row.name)
@@ -451,6 +490,7 @@ async function moveInto(dest, rows) {
 // ---------- 框选多选（在空白处按下并拖动画选择框）----------
 function onContentMousedown(ev) {
   if (ev.button !== 0) return
+  if (isMobile.value) return // 移动端不启动框选，改用「选择」模式
   // 落在行/卡片/表头/控件上时不启动框选，交给点击或拖拽
   if (ev.target.closest(
     '.el-table__row, .cell, .el-table__header, .rowmore, .el-checkbox, .el-dropdown, a, button, input',
@@ -709,8 +749,8 @@ onUnmounted(() => {
 <template>
   <div class="fm">
     <div class="fm-card">
-      <!-- 左侧：目录树 + 存储条 -->
-      <aside class="fm-side" :style="{ width: sideW + 'px' }">
+      <!-- 左侧：目录树 + 存储条（移动端隐藏，改用面包屑导航） -->
+      <aside v-if="!isMobile" class="fm-side" :style="{ width: sideW + 'px' }">
         <el-dropdown trigger="click" @command="(c) => (c === 'file' ? pickFiles() : pickFolder())">
           <el-button type="primary" class="fm-upload" :icon="Upload">上传</el-button>
           <template #dropdown>
@@ -764,7 +804,7 @@ onUnmounted(() => {
         </div>
       </aside>
 
-      <div class="fm-rs" @mousedown.prevent="startResize('side', $event)"></div>
+      <div v-if="!isMobile" class="fm-rs" @mousedown.prevent="startResize('side', $event)"></div>
 
       <!-- 中间：工具栏 + 面包屑 + 内容（整块可拖入上传） -->
       <section
@@ -790,10 +830,21 @@ onUnmounted(() => {
           </div>
           <div class="fm-tb-right">
             <el-input v-model="q" :prefix-icon="Search" placeholder="搜索当前目录" clearable class="fm-search" />
-            <el-segmented v-model="viewMode" :options="viewOptions" class="fm-seg">
-              <template #default="{ item }"><el-icon><component :is="item.icon" /></el-icon></template>
-            </el-segmented>
-            <el-button :icon="View" circle :type="showInfo ? 'primary' : ''" :plain="showInfo" title="预览面板" @click="showInfo = !showInfo" />
+            <template v-if="!isMobile">
+              <el-segmented v-model="viewMode" :options="viewOptions" class="fm-seg">
+                <template #default="{ item }"><el-icon><component :is="item.icon" /></el-icon></template>
+              </el-segmented>
+              <el-button :icon="View" circle :type="showInfo ? 'primary' : ''" :plain="showInfo" title="预览面板" @click="showInfo = !showInfo" />
+            </template>
+            <el-button
+              v-else
+              :icon="selectMode ? Close : Select"
+              circle
+              :type="selectMode ? 'primary' : ''"
+              :plain="selectMode"
+              title="多选"
+              @click="toggleSelectMode"
+            />
           </div>
         </div>
 
@@ -815,7 +866,7 @@ onUnmounted(() => {
         >
           <!-- 列表 -->
           <el-table
-            v-if="viewMode === 'list'"
+            v-if="effectiveView === 'list'"
             ref="tableRef"
             :data="filtered"
             row-key="path"
@@ -877,8 +928,8 @@ onUnmounted(() => {
                 'is-checked': selPaths.includes(row.path),
                 'drop-into': row.is_dir && dnd.overPath === row.path,
               }"
-              draggable="true"
-              @click="onCellClick(row, $event)"
+              :draggable="!isMobile"
+              @click="onCellTap(row, $event)"
               @dblclick="onRowDblclick(row)"
               @contextmenu="openCtxRow($event, row)"
               @dragstart="onDragStartRow($event, row)"
@@ -887,6 +938,14 @@ onUnmounted(() => {
               @dragleave="onRowDragLeave(row)"
               @drop="onRowDrop($event, row)"
             >
+              <button v-if="isMobile && !selectMode" class="cell-more" @click.stop="openSheet(row)">
+                <el-icon><MoreFilled /></el-icon>
+              </button>
+              <el-icon
+                v-if="isMobile && selectMode"
+                class="cell-check"
+                :class="{ on: selPaths.includes(row.path) }"
+              ><Select /></el-icon>
               <div class="cell-thumb">
                 <img v-if="isImage(row)" :src="fm.previewUrl(row.path, { w: 320, h: 200, mode: 'fill' })" class="cell-img" loading="lazy" alt="" />
                 <el-icon v-else class="cell-ico" :style="{ color: tintOf(row) }"><component :is="iconOf(row)" /></el-icon>
@@ -904,8 +963,8 @@ onUnmounted(() => {
         </div>
       </section>
 
-      <!-- 右侧：预览 + 信息 -->
-      <template v-if="showInfo">
+      <!-- 右侧：预览 + 信息（移动端改用底部弹层，不渲染此面板） -->
+      <template v-if="showInfo && !isMobile">
         <div class="fm-rs" @mousedown.prevent="startResize('info', $event)"></div>
         <aside class="fm-info" :style="{ width: infoW + 'px' }">
           <div class="fm-info-head">
@@ -941,8 +1000,8 @@ onUnmounted(() => {
     <el-dialog
       v-model="modal.show"
       :title="modal.row?.name"
-      width="72%"
-      top="6vh"
+      :width="isMobile ? '94%' : '72%'"
+      :top="isMobile ? '4vh' : '6vh'"
       append-to-body
       :before-close="beforeCloseModal"
     >
@@ -1034,7 +1093,7 @@ onUnmounted(() => {
     <el-dialog
       v-model="destDlg.show"
       :title="`${destDlg.mode === 'move' ? '移动' : '复制'} ${destDlg.rows.length} 项到…`"
-      width="420px"
+      :width="isMobile ? '92%' : '420px'"
       append-to-body
     >
       <div class="dest-tree">
@@ -1067,6 +1126,56 @@ onUnmounted(() => {
 
     <!-- 框选选择框（视口固定坐标） -->
     <div v-if="marquee.show" class="fm-marquee" :style="marqueeStyle"></div>
+
+    <!-- 移动端：悬浮 +（上传 / 新建） -->
+    <el-dropdown
+      v-if="isMobile"
+      trigger="click"
+      class="fm-fab"
+      placement="top-end"
+      @command="(c) => (c === 'file' ? pickFiles() : c === 'folder' ? pickFolder() : newFolder())"
+    >
+      <el-button type="primary" circle :icon="Plus" class="fm-fab-btn" />
+      <template #dropdown>
+        <el-dropdown-menu>
+          <el-dropdown-item command="file" :icon="Files">上传文件</el-dropdown-item>
+          <el-dropdown-item command="folder" :icon="FolderOpened">上传文件夹</el-dropdown-item>
+          <el-dropdown-item command="newfolder" :icon="FolderAdd" divided>新建文件夹</el-dropdown-item>
+        </el-dropdown-menu>
+      </template>
+    </el-dropdown>
+
+    <!-- 移动端：底部操作弹层 -->
+    <el-drawer v-model="sheet.show" direction="btt" size="auto" :with-header="false" class="fm-sheet">
+      <div v-if="sheet.row" class="fm-sheet-inner">
+        <div class="fm-sheet-head">
+          <el-icon class="fm-sheet-ico" :style="{ color: tintOf(sheet.row) }">
+            <component :is="iconOf(sheet.row)" />
+          </el-icon>
+          <div class="fm-sheet-name">{{ sheet.row.name }}</div>
+        </div>
+        <div class="fm-sheet-grid">
+          <button v-if="!sheet.row.is_dir" class="fm-sheet-btn" @click="sheetDo('preview')">
+            <el-icon><View /></el-icon><span>预览</span>
+          </button>
+          <button v-if="!sheet.row.is_dir" class="fm-sheet-btn" @click="sheetDo('download')">
+            <el-icon><Download /></el-icon><span>下载</span>
+          </button>
+          <button class="fm-sheet-btn" @click="sheetDo('rename')">
+            <el-icon><EditPen /></el-icon><span>重命名</span>
+          </button>
+          <button class="fm-sheet-btn" @click="sheetDo('move')">
+            <el-icon><Right /></el-icon><span>移动</span>
+          </button>
+          <button class="fm-sheet-btn" @click="sheetDo('copy')">
+            <el-icon><CopyDocument /></el-icon><span>复制</span>
+          </button>
+          <button class="fm-sheet-btn danger" @click="sheetDo('delete')">
+            <el-icon><Delete /></el-icon><span>删除</span>
+          </button>
+        </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -1213,11 +1322,43 @@ onUnmounted(() => {
   padding: 12px 8px;
 }
 .cell {
+  position: relative;
   border: 1px solid var(--w-border);
   border-radius: 10px;
   padding: 12px;
   cursor: pointer;
   transition: border-color 0.15s, box-shadow 0.15s;
+}
+/* 移动端网格卡片右上角 ⋮ 操作入口 */
+.cell-more {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #606266;
+  cursor: pointer;
+}
+/* 选择模式的勾选标 */
+.cell-check {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  font-size: 18px;
+  color: #c0c4cc;
+  background: #fff;
+  border-radius: 50%;
+}
+.cell-check.on {
+  color: var(--el-color-primary);
 }
 .cell:hover { box-shadow: var(--w-shadow); }
 .cell.is-sel { background: var(--w-sel); border-color: #d5d9e6; }
@@ -1440,5 +1581,79 @@ onUnmounted(() => {
   .fm-side { width: 180px !important; }
   .fm-info,
   .fm-rs { display: none; }
+}
+
+/* ---------- 移动端悬浮 + 按钮 ---------- */
+.fm-fab {
+  position: fixed;
+  right: 18px;
+  bottom: 22px;
+  z-index: 1500;
+}
+.fm-fab-btn {
+  width: 52px;
+  height: 52px;
+  font-size: 22px;
+  box-shadow: 0 6px 18px rgba(22, 119, 255, 0.38);
+}
+
+/* ---------- 移动端底部操作弹层 ---------- */
+.fm-sheet :deep(.el-drawer__body) { padding: 0; }
+.fm-sheet-inner { padding: 8px 12px 20px; }
+.fm-sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 6px 14px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.fm-sheet-ico { font-size: 26px; flex-shrink: 0; }
+.fm-sheet-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  word-break: break-all;
+}
+.fm-sheet-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding-top: 14px;
+}
+.fm-sheet-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 14px 6px;
+  border: none;
+  border-radius: 12px;
+  background: #f5f7fa;
+  color: #3c4149;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.fm-sheet-btn .el-icon { font-size: 21px; }
+.fm-sheet-btn.danger { color: var(--el-color-danger); }
+
+/* ---------- 移动端整体布局（≤768） ---------- */
+@media (max-width: 768px) {
+  .fm-toolbar { flex-wrap: wrap; gap: 8px; }
+  .fm-tb-left { flex-wrap: wrap; }
+  .fm-tb-right { flex: 1; }
+  .fm-search { width: 100%; flex: 1; }
+  .fm-content { padding: 6px; }
+  .fm-grid {
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 10px;
+    padding: 10px 4px 80px; /* 底部留白避开 FAB */
+  }
+  .cell-thumb { height: 68px; }
+  /* 传输列表：右下角浮窗 → 贴底通栏 */
+  .fm-tasks {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: auto;
+  }
 }
 </style>

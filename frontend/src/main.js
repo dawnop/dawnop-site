@@ -4,6 +4,7 @@ import { createApp } from 'vue'
 import './assets/element-theme.css'
 import './style.css'
 import './assets/admin.css'
+import './assets/responsive.css'
 import App from './App.vue'
 import router from './router'
 

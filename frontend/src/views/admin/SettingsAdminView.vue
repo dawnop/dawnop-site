@@ -3,7 +3,9 @@
 // 新增配置项：后端 api/settings.py 的 DEFAULTS/VALIDATORS 加一项，这里加一个表单控件。
 import { ref, reactive, computed, onMounted } from 'vue'
 import { settingsApi } from '../../api'
+import { useIsMobile } from '../../composables/useIsMobile'
 
+const isMobile = useIsMobile()
 const loading = ref(true)
 const saving = ref(false)
 const form = reactive({
@@ -52,7 +54,11 @@ onMounted(load)
     <p class="hint">改动即时生效（文件管理页需刷新后生效）。</p>
 
     <el-card v-loading="loading" shadow="never">
-      <el-form label-width="140px" class="settings-form">
+      <el-form
+        :label-width="isMobile ? 'auto' : '140px'"
+        :label-position="isMobile ? 'top' : 'right'"
+        class="settings-form"
+      >
         <h3 class="group-title">文件管理</h3>
         <el-form-item label="上传并发数">
           <el-input-number v-model="form.upload_concurrency" :min="1" :max="8" />
@@ -103,5 +109,16 @@ onMounted(load)
   margin-left: 14px;
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+@media (max-width: 768px) {
+  .page-head h1 {
+    font-size: 1.15rem;
+  }
+  .tip {
+    display: block;
+    margin-left: 0;
+    margin-top: 4px;
+  }
 }
 </style>

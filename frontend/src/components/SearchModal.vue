@@ -3,11 +3,13 @@ import { ref, watch, computed, nextTick, onBeforeUnmount } from 'vue'
 import { useRouter, RouterLink } from 'vue-router'
 import { Search, Clock, Close } from '@element-plus/icons-vue'
 import { searchApi } from '../api'
+import { useIsMobile } from '../composables/useIsMobile'
 
 const props = defineProps({ modelValue: Boolean })
 const emit = defineEmits(['update:modelValue'])
 
 const router = useRouter()
+const isMobile = useIsMobile()
 
 const kw = ref('')
 const items = ref([])
@@ -183,7 +185,10 @@ onBeforeUnmount(() => {
               autocomplete="off"
               spellcheck="false"
             />
-            <kbd class="s-esc" @click="close">Esc</kbd>
+            <kbd v-if="!isMobile" class="s-esc" @click="close">Esc</kbd>
+            <button v-else class="s-close" type="button" aria-label="关闭" @click="close">
+              <el-icon><Close /></el-icon>
+            </button>
           </div>
 
           <!-- 结果 / 最近搜索 / 空态 -->
@@ -247,9 +252,9 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <!-- 底栏 -->
-          <div class="s-foot">
-            <div class="s-keys">
+          <!-- 底栏（移动端隐藏键盘提示；无「查看全部」时整条不显示） -->
+          <div v-if="!isMobile || (items.length && total > items.length)" class="s-foot">
+            <div v-if="!isMobile" class="s-keys">
               <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
               <span><kbd>↵</kbd> 打开</span>
               <span><kbd>esc</kbd> 关闭</span>
@@ -537,16 +542,53 @@ onBeforeUnmount(() => {
   opacity: 0;
 }
 
-/* 移动端：近全屏 */
+/* 关闭按钮（移动端全屏时的明确关闭入口，44px 触控目标） */
+.s-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-right: -6px;
+  border: none;
+  background: none;
+  color: #8a9099;
+  cursor: pointer;
+  font-size: 20px;
+}
+.s-close:active {
+  color: #5a5a5a;
+}
+
+/* 移动端：全屏（dvh 适配 iOS 键盘弹起，避免底栏被顶出视口） */
 @media (max-width: 560px) {
   .s-overlay {
     padding: 0;
   }
   .s-panel {
     max-width: 100%;
-    max-height: 100%;
-    height: 100%;
+    max-height: 100vh;
+    max-height: 100dvh;
+    height: 100vh;
+    height: 100dvh;
     border-radius: 0;
+  }
+  .s-head {
+    height: 54px;
+    padding: 0 8px 0 14px;
+  }
+  .s-item {
+    padding: 13px 12px;
+  }
+  .s-recent {
+    padding: 12px 10px;
+  }
+  .s-foot {
+    justify-content: center;
+    padding: 12px 14px;
+  }
+  .s-viewall {
+    font-size: 0.9rem;
   }
 }
 </style>

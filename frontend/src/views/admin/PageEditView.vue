@@ -8,6 +8,9 @@ import { pagesApi } from '../../api'
 import { useEditorPreviewIslands } from '../../viz/editorPreview'
 import { firstH1 } from '../../utils/markdownTitle'
 import HelpTip from '../../components/HelpTip.vue'
+import { useIsMobile } from '../../composables/useIsMobile'
+
+const isMobile = useIsMobile()
 
 // 内容页编辑器预览里把 ```viz 占位渲染成真实交互组件（类 mermaid）
 const { onHtmlChanged } = useEditorPreviewIslands('page-editor-preview')
@@ -196,7 +199,7 @@ async function save() {
       v-model="form.content"
       editor-id="page-editor"
       language="zh-CN"
-      :preview="true"
+      :preview="!isMobile"
       class="editor"
       @on-html-changed="onHtmlChanged"
     />
@@ -226,7 +229,7 @@ async function save() {
     </el-card>
 
     <!-- 右侧设置抽屉 -->
-    <el-drawer v-model="showSettings" title="页面设置" size="360px">
+    <el-drawer v-model="showSettings" title="页面设置" :size="isMobile ? '86%' : '360px'">
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
         <el-form-item label="标题" prop="title">
           <el-input
@@ -378,5 +381,26 @@ async function save() {
 }
 .w-full {
   width: 100%;
+}
+
+@media (max-width: 768px) {
+  .edit-topbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .doc-title {
+    flex: 1 0 100%;
+    font-size: 1.12rem;
+    white-space: normal;
+  }
+  .actions {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .editor {
+    min-height: 300px;
+  }
 }
 </style>

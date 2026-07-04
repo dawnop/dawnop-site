@@ -9,6 +9,9 @@ import { builtinIds } from '../../viz/registry'
 import { useEditorPreviewIslands } from '../../viz/editorPreview'
 import { firstH1 } from '../../utils/markdownTitle'
 import HelpTip from '../../components/HelpTip.vue'
+import { useIsMobile } from '../../composables/useIsMobile'
+
+const isMobile = useIsMobile()
 
 const IMPORT_KEY = 'dawnop_import_md' // 导入 .md 时由列表页写入、本页读取后清除
 const META_KEY = 'dawnop_import_meta' // 导入 .md 的 front matter 元数据（同上）
@@ -247,13 +250,13 @@ async function save() {
       v-model="form.content"
       editor-id="article-editor"
       language="zh-CN"
-      :preview="true"
+      :preview="!isMobile"
       class="editor"
       @on-html-changed="onHtmlChanged"
     />
 
     <!-- 右侧设置抽屉 -->
-    <el-drawer v-model="showSettings" title="文章设置" size="360px">
+    <el-drawer v-model="showSettings" title="文章设置" :size="isMobile ? '86%' : '360px'">
       <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
         <el-form-item prop="title">
           <template #label>
@@ -388,5 +391,26 @@ async function save() {
 }
 .w-full {
   width: 100%;
+}
+
+@media (max-width: 768px) {
+  .edit-topbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .doc-title {
+    flex: 1 0 100%;
+    font-size: 1.12rem;
+    white-space: normal;
+  }
+  .actions {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .editor {
+    min-height: 300px;
+  }
 }
 </style>

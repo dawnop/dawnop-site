@@ -159,7 +159,13 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
     display: none;
   }
   .search-trigger {
-    padding: 0 8px;
+    height: 40px;
+    width: 40px;
+    justify-content: center;
+    padding: 0;
+  }
+  .st-icon {
+    font-size: 18px;
   }
 }
 </style>

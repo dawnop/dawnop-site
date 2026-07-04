@@ -1,10 +1,19 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { Search, Delete } from '@element-plus/icons-vue'
+import { Search, Delete, MoreFilled } from '@element-plus/icons-vue'
 import { tagsApi } from '../../api'
 import { useColWidths } from '../../utils/colWidths'
+import { useIsMobile } from '../../composables/useIsMobile'
 
 const { colW, onHeaderDrag } = useColWidths('dawnop_colw_tags')
+const isMobile = useIsMobile()
+
+// 移动卡片「更多」操作
+function tagCmd(cmd, row) {
+  if (cmd === 'rename') rename(row)
+  else if (cmd === 'merge') openMerge(row)
+  else if (cmd === 'delete') remove(row)
+}
 
 const items = ref([])
 const loading = ref(true)
@@ -149,7 +158,7 @@ onMounted(load)
         <span class="muted total">共 {{ items.length }} 个标签</span>
       </div>
 
-      <el-table v-loading="loading" :data="filtered" border empty-text="还没有标签，去文章里打上第一个吧" @header-dragend="onHeaderDrag">
+      <el-table v-if="!isMobile" v-loading="loading" :data="filtered" border empty-text="还没有标签，去文章里打上第一个吧" @header-dragend="onHeaderDrag">
         <el-table-column label="名称" :width="colW['名称'] || 220" show-overflow-tooltip>
           <template #default="{ row }">
             <span class="tag-name"><span class="hash">#</span>{{ row.name }}</span>
@@ -178,9 +187,31 @@ onMounted(load)
           </template>
         </el-table-column>
       </el-table>
+
+      <!-- 移动端卡片列表 -->
+      <div v-else v-loading="loading" class="m-list">
+        <el-empty v-if="!filtered.length && !loading" description="还没有标签" :image-size="80" />
+        <div v-for="row in filtered" :key="row.id" class="m-tag">
+          <div class="m-tag-info">
+            <span class="tag-name"><span class="hash">#</span>{{ row.name }}</span>
+            <a :href="`/tag/${row.slug}`" target="_blank" rel="noopener" class="slug-link">/tag/{{ row.slug }}</a>
+            <span :class="row.count === 0 ? 'orphan' : 'muted'" class="m-count">{{ row.count }} 篇</span>
+          </div>
+          <el-dropdown trigger="click" @command="(c) => tagCmd(c, row)">
+            <el-button size="small" :icon="MoreFilled" />
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="rename">重命名</el-dropdown-item>
+                <el-dropdown-item command="merge" :disabled="items.length < 2">合并</el-dropdown-item>
+                <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+      </div>
     </el-card>
 
-    <el-dialog v-model="mergeVisible" title="合并标签" width="420px">
+    <el-dialog v-model="mergeVisible" title="合并标签" :width="isMobile ? '92%' : '420px'">
       <p class="merge-hint">
         把 <b>#{{ mergeSource?.name }}</b>（{{ mergeSource?.count }} 篇）的文章并入下面选择的标签，
         随后删除 #{{ mergeSource?.name }}。
@@ -246,5 +277,51 @@ onMounted(load)
 }
 .w-full {
   width: 100%;
+}
+
+/* 移动端卡片列表 */
+.m-list {
+  display: flex;
+  flex-direction: column;
+}
+.m-tag {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.m-tag:last-child {
+  border-bottom: none;
+}
+.m-tag-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+.m-tag-info .tag-name {
+  font-weight: 600;
+}
+.m-count {
+  font-size: 0.8rem;
+}
+
+@media (max-width: 768px) {
+  .page-head {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .page-head h1 {
+    font-size: 1.15rem;
+  }
+  .toolbar {
+    flex-wrap: wrap;
+  }
+  .search {
+    width: 100%;
+  }
 }
 </style>

@@ -1,0 +1,18 @@
+/* 全站移动端断点约定：≤768px = 移动，≤480px = 小屏。
+   组件内的响应式各自用 useIsMobile()/useIsSmall() 或 scoped @media 处理；
+   本文件只放少量「全局安全兜底」——不改桌面、只在窄屏生效。 */
+
+@media (max-width: 768px) {
+  /* 后台内可点交互项的触控目标不小于 44px（Apple HIG / Material 48）。
+     仅作用于后台外壳 .admin，不影响前台既有排版。 */
+  .admin .el-menu-item,
+  .admin .el-dropdown-menu__item {
+    min-height: 44px;
+  }
+
+  /* 命令式弹层（ElMessageBox 等）在窄屏留边、不贴死屏幕两侧 */
+  .el-message-box {
+    width: calc(100vw - 32px) !important;
+    max-width: 420px;
+  }
+}

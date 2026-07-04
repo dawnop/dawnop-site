@@ -1,14 +1,23 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Search, Upload, EditPen } from '@element-plus/icons-vue'
+import { Search, Upload, EditPen, MoreFilled } from '@element-plus/icons-vue'
 import { articlesApi, pagesApi, tagsApi } from '../../api'
 import { parseFrontmatter } from '../../utils/frontmatter'
 import { useColWidths } from '../../utils/colWidths'
+import { useIsMobile } from '../../composables/useIsMobile'
 
 const { colW, onHeaderDrag } = useColWidths('dawnop_colw_articles')
 
 const router = useRouter()
+const isMobile = useIsMobile()
+
+// 移动卡片的「更多」操作
+function rowCmd(cmd, row) {
+  if (cmd === 'publish') togglePublish(row)
+  else if (cmd === 'export') exportMd(row)
+  else if (cmd === 'delete') remove(row)
+}
 
 const items = ref([])
 const total = ref(0)
@@ -191,7 +200,7 @@ onMounted(load)
       <el-button v-if="fStatus || fPageId || fq" link @click="resetFilters">重置</el-button>
     </el-card>
 
-    <el-card shadow="never">
+    <el-card v-if="!isMobile" shadow="never">
       <el-table v-loading="loading" :data="items" border empty-text="还没有文章" @header-dragend="onHeaderDrag">
         <el-table-column prop="title" label="标题" :width="colW.title" min-width="150" show-overflow-tooltip />
         <el-table-column label="链接" :width="colW['链接']" min-width="110" show-overflow-tooltip>
@@ -267,6 +276,65 @@ onMounted(load)
         />
       </div>
     </el-card>
+
+    <!-- 移动端卡片列表 -->
+    <div v-else v-loading="loading" class="m-list">
+      <el-empty v-if="!items.length && !loading" description="还没有文章" :image-size="80" />
+      <el-card v-for="row in items" :key="row.id" shadow="never" class="m-card">
+        <div class="m-card-head">
+          <a :href="articleUrl(row.slug)" target="_blank" rel="noopener" class="m-title">{{ row.title }}</a>
+          <el-tag :type="row.published ? 'success' : 'info'" size="small" effect="light">
+            {{ row.published ? '已发布' : '草稿' }}
+          </el-tag>
+        </div>
+        <div class="m-slug">/article/{{ row.slug }}</div>
+        <div class="m-meta">
+          <span>{{ pageName(row.page_id) }}</span>
+          <span>· {{ row.views ?? 0 }} 浏览</span>
+          <span>· {{ fmtDate(row.updated_at) }}</span>
+        </div>
+        <el-select
+          v-model="row.tagNames"
+          multiple
+          filterable
+          allow-create
+          default-first-option
+          collapse-tags
+          collapse-tags-tooltip
+          :reserve-keyword="false"
+          size="small"
+          placeholder="加标签"
+          class="m-tags"
+          @change="saveTags(row)"
+        >
+          <el-option v-for="t in allTags" :key="t" :label="t" :value="t" />
+        </el-select>
+        <div class="m-actions">
+          <el-button size="small" @click="router.push(`/admin/articles/${row.id}/edit`)">编辑</el-button>
+          <el-dropdown trigger="click" @command="(c) => rowCmd(c, row)">
+            <el-button size="small" :icon="MoreFilled" />
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="publish">{{ row.published ? '转草稿' : '发布' }}</el-dropdown-item>
+                <el-dropdown-item command="export">导出 .md</el-dropdown-item>
+                <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+      </el-card>
+      <div v-if="total > size" class="pager">
+        <el-pagination
+          background
+          small
+          layout="prev, pager, next"
+          :total="total"
+          :page-size="size"
+          :current-page="page"
+          @current-change="goPage"
+        />
+      </div>
+    </div>
   </div>
 </template>
 
@@ -324,5 +392,91 @@ onMounted(load)
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+/* 移动端卡片列表 */
+.m-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.m-card :deep(.el-card__body) {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.m-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.m-title {
+  font-weight: 600;
+  font-size: 0.98rem;
+  line-height: 1.35;
+  text-decoration: none;
+  color: var(--el-text-color-primary);
+}
+.m-slug {
+  font-size: 0.8rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+.m-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.m-tags {
+  width: 100%;
+}
+.m-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+.m-actions > .el-button {
+  flex: 1;
+}
+
+/* 移动端工具条 / 头部堆叠 */
+@media (max-width: 768px) {
+  .page-head {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .page-head h1 {
+    font-size: 1.15rem;
+  }
+  .actions {
+    width: 100%;
+  }
+  .actions .el-button {
+    flex: 1;
+  }
+  .toolbar :deep(.el-card__body) {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px;
+  }
+  .search,
+  .cat {
+    width: 100%;
+  }
+  .toolbar :deep(.el-radio-group) {
+    display: flex;
+    width: 100%;
+  }
+  .toolbar :deep(.el-radio-button) {
+    flex: 1;
+  }
+  .toolbar :deep(.el-radio-button__inner) {
+    width: 100%;
+  }
 }
 </style>

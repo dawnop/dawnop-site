@@ -5,10 +5,12 @@ import { MagicStick } from '@element-plus/icons-vue'
 import { vizApi } from '../../api'
 import HelpTip from '../../components/HelpTip.vue'
 import { useColWidths } from '../../utils/colWidths'
+import { useIsMobile } from '../../composables/useIsMobile'
 
 const { colW, onHeaderDrag } = useColWidths('dawnop_colw_viz')
 
 const router = useRouter()
+const isMobile = useIsMobile()
 const items = ref([])
 const loading = ref(true)
 
@@ -64,7 +66,7 @@ onMounted(load)
       </HelpTip>
     </p>
 
-    <el-card shadow="never">
+    <el-card v-if="!isMobile" shadow="never">
       <el-table v-loading="loading" :data="items" row-key="id" border empty-text="还没有可视化组件" @header-dragend="onHeaderDrag">
         <el-table-column prop="slug" label="标识" :width="colW.slug || 240" show-overflow-tooltip>
           <template #default="{ row }"><code class="slug">{{ row.slug }}</code></template>
@@ -88,6 +90,22 @@ onMounted(load)
         </el-table-column>
       </el-table>
     </el-card>
+
+    <!-- 移动端卡片列表 -->
+    <div v-else v-loading="loading" class="m-list">
+      <el-empty v-if="!items.length && !loading" description="还没有可视化组件" :image-size="80" />
+      <el-card v-for="row in items" :key="row.id" shadow="never" class="m-card">
+        <div class="m-card-head">
+          <code class="slug">{{ row.slug }}</code>
+          <span :class="{ muted: !row.name }" class="m-name">{{ row.name || '（未命名）' }}</span>
+        </div>
+        <div class="m-meta">更新于 {{ fmtDate(row.updated_at) }}</div>
+        <div class="m-actions">
+          <el-button size="small" @click="router.push(`/admin/viz/${row.id}/edit`)">编辑</el-button>
+          <el-button size="small" type="danger" plain @click="remove(row)">删除</el-button>
+        </div>
+      </el-card>
+    </div>
   </div>
 </template>
 
@@ -117,5 +135,48 @@ onMounted(load)
 }
 .muted {
   color: var(--muted);
+}
+
+/* 移动端卡片列表 */
+.m-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.m-card :deep(.el-card__body) {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.m-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.m-name {
+  font-weight: 600;
+}
+.m-meta {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.m-actions {
+  display: flex;
+  gap: 8px;
+}
+.m-actions > .el-button {
+  flex: 1;
+}
+
+@media (max-width: 768px) {
+  .page-head {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .page-head h1 {
+    font-size: 1.15rem;
+  }
 }
 </style>
