@@ -1637,10 +1637,11 @@ onUnmounted(() => {
 
 /* ---------- 移动端整体布局（≤768） ---------- */
 @media (max-width: 768px) {
-  .fm-toolbar { flex-wrap: wrap; gap: 8px; }
-  .fm-tb-left { flex-wrap: wrap; }
-  .fm-tb-right { flex: 1; }
-  .fm-search { width: 100%; flex: 1; }
+  .fm-toolbar { flex-wrap: wrap; gap: 8px; align-items: stretch; }
+  /* 批量操作与搜索各占整行，互不挤压 */
+  .fm-tb-left { flex: 1 0 100%; flex-wrap: wrap; gap: 2px 4px; }
+  .fm-tb-right { flex: 1 0 100%; }
+  .fm-search { flex: 1; }
   .fm-content { padding: 6px; }
   .fm-grid {
     grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));

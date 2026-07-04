@@ -101,6 +101,11 @@ function logout() {
           <Fold v-else />
         </el-icon>
         <span class="brand"><img src="/logo.svg" alt="" class="brand-logo" /><span class="brand-text">dawnop 控制台</span></span>
+        <el-breadcrumb v-if="!fluid && crumbs.length" class="topbar-crumb" separator="/">
+          <el-breadcrumb-item v-for="(c, i) in crumbs" :key="i" :to="c.to">
+            {{ c.label }}
+          </el-breadcrumb-item>
+        </el-breadcrumb>
       </div>
       <div class="right">
         <template v-if="!isMobile">
@@ -136,11 +141,6 @@ function logout() {
 
       <!-- 主区 -->
       <el-main class="main" :class="{ fluid }">
-        <el-breadcrumb v-if="!fluid && crumbs.length" class="breadcrumb" separator="/">
-          <el-breadcrumb-item v-for="(c, i) in crumbs" :key="i" :to="c.to">
-            {{ c.label }}
-          </el-breadcrumb-item>
-        </el-breadcrumb>
         <div class="view" :class="{ fluid }">
           <RouterView />
         </div>
@@ -181,18 +181,34 @@ function logout() {
 .topbar .left {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
+  min-width: 0;
 }
 .toggle {
-  font-size: 18px;
+  font-size: 22px;
   color: #595959;
   cursor: pointer;
-  padding: 6px;
-  border-radius: 6px;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  flex-shrink: 0;
 }
 .toggle:hover {
   background: #f0f2f5;
   color: var(--accent);
+}
+/* 顶栏面包屑：紧挨品牌，左侧竖线分隔 */
+.topbar-crumb {
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
 }
 .brand {
   display: inline-flex;
@@ -201,6 +217,7 @@ function logout() {
   font-weight: 700;
   font-size: 1.05rem;
   color: #1f2329;
+  flex-shrink: 0;
 }
 .brand-logo {
   width: 24px;
@@ -248,10 +265,6 @@ function logout() {
   min-width: 0;
 }
 /* 主区留白随窗口宽度自适应：窄屏收紧，宽屏保持 28px */
-.breadcrumb {
-  padding: 14px clamp(14px, 2.2vw, 28px) 0;
-  flex-shrink: 0;
-}
 .view {
   flex: 1;
   min-height: 0;
@@ -288,26 +301,23 @@ function logout() {
 
 @media (max-width: 768px) {
   .topbar {
-    padding: 0 12px;
+    padding: 0 8px;
   }
   .topbar .left {
-    gap: 8px;
+    gap: 6px;
   }
+  /* 窄屏隐藏品牌文字（只留 logo），给面包屑腾地方 */
   .brand-text {
-    font-size: 0.98rem;
+    display: none;
   }
-  .toggle {
-    font-size: 20px;
-    padding: 8px;
+  .topbar-crumb {
+    padding-left: 8px;
   }
   .view {
     padding: 14px 14px 24px;
   }
   .view.fluid {
     padding: 12px 12px 16px;
-  }
-  .breadcrumb {
-    padding: 12px 14px 0;
   }
 }
 </style>

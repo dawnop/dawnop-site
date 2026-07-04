@@ -41,7 +41,7 @@ onMounted(async () => {
     </el-card>
 
     <el-row :gutter="16" class="stat-row">
-      <el-col v-for="c in cards" :key="c.label" :span="6">
+      <el-col v-for="c in cards" :key="c.label" :xs="12" :sm="12" :md="6">
         <el-card class="stat" shadow="hover" @click="router.push(c.to)">
           <el-statistic :value="stats[c.key] ?? 0" :title="c.label" />
         </el-card>
@@ -83,10 +83,15 @@ onMounted(async () => {
   color: var(--muted);
 }
 .stat-row {
-  margin-bottom: 16px;
+  margin-bottom: 4px;
+}
+/* 换行时（手机 2×2）列之间留纵向间距 */
+.stat-row .el-col {
+  margin-bottom: 12px;
 }
 .stat {
   cursor: pointer;
+  height: 100%;
 }
 .quick-title {
   font-weight: 600;
