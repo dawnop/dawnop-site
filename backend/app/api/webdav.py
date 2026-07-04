@@ -24,7 +24,7 @@ import base64
 import hashlib
 import time
 import uuid
-from email.utils import formatdate
+from email.utils import formatdate, parsedate_to_datetime
 from urllib.parse import quote, unquote, urlparse
 from xml.sax.saxutils import escape
 
@@ -134,6 +134,37 @@ def _href(prefix: str, rel: str, is_dir: bool) -> str:
     return href
 
 
+def _etag(key: str | None) -> str | None:
+    """强 ETag = 七牛 key。key 是内容不可变的 uuid（编辑/覆盖都换新 key），
+    故同一 key 的字节永不变，用它当校验符最稳；客户端 If-None-Match 命中即 304。"""
+    return f'"{key}"' if key else None
+
+
+def _not_modified(request: Request, etag: str | None, mtime_ts: int | None) -> bool:
+    """按 RFC 7232 判断客户端缓存是否仍新：
+    If-None-Match 优先（在则忽略 If-Modified-Since），命中 ETag 或 `*` → 未改；
+    否则退到 If-Modified-Since 比 Last-Modified。命中即可回 304、免传字节。"""
+    inm = request.headers.get("If-None-Match")
+    if inm is not None:
+        inm = inm.strip()
+        if inm == "*":
+            return True
+        if etag:
+            for tok in inm.split(","):
+                tok = tok.strip()
+                if tok == etag or tok.removeprefix("W/") == etag:
+                    return True
+        return False
+    ims = request.headers.get("If-Modified-Since")
+    if ims and mtime_ts is not None:
+        try:
+            if mtime_ts <= int(parsedate_to_datetime(ims).timestamp()):
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
+
+
 def _http_date(ts: int | None) -> str:
     return formatdate(ts if ts is not None else time.time(), usegmt=True)
 
@@ -151,15 +182,18 @@ def _response_xml(
     mime: str,
     mtime: int | None,
     ctime: int | None,
+    etag: str | None = None,
 ) -> str:
     if is_dir:
         typ = "<D:collection/>"
         extra = ""
     else:
         typ = ""
+        etag_xml = f"<D:getetag>{escape(etag)}</D:getetag>" if etag else ""
         extra = (
             f"<D:getcontentlength>{size}</D:getcontentlength>"
             f"<D:getcontenttype>{escape(mime or 'application/octet-stream')}</D:getcontenttype>"
+            f"{etag_xml}"
         )
     return (
         "<D:response>"
@@ -180,6 +214,7 @@ def _entry_xml_from_obj(prefix: str, o) -> str:
     return _response_xml(
         prefix, o.path, name, o.is_dir, o.size or 0, o.content_type or "",
         _ts(o.updated_at), _ts(o.created_at),
+        etag=None if o.is_dir else _etag(o.key),
     )
 
 
@@ -226,15 +261,28 @@ def _get_or_head(request: Request, db: Session, rel: str, head: bool) -> Respons
         raise HTTPException(status.HTTP_405_METHOD_NOT_ALLOWED, "不能下载目录")
 
     mime = o.content_type or "application/octet-stream"
+    etag = _etag(o.key)
+    last_mod = _http_date(_ts(o.updated_at))
+
+    # 条件请求：客户端手里的副本仍是最新 → 304，省掉整次下载。
+    # ETag 强校验（key 不可变）优先；退一步用 If-Modified-Since 比 Last-Modified。
+    if _not_modified(request, etag, _ts(o.updated_at)):
+        headers = {"Last-Modified": last_mod}
+        if etag:
+            headers["ETag"] = etag
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+
+    base_headers = {
+        "Accept-Ranges": "bytes",
+        "Last-Modified": last_mod,
+    }
+    if etag:
+        base_headers["ETag"] = etag
+
     if head:
         return Response(
             status_code=200,
-            headers={
-                "Content-Length": str(o.size or 0),
-                "Content-Type": mime,
-                "Accept-Ranges": "bytes",
-                "Last-Modified": _http_date(_ts(o.updated_at)),
-            },
+            headers={"Content-Length": str(o.size or 0), "Content-Type": mime, **base_headers},
         )
 
     try:
@@ -254,7 +302,7 @@ def _get_or_head(request: Request, db: Session, rel: str, head: bool) -> Respons
     r = _plain_http.get(url, stream=True, timeout=30, headers=up_headers)
     if r.status_code not in (200, 206):
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"七牛取回失败：{r.status_code}")
-    resp_headers = {"Accept-Ranges": "bytes"}
+    resp_headers = dict(base_headers)
     for h in ("Content-Length", "Content-Range"):
         if r.headers.get(h):
             resp_headers[h] = r.headers[h]

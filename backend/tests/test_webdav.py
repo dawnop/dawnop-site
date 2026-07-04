@@ -185,7 +185,48 @@ def test_head_returns_metadata_no_body(client, auth_headers, stub_qiniu):
     assert r.status_code == 200
     assert r.headers.get("Content-Length") == "7"
     assert r.headers.get("Accept-Ranges") == "bytes"
+    assert r.headers.get("ETag", "").startswith('"')
     assert r.content == b""
+
+
+def test_propfind_includes_etag(client, auth_headers, stub_qiniu):
+    _upload(client, auth_headers, "qiniu://", "e.txt", b"x", "text/plain")
+    r = client.request("PROPFIND", "/dav/e.txt", headers={**_basic(), "Depth": "0"})
+    assert r.status_code == 207
+    assert "<D:getetag>" in r.text
+
+
+def test_if_none_match_returns_304(client, auth_headers, stub_qiniu):
+    _upload(client, auth_headers, "qiniu://", "c.txt", b"cache me", "text/plain")
+    etag = client.request(
+        "HEAD", "/dav/c.txt", headers=_basic()
+    ).headers["ETag"]
+    # 拿着相同 ETag 复验 → 304，无 body
+    r = client.request(
+        "GET", "/dav/c.txt", headers={**_basic(), "If-None-Match": etag}
+    )
+    assert r.status_code == 304
+    assert r.content == b""
+    assert r.headers.get("ETag") == etag
+
+
+def test_if_none_match_mismatch_serves_full(client, auth_headers, stub_qiniu, monkeypatch):
+    _upload(client, auth_headers, "qiniu://", "c.txt", b"FULLBODY", "text/plain")
+
+    class FakeResp:
+        status_code = 200
+        headers = {"Content-Length": "8"}
+
+        def iter_content(self, n):
+            yield b"FULLBODY"
+
+    monkeypatch.setattr("app.api.webdav._plain_http.get", lambda *a, **k: FakeResp())
+    # ETag 不匹配 → 回全量
+    r = client.request(
+        "GET", "/dav/c.txt", headers={**_basic(), "If-None-Match": '"stale-key"'}
+    )
+    assert r.status_code == 200
+    assert r.content == b"FULLBODY"
 
 
 def test_get_on_directory_405(client, auth_headers, stub_qiniu):
