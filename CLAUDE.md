@@ -143,7 +143,7 @@ dawnop-site/
 > 方法 GET/HEAD。生产环境还需把私有空间**绑定自定义 HTTPS 域名**（测试域名 http 且限速，https 站点下混合内容会被拦）。
 > 七牛无压缩能力，archive/unarchive 已禁用。
 
-- **WebDAV（只读，`/dav`，`api/webdav.py`）**：把 `FileObject` 的 path↔key 树以标准 WebDAV 暴露，
+- **WebDAV（可读写，`api/webdav.py`）**：把 `FileObject` 的 path↔key 树以标准 WebDAV 暴露，
   供 Finder / RaiDrive / rclone / Mountain Duck 挂载浏览/预览/下载/**编辑**。读方法 `OPTIONS/PROPFIND/HEAD/GET`，
   写方法 `PUT`(新建/覆盖) / `DELETE` / `MKCOL`(建目录) / `MOVE`(移动改名) / `COPY` / `LOCK`+`UNLOCK`；
   广播 **DAV class 1,2**（含 LOCK → macOS Finder 据此可写挂载，否则只读）。写操作复用 fm 原语
@@ -153,7 +153,12 @@ dawnop-site/
   鉴权 **HTTP Basic**（管理员账号，bcrypt 结果带 TTL 缓存挡住挂载高频请求）。
   取字节两条路：**UA 命中会跟随 302 的客户端**（rclone/cyberduck/mountain duck/raidrive）→ 302 直连七牛省流量；
   **其余**（含 macOS webdavfs、Windows mini-redirector，跨域 302 不可靠）→ 后端代理并**透传 Range**
-  （QuickLook/流媒体/续传要分段读）。生产需给 nginx 加 `location /dav`（见 `deploy/nginx.conf`）且必须 HTTPS。
+  （QuickLook/流媒体/续传要分段读）。
+  **两种入口**：① 主域子路径 `dawnop.com/dav`（默认前缀 `/dav`）；② 专用子域名 `dav.dawnop.com`（根挂载，
+  客户端只填 `https://dav.dawnop.com`，比子路径更兼容）。href 前缀**跟随请求**（`_dav_prefix` 读 `X-Dav-Prefix`，
+  默认 `/dav`；子域名 vhost 由 nginx 传 `X-Dav-Prefix: /` 归一化为空串，避免子域名下 `/dav/dav/...` 双前缀 404）。
+  生产 nginx 已配主域 `location /dav` + 子域名 `server dav.dawnop.com`（反代 `/` → 后端 `/dav/`，见
+  `deploy/nginx.conf`）；子域名需加 DNS A 记录（备案随主域继承）、复用通配符证书 `*.dawnop.com`；必须 HTTPS。
 
 - 全局设置：`GET/PUT /api/settings`（需鉴权）→ key-value 存 `settings` 表与 DEFAULTS 合并；
   现有项：上传/下载并发、存储配额(GB, 用量条展示)、文本预览大小上限(KB)。后台「系统 → 全局设置」页编辑。

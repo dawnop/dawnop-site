@@ -81,6 +81,39 @@ def test_propfind_lists_root_children(client, auth_headers, stub_qiniu):
     assert "<D:getcontentlength>5</D:getcontentlength>" in body
 
 
+def test_propfind_root_prefix_via_header(client, auth_headers, stub_qiniu):
+    """子域名 vhost（nginx 传 X-Dav-Prefix: /）→ href 无 /dav 前缀，走域名根。"""
+    _upload(client, auth_headers, "qiniu://", "readme.txt", b"hello", "text/plain")
+    _upload(client, auth_headers, "qiniu://docs", "a.md", b"# a", "text/markdown")
+
+    r = client.request(
+        "PROPFIND", "/dav/", headers={**_basic(), "Depth": "1", "X-Dav-Prefix": "/"}
+    )
+    assert r.status_code == 207
+    body = r.text
+    assert "<D:href>/</D:href>" in body          # 根
+    assert "<D:href>/readme.txt</D:href>" in body
+    assert "<D:href>/docs/</D:href>" in body
+    assert "/dav/" not in body                    # 绝不带 /dav 前缀
+
+
+def test_move_root_prefix_destination(client, stub_qiniu):
+    """子域名下 Destination 形如 https://dav.dawnop.com/new.txt（无 /dav）。"""
+    client.request("PUT", "/dav/old.txt", headers=_basic(), content=b"data")
+    r = client.request(
+        "MOVE", "/dav/old.txt",
+        headers={
+            **_basic(),
+            "X-Dav-Prefix": "/",
+            "Destination": "https://dav.dawnop.com/new.txt",
+        },
+    )
+    assert r.status_code == 201
+    assert client.request(
+        "PROPFIND", "/dav/new.txt", headers={**_basic(), "Depth": "0"}
+    ).status_code == 207
+
+
 def test_propfind_depth0_only_self(client, auth_headers, stub_qiniu):
     _upload(client, auth_headers, "qiniu://", "x.txt", b"xy", "text/plain")
     r = client.request("PROPFIND", "/dav/", headers={**_basic(), "Depth": "0"})

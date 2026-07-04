@@ -106,13 +106,29 @@ def _follows_redirect(request: Request) -> bool:
     return any(tag in ua for tag in _REDIRECT_CLIENTS)
 
 
+def _dav_prefix(request: Request) -> str:
+    """外部可见的 WebDAV 根前缀，决定 PROPFIND href 与 Destination 解析。
+
+    默认 `/dav`（主域 `dawnop.com/dav`，路径挂载）。子域名 vhost
+    （`dav.dawnop.com`）里 nginx 把 `/` 反代到后端 `/dav/`，并传
+    `X-Dav-Prefix: /` 表示「这里 WebDAV 根 = 域名根」，归一化为空串，
+    于是 href 出 `/foo.txt` 而非 `/dav/foo.txt`（避免子域名下双前缀 404）。
+    """
+    raw = request.headers.get("X-Dav-Prefix", DAV_PREFIX)
+    p = "/" + raw.strip("/")
+    return "" if p == "/" else p
+
+
 # ---------------- PROPFIND XML ----------------
 
 
-def _href(rel: str, is_dir: bool) -> str:
+def _href(prefix: str, rel: str, is_dir: bool) -> str:
     segs = rel.split("/") if rel else []
     path = "/".join(quote(s) for s in segs)
-    href = f"{DAV_PREFIX}/{path}" if path else f"{DAV_PREFIX}/"
+    if not path:
+        href = prefix + "/" if prefix else "/"  # 根
+    else:
+        href = f"{prefix}/{path}"
     if is_dir and not href.endswith("/"):
         href += "/"
     return href
@@ -127,6 +143,7 @@ def _iso_date(ts: int | None) -> str:
 
 
 def _response_xml(
+    prefix: str,
     rel: str,
     name: str,
     is_dir: bool,
@@ -146,7 +163,7 @@ def _response_xml(
         )
     return (
         "<D:response>"
-        f"<D:href>{escape(_href(rel, is_dir))}</D:href>"
+        f"<D:href>{escape(_href(prefix, rel, is_dir))}</D:href>"
         "<D:propstat><D:prop>"
         f"<D:displayname>{escape(name)}</D:displayname>"
         f"<D:resourcetype>{typ}</D:resourcetype>"
@@ -158,31 +175,32 @@ def _response_xml(
     )
 
 
-def _entry_xml_from_obj(o) -> str:
+def _entry_xml_from_obj(prefix: str, o) -> str:
     name = o.path.rsplit("/", 1)[-1] if o.path else ""
     return _response_xml(
-        o.path, name, o.is_dir, o.size or 0, o.content_type or "",
+        prefix, o.path, name, o.is_dir, o.size or 0, o.content_type or "",
         _ts(o.updated_at), _ts(o.created_at),
     )
 
 
 def _propfind(request: Request, db: Session, rel: str) -> Response:
+    prefix = _dav_prefix(request)
     depth = request.headers.get("Depth", "1")
     parts = []
 
     if rel == "":
-        parts.append(_response_xml("", "", True, 0, "", None, None))
+        parts.append(_response_xml(prefix, "", "", True, 0, "", None, None))
         target_is_dir = True
     else:
         o = _get(db, rel)
         if o is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "资源不存在")
-        parts.append(_entry_xml_from_obj(o))
+        parts.append(_entry_xml_from_obj(prefix, o))
         target_is_dir = o.is_dir
 
     if depth != "0" and target_is_dir:
         for kid in _children(db, rel):
-            parts.append(_entry_xml_from_obj(kid))
+            parts.append(_entry_xml_from_obj(prefix, kid))
 
     body = (
         '<?xml version="1.0" encoding="utf-8"?>'
@@ -252,13 +270,17 @@ def _get_or_head(request: Request, db: Session, rel: str, head: bool) -> Respons
 
 
 def _dest_rel(request: Request) -> str:
-    """解析 MOVE/COPY 的 Destination 头（形如 https://host/dav/新/路径）为相对路径。"""
+    """解析 MOVE/COPY 的 Destination 头（形如 https://host<prefix>/新/路径）为相对路径。
+
+    前缀随 vhost 变（主域 `/dav`、子域名根 ``），按本次请求的 `X-Dav-Prefix` 剥离。
+    """
     dest = request.headers.get("Destination")
     if not dest:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "缺少 Destination")
     path = urlparse(dest).path
-    if path.startswith(DAV_PREFIX):
-        path = path[len(DAV_PREFIX):]
+    prefix = _dav_prefix(request)
+    if prefix and path.startswith(prefix):
+        path = path[len(prefix):]
     return unquote(path).strip("/")
 
 
@@ -376,8 +398,9 @@ def _move_or_copy(request: Request, db: Session, rel: str, is_move: bool) -> Res
     return Response(status_code=204 if existing is not None else 201)
 
 
-def _lock(rel: str) -> Response:
+def _lock(request: Request, rel: str) -> Response:
     """假锁：总是授予并回 opaquelocktoken（单管理员无写并发，仅让 Finder 认为可写）。"""
+    prefix = _dav_prefix(request)
     token = f"opaquelocktoken:{uuid.uuid4()}"
     body = (
         '<?xml version="1.0" encoding="utf-8"?>'
@@ -387,7 +410,7 @@ def _lock(rel: str) -> Response:
         "<D:depth>infinity</D:depth>"
         "<D:timeout>Second-3600</D:timeout>"
         f"<D:locktoken><D:href>{token}</D:href></D:locktoken>"
-        f"<D:lockroot><D:href>{escape(_href(rel, False))}</D:href></D:lockroot>"
+        f"<D:lockroot><D:href>{escape(_href(prefix, rel, False))}</D:href></D:lockroot>"
         "</D:activelock></D:lockdiscovery></D:prop>"
     )
     return Response(
@@ -452,6 +475,6 @@ async def dav_write(
     if method == "COPY":
         return _move_or_copy(request, db, rel, is_move=False)
     if method == "LOCK":
-        return _lock(rel)
+        return _lock(request, rel)
     # UNLOCK
     return Response(status_code=204)
