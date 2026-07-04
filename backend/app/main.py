@@ -4,7 +4,17 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import articles, auth, fm, pages, search, settings as settings_api, tags, viz
+from app.api import (
+    articles,
+    auth,
+    fm,
+    pages,
+    search,
+    settings as settings_api,
+    tags,
+    viz,
+    webdav,
+)
 from app.config import settings
 from app.core.bootstrap import ensure_builtin_pages
 from app.core.errors import register_error_handlers
@@ -47,3 +57,4 @@ app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
 app.include_router(tags.router, prefix="/api/tags", tags=["tags"])
 app.include_router(viz.router, prefix="/api/viz", tags=["viz"])
+app.include_router(webdav.router, prefix="/dav", tags=["webdav"])
