@@ -42,6 +42,7 @@ from app.api.settings import get_setting
 from app.core import qiniu_client
 from app.deps import get_current_user, get_current_user_flexible, get_db
 from app.models.file_object import FileObject
+from app.models.pending_upload import PendingUpload
 
 # 服务端直取七牛用：忽略 http_proxy/all_proxy 等环境变量。
 # 开发机常配本机代理，经它取七牛时好时坏（socks 变量还会因缺依赖直接报错）；
@@ -251,6 +252,13 @@ def upload_token(
         host = qiniu_client.upload_host()
     except RuntimeError as e:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+    # 记账：本环境亲自签发的 key。/register 成功后清除；始终没登记的即孤儿。
+    db.execute(
+        sqlite_insert(PendingUpload)
+        .values(key=key, path=_full(rel))
+        .on_conflict_do_nothing(index_elements=["key"])
+    )
+    db.commit()
     return {"token": token, "key": key, "path": _full(rel), "up_host": host}
 
 
@@ -260,13 +268,30 @@ def register(
     db: Session = Depends(get_db),
     _: object = Depends(get_current_user),
 ):
-    """前端直传七牛成功后登记元信息（path↔key）。"""
+    """前端直传七牛成功后登记元信息（path↔key）。
+
+    登记前先 `stat` 校验对象确实已落到七牛，并以七牛返回的 fsize/mimeType 为准
+    （不轻信前端上报的大小）。校验通过才建行，因此「已登记」严格等价于
+    「七牛上真实存在」，不会产生悬空引用。登记成功后清掉待登记账本行。
+    """
     rel = _split(payload.get("path"))
     key = payload.get("key")
     if not rel or not key:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "缺少 path / key")
-    size = int(payload.get("size") or 0)
-    mime = payload.get("content_type") or _guess_mime(_basename(rel))
+
+    # 多一步验证：确认直传真的落到了七牛，并取权威大小/类型。
+    try:
+        info = qiniu_client.stat(key)
+    except RuntimeError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "上传校验失败：对象未在七牛找到，请重试上传"
+        )
+    size = int(info.get("fsize") or payload.get("size") or 0)
+    mime = (
+        info.get("mimeType")
+        or payload.get("content_type")
+        or _guess_mime(_basename(rel))
+    )
 
     _ensure_dirs(db, rel)
     existing = _get(db, rel)
@@ -284,6 +309,8 @@ def register(
             path=rel, is_dir=False, key=key, content_type=mime, size=size
         )
         db.add(obj)
+    # 登记成功，从待登记账本移除该 key
+    db.query(PendingUpload).filter(PendingUpload.key == key).delete()
     db.commit()
     db.refresh(obj)
     return _entry(obj)

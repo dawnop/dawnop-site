@@ -29,12 +29,20 @@ def stub_qiniu(monkeypatch):
     def fake_upload_host():
         return "https://up.example.com"
 
+    def fake_stat(key):
+        # 模拟 /register 的存在性校验：对象不在（未真正直传）则报错
+        if key not in store:
+            raise RuntimeError("no such object")
+        data, mime = store[key]
+        return {"fsize": len(data), "mimeType": mime, "hash": "fakehash"}
+
     monkeypatch.setattr(qiniu_client, "proxy_upload", fake_proxy_upload)
     monkeypatch.setattr(qiniu_client, "private_url", fake_private_url)
     monkeypatch.setattr(qiniu_client, "delete", fake_delete)
     monkeypatch.setattr(qiniu_client, "copy", fake_copy)
     monkeypatch.setattr(qiniu_client, "upload_token", fake_upload_token)
     monkeypatch.setattr(qiniu_client, "upload_host", fake_upload_host)
+    monkeypatch.setattr(qiniu_client, "stat", fake_stat)
     return store
 
 
@@ -173,7 +181,8 @@ def test_direct_upload_token_then_register(client, auth_headers, stub_qiniu):
     assert tok["up_host"] == "https://up.example.com"
     assert tok["path"] == "qiniu://pics/a.png"
 
-    # 2. 前端直传七牛（此处略），成功后登记 path↔key
+    # 2. 前端直传七牛（此处以入桩模拟），成功后登记 path↔key
+    stub_qiniu[tok["key"]] = (b"x" * 1234, "image/png")
     reg = client.post("/api/fm/register",
                       json={"path": tok["path"], "key": tok["key"],
                             "size": 1234, "content_type": "image/png"},
@@ -181,11 +190,52 @@ def test_direct_upload_token_then_register(client, auth_headers, stub_qiniu):
     assert reg.status_code == 200
     entry = reg.json()
     assert entry["path"] == "qiniu://pics/a.png"
+    # 大小以七牛 stat 的 fsize 为准
     assert entry["file_size"] == 1234
 
     # 自动建出的 pics 文件夹应出现在根
     root = client.get("/api/fm", headers=auth_headers).json()
     assert [(f["basename"], f["type"]) for f in root["files"]] == [("pics", "dir")]
+
+
+def test_register_rejects_when_object_missing(client, auth_headers, stub_qiniu):
+    """直传未真正落到七牛时，/register 应拒绝（不建悬空引用）。"""
+    tok = client.post("/api/fm/upload-token",
+                      json={"path": "qiniu://", "name": "ghost.txt"},
+                      headers=auth_headers).json()
+    # 不入桩：模拟对象并不存在
+    reg = client.post("/api/fm/register",
+                      json={"path": tok["path"], "key": tok["key"], "size": 9},
+                      headers=auth_headers)
+    assert reg.status_code == 400
+    # 未建行；且待登记账本仍保留该 key（供后续孤儿清理识别）
+    root = client.get("/api/fm", headers=auth_headers).json()
+    assert root["files"] == []
+
+
+def test_upload_token_records_pending_register_clears_it(
+    client, auth_headers, stub_qiniu, db_session
+):
+    """upload-token 记账、register 成功后清账本。"""
+    from app.models.pending_upload import PendingUpload
+
+    def pending_count(key):
+        s = db_session()
+        try:
+            return s.query(PendingUpload).filter_by(key=key).count()
+        finally:
+            s.close()
+
+    tok = client.post("/api/fm/upload-token",
+                      json={"path": "qiniu://", "name": "led.txt"},
+                      headers=auth_headers).json()
+    assert pending_count(tok["key"]) == 1
+
+    stub_qiniu[tok["key"]] = (b"hello", "text/plain")
+    client.post("/api/fm/register",
+                json={"path": tok["path"], "key": tok["key"], "size": 5},
+                headers=auth_headers)
+    assert pending_count(tok["key"]) == 0
 
 
 def test_register_overwrite_deletes_old_object(client, auth_headers, stub_qiniu):
