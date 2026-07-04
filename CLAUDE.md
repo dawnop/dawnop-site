@@ -147,8 +147,11 @@ dawnop-site/
   供 Finder / RaiDrive / rclone / Mountain Duck 挂载浏览/预览/下载/**编辑**。读方法 `OPTIONS/PROPFIND/HEAD/GET`，
   写方法 `PUT`(新建/覆盖) / `DELETE` / `MKCOL`(建目录) / `MOVE`(移动改名) / `COPY` / `LOCK`+`UNLOCK`；
   广播 **DAV class 1,2**（含 LOCK → macOS Finder 据此可写挂载，否则只读）。写操作复用 fm 原语
-  （`proxy_upload/delete/copy/_reparent/_ensure_dirs`），语义同网页管理器：改名/移动只改 path 不动七牛对象、
+  （`delete/copy/_reparent/_ensure_dirs`），语义同网页管理器：改名/移动只改 path 不动七牛对象、
   复制才真复制、覆盖走「写新 key + 删旧 key」避 CDN 缓存；父目录不存在的写入回 409（客户端应先 MKCOL）。
+  **`PUT` 流式上传**：不 `await request.body()` 把整包读进内存，而是边收边写临时文件（内存恒定）、
+  再用 `qiniu_client.proxy_upload_file`（`put_file` 自动分片续传、从磁盘按块读）上传，故拖大文件不会顶爆 4G 内存
+  （**上传字节仍经后端**——WebDAV 客户端只会 PUT、七牛不接受，后端当翻译器；下载可 302 直连、上传绕不开）。
   `LOCK` 是**假锁**（单管理员无写并发，总是授予、回 opaquelocktoken 不真追踪，仅为让 webdavfs 认为可写）。
   鉴权 **HTTP Basic**（管理员账号，bcrypt 结果带 TTL 缓存挡住挂载高频请求）。
   取字节两条路：**UA 命中会跟随 302 的客户端**（rclone/cyberduck/mountain duck/raidrive）→ 302 直连七牛省流量；
