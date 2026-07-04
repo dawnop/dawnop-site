@@ -75,6 +75,18 @@ const filtered = computed(() => {
 const selected = computed(() => entries.value.find((r) => r.path === selectedPath.value) || null)
 const selRows = computed(() => entries.value.filter((r) => selPaths.value.includes(r.path)))
 const selFiles = computed(() => selRows.value.filter((r) => !r.is_dir))
+
+// 拖动移动：dnd.rows 为正在拖的行集，overPath 为当前悬停的目标文件夹路径
+const contentEl = ref(null)
+const dnd = reactive({ dragging: false, rows: [], overPath: null })
+// 框选：起止点（视口坐标），show 为是否正在画框
+const marquee = reactive({ show: false, x0: 0, y0: 0, x1: 0, y1: 0 })
+const marqueeStyle = computed(() => ({
+  left: Math.min(marquee.x0, marquee.x1) + 'px',
+  top: Math.min(marquee.y0, marquee.y1) + 'px',
+  width: Math.abs(marquee.x1 - marquee.x0) + 'px',
+  height: Math.abs(marquee.y1 - marquee.y0) + 'px',
+}))
 const crumbs = computed(() => {
   const segs = cwd.value.split('/').filter(Boolean)
   const acc = [{ name: '我的文件', path: '' }]
@@ -154,7 +166,10 @@ function onRowDblclick(row) {
   row.is_dir ? goto(row.path) : openModal(row)
 }
 // 点内容区空白处取消多选和单选（行/卡片/操作控件上的点击不算）
+let marqueeSuppressBlank = false
 function onBlankClick(ev) {
+  // 框选拖拽结束会补发一次 click，别把刚框中的选择清掉
+  if (marqueeSuppressBlank) { marqueeSuppressBlank = false; return }
   if (ev.target.closest('.el-table__row, .cell, .rowmore, .el-dropdown, .el-checkbox')) return
   clearSel()
   selectedPath.value = ''
@@ -363,6 +378,126 @@ async function confirmDest() {
     ElMessage.error(e?.response?.data?.detail || `${verb}失败`)
   } finally {
     destDlg.busy = false
+  }
+}
+
+// ---------- 拖动移动（把文件/文件夹拖到目标文件夹或左侧目录树）----------
+function parentOf(p) { return p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '' }
+// 拖的是已选中集合里的项 → 拖整个选中集；否则只拖这一行
+function dragSetFor(row) {
+  return selPaths.value.length > 1 && selPaths.value.includes(row.path) ? selRows.value : [row]
+}
+// dest 是否是合法落点：非自身/子孙、且不是原地（源就在该目录下）
+function canDropDest(dest) {
+  if (!dnd.dragging || dest === null) return false
+  return !dnd.rows.some(
+    (r) => r.path === dest || parentOf(r.path) === dest || (r.is_dir && dest.startsWith(r.path + '/')),
+  )
+}
+function onDragStartRow(ev, row) {
+  dnd.rows = dragSetFor(row)
+  dnd.dragging = true
+  ev.dataTransfer.effectAllowed = 'move'
+  ev.dataTransfer.setData('application/x-fm-move', '1') // 标记为内部拖拽，区别于外部拖文件上传
+  const n = dnd.rows.length
+  if (n > 1 && ev.dataTransfer.setDragImage) {
+    const chip = document.createElement('div')
+    chip.textContent = `移动 ${n} 项`
+    chip.style.cssText =
+      'position:fixed;top:-1000px;left:-1000px;padding:4px 10px;border-radius:6px;' +
+      'background:var(--el-color-primary,#1677ff);color:#fff;font-size:12px;font-weight:600;'
+    document.body.appendChild(chip)
+    ev.dataTransfer.setDragImage(chip, -8, -8)
+    setTimeout(() => chip.remove(), 0)
+  }
+}
+function onDragEndRow() { dnd.dragging = false; dnd.rows = []; dnd.overPath = null }
+function onDestDragOver(ev, dest) {
+  if (!canDropDest(dest)) return
+  ev.preventDefault()
+  ev.stopPropagation() // 别冒泡到 fm-main 的上传拖放
+  ev.dataTransfer.dropEffect = 'move'
+  dnd.overPath = dest
+}
+function onDestDragLeave(dest) { if (dnd.overPath === dest) dnd.overPath = null }
+async function onDestDrop(ev, dest) {
+  if (!canDropDest(dest)) return
+  ev.preventDefault()
+  ev.stopPropagation()
+  const rows = dnd.rows.slice()
+  onDragEndRow()
+  await moveInto(dest, rows)
+}
+// 行/卡片作落点时，仅文件夹可接收
+function onRowDragOver(ev, row) { if (row.is_dir) onDestDragOver(ev, row.path) }
+function onRowDragLeave(row) { if (row.is_dir) onDestDragLeave(row.path) }
+function onRowDrop(ev, row) { if (row.is_dir) onDestDrop(ev, row.path) }
+async function moveInto(dest, rows) {
+  const movable = rows.filter(
+    (r) => parentOf(r.path) !== dest && r.path !== dest && !(r.is_dir && dest.startsWith(r.path + '/')),
+  )
+  if (!movable.length) return
+  try {
+    await fm.move(cwd.value, dest, movable.map((r) => r.path))
+    ElMessage.success(`已移动 ${movable.length} 项`)
+    if (movable.some((r) => r.path === selectedPath.value)) { showInfo.value = false; selectedPath.value = '' }
+    clearSel()
+    await loadCwd(); if (movable.some((r) => r.is_dir)) reloadTree()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.detail || '移动失败')
+  }
+}
+
+// ---------- 框选多选（在空白处按下并拖动画选择框）----------
+function onContentMousedown(ev) {
+  if (ev.button !== 0) return
+  // 落在行/卡片/表头/控件上时不启动框选，交给点击或拖拽
+  if (ev.target.closest(
+    '.el-table__row, .cell, .el-table__header, .rowmore, .el-checkbox, .el-dropdown, a, button, input',
+  )) return
+  const sx = ev.clientX
+  const sy = ev.clientY
+  let moved = false
+  const onMove = (e) => {
+    if (!moved) {
+      if (Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) < 5) return // 抖动阈值
+      moved = true
+      marquee.show = true
+      document.body.style.userSelect = 'none'
+    }
+    marquee.x0 = sx; marquee.y0 = sy; marquee.x1 = e.clientX; marquee.y1 = e.clientY
+    applyMarquee()
+  }
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    document.body.style.userSelect = ''
+    if (moved) { marquee.show = false; marqueeSuppressBlank = true }
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
+// 选择框与各行/卡片求交（DOM 顺序与 filtered 一致，按下标映射回数据行）
+function applyMarquee() {
+  const rows = filtered.value
+  const nodes = contentEl.value?.querySelectorAll(
+    viewMode.value === 'list' ? '.el-table__body-wrapper .el-table__row' : '.cell',
+  )
+  if (!nodes) return
+  const L = Math.min(marquee.x0, marquee.x1)
+  const R = Math.max(marquee.x0, marquee.x1)
+  const T = Math.min(marquee.y0, marquee.y1)
+  const B = Math.max(marquee.y0, marquee.y1)
+  const hit = new Set()
+  nodes.forEach((el, i) => {
+    const b = el.getBoundingClientRect()
+    if (b.right >= L && b.left <= R && b.bottom >= T && b.top <= B && rows[i]) hit.add(rows[i].path)
+  })
+  if (viewMode.value === 'list' && tableRef.value) {
+    // 交给 el-table 勾选，selPaths 由 selection-change 同步
+    rows.forEach((row) => tableRef.value.toggleRowSelection(row, hit.has(row.path)))
+  } else {
+    selPaths.value = [...hit]
   }
 }
 
@@ -603,7 +738,13 @@ onUnmounted(() => {
             @node-click="onTreeClick"
           >
             <template #default="{ node }">
-              <span class="tnode">
+              <span
+                class="tnode"
+                :class="{ 'drop-into': dnd.dragging && dnd.overPath === node.data.path }"
+                @dragover="onDestDragOver($event, node.data.path)"
+                @dragleave="onDestDragLeave(node.data.path)"
+                @drop="onDestDrop($event, node.data.path)"
+              >
                 <el-icon class="ti"><FolderOpened v-if="node.expanded" /><Folder v-else /></el-icon>
                 <span class="tlabel">{{ node.label }}</span>
               </span>
@@ -664,7 +805,14 @@ onUnmounted(() => {
           </el-breadcrumb>
         </div>
 
-        <div v-loading="loading" class="fm-content" @contextmenu="openCtxBlank" @click="onBlankClick">
+        <div
+          v-loading="loading"
+          ref="contentEl"
+          class="fm-content"
+          @contextmenu="openCtxBlank"
+          @click="onBlankClick"
+          @mousedown="onContentMousedown"
+        >
           <!-- 列表 -->
           <el-table
             v-if="viewMode === 'list'"
@@ -680,7 +828,16 @@ onUnmounted(() => {
             <el-table-column type="selection" width="40" :reserve-selection="false" />
             <el-table-column label="名称" min-width="260">
               <template #default="{ row }">
-                <span class="namecell">
+                <span
+                  class="namecell"
+                  :class="{ 'drop-into': row.is_dir && dnd.overPath === row.path }"
+                  draggable="true"
+                  @dragstart="onDragStartRow($event, row)"
+                  @dragend="onDragEndRow"
+                  @dragover="onRowDragOver($event, row)"
+                  @dragleave="onRowDragLeave(row)"
+                  @drop="onRowDrop($event, row)"
+                >
                   <el-icon class="nc-ico" :style="{ color: tintOf(row) }"><component :is="iconOf(row)" /></el-icon>
                   <span class="nc-name">{{ row.name }}</span>
                 </span>
@@ -715,10 +872,20 @@ onUnmounted(() => {
               v-for="row in filtered"
               :key="row.path"
               class="cell"
-              :class="{ 'is-sel': row.path === selectedPath, 'is-checked': selPaths.includes(row.path) }"
+              :class="{
+                'is-sel': row.path === selectedPath,
+                'is-checked': selPaths.includes(row.path),
+                'drop-into': row.is_dir && dnd.overPath === row.path,
+              }"
+              draggable="true"
               @click="onCellClick(row, $event)"
               @dblclick="onRowDblclick(row)"
               @contextmenu="openCtxRow($event, row)"
+              @dragstart="onDragStartRow($event, row)"
+              @dragend="onDragEndRow"
+              @dragover="onRowDragOver($event, row)"
+              @dragleave="onRowDragLeave(row)"
+              @drop="onRowDrop($event, row)"
             >
               <div class="cell-thumb">
                 <img v-if="isImage(row)" :src="fm.previewUrl(row.path)" class="cell-img" loading="lazy" alt="" />
@@ -897,6 +1064,9 @@ onUnmounted(() => {
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 框选选择框（视口固定坐标） -->
+    <div v-if="marquee.show" class="fm-marquee" :style="marqueeStyle"></div>
   </div>
 </template>
 
@@ -999,8 +1169,33 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
+/* 拖动移动：落点文件夹高亮 */
+.namecell.drop-into,
+.tnode.drop-into {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 1px;
+  border-radius: 6px;
+  background: var(--el-color-primary-light-9);
+}
+.cell.drop-into {
+  border-color: var(--el-color-primary);
+  box-shadow: 0 0 0 2px var(--el-color-primary) inset;
+  background: var(--el-color-primary-light-9);
+}
+.tnode { border-radius: 6px; }
+
+/* 框选选择框 */
+.fm-marquee {
+  position: fixed;
+  z-index: 2500;
+  pointer-events: none;
+  border: 1px solid var(--el-color-primary);
+  background: rgba(22, 119, 255, 0.1);
+  border-radius: 2px;
+}
+
 /* 列表 */
-.namecell { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
+.namecell { display: inline-flex; align-items: center; gap: 10px; cursor: grab; }
 .nc-ico { font-size: 18px; }
 .nc-name { color: var(--el-text-color-primary); }
 .muted { color: var(--w-muted); font-size: 0.86rem; }

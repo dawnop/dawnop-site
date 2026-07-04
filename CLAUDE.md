@@ -31,7 +31,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Markdown 编辑器 | **md-editor-v3**（CodeMirror6 内核） | 后台写/编辑文章共用；分屏预览、工具栏、暗色 |
 | LaTeX | **KaTeX**（编辑器内置 + 文章页 `@mdit/plugin-katex`） | 编辑器与文章页同款渲染；本地实例(不依赖 CDN) |
 | 代码高亮 | `highlight.js` | 文章代码块 |
-| 文件管理 UI | **自建**（Element Plus + `qiniu-js`） | SVAR 观感：目录树/面包屑/右键菜单/多选/拖拽上传/预览编辑/传输列表 |
+| 文件管理 UI | **自建**（Element Plus + `qiniu-js`） | SVAR 观感：目录树/面包屑/右键菜单/框选多选/拖拽上传/拖动移动/预览编辑/传输列表 |
 | 部署 | **Nginx**（80 端口）+ systemd 托管 uvicorn | 4 核 4G 足够 |
 
 > 这些是推荐默认值。若你（用户）更倾向 Flask / React 等，请在动工前提出，我会相应调整计划。
