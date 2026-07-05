@@ -40,14 +40,6 @@ function closeSearch() {
   searchOpen.value = false
   q.value = ''
 }
-// 搜索窗口里点结果：文件夹进入、文件打开预览，随后关闭窗口
-function onSearchPick(row) {
-  const dir = row.is_dir
-  const path = row.path
-  closeSearch()
-  if (dir) goto(path)
-  else openModal(row)
-}
 // 移动端强制网格视图（表格在窄屏太挤）
 const effectiveView = computed(() => (isMobile.value ? 'grid' : viewMode.value))
 
@@ -863,6 +855,19 @@ onUnmounted(() => {
           <el-button text @click="toggleSelectMode">取消</el-button>
         </div>
 
+        <!-- 移动端搜索态顶栏：复用顶部条，就地过滤下方网格 -->
+        <div v-else-if="isMobile && searchOpen" class="fm-selhead">
+          <el-input
+            ref="searchInputRef"
+            v-model="q"
+            :prefix-icon="Search"
+            placeholder="搜索当前目录"
+            clearable
+            class="fm-searchbar-input"
+          />
+          <el-button text @click="closeSearch">取消</el-button>
+        </div>
+
         <div class="fm-crumb">
           <el-breadcrumb separator="/">
             <el-breadcrumb-item v-for="c in crumbs" :key="c.path">
@@ -1164,37 +1169,6 @@ onUnmounted(() => {
       </template>
     </el-dropdown>
 
-    <!-- 移动端：搜索窗口（全屏覆盖，独立于文件列表） -->
-    <div v-if="isMobile && searchOpen" class="fm-searchwin">
-      <div class="fm-searchwin-bar">
-        <el-input
-          ref="searchInputRef"
-          v-model="q"
-          :prefix-icon="Search"
-          placeholder="搜索当前目录"
-          clearable
-          class="fm-searchwin-input"
-        />
-        <el-button text @click="closeSearch">取消</el-button>
-      </div>
-      <div class="fm-searchwin-list">
-        <div v-if="!q.trim()" class="fm-searchwin-hint">
-          搜索「{{ crumbs[crumbs.length - 1]?.name }}」目录下的文件与文件夹
-        </div>
-        <el-empty v-else-if="!filtered.length" description="没有匹配的项" :image-size="72" />
-        <button
-          v-for="row in filtered"
-          v-else
-          :key="row.path"
-          class="fm-searchwin-item"
-          @click="onSearchPick(row)"
-        >
-          <el-icon class="sw-ico" :style="{ color: tintOf(row) }"><component :is="iconOf(row)" /></el-icon>
-          <span class="sw-name">{{ row.name }}</span>
-          <el-icon v-if="row.is_dir" class="sw-arrow"><Right /></el-icon>
-        </button>
-      </div>
-    </div>
 
     <!-- 移动端：多选态底部批量操作条 -->
     <div v-if="isMobile && selectMode && selPaths.length" class="fm-selbar">
@@ -1692,48 +1666,8 @@ onUnmounted(() => {
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
-
-/* ---------- 移动端搜索窗口（全屏覆盖） ---------- */
-.fm-searchwin {
-  position: fixed;
-  inset: 0;
-  z-index: 2000;
-  background: #fff;
-  display: flex;
-  flex-direction: column;
-  padding-top: env(safe-area-inset-top, 0px);
-}
-.fm-searchwin-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 10px 10px 12px;
-  border-bottom: 1px solid var(--w-border);
-}
-.fm-searchwin-input { flex: 1; }
-.fm-searchwin-list { flex: 1; overflow-y: auto; padding: 4px 0 20px; }
-.fm-searchwin-hint {
-  padding: 22px 16px;
-  color: var(--muted);
-  font-size: 0.88rem;
-  text-align: center;
-}
-.fm-searchwin-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 13px 16px;
-  border: none;
-  background: none;
-  text-align: left;
-  cursor: pointer;
-  border-bottom: 1px solid var(--el-border-color-lighter);
-}
-.fm-searchwin-item:active { background: #f5f7fa; }
-.sw-ico { font-size: 22px; flex-shrink: 0; }
-.sw-name { flex: 1; min-width: 0; font-size: 0.95rem; word-break: break-all; }
-.sw-arrow { color: var(--el-text-color-placeholder); flex-shrink: 0; }
+/* 搜索态复用顶栏，输入框铺满 */
+.fm-searchbar-input { flex: 1; }
 
 /* ---------- 移动端多选底部批量操作条 ---------- */
 .fm-selbar {
