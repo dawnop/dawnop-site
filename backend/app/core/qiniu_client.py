@@ -3,6 +3,7 @@
 空间为**私有**：下载/预览均通过带签名、有时效的 URL（private_download_url）。
 所有函数失败时抛 RuntimeError，由上层转换为 HTTP 错误。
 """
+import json
 from functools import lru_cache
 from urllib.parse import quote
 
@@ -223,3 +224,84 @@ def bucket_space() -> int:
     if v is None:
         raise RuntimeError("七牛空间统计无数据")
     return v
+
+
+# ---------------- 融合 CDN 用量 ----------------
+# 私有空间绑的自定义域名 storage.dawnop.com 是**融合 CDN 域名**，用户下载走 CDN（302 直连）。
+# CDN 流量与 Kodo 源站流出（blob_io）是两个产品：源站只有回源那部分，CDN 才是真实用户侧流量。
+# CDN 统计接口用 QiniuMacAuth 签名（含 body），域名列表在 api.qiniu.com，流量/带宽在 fusion.qiniuapi.com。
+
+
+def _mac_request(host: str, path: str, method: str = "GET", body: dict | None = None):
+    """QiniuMacAuth 签名请求（CDN 接口用；GET 域名列表 / POST 流量带宽）。失败抛 RuntimeError。"""
+    if not settings.qiniu_access_key or not settings.qiniu_secret_key:
+        raise RuntimeError("未配置 QINIU_ACCESS_KEY / QINIU_SECRET_KEY")
+    url = f"http://{host}{path}"
+    data = json.dumps(body) if body is not None else None
+    mac = QiniuMacAuth(settings.qiniu_access_key, settings.qiniu_secret_key)
+    token = mac.token_of_request(
+        method=method, host=host, url=url, qheaders="",
+        content_type="application/json", body=data,
+    )
+    r = _plain_http.request(
+        method, url,
+        data=data.encode() if data else None,
+        headers={"Authorization": f"Qiniu {token}", "Content-Type": "application/json"},
+        timeout=12,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"七牛 CDN 接口失败 {path}: {r.status_code} {r.text[:120]}")
+    return r.json()
+
+
+def cdn_domains() -> list[str]:
+    """账号下所有 CDN 加速域名（含测试域名）。"""
+    j = _mac_request("api.qiniu.com", "/domain?limit=100")
+    return [d["name"] for d in (j.get("domains") or []) if d.get("name")]
+
+
+def _cdn_tune(kind: str, days: int, domains: list[str]) -> dict:
+    """flux(流量,字节) 或 bandwidth(带宽,bps) 的按天序列（跨所有域名/大区汇总）。
+
+    返回 {times:[unix秒], values:[int]}。CDN 接口按北京时间日期分点。
+    """
+    from datetime import datetime, timedelta
+
+    if not domains:
+        return {"times": [], "values": []}
+    end = datetime.now()
+    start = end - timedelta(days=days)
+    j = _mac_request(
+        "fusion.qiniuapi.com",
+        f"/v2/tune/{kind}",
+        "POST",
+        {
+            "domains": ";".join(domains),
+            "startDate": start.strftime("%Y-%m-%d"),
+            "endDate": end.strftime("%Y-%m-%d"),
+            "granularity": "day",
+        },
+    )
+    time_strs = j.get("time") or []
+    totals = [0] * len(time_strs)
+    for _dom, regions in (j.get("data") or {}).items():
+        for _region, arr in (regions or {}).items():
+            for i, v in enumerate(arr or []):
+                if v and i < len(totals):
+                    totals[i] += int(v)
+    times = [int(datetime.strptime(t, "%Y-%m-%d %H:%M:%S").timestamp()) for t in time_strs]
+    return {"times": times, "values": totals}
+
+
+def cdn_flux_series(days: int = 30) -> dict:
+    """CDN 外网流出流量（字节）按天序列。返回 {times, values, domains}。"""
+    domains = cdn_domains()
+    s = _cdn_tune("flux", days, domains)
+    s["domains"] = domains
+    return s
+
+
+def cdn_bandwidth_peak(days: int = 30) -> int:
+    """CDN 峰值带宽（bps），取序列最大值。"""
+    s = _cdn_tune("bandwidth", days, cdn_domains())
+    return max(s["values"]) if s["values"] else 0

@@ -98,6 +98,15 @@ def _qiniu() -> dict:
         out["flow_trend"] = [{"t": x["time"], "v": x["value"]} for x in flow]
     except Exception as e:  # noqa: BLE001
         out["error"] = str(e)
+    # CDN 流量（融合 CDN，真实用户侧下载量）独立容错：拿不到不影响源站/存储展示
+    try:
+        cdn = qiniu_client.cdn_flux_series(days=30)
+        out["cdn_flow_30d"] = sum(cdn["values"])
+        out["cdn_peak_bps"] = qiniu_client.cdn_bandwidth_peak(days=30)
+        out["cdn_domains"] = cdn["domains"]
+        out["cdn_trend"] = [{"t": t, "v": v} for t, v in zip(cdn["times"], cdn["values"])]
+    except Exception as e:  # noqa: BLE001
+        out["cdn_error"] = str(e)
     return out
 
 
