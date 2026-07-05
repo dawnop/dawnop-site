@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.config import settings as env_settings
 from app.deps import get_current_user, get_db
 from app.models.setting import Setting
+from app.schemas.settings import SettingsOut
 
 router = APIRouter()
 
@@ -64,7 +65,7 @@ def get_setting(db: Session, key: str):
     return DEFAULTS[key]
 
 
-@router.get("", summary="读取全局配置")
+@router.get("", response_model=SettingsOut, summary="读取全局配置")
 def read_settings(
     db: Session = Depends(get_db),
     _: object = Depends(get_current_user),
@@ -72,7 +73,7 @@ def read_settings(
     return get_all_settings(db)
 
 
-@router.put("", summary="更新全局配置")
+@router.put("", response_model=SettingsOut, summary="更新全局配置")
 def update_settings(
     payload: dict = Body(...),
     db: Session = Depends(get_db),

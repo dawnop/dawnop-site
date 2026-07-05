@@ -142,6 +142,9 @@ def _vault() -> dict:
     return out
 
 
+# 注：此端点刻意不套 response_model —— 返回体按「块」动态组装（每块独立容错，
+# 失败时下发 *_error / configured=False 等回落字段，见 _lighthouse/_qiniu/_vault），
+# 形状随运行状态而变；严格模型会把这些动态错误字段过滤掉、反而破坏前端的容错展示。
 @router.get("", summary="监控总览：本机 / 腾讯云 / 七牛 / Vault 用量快照 + 趋势")
 def overview(
     refresh: bool = Query(False, description="跳过三方数据缓存强制刷新"),
