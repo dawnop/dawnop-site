@@ -146,7 +146,6 @@ onMounted(async () => {
 <template>
   <div>
     <div class="page-head">
-      <h1>页面管理</h1>
       <div class="actions">
         <el-button :icon="Document" @click="newPage('content')">新建内容页</el-button>
         <el-button type="primary" :icon="Collection" @click="newPage('article_list')">
@@ -249,13 +248,8 @@ onMounted(async () => {
 .page-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   margin-bottom: 12px;
-}
-.page-head h1 {
-  margin: 0;
-  font-size: 1.3rem;
-  font-weight: 600;
 }
 .actions {
   display: flex;

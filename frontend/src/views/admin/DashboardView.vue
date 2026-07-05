@@ -31,10 +31,6 @@ onMounted(async () => {
 
 <template>
   <div>
-    <div class="page-head">
-      <h1>首页</h1>
-    </div>
-
     <el-card class="welcome" shadow="never">
       <h2>欢迎回来 👋</h2>
       <p class="muted">这里是 dawnop 控制台，可在左侧管理文章、页面与文件。</p>

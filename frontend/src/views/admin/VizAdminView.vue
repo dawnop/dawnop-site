@@ -51,7 +51,6 @@ onMounted(load)
 <template>
   <div>
     <div class="page-head">
-      <h1>可视化组件</h1>
       <el-button type="primary" :icon="MagicStick" @click="router.push('/admin/viz/new')">
         新建可视化
       </el-button>
@@ -113,13 +112,8 @@ onMounted(load)
 .page-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   margin-bottom: 12px;
-}
-.page-head h1 {
-  margin: 0;
-  font-size: 1.3rem;
-  font-weight: 600;
 }
 .hint {
   margin: 0 0 16px;

@@ -48,7 +48,6 @@ onMounted(load)
 <template>
   <div>
     <div class="page-head">
-      <h1>全局设置</h1>
       <el-button type="primary" :loading="saving" :disabled="!dirty" @click="save">保存</el-button>
     </div>
     <p class="hint">改动即时生效（文件管理页需刷新后生效）。</p>
@@ -85,12 +84,8 @@ onMounted(load)
 .page-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   margin-bottom: 12px;
-}
-.page-head h1 {
-  margin: 0;
-  font-size: 1.3rem;
 }
 .hint {
   color: var(--muted);

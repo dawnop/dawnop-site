@@ -139,9 +139,8 @@ onMounted(load)
 
 <template>
   <div>
-    <div class="page-head">
-      <h1>标签管理</h1>
-      <el-button v-if="orphanCount > 0" :icon="Delete" @click="cleanup">
+    <div v-if="orphanCount > 0" class="page-head">
+      <el-button :icon="Delete" @click="cleanup">
         清理未使用标签（{{ orphanCount }}）
       </el-button>
     </div>
@@ -236,13 +235,8 @@ onMounted(load)
 .page-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   margin-bottom: 16px;
-}
-.page-head h1 {
-  margin: 0;
-  font-size: 1.3rem;
-  font-weight: 600;
 }
 .toolbar {
   display: flex;

@@ -163,7 +163,6 @@ onMounted(load)
 <template>
   <div>
     <div class="page-head">
-      <h1>文章管理</h1>
       <div class="actions">
         <input ref="fileInput" type="file" accept=".md,text/markdown" hidden @change="onImport" />
         <el-button :icon="Upload" @click="pickImport">导入 .md</el-button>
@@ -342,13 +341,8 @@ onMounted(load)
 .page-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   margin-bottom: 16px;
-}
-.page-head h1 {
-  margin: 0;
-  font-size: 1.3rem;
-  font-weight: 600;
 }
 .actions {
   display: flex;
