@@ -193,6 +193,30 @@ const trafficCycle = computed(() => {
         </div>
       </el-card>
 
+      <!-- Vaultwarden（放在七牛之前，让最高的七牛卡片单独占一列，瀑布流更均衡）-->
+      <el-card shadow="never" class="mon-card">
+        <template #header>
+          <div class="ch">
+            <span class="ct">Vaultwarden · 密码库</span>
+            <el-tag v-if="vault" :type="vault.alive ? 'success' : 'danger'" size="small" effect="light">
+              {{ vault.alive ? '在线' : '离线' }}
+            </el-tag>
+          </div>
+        </template>
+        <div v-if="vault" class="kv-grid single">
+          <div v-if="vault.public_url">
+            <span class="k">入口</span>
+            <a :href="vault.public_url" target="_blank" rel="noopener" class="vault-link">{{ vault.public_url }}</a>
+          </div>
+          <div v-if="vault.version"><span class="k">版本</span>{{ vault.version }}</div>
+          <div v-if="vault.latency_ms != null"><span class="k">响应</span>{{ vault.latency_ms }} ms</div>
+          <div v-if="vault.error" class="err"><span class="k">错误</span>{{ vault.error }}</div>
+        </div>
+        <div v-if="vault?.public_url" class="vault-actions">
+          <el-button type="primary" :icon="TopRight" @click="openVault">打开 Vault</el-button>
+        </div>
+      </el-card>
+
       <!-- 七牛 Kodo -->
       <el-card shadow="never" class="mon-card">
         <template #header>
@@ -265,30 +289,6 @@ const trafficCycle = computed(() => {
           </div>
         </template>
       </el-card>
-
-      <!-- Vaultwarden -->
-      <el-card shadow="never" class="mon-card">
-        <template #header>
-          <div class="ch">
-            <span class="ct">Vaultwarden · 密码库</span>
-            <el-tag v-if="vault" :type="vault.alive ? 'success' : 'danger'" size="small" effect="light">
-              {{ vault.alive ? '在线' : '离线' }}
-            </el-tag>
-          </div>
-        </template>
-        <div v-if="vault" class="kv-grid single">
-          <div v-if="vault.public_url">
-            <span class="k">入口</span>
-            <a :href="vault.public_url" target="_blank" rel="noopener" class="vault-link">{{ vault.public_url }}</a>
-          </div>
-          <div v-if="vault.version"><span class="k">版本</span>{{ vault.version }}</div>
-          <div v-if="vault.latency_ms != null"><span class="k">响应</span>{{ vault.latency_ms }} ms</div>
-          <div v-if="vault.error" class="err"><span class="k">错误</span>{{ vault.error }}</div>
-        </div>
-        <div v-if="vault?.public_url" class="vault-actions">
-          <el-button type="primary" :icon="TopRight" @click="openVault">打开 Vault</el-button>
-        </div>
-      </el-card>
     </div>
   </div>
 </template>
@@ -306,11 +306,14 @@ const trafficCycle = computed(() => {
 .muted { color: var(--muted); }
 .mb { margin-bottom: 14px; }
 
+/* 瀑布流：CSS 多列布局，卡片按列紧凑堆叠、不留行对齐的空隙 */
 .cards {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  align-items: start;
+  column-count: 2;
+  column-gap: 16px;
+}
+.mon-card {
+  break-inside: avoid;
+  margin-bottom: 16px;
 }
 .ch { display: flex; align-items: center; gap: 10px; }
 .ct { font-weight: 600; }
@@ -382,7 +385,7 @@ const trafficCycle = computed(() => {
 .trend-t { font-size: 0.82rem; color: var(--muted); margin-bottom: 4px; }
 
 @media (max-width: 768px) {
-  .cards { grid-template-columns: 1fr; }
+  .cards { column-count: 1; }
   .page-head { flex-wrap: wrap; gap: 10px; }
   .page-head .el-button { width: 100%; }
   .tiles { justify-content: space-around; gap: 14px 10px; }
