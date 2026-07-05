@@ -305,3 +305,34 @@ def cdn_bandwidth_peak(days: int = 30) -> int:
     """CDN 峰值带宽（bps），取序列最大值。"""
     s = _cdn_tune("bandwidth", days, cdn_domains())
     return max(s["values"]) if s["values"] else 0
+
+
+# ---------------- 资源包（流量包/存储包）余额 ----------------
+# 七牛财务 API：GET api.qiniu.com/billing-api/v1/respack/list（QiniuMacAuth 签名）。
+# CDN 流量按**流量包**计费（如 500GB 年包），非月度——此接口给权威的 已用/总量/剩余。
+
+
+def respack_cdn() -> dict | None:
+    """当前生效的 CDN 流量包汇总（字节）。无流量包返回 None。
+
+    返回 {used, total, remain, expire(ISO), names[]}。接口单位为 GB，此处换算成字节。
+    识别：status==2（生效中）且 respack_name 含「流量」（存储包名含「存储」，据此区分）。
+    """
+    j = _mac_request("api.qiniu.com", "/billing-api/v1/respack/list")
+    items = [
+        d for d in (j.get("data") or [])
+        if d.get("status") == 2 and "流量" in (d.get("respack_name") or "")
+    ]
+    if not items:
+        return None
+    gb = 1024**3
+    used = sum(float(d.get("used_amount") or 0) for d in items) * gb
+    total = sum(float(d.get("total_amount") or 0) for d in items) * gb
+    ends = [d["effective_end"] for d in items if d.get("effective_end")]
+    return {
+        "used": int(used),
+        "total": int(total),
+        "remain": int(max(0, total - used)),
+        "expire": min(ends) if ends else None,
+        "names": [d.get("respack_name") for d in items],
+    }

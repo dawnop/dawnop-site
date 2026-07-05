@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime
 
 import psutil
 import requests
@@ -101,20 +100,19 @@ def _qiniu() -> dict:
     except Exception as e:  # noqa: BLE001
         out["error"] = str(e)
     # CDN 流量（融合 CDN，真实用户侧下载量）独立容错：拿不到不影响源站/存储展示。
-    # 取 31 天窗口（必含本月全部），再切出「本月至今」（配额条分母）与「近 30 天」（趋势）。
+    # 配额条用**流量包**（respack，权威的已用/总量/剩余，按包非按月）；趋势/峰值用近 30 天日志。
     try:
-        cdn = qiniu_client.cdn_flux_series(days=31)
-        now = time.time()
-        month_start = datetime(*time.localtime(now)[:2], 1).timestamp()
-        d30 = now - 30 * 86400
-        trend = [(t, v) for t, v in zip(cdn["times"], cdn["values"]) if t >= d30]
-        out["cdn_flow_month"] = sum(v for t, v in zip(cdn["times"], cdn["values"]) if t >= month_start)
-        out["cdn_flow_30d"] = sum(v for _, v in trend)
+        cdn = qiniu_client.cdn_flux_series(days=30)
+        out["cdn_flow_30d"] = sum(cdn["values"])
         out["cdn_peak_bps"] = qiniu_client.cdn_bandwidth_peak(days=30)
         out["cdn_domains"] = cdn["domains"]
-        out["cdn_trend"] = [{"t": t, "v": v} for t, v in trend]
+        out["cdn_trend"] = [{"t": t, "v": v} for t, v in zip(cdn["times"], cdn["values"])]
     except Exception as e:  # noqa: BLE001
         out["cdn_error"] = str(e)
+    try:
+        out["cdn_pack"] = qiniu_client.respack_cdn()
+    except Exception as e:  # noqa: BLE001
+        out["cdn_pack_error"] = str(e)
     return out
 
 
@@ -152,11 +150,11 @@ def overview(
         _cache["lighthouse"] = _lighthouse()
         _cache["qiniu"] = _qiniu()
         _cache["at"] = now
-    # 配额从全局设置（DB）实时读取并覆盖到七牛块——用量条分母，改设置即时生效（不受缓存影响）
+    # 存储配额从全局设置（DB）实时读取覆盖——存储用量条分母，改设置即时生效（不受缓存影响）。
+    # CDN 用流量包（respack）自身的总量，无需配额设置。
     qn = _cache["qiniu"]
     if qn and qn.get("configured"):
         qn["quota"] = int(get_setting(db, "storage_quota_gb")) * 1024**3
-        qn["cdn_quota"] = int(get_setting(db, "cdn_quota_gb")) * 1024**3
     return {
         "server": _server(),
         "lighthouse": _cache["lighthouse"],

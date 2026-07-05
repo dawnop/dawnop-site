@@ -51,6 +51,12 @@ function shortDate(iso) {
   const d = new Date(iso)
   return `${d.getMonth() + 1}/${d.getDate()}`
 }
+function dateYmd(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
 function pct(used, total) {
   total = Number(total) || 0
   if (!total) return 0
@@ -194,18 +200,21 @@ const trafficCycle = computed(() => {
             <div class="kv-row"><span>已用 <b>{{ fmtBytes(qn.space) }}</b></span></div>
           </div>
 
-          <div v-if="!qn.cdn_error && qn.cdn_quota" class="block">
+          <div v-if="qn.cdn_pack" class="block">
             <div class="block-t">
-              <span>CDN 流量 · 本月</span>
-              <span class="muted">配额 {{ fmtBytes(qn.cdn_quota) }}</span>
+              <span>CDN 流量包</span>
+              <span class="muted">
+                总 {{ fmtBytes(qn.cdn_pack.total) }}
+                <template v-if="qn.cdn_pack.expire"> · 有效期至 {{ dateYmd(qn.cdn_pack.expire) }}</template>
+              </span>
             </div>
             <el-progress
-              :percentage="pct(qn.cdn_flow_month, qn.cdn_quota)"
-              :color="barColor(pct(qn.cdn_flow_month, qn.cdn_quota))"
+              :percentage="pct(qn.cdn_pack.used, qn.cdn_pack.total)"
+              :color="barColor(pct(qn.cdn_pack.used, qn.cdn_pack.total))"
               :stroke-width="10"
             />
             <div class="kv-row">
-              <span>已用 <b>{{ fmtBytes(qn.cdn_flow_month) }}</b></span>
+              <span>已用 <b>{{ fmtBytes(qn.cdn_pack.used) }}</b> · 剩余 {{ fmtBytes(qn.cdn_pack.remain) }}</span>
               <span v-if="qn.cdn_peak_bps">峰值带宽 {{ fmtMbps(qn.cdn_peak_bps) }}</span>
               <span v-if="qn.cdn_domains?.length" class="muted">{{ qn.cdn_domains.join('、') }}</span>
             </div>
