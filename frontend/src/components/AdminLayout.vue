@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { RouterView, useRouter, useRoute } from 'vue-router'
-import { Fold, Expand, House, Document, Collection, FolderOpened, MagicStick, PriceTag, Setting, MoreFilled } from '@element-plus/icons-vue'
+import { Fold, Expand, House, Document, Collection, FolderOpened, MagicStick, PriceTag, Setting, Odometer, MoreFilled } from '@element-plus/icons-vue'
 import { auth } from '../store/auth'
 import { useIsMobile } from '../composables/useIsMobile'
 
@@ -50,12 +50,15 @@ const groups = [
   },
   {
     label: '系统',
-    items: [{ to: '/admin/settings', label: '全局设置', icon: Setting }],
+    items: [
+      { to: '/admin/monitor', label: '监控', icon: Odometer },
+      { to: '/admin/settings', label: '全局设置', icon: Setting },
+    ],
   },
 ]
 
 // 当前高亮项：首页精确匹配，其余匹配前缀（子路由如 /admin/articles/new 仍高亮文章管理）
-const navTos = ['/admin/articles', '/admin/tags', '/admin/pages', '/admin/viz', '/admin/files', '/admin/settings']
+const navTos = ['/admin/articles', '/admin/tags', '/admin/pages', '/admin/viz', '/admin/files', '/admin/monitor', '/admin/settings']
 const activeMenu = computed(() => {
   if (route.path === '/admin') return '/admin'
   return navTos.find((t) => route.path === t || route.path.startsWith(t + '/')) || route.path
@@ -77,6 +80,7 @@ const crumbs = computed(() => {
     'admin-viz-new': [home, { label: '可视化', to: '/admin/viz' }, { label: '新建可视化' }],
     'admin-viz-edit': [home, { label: '可视化', to: '/admin/viz' }, { label: '编辑可视化' }],
     'admin-files': [home, { label: '文件管理' }],
+    'admin-monitor': [home, { label: '监控' }],
     'admin-settings': [home, { label: '全局设置' }],
   }
   return map[route.name] || []

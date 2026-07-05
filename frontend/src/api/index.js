@@ -139,6 +139,13 @@ export const vizApi = {
   },
 }
 
+// ---- 监控总览（本机 / 腾讯云 / 七牛 / Vault）----
+export const monitorApi = {
+  overview(refresh = false) {
+    return client.get('/monitor', { params: refresh ? { refresh: 1 } : {} })
+  },
+}
+
 // ---- 后台全局配置 ----
 export const settingsApi = {
   get() {

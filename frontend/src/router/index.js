@@ -118,6 +118,11 @@ const routes = [
       // 自建文件管理器试用期的旧地址，保留跳转
       { path: 'files-lab', redirect: { name: 'admin-files' } },
       {
+        path: 'monitor',
+        name: 'admin-monitor',
+        component: () => import('../views/admin/MonitorView.vue'),
+      },
+      {
         path: 'settings',
         name: 'admin-settings',
         component: () => import('../views/admin/SettingsAdminView.vue'),

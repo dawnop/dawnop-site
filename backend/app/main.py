@@ -8,6 +8,7 @@ from app.api import (
     articles,
     auth,
     fm,
+    monitor,
     pages,
     search,
     settings as settings_api,
@@ -52,6 +53,7 @@ def health() -> dict[str, str]:
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(articles.router, prefix="/api/articles", tags=["articles"])
 app.include_router(fm.router, prefix="/api/fm", tags=["files"])
+app.include_router(monitor.router, prefix="/api/monitor", tags=["monitor"])
 app.include_router(pages.router, prefix="/api/pages", tags=["pages"])
 app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
