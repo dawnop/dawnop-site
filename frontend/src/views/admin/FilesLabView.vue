@@ -40,6 +40,14 @@ function closeSearch() {
   searchOpen.value = false
   q.value = ''
 }
+// 搜索窗口里点结果：文件夹进入、文件打开预览，随后关闭窗口
+function onSearchPick(row) {
+  const dir = row.is_dir
+  const path = row.path
+  closeSearch()
+  if (dir) goto(path)
+  else openModal(row)
+}
 // 移动端强制网格视图（表格在窄屏太挤）
 const effectiveView = computed(() => (isMobile.value ? 'grid' : viewMode.value))
 
@@ -825,51 +833,34 @@ onUnmounted(() => {
         @dragleave="onDragLeave"
         @drop.prevent="onDrop"
       >
-        <div class="fm-toolbar">
+        <!-- 桌面工具栏（移动端改用右下角悬浮按钮 + 搜索窗口 + 多选头） -->
+        <div v-if="!isMobile" class="fm-toolbar">
           <div class="fm-tb-left">
             <template v-if="selPaths.length">
               <span class="fm-selinfo">已选 {{ selPaths.length }} 项</span>
-              <!-- 桌面：批量操作内联；移动端移到底部操作条，这里只留计数 -->
-              <template v-if="!isMobile">
-                <el-button text :icon="Download" :disabled="!selFiles.length" @click="doDownloadMany(selRows)">下载</el-button>
-                <el-button text :icon="Right" @click="startMoveCopy('move', selRows)">移动</el-button>
-                <el-button text :icon="CopyDocument" @click="startMoveCopy('copy', selRows)">复制</el-button>
-                <el-button text type="danger" :icon="Delete" @click="doDeleteMany(selRows)">删除</el-button>
-                <el-button text :icon="Close" @click="clearSel">取消选择</el-button>
-              </template>
+              <el-button text :icon="Download" :disabled="!selFiles.length" @click="doDownloadMany(selRows)">下载</el-button>
+              <el-button text :icon="Right" @click="startMoveCopy('move', selRows)">移动</el-button>
+              <el-button text :icon="CopyDocument" @click="startMoveCopy('copy', selRows)">复制</el-button>
+              <el-button text type="danger" :icon="Delete" @click="doDeleteMany(selRows)">删除</el-button>
+              <el-button text :icon="Close" @click="clearSel">取消选择</el-button>
             </template>
-            <template v-else-if="!isMobile">
+            <template v-else>
               <el-button :icon="FolderAdd" text @click="newFolder">新建文件夹</el-button>
             </template>
           </div>
           <div class="fm-tb-right">
-            <!-- 搜索框：桌面常驻；移动端仅在展开时占整行（默认收起，走右下角搜索按钮） -->
-            <el-input
-              v-if="!isMobile || (searchOpen && !selectMode)"
-              ref="searchInputRef"
-              v-model="q"
-              :prefix-icon="Search"
-              placeholder="搜索当前目录"
-              clearable
-              class="fm-search"
-            />
-            <el-button v-if="isMobile && searchOpen && !selectMode" text class="fm-search-cancel" @click="closeSearch">取消</el-button>
-            <template v-if="!isMobile">
-              <el-segmented v-model="viewMode" :options="viewOptions" class="fm-seg">
-                <template #default="{ item }"><el-icon><component :is="item.icon" /></el-icon></template>
-              </el-segmented>
-              <el-button :icon="View" circle :type="showInfo ? 'primary' : ''" :plain="showInfo" title="预览面板" @click="showInfo = !showInfo" />
-            </template>
-            <el-button
-              v-else-if="!searchOpen"
-              :icon="selectMode ? Close : Select"
-              circle
-              :type="selectMode ? 'primary' : ''"
-              :plain="selectMode"
-              title="多选"
-              @click="toggleSelectMode"
-            />
+            <el-input v-model="q" :prefix-icon="Search" placeholder="搜索当前目录" clearable class="fm-search" />
+            <el-segmented v-model="viewMode" :options="viewOptions" class="fm-seg">
+              <template #default="{ item }"><el-icon><component :is="item.icon" /></el-icon></template>
+            </el-segmented>
+            <el-button :icon="View" circle :type="showInfo ? 'primary' : ''" :plain="showInfo" title="预览面板" @click="showInfo = !showInfo" />
           </div>
+        </div>
+
+        <!-- 移动端多选态顶栏：已选计数 + 取消 -->
+        <div v-if="isMobile && selectMode" class="fm-selhead">
+          <span class="fm-selhead-count">{{ selPaths.length ? `已选 ${selPaths.length} 项` : '选择文件' }}</span>
+          <el-button text @click="toggleSelectMode">取消</el-button>
         </div>
 
         <div class="fm-crumb">
@@ -1151,19 +1142,13 @@ onUnmounted(() => {
     <!-- 框选选择框（视口固定坐标） -->
     <div v-if="marquee.show" class="fm-marquee" :style="marqueeStyle"></div>
 
-    <!-- 移动端：右下角搜索按钮（点开顶部搜索栏） -->
-    <el-button
-      v-if="isMobile && !selectMode && !searchOpen"
-      circle
-      :icon="Search"
-      class="fm-fab-search"
-      title="搜索"
-      @click="openSearch"
-    />
-
-    <!-- 移动端：悬浮 +（上传 / 新建文件夹） -->
+    <!-- 移动端右下角悬浮按钮组（自下而上：+ / 搜索 / 多选）；多选态与搜索窗内全部隐藏 -->
+    <template v-if="isMobile && !selectMode && !searchOpen">
+      <el-button circle :icon="Select" class="fm-fab-mini fm-fab-select" title="多选" @click="toggleSelectMode" />
+      <el-button circle :icon="Search" class="fm-fab-mini fm-fab-search" title="搜索" @click="openSearch" />
+    </template>
     <el-dropdown
-      v-if="isMobile && !selectMode"
+      v-if="isMobile && !selectMode && !searchOpen"
       trigger="click"
       class="fm-fab"
       placement="top-end"
@@ -1178,6 +1163,38 @@ onUnmounted(() => {
         </el-dropdown-menu>
       </template>
     </el-dropdown>
+
+    <!-- 移动端：搜索窗口（全屏覆盖，独立于文件列表） -->
+    <div v-if="isMobile && searchOpen" class="fm-searchwin">
+      <div class="fm-searchwin-bar">
+        <el-input
+          ref="searchInputRef"
+          v-model="q"
+          :prefix-icon="Search"
+          placeholder="搜索当前目录"
+          clearable
+          class="fm-searchwin-input"
+        />
+        <el-button text @click="closeSearch">取消</el-button>
+      </div>
+      <div class="fm-searchwin-list">
+        <div v-if="!q.trim()" class="fm-searchwin-hint">
+          搜索「{{ crumbs[crumbs.length - 1]?.name }}」目录下的文件与文件夹
+        </div>
+        <el-empty v-else-if="!filtered.length" description="没有匹配的项" :image-size="72" />
+        <button
+          v-for="row in filtered"
+          v-else
+          :key="row.path"
+          class="fm-searchwin-item"
+          @click="onSearchPick(row)"
+        >
+          <el-icon class="sw-ico" :style="{ color: tintOf(row) }"><component :is="iconOf(row)" /></el-icon>
+          <span class="sw-name">{{ row.name }}</span>
+          <el-icon v-if="row.is_dir" class="sw-arrow"><Right /></el-icon>
+        </button>
+      </div>
+    </div>
 
     <!-- 移动端：多选态底部批量操作条 -->
     <div v-if="isMobile && selectMode && selPaths.length" class="fm-selbar">
@@ -1646,11 +1663,10 @@ onUnmounted(() => {
   font-size: 22px;
   box-shadow: 0 6px 18px rgba(22, 119, 255, 0.38);
 }
-/* 搜索按钮：叠在 + 之上，白底次要样式 */
-.fm-fab-search {
+/* 次级悬浮按钮（搜索 / 多选）：叠在 + 之上，白底 */
+.fm-fab-mini {
   position: fixed;
   right: 21px;
-  bottom: 84px;
   z-index: 1500;
   width: 46px;
   height: 46px;
@@ -1658,6 +1674,66 @@ onUnmounted(() => {
   background: #fff;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
 }
+.fm-fab-search { bottom: 84px; }
+.fm-fab-select { bottom: 140px; }
+
+/* ---------- 移动端多选顶栏 ---------- */
+.fm-selhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 52px;
+  flex-shrink: 0;
+  padding: 0 6px 0 14px;
+  border-bottom: 1px solid var(--w-border);
+}
+.fm-selhead-count {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+/* ---------- 移动端搜索窗口（全屏覆盖） ---------- */
+.fm-searchwin {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  padding-top: env(safe-area-inset-top, 0px);
+}
+.fm-searchwin-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 10px 10px 12px;
+  border-bottom: 1px solid var(--w-border);
+}
+.fm-searchwin-input { flex: 1; }
+.fm-searchwin-list { flex: 1; overflow-y: auto; padding: 4px 0 20px; }
+.fm-searchwin-hint {
+  padding: 22px 16px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  text-align: center;
+}
+.fm-searchwin-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 16px;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.fm-searchwin-item:active { background: #f5f7fa; }
+.sw-ico { font-size: 22px; flex-shrink: 0; }
+.sw-name { flex: 1; min-width: 0; font-size: 0.95rem; word-break: break-all; }
+.sw-arrow { color: var(--el-text-color-placeholder); flex-shrink: 0; }
 
 /* ---------- 移动端多选底部批量操作条 ---------- */
 .fm-selbar {
@@ -1729,12 +1805,7 @@ onUnmounted(() => {
 
 /* ---------- 移动端整体布局（≤768） ---------- */
 @media (max-width: 768px) {
-  /* 工具栏单行：左计数 / 右搜索栏或多选开关；批量操作移到底部条 */
-  .fm-toolbar { gap: 8px; padding: 0 10px; }
-  .fm-tb-left { min-width: 0; }
-  .fm-tb-right { flex: 1; justify-content: flex-end; gap: 8px; }
-  .fm-search { flex: 1; }
-  .fm-search-cancel { flex-shrink: 0; }
+  /* 顶部工具栏移动端不渲染（改用悬浮按钮 + 搜索窗 + 多选顶栏） */
   .fm-content { padding: 6px; }
   .fm-grid {
     grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
