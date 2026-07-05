@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
+import { fmtDate } from '../../utils/format'
 import { useRouter } from 'vue-router'
 import { Rank, Document, Collection, Top, Bottom } from '@element-plus/icons-vue'
 import Sortable from 'sortablejs'
@@ -107,9 +108,6 @@ async function remove(p) {
   load()
 }
 
-function fmtDate(s) {
-  return new Date(s).toLocaleDateString('zh-CN')
-}
 
 // 行拖拽排序：sortablejs 绑定到 el-table 内部 tbody，拖完同步数据并提交顺序
 function initSortable() {

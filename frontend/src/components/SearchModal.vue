@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watch, computed, nextTick, onBeforeUnmount } from 'vue'
+import { fmtDate } from '../utils/format'
 import { useRouter, RouterLink } from 'vue-router'
 import { Search, Clock, Close } from '@element-plus/icons-vue'
 import { searchApi } from '../api'
@@ -28,9 +29,6 @@ const RECENT_KEY = 'dawnop:recent-search'
 const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent)
 const modKey = computed(() => (isMac ? '⌘' : 'Ctrl'))
 
-function fmtDate(s) {
-  return new Date(s).toLocaleDateString('zh-CN')
-}
 function readMinutes(wc) {
   return Math.max(1, Math.round((wc || 0) / 300))
 }

@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
+import { fmtDate } from '../../utils/format'
 import { useRouter } from 'vue-router'
 import { Search, Upload, EditPen, MoreFilled } from '@element-plus/icons-vue'
 import { articlesApi, pagesApi, tagsApi } from '../../api'
@@ -148,9 +149,6 @@ async function exportMd(a) {
   URL.revokeObjectURL(url)
 }
 
-function fmtDate(s) {
-  return new Date(s).toLocaleDateString('zh-CN')
-}
 
 function goPage(p) {
   page.value = p

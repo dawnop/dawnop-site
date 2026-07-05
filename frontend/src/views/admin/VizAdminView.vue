@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted } from 'vue'
+import { fmtDate } from '../../utils/format'
 import { useRouter } from 'vue-router'
 import { MagicStick } from '@element-plus/icons-vue'
 import { vizApi } from '../../api'
@@ -41,9 +42,6 @@ async function remove(v) {
   load()
 }
 
-function fmtDate(s) {
-  return new Date(s).toLocaleDateString('zh-CN')
-}
 
 onMounted(load)
 </script>

@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watch } from 'vue'
+import { fmtDate } from '../utils/format'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { Search } from '@element-plus/icons-vue'
 import { searchApi } from '../api'
@@ -15,9 +16,6 @@ const size = 10
 const loading = ref(false)
 const searched = ref(false) // 是否已发起过一次查询（区分「初始空」与「无结果」）
 
-function fmtDate(s) {
-  return new Date(s).toLocaleDateString('zh-CN')
-}
 function readMinutes(wc) {
   return Math.max(1, Math.round((wc || 0) / 300))
 }

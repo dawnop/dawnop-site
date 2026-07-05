@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watch, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
+import { fmtDate } from '../utils/format'
 import { useRoute } from 'vue-router'
 import { articlesApi } from '../api'
 import MarkdownView from '../components/MarkdownView.vue'
@@ -32,9 +33,6 @@ async function load(slug) {
   }
 }
 
-function fmtDate(s) {
-  return new Date(s).toLocaleDateString('zh-CN')
-}
 
 const readMinutes = computed(() =>
   article.value ? Math.max(1, Math.round((article.value.word_count || 0) / 300)) : 0

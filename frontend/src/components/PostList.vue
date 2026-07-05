@@ -2,14 +2,12 @@
 // 前台文章列表项（首页 / 文章列表页 / 标签页共用）：
 // 标题 + 摘要 + 「日期 · 约 N 分钟 · #标签」meta 行
 import { RouterLink } from 'vue-router'
+import { fmtDate } from '../utils/format'
 
 defineProps({
   items: { type: Array, required: true },
 })
 
-function fmtDate(s) {
-  return new Date(s).toLocaleDateString('zh-CN')
-}
 
 function readMinutes(wc) {
   return Math.max(1, Math.round((wc || 0) / 300))
