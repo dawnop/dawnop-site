@@ -51,19 +51,19 @@ onMounted(load)
 <template>
   <div>
     <div class="page-head">
+      <p class="hint">
+        在后台直接写 Vue 组件、实时预览、保存即生效。引用格式
+        <HelpTip>
+          <div>文章里用如下围栏引用（标识单独成行）：</div>
+          <pre style="margin: 6px 0 0; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre;">```viz
+标识
+```</pre>
+        </HelpTip>
+      </p>
       <el-button type="primary" :icon="MagicStick" @click="router.push('/admin/viz/new')">
         新建可视化
       </el-button>
     </div>
-    <p class="hint">
-      在后台直接写 Vue 组件、实时预览、保存即生效。引用格式
-      <HelpTip>
-        <div>文章里用如下围栏引用（标识单独成行）：</div>
-        <pre style="margin: 6px 0 0; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre;">```viz
-标识
-```</pre>
-      </HelpTip>
-    </p>
 
     <el-card v-if="!isMobile" shadow="never">
       <el-table v-loading="loading" :data="items" row-key="id" border empty-text="还没有可视化组件" @header-dragend="onHeaderDrag">
@@ -112,11 +112,15 @@ onMounted(load)
 .page-head {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  margin-bottom: 12px;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.page-head .el-button {
+  flex-shrink: 0;
 }
 .hint {
-  margin: 0 0 16px;
+  margin: 0;
   color: var(--muted);
   font-size: 0.85rem;
 }
@@ -169,8 +173,8 @@ onMounted(load)
     flex-wrap: wrap;
     gap: 10px;
   }
-  .page-head h1 {
-    font-size: 1.15rem;
+  .page-head .el-button {
+    width: 100%;
   }
 }
 </style>

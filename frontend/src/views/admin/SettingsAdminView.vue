@@ -48,9 +48,9 @@ onMounted(load)
 <template>
   <div>
     <div class="page-head">
+      <p class="hint">改动即时生效（文件管理页需刷新后生效）。</p>
       <el-button type="primary" :loading="saving" :disabled="!dirty" @click="save">保存</el-button>
     </div>
-    <p class="hint">改动即时生效（文件管理页需刷新后生效）。</p>
 
     <el-card v-loading="loading" shadow="never">
       <el-form
@@ -84,13 +84,17 @@ onMounted(load)
 .page-head {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  margin-bottom: 12px;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.page-head .el-button {
+  flex-shrink: 0;
 }
 .hint {
   color: var(--muted);
   font-size: 0.88rem;
-  margin: 0 0 16px;
+  margin: 0;
 }
 .group-title {
   margin: 4px 0 18px;
@@ -107,8 +111,12 @@ onMounted(load)
 }
 
 @media (max-width: 768px) {
-  .page-head h1 {
-    font-size: 1.15rem;
+  .page-head {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .page-head .el-button {
+    width: 100%;
   }
   .tip {
     display: block;

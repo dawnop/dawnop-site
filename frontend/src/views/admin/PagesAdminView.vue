@@ -146,6 +146,9 @@ onMounted(async () => {
 <template>
   <div>
     <div class="page-head">
+      <p class="hint">
+        {{ isMobile ? '用卡片上的 ↑↓ 调整导航顺序' : '拖动行首图标调整导航顺序' }}；「首页」「标签」为内置页，可改名、隐藏，不可删除。
+      </p>
       <div class="actions">
         <el-button :icon="Document" @click="newPage('content')">新建内容页</el-button>
         <el-button type="primary" :icon="Collection" @click="newPage('article_list')">
@@ -153,9 +156,6 @@ onMounted(async () => {
         </el-button>
       </div>
     </div>
-    <p class="hint">
-      {{ isMobile ? '用卡片上的 ↑↓ 调整导航顺序' : '拖动行首图标调整导航顺序' }}；「首页」「标签」为内置页，可改名、隐藏，不可删除。
-    </p>
 
     <el-card v-if="!isMobile" shadow="never">
       <el-table ref="tableRef" v-loading="loading" :data="pages" row-key="id" border empty-text="还没有页面" @header-dragend="onHeaderDrag">
@@ -248,15 +248,17 @@ onMounted(async () => {
 .page-head {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  margin-bottom: 12px;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
 }
 .actions {
   display: flex;
   gap: 10px;
+  flex-shrink: 0;
 }
 .hint {
-  margin: 0 0 16px;
+  margin: 0;
   color: var(--muted);
   font-size: 0.85rem;
 }
@@ -317,9 +319,6 @@ onMounted(async () => {
   .page-head {
     flex-wrap: wrap;
     gap: 10px;
-  }
-  .page-head h1 {
-    font-size: 1.15rem;
   }
   .actions {
     width: 100%;

@@ -139,12 +139,6 @@ onMounted(load)
 
 <template>
   <div>
-    <div v-if="orphanCount > 0" class="page-head">
-      <el-button :icon="Delete" @click="cleanup">
-        清理未使用标签（{{ orphanCount }}）
-      </el-button>
-    </div>
-
     <el-card shadow="never">
       <div class="toolbar">
         <el-input
@@ -155,6 +149,9 @@ onMounted(load)
           clearable
         />
         <span class="muted total">共 {{ items.length }} 个标签</span>
+        <el-button v-if="orphanCount > 0" class="tb-clean" :icon="Delete" @click="cleanup">
+          清理未使用（{{ orphanCount }}）
+        </el-button>
       </div>
 
       <el-table v-if="!isMobile" v-loading="loading" :data="filtered" border empty-text="还没有标签，去文章里打上第一个吧" @header-dragend="onHeaderDrag">
@@ -232,17 +229,14 @@ onMounted(load)
 </template>
 
 <style scoped>
-.page-head {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  margin-bottom: 16px;
-}
 .toolbar {
   display: flex;
   align-items: center;
   gap: 12px;
   margin-bottom: 14px;
+}
+.tb-clean {
+  margin-left: auto;
 }
 .search {
   width: 240px;
@@ -304,17 +298,14 @@ onMounted(load)
 }
 
 @media (max-width: 768px) {
-  .page-head {
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-  .page-head h1 {
-    font-size: 1.15rem;
-  }
   .toolbar {
     flex-wrap: wrap;
   }
   .search {
+    width: 100%;
+  }
+  .tb-clean {
+    margin-left: 0;
     width: 100%;
   }
 }

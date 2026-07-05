@@ -162,16 +162,6 @@ onMounted(load)
 
 <template>
   <div>
-    <div class="page-head">
-      <div class="actions">
-        <input ref="fileInput" type="file" accept=".md,text/markdown" hidden @change="onImport" />
-        <el-button :icon="Upload" @click="pickImport">导入 .md</el-button>
-        <el-button type="primary" :icon="EditPen" @click="router.push('/admin/articles/new')">
-          写文章
-        </el-button>
-      </div>
-    </div>
-
     <el-card class="toolbar" shadow="never">
       <el-input
         v-model="fq"
@@ -197,6 +187,13 @@ onMounted(load)
         <el-option v-for="p in listPages" :key="p.id" :label="p.title" :value="p.id" />
       </el-select>
       <el-button v-if="fStatus || fPageId || fq" link @click="resetFilters">重置</el-button>
+      <div class="tb-actions">
+        <input ref="fileInput" type="file" accept=".md,text/markdown" hidden @change="onImport" />
+        <el-button :icon="Upload" @click="pickImport">导入 .md</el-button>
+        <el-button type="primary" :icon="EditPen" @click="router.push('/admin/articles/new')">
+          写文章
+        </el-button>
+      </div>
     </el-card>
 
     <el-card v-if="!isMobile" shadow="never">
@@ -338,16 +335,6 @@ onMounted(load)
 </template>
 
 <style scoped>
-.page-head {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  margin-bottom: 16px;
-}
-.actions {
-  display: flex;
-  gap: 10px;
-}
 .toolbar {
   margin-bottom: 16px;
 }
@@ -356,6 +343,12 @@ onMounted(load)
   align-items: center;
   gap: 12px;
   padding: 14px 16px;
+}
+/* 操作按钮靠右，与左侧筛选同处一行 */
+.tb-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
 }
 .search {
   width: 240px;
@@ -440,23 +433,18 @@ onMounted(load)
 
 /* 移动端工具条 / 头部堆叠 */
 @media (max-width: 768px) {
-  .page-head {
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-  .page-head h1 {
-    font-size: 1.15rem;
-  }
-  .actions {
-    width: 100%;
-  }
-  .actions .el-button {
-    flex: 1;
-  }
   .toolbar :deep(.el-card__body) {
     flex-wrap: wrap;
     gap: 10px;
     padding: 12px;
+  }
+  .tb-actions {
+    width: 100%;
+    margin-left: 0;
+    order: -1; /* 移动端操作按钮放最上 */
+  }
+  .tb-actions .el-button {
+    flex: 1;
   }
   .search,
   .cat {
