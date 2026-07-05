@@ -312,27 +312,40 @@ def cdn_bandwidth_peak(days: int = 30) -> int:
 # CDN 流量按**流量包**计费（如 500GB 年包），非月度——此接口给权威的 已用/总量/剩余。
 
 
-def respack_cdn() -> dict | None:
-    """当前生效的 CDN 流量包汇总（字节）。无流量包返回 None。
+_GB = 1024**3
 
-    返回 {used, total, remain, expire(ISO), names[]}。接口单位为 GB，此处换算成字节。
-    识别：status==2（生效中）且 respack_name 含「流量」（存储包名含「存储」，据此区分）。
+
+def respack_summary() -> dict:
+    """CDN 流量包 + 存储资源包 概览。返回 {cdn:{...}|None, storage:{...}|None}。
+
+    - CDN（流量）：用 list 的累计 used_amount/total_amount（按流量计，权威）→ {used,total,remain,expire,names}。
+    - 存储（容量）：用 month-overview 的 total_surplus 作**容量**（list 的 total_amount 是 GB·月不适合当容量），
+      有效期取 list → {capacity,expire,names}。存储条的分子用实际占用空间（另由 space 提供），非此处 used。
+    识别：status==2（生效中）；名字含「流量」= CDN、含「存储」= 存储。单位 GB→字节。
     """
-    j = _mac_request("api.qiniu.com", "/billing-api/v1/respack/list")
-    items = [
-        d for d in (j.get("data") or [])
-        if d.get("status") == 2 and "流量" in (d.get("respack_name") or "")
-    ]
-    if not items:
-        return None
-    gb = 1024**3
-    used = sum(float(d.get("used_amount") or 0) for d in items) * gb
-    total = sum(float(d.get("total_amount") or 0) for d in items) * gb
-    ends = [d["effective_end"] for d in items if d.get("effective_end")]
-    return {
-        "used": int(used),
-        "total": int(total),
-        "remain": int(max(0, total - used)),
-        "expire": min(ends) if ends else None,
-        "names": [d.get("respack_name") for d in items],
-    }
+    out: dict = {"cdn": None, "storage": None}
+    active = [d for d in (_mac_request("api.qiniu.com", "/billing-api/v1/respack/list").get("data") or [])
+              if d.get("status") == 2]
+
+    cdn_items = [d for d in active if "流量" in (d.get("respack_name") or "")]
+    if cdn_items:
+        used = sum(float(d.get("used_amount") or 0) for d in cdn_items) * _GB
+        total = sum(float(d.get("total_amount") or 0) for d in cdn_items) * _GB
+        ends = [d["effective_end"] for d in cdn_items if d.get("effective_end")]
+        out["cdn"] = {
+            "used": int(used), "total": int(total), "remain": int(max(0, total - used)),
+            "expire": min(ends) if ends else None,
+            "names": [d.get("respack_name") for d in cdn_items],
+        }
+
+    store_items = [d for d in active if "存储" in (d.get("respack_name") or "")]
+    overview = _mac_request("api.qiniu.com", "/billing-api/v1/respack/month-overview").get("data") or []
+    store_ov = [o for o in overview if "存储" in (o.get("item_name") or "")]
+    if store_ov:
+        capacity = sum(float(o.get("total_surplus") or 0) for o in store_ov) * _GB
+        ends = [d["effective_end"] for d in store_items if d.get("effective_end")]
+        out["storage"] = {
+            "capacity": int(capacity), "expire": min(ends) if ends else None,
+            "names": [o.get("item_name") for o in store_ov],
+        }
+    return out

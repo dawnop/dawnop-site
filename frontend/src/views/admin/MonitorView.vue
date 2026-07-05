@@ -91,6 +91,9 @@ const cdnTrend = computed(() =>
 function fmtMbps(bps) {
   return ((Number(bps) || 0) / 1e6).toFixed(2) + ' Mbps'
 }
+// 存储条分母：优先用存储资源包容量（API），无包则回落全局设置配额
+const storageTotal = computed(() => qn.value?.storage_pack?.capacity || qn.value?.quota || 0)
+const storageRemain = computed(() => Math.max(0, storageTotal.value - (qn.value?.space || 0)))
 
 const trafficCycle = computed(() => {
   const t = lh.value?.traffic
@@ -194,10 +197,18 @@ const trafficCycle = computed(() => {
           <div class="block">
             <div class="block-t">
               <span>存储用量</span>
-              <span class="muted">配额 {{ fmtBytes(qn.quota) }}</span>
+              <span class="muted">
+                <template v-if="qn.storage_pack">
+                  存储包 {{ fmtBytes(qn.storage_pack.capacity) }}
+                  <template v-if="qn.storage_pack.expire"> · 有效期至 {{ dateYmd(qn.storage_pack.expire) }}</template>
+                </template>
+                <template v-else>配额 {{ fmtBytes(qn.quota) }}</template>
+              </span>
             </div>
-            <el-progress :percentage="pct(qn.space, qn.quota)" :color="barColor(pct(qn.space, qn.quota))" :stroke-width="10" />
-            <div class="kv-row"><span>已用 <b>{{ fmtBytes(qn.space) }}</b></span></div>
+            <el-progress :percentage="pct(qn.space, storageTotal)" :color="barColor(pct(qn.space, storageTotal))" :stroke-width="10" />
+            <div class="kv-row">
+              <span>已用 <b>{{ fmtBytes(qn.space) }}</b><template v-if="qn.storage_pack"> · 剩余 {{ fmtBytes(storageRemain) }}</template></span>
+            </div>
           </div>
 
           <div v-if="qn.cdn_pack" class="block">

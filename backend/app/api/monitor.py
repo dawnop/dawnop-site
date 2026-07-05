@@ -110,9 +110,11 @@ def _qiniu() -> dict:
     except Exception as e:  # noqa: BLE001
         out["cdn_error"] = str(e)
     try:
-        out["cdn_pack"] = qiniu_client.respack_cdn()
+        rp = qiniu_client.respack_summary()
+        out["cdn_pack"] = rp["cdn"]
+        out["storage_pack"] = rp["storage"]
     except Exception as e:  # noqa: BLE001
-        out["cdn_pack_error"] = str(e)
+        out["respack_error"] = str(e)
     return out
 
 
