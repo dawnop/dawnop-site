@@ -22,12 +22,13 @@ from sqlalchemy.orm import Session
 from app.api.settings import get_setting
 from app.config import settings
 from app.core import qiniu_client, tencent_client
+from app.core.cache import TTLCache
 from app.deps import get_current_user, get_db
 
 router = APIRouter()
 
-_TTL = 120  # 三方数据缓存秒数
-_cache: dict = {"at": 0.0, "lighthouse": None, "qiniu": None}
+# 三方数据（lighthouse + qiniu）合并缓存 120s，避免频繁打第三方 API；server/vault 每次实时
+_cache = TTLCache(120)
 
 _vault_http = requests.Session()
 _vault_http.trust_env = False
@@ -147,20 +148,19 @@ def overview(
     db: Session = Depends(get_db),
     _: object = Depends(get_current_user),
 ):
-    now = time.time()
-    if refresh or _cache["lighthouse"] is None or now - _cache["at"] > _TTL:
-        _cache["lighthouse"] = _lighthouse()
-        _cache["qiniu"] = _qiniu()
-        _cache["at"] = now
+    snap = _cache.get(
+        lambda: {"lighthouse": _lighthouse(), "qiniu": _qiniu()},
+        force=refresh,
+    )
     # 存储配额从全局设置（DB）实时读取覆盖——存储用量条分母，改设置即时生效（不受缓存影响）。
     # CDN 用流量包（respack）自身的总量，无需配额设置。
-    qn = _cache["qiniu"]
+    qn = snap["qiniu"]
     if qn and qn.get("configured"):
         qn["quota"] = int(get_setting(db, "storage_quota_gb")) * 1024**3
     return {
         "server": _server(),
-        "lighthouse": _cache["lighthouse"],
+        "lighthouse": snap["lighthouse"],
         "qiniu": qn,
         "vault": _vault(),
-        "cached_at": int(_cache["at"]),
+        "cached_at": int(_cache.at),
     }

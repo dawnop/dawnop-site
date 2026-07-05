@@ -1,5 +1,4 @@
 """文件树增删改端点：列目录、用量统计、删除、重命名、移动、复制、建目录/文件、文本保存。"""
-import time
 import uuid
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
@@ -8,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.settings import get_setting
 from app.core import qiniu_client
+from app.core.cache import TTLCache
 from app.deps import get_current_user, get_db
 from app.models.file_object import FileObject
 
@@ -39,7 +39,15 @@ def list_dir(
 
 
 # 七牛空间统计缓存：统计 API 有小时级延迟且没必要每次列目录都打
-_space_cache: dict = {"at": 0.0, "value": None}
+_space_cache = TTLCache(600)
+
+
+def _load_bucket_space():
+    """取七牛空间用量；未配置/失败返回 None（None 也会被缓存，避免每次列目录都打）。"""
+    try:
+        return qiniu_client.bucket_space()
+    except RuntimeError:
+        return None
 
 
 @router.get("/stats")
@@ -57,14 +65,7 @@ def stats(
         .filter(FileObject.is_dir.is_(False))
         .scalar()
     )
-    now = time.time()
-    if now - _space_cache["at"] > 600:
-        try:
-            _space_cache["value"] = qiniu_client.bucket_space()
-        except RuntimeError:
-            _space_cache["value"] = None  # 未配置/失败则只用本地求和
-        _space_cache["at"] = now
-    remote = _space_cache["value"]
+    remote = _space_cache.get(_load_bucket_space)
     files = db.query(func.count()).filter(FileObject.is_dir.is_(False)).scalar()
     dirs = db.query(func.count()).filter(FileObject.is_dir.is_(True)).scalar()
     # 配额与监控页对齐：优先用七牛存储资源包容量，无包则回落全局设置（respack 自带 TTL 缓存）

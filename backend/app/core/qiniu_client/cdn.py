@@ -6,12 +6,12 @@ CDN/财务接口用 QiniuMacAuth 签名（含 body）：域名列表在 api.qini
 资源包在 api.qiniu.com/billing-api（无公开文档，实测可用）。
 """
 import json
-import time
 from datetime import datetime, timedelta
 
 from qiniu import QiniuMacAuth
 
 from app.config import settings
+from app.core.cache import TTLCache
 
 from ._common import _plain_http, _require_keys
 
@@ -92,18 +92,12 @@ def cdn_bandwidth_peak(days: int = 30) -> int:
 
 _GB = 1024**3
 # respack 财务接口有速率限制且变化慢；fm/stats 会高频调用（每次列目录），故带 TTL 缓存
-_respack_cache: dict = {"at": 0.0, "val": None}
+_respack_cache = TTLCache(300)
 
 
 def respack_summary(force: bool = False) -> dict:
     """CDN 流量包 + 存储资源包 概览（TTL 缓存 300s）。返回 {cdn:{...}|None, storage:{...}|None}。"""
-    now = time.time()
-    if not force and _respack_cache["val"] is not None and now - _respack_cache["at"] < 300:
-        return _respack_cache["val"]
-    val = _respack_fetch()
-    _respack_cache["val"] = val
-    _respack_cache["at"] = now
-    return val
+    return _respack_cache.get(_respack_fetch, force=force)
 
 
 def _respack_fetch() -> dict:

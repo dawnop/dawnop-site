@@ -326,7 +326,7 @@ def test_stats(client, auth_headers, stub_qiniu, monkeypatch):
         lambda: (_ for _ in ()).throw(RuntimeError("no stats")),
     )
     import app.api.fm as fm_mod
-    monkeypatch.setitem(fm_mod._space_cache, "at", 0.0)
+    fm_mod._space_cache.invalidate()  # 清空 TTL 缓存，强制本次重新取数
 
     assert client.get("/api/fm/stats").status_code == 401
     _upload(client, auth_headers, "qiniu://", "a.txt", b"12345")
@@ -341,7 +341,7 @@ def test_stats(client, auth_headers, stub_qiniu, monkeypatch):
 def test_stats_prefers_remote_when_larger(client, auth_headers, stub_qiniu, monkeypatch):
     monkeypatch.setattr(qiniu_client, "bucket_space", lambda: 10**9)
     import app.api.fm as fm_mod
-    monkeypatch.setitem(fm_mod._space_cache, "at", 0.0)
+    fm_mod._space_cache.invalidate()  # 清空 TTL 缓存，强制本次重新取数
     _upload(client, auth_headers, "qiniu://", "a.txt", b"12345")
     r = client.get("/api/fm/stats", headers=auth_headers).json()
     assert r["used"] == 10**9 and r["used_local"] == 5
