@@ -16,3 +16,12 @@
     max-width: 420px;
   }
 }
+
+/* 后台移动端抽屉侧栏：el-drawer 挂到 <body>，组件 scoped :deep 命不中，
+   这里全局兜底——菜单铺满抽屉、去掉默认右边框（否则内缩留一条竖线）。 */
+.nav-drawer .el-drawer__body {
+  padding: 0;
+}
+.nav-drawer .el-menu {
+  border-right: none;
+}

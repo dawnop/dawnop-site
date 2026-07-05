@@ -291,13 +291,7 @@ function logout() {
   color: var(--accent);
 }
 
-/* 移动端抽屉侧栏内容满铺 */
-.nav-drawer :deep(.el-drawer__body) {
-  padding: 0;
-}
-.nav-drawer :deep(.el-menu) {
-  border-right: none;
-}
+/* 抽屉侧栏样式挂在 assets/responsive.css（el-drawer teleport 到 body，scoped 命不中） */
 
 @media (max-width: 768px) {
   .topbar {

@@ -2,7 +2,7 @@
 // 自建文件管理器（SVAR 观感 / Element Plus）。第三期：右键菜单、拖拽上传、
 // 多选批量操作、面板宽度可拖拽、并行上传/批量下载。
 // 布局：左「目录树 + 存储条」/ 顶「工具栏」/ 中「列表·网格」/ 右「点文件弹出的预览面板」。
-import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import {
   Folder, FolderOpened, FolderAdd, Document, Picture, Files, Upload,
   Search, Grid, List, MoreFilled, Download, EditPen, Delete,
@@ -28,7 +28,18 @@ const previewErr = ref('')
 // ---------- 移动端 ----------
 const isMobile = useIsMobile()
 const selectMode = ref(false) // 移动端多选模式（替代框选）
+const searchOpen = ref(false) // 移动端搜索栏展开（默认收起，点右下角搜索按钮展开）
+const searchInputRef = ref(null)
 const sheet = reactive({ show: false, row: null }) // 底部操作弹层（替代右键菜单 + 右侧预览面板）
+
+function openSearch() {
+  searchOpen.value = true
+  nextTick(() => searchInputRef.value?.focus())
+}
+function closeSearch() {
+  searchOpen.value = false
+  q.value = ''
+}
 // 移动端强制网格视图（表格在窄屏太挤）
 const effectiveView = computed(() => (isMobile.value ? 'grid' : viewMode.value))
 
@@ -818,18 +829,31 @@ onUnmounted(() => {
           <div class="fm-tb-left">
             <template v-if="selPaths.length">
               <span class="fm-selinfo">已选 {{ selPaths.length }} 项</span>
-              <el-button text :icon="Download" :disabled="!selFiles.length" @click="doDownloadMany(selRows)">下载</el-button>
-              <el-button text :icon="Right" @click="startMoveCopy('move', selRows)">移动</el-button>
-              <el-button text :icon="CopyDocument" @click="startMoveCopy('copy', selRows)">复制</el-button>
-              <el-button text type="danger" :icon="Delete" @click="doDeleteMany(selRows)">删除</el-button>
-              <el-button text :icon="Close" @click="clearSel">取消选择</el-button>
+              <!-- 桌面：批量操作内联；移动端移到底部操作条，这里只留计数 -->
+              <template v-if="!isMobile">
+                <el-button text :icon="Download" :disabled="!selFiles.length" @click="doDownloadMany(selRows)">下载</el-button>
+                <el-button text :icon="Right" @click="startMoveCopy('move', selRows)">移动</el-button>
+                <el-button text :icon="CopyDocument" @click="startMoveCopy('copy', selRows)">复制</el-button>
+                <el-button text type="danger" :icon="Delete" @click="doDeleteMany(selRows)">删除</el-button>
+                <el-button text :icon="Close" @click="clearSel">取消选择</el-button>
+              </template>
             </template>
-            <template v-else>
+            <template v-else-if="!isMobile">
               <el-button :icon="FolderAdd" text @click="newFolder">新建文件夹</el-button>
             </template>
           </div>
           <div class="fm-tb-right">
-            <el-input v-model="q" :prefix-icon="Search" placeholder="搜索当前目录" clearable class="fm-search" />
+            <!-- 搜索框：桌面常驻；移动端仅在展开时占整行（默认收起，走右下角搜索按钮） -->
+            <el-input
+              v-if="!isMobile || (searchOpen && !selectMode)"
+              ref="searchInputRef"
+              v-model="q"
+              :prefix-icon="Search"
+              placeholder="搜索当前目录"
+              clearable
+              class="fm-search"
+            />
+            <el-button v-if="isMobile && searchOpen && !selectMode" text class="fm-search-cancel" @click="closeSearch">取消</el-button>
             <template v-if="!isMobile">
               <el-segmented v-model="viewMode" :options="viewOptions" class="fm-seg">
                 <template #default="{ item }"><el-icon><component :is="item.icon" /></el-icon></template>
@@ -837,7 +861,7 @@ onUnmounted(() => {
               <el-button :icon="View" circle :type="showInfo ? 'primary' : ''" :plain="showInfo" title="预览面板" @click="showInfo = !showInfo" />
             </template>
             <el-button
-              v-else
+              v-else-if="!searchOpen"
               :icon="selectMode ? Close : Select"
               circle
               :type="selectMode ? 'primary' : ''"
@@ -1127,9 +1151,19 @@ onUnmounted(() => {
     <!-- 框选选择框（视口固定坐标） -->
     <div v-if="marquee.show" class="fm-marquee" :style="marqueeStyle"></div>
 
-    <!-- 移动端：悬浮 +（上传 / 新建） -->
+    <!-- 移动端：右下角搜索按钮（点开顶部搜索栏） -->
+    <el-button
+      v-if="isMobile && !selectMode && !searchOpen"
+      circle
+      :icon="Search"
+      class="fm-fab-search"
+      title="搜索"
+      @click="openSearch"
+    />
+
+    <!-- 移动端：悬浮 +（上传 / 新建文件夹） -->
     <el-dropdown
-      v-if="isMobile"
+      v-if="isMobile && !selectMode"
       trigger="click"
       class="fm-fab"
       placement="top-end"
@@ -1144,6 +1178,22 @@ onUnmounted(() => {
         </el-dropdown-menu>
       </template>
     </el-dropdown>
+
+    <!-- 移动端：多选态底部批量操作条 -->
+    <div v-if="isMobile && selectMode && selPaths.length" class="fm-selbar">
+      <button class="fm-selbar-btn" :disabled="!selFiles.length" @click="doDownloadMany(selRows)">
+        <el-icon><Download /></el-icon><span>下载</span>
+      </button>
+      <button class="fm-selbar-btn" @click="startMoveCopy('move', selRows)">
+        <el-icon><Right /></el-icon><span>移动</span>
+      </button>
+      <button class="fm-selbar-btn" @click="startMoveCopy('copy', selRows)">
+        <el-icon><CopyDocument /></el-icon><span>复制</span>
+      </button>
+      <button class="fm-selbar-btn danger" @click="doDeleteMany(selRows)">
+        <el-icon><Delete /></el-icon><span>删除</span>
+      </button>
+    </div>
 
     <!-- 移动端：底部操作弹层 -->
     <el-drawer v-model="sheet.show" direction="btt" size="auto" :with-header="false" class="fm-sheet">
@@ -1596,6 +1646,48 @@ onUnmounted(() => {
   font-size: 22px;
   box-shadow: 0 6px 18px rgba(22, 119, 255, 0.38);
 }
+/* 搜索按钮：叠在 + 之上，白底次要样式 */
+.fm-fab-search {
+  position: fixed;
+  right: 21px;
+  bottom: 84px;
+  z-index: 1500;
+  width: 46px;
+  height: 46px;
+  font-size: 18px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+}
+
+/* ---------- 移动端多选底部批量操作条 ---------- */
+.fm-selbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1400;
+  display: flex;
+  background: #fff;
+  border-top: 1px solid var(--w-border);
+  box-shadow: 0 -2px 14px rgba(0, 0, 0, 0.07);
+  padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+}
+.fm-selbar-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 2px;
+  border: none;
+  background: none;
+  color: #3c4149;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.fm-selbar-btn .el-icon { font-size: 20px; }
+.fm-selbar-btn.danger { color: var(--el-color-danger); }
+.fm-selbar-btn:disabled { opacity: 0.38; }
 
 /* ---------- 移动端底部操作弹层 ---------- */
 .fm-sheet :deep(.el-drawer__body) { padding: 0; }
@@ -1637,16 +1729,17 @@ onUnmounted(() => {
 
 /* ---------- 移动端整体布局（≤768） ---------- */
 @media (max-width: 768px) {
-  .fm-toolbar { flex-wrap: wrap; gap: 8px; align-items: stretch; }
-  /* 批量操作与搜索各占整行，互不挤压 */
-  .fm-tb-left { flex: 1 0 100%; flex-wrap: wrap; gap: 2px 4px; }
-  .fm-tb-right { flex: 1 0 100%; }
+  /* 工具栏单行：左计数 / 右搜索栏或多选开关；批量操作移到底部条 */
+  .fm-toolbar { gap: 8px; padding: 0 10px; }
+  .fm-tb-left { min-width: 0; }
+  .fm-tb-right { flex: 1; justify-content: flex-end; gap: 8px; }
   .fm-search { flex: 1; }
+  .fm-search-cancel { flex-shrink: 0; }
   .fm-content { padding: 6px; }
   .fm-grid {
     grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
     gap: 10px;
-    padding: 10px 4px 80px; /* 底部留白避开 FAB */
+    padding: 10px 4px 80px; /* 底部留白避开 FAB / 操作条 */
   }
   .cell-thumb { height: 68px; }
   /* 传输列表：右下角浮窗 → 贴底通栏 */
