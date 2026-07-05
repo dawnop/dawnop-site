@@ -1,6 +1,6 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue'
-import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
+import { ref, onMounted, computed, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Setting, MagicStick, ArrowDown } from '@element-plus/icons-vue'
 import { MdEditor } from 'md-editor-v3'
 import '../../setupMdEditor'
@@ -10,6 +10,7 @@ import { useEditorPreviewIslands } from '../../viz/editorPreview'
 import { firstH1 } from '../../utils/markdownTitle'
 import HelpTip from '../../components/HelpTip.vue'
 import { useIsMobile } from '../../composables/useIsMobile'
+import { useUnsavedGuard } from '../../composables/useUnsavedGuard'
 
 const isMobile = useIsMobile()
 
@@ -86,26 +87,14 @@ const slugPreview = computed(() => {
   return s ? `/article/${s}` : '/article/（留空将按标题自动生成）'
 })
 
-// ---- 未保存离开拦截：用快照对比判断脏 ----
-let snapshot = ''
-let justSaved = false
-function takeSnapshot() {
-  snapshot = serialize()
-}
+// ---- 未保存离开拦截：快照对比判断脏（守卫逻辑见 useUnsavedGuard）----
 function serialize() {
   return JSON.stringify({
     ...form.value,
     publishAt: publishAt.value ? publishAt.value.getTime() : null,
   })
 }
-const dirty = computed(() => serialize() !== snapshot)
-
-function beforeUnload(e) {
-  if (dirty.value && !justSaved) {
-    e.preventDefault()
-    e.returnValue = ''
-  }
-}
+const { dirty, takeSnapshot, markSaved } = useUnsavedGuard(serialize)
 
 onMounted(async () => {
   const { data: allPages } = await pagesApi.listAll()
@@ -171,23 +160,6 @@ onMounted(async () => {
       takeSnapshot()
     }
   }
-  window.addEventListener('beforeunload', beforeUnload)
-})
-
-onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
-
-onBeforeRouteLeave(async () => {
-  if (!dirty.value || justSaved) return true
-  try {
-    await ElMessageBox.confirm('有未保存的修改，确定离开吗？', '放弃修改', {
-      type: 'warning',
-      confirmButtonText: '放弃',
-      cancelButtonText: '继续编辑',
-    })
-    return true
-  } catch (e) {
-    return false
-  }
 })
 
 async function save() {
@@ -207,7 +179,7 @@ async function save() {
     } else {
       await articlesApi.create(payload)
     }
-    justSaved = true
+    markSaved()
     ElMessage.success('已保存')
     router.push('/admin/articles')
   } catch (e) {

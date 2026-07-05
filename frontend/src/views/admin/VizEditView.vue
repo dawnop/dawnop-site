@@ -1,11 +1,12 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, computed, watch, nextTick, createApp } from 'vue'
-import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { vizApi } from '../../api'
 import { compileSfc } from '../../viz/compileSfc'
 import { buildComponent, acquireStyle } from '../../viz/runtime'
 import { invalidateViz } from '../../viz/registry'
 import HelpTip from '../../components/HelpTip.vue'
+import { useUnsavedGuard } from '../../composables/useUnsavedGuard'
 
 const route = useRoute()
 const router = useRouter()
@@ -114,17 +115,9 @@ watch(
   }
 )
 
-// ---- 未保存离开拦截 ----
-let snapshot = ''
-let justSaved = false
+// ---- 未保存离开拦截（守卫逻辑见 useUnsavedGuard）----
 const serialize = () => JSON.stringify(form.value)
-const dirty = computed(() => serialize() !== snapshot)
-function beforeUnload(e) {
-  if (dirty.value && !justSaved) {
-    e.preventDefault()
-    e.returnValue = ''
-  }
-}
+const { dirty, takeSnapshot, markSaved } = useUnsavedGuard(serialize)
 
 onMounted(async () => {
   if (isEdit.value) {
@@ -141,29 +134,13 @@ onMounted(async () => {
       return
     }
   }
-  snapshot = serialize()
-  window.addEventListener('beforeunload', beforeUnload)
+  takeSnapshot()
   recompile()
 })
 
 onBeforeUnmount(() => {
   clearTimeout(compileTimer)
   teardownPreview()
-  window.removeEventListener('beforeunload', beforeUnload)
-})
-
-onBeforeRouteLeave(async () => {
-  if (!dirty.value || justSaved) return true
-  try {
-    await ElMessageBox.confirm('有未保存的修改，确定离开吗？', '放弃修改', {
-      type: 'warning',
-      confirmButtonText: '放弃',
-      cancelButtonText: '继续编辑',
-    })
-    return true
-  } catch (e) {
-    return false
-  }
 })
 
 async function save() {
@@ -194,7 +171,7 @@ async function save() {
       await vizApi.create(payload)
     }
     invalidateViz(form.value.slug) // 使文章预览/同会话下次渲染拿到新版本
-    justSaved = true
+    markSaved()
     ElMessage.success('已保存')
     router.push('/admin/viz')
   } catch (e) {
