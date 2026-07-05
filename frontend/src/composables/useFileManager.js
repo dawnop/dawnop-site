@@ -120,8 +120,8 @@ export function useFileManager() {
     loading.value = true
     try {
       entries.value = await fm.listDir(cwd.value)
-    } catch (e) {
-      ElMessage.error(e?.response?.data?.detail || '加载失败')
+    } catch {
+      // 失败已由 axios 拦截器统一提示，这里只需结束 loading
     } finally {
       loading.value = false
     }
@@ -238,8 +238,8 @@ export function useFileManager() {
       ElMessage.success('已保存')
       if (selectedPath.value === modal.row.path) previewText.value = modal.text
       loadCwd() // 大小变了，刷新列表
-    } catch (e) {
-      ElMessage.error(e?.response?.data?.detail || '保存失败')
+    } catch {
+      // 失败已由 axios 拦截器统一提示
     } finally {
       modal.saving = false
     }
@@ -346,7 +346,7 @@ export function useFileManager() {
       await fm.createFolder(cwd.value, value.trim())
       ElMessage.success('已创建')
       await loadCwd(); reloadTree()
-    } catch (e) { if (e !== 'cancel') ElMessage.error(e?.response?.data?.detail || '创建失败') }
+    } catch { /* 取消或失败：失败已由 axios 拦截器统一提示 */ }
   }
 
   async function doRename(row) {
@@ -360,7 +360,7 @@ export function useFileManager() {
       await fm.rename(cwd.value, row.path, name)
       ElMessage.success('已重命名')
       await loadCwd(); if (row.is_dir) reloadTree()
-    } catch (e) { if (e !== 'cancel') ElMessage.error(e?.response?.data?.detail || '重命名失败') }
+    } catch { /* 取消或失败：失败已由 axios 拦截器统一提示 */ }
   }
 
   async function doDelete(row) {
@@ -374,7 +374,7 @@ export function useFileManager() {
       if (selectedPath.value === row.path) { showInfo.value = false; selectedPath.value = '' }
       clearSel()
       await loadCwd(); if (row.is_dir) reloadTree()
-    } catch (e) { if (e !== 'cancel') ElMessage.error(e?.response?.data?.detail || '删除失败') }
+    } catch { /* 取消或失败：失败已由 axios 拦截器统一提示 */ }
   }
 
   async function doDeleteMany(rows) {
@@ -389,7 +389,7 @@ export function useFileManager() {
       const hadDir = rows.some((r) => r.is_dir)
       clearSel()
       await loadCwd(); if (hadDir) reloadTree()
-    } catch (e) { if (e !== 'cancel') ElMessage.error(e?.response?.data?.detail || '删除失败') }
+    } catch { /* 取消或失败：失败已由 axios 拦截器统一提示 */ }
   }
 
   function onRowCommand(cmd, row) {
@@ -424,8 +424,8 @@ export function useFileManager() {
       if (rows.some((r) => r.path === selectedPath.value)) { showInfo.value = false; selectedPath.value = '' }
       clearSel()
       await loadCwd(); if (rows.some((r) => r.is_dir)) reloadTree()
-    } catch (e) {
-      ElMessage.error(e?.response?.data?.detail || `${verb}失败`)
+    } catch {
+      // 失败已由 axios 拦截器统一提示
     } finally {
       destDlg.busy = false
     }
@@ -493,8 +493,8 @@ export function useFileManager() {
       if (movable.some((r) => r.path === selectedPath.value)) { showInfo.value = false; selectedPath.value = '' }
       clearSel()
       await loadCwd(); if (movable.some((r) => r.is_dir)) reloadTree()
-    } catch (e) {
-      ElMessage.error(e?.response?.data?.detail || '移动失败')
+    } catch {
+      // 失败已由 axios 拦截器统一提示
     }
   }
 

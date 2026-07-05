@@ -22,8 +22,8 @@ async function load() {
   try {
     Object.assign(form, (await settingsApi.get()).data)
     snapshot.value = JSON.stringify(form)
-  } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || '加载失败')
+  } catch {
+    // 失败已由 axios 拦截器统一提示
   } finally {
     loading.value = false
   }
@@ -35,8 +35,8 @@ async function save() {
     Object.assign(form, (await settingsApi.update({ ...form })).data)
     snapshot.value = JSON.stringify(form)
     ElMessage.success('已保存')
-  } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || '保存失败')
+  } catch {
+    // 失败已由 axios 拦截器统一提示
   } finally {
     saving.value = false
   }
