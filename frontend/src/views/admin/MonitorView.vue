@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { monitorApi } from '../../api'
 import MiniChart from '../../components/MiniChart.vue'
+import HelpTip from '../../components/HelpTip.vue'
 
 const data = ref(null)
 const loading = ref(true)
@@ -72,6 +73,19 @@ function labelFromUnix(t) {
 
 // ---- 分块取数（容错） ----
 const server = computed(() => data.value?.server || null)
+// 负载直观化：按核数折算成百分比 + 空闲/较忙/满载 状态词（0.05 这种裸数字太难懂）
+const loadInfo = computed(() => {
+  const s = server.value
+  if (!s?.load || s.load[0] == null) return null
+  const cores = s.cpu_count || 1
+  const pcts = s.load.map((v) => (v == null ? null : Math.round((v / cores) * 100)))
+  const r = s.load[0] / cores
+  const level =
+    r < 0.7 ? { label: '空闲', type: 'success' }
+    : r < 1 ? { label: '较忙', type: 'warning' }
+    : { label: '满载', type: 'danger' }
+  return { pcts, level, cores }
+})
 const lh = computed(() => data.value?.lighthouse || null)
 const qn = computed(() => data.value?.qiniu || null)
 const vault = computed(() => data.value?.vault || null)
@@ -171,7 +185,16 @@ const trafficCycle = computed(() => {
             <span class="muted">（{{ daysUntil(lh.instance.expired_at) }} 天后）</span>
           </div>
           <div v-if="server"><span class="k">运行</span>{{ fmtDuration(server.uptime) }}</div>
-          <div v-if="server?.load?.[0] != null"><span class="k">负载</span>{{ server.load.map((x) => x?.toFixed(2)).join(' / ') }}</div>
+          <div v-if="loadInfo" class="load-cell">
+            <span class="k">负载</span>
+            <el-tag :type="loadInfo.level.type" size="small" effect="light">{{ loadInfo.level.label }}</el-tag>
+            <span class="muted load-pct">{{ loadInfo.pcts[0] }}%</span>
+            <HelpTip>
+              系统负载 = 正在运行或排队等 CPU/磁盘的任务数，按 {{ loadInfo.cores }} 核折算成百分比，
+              低于 100% 表示 CPU 还有余量、超过才会排队变慢。<br />
+              近 1 / 5 / 15 分钟：{{ loadInfo.pcts.map((p) => p + '%').join(' / ') }}
+            </HelpTip>
+          </div>
           <div v-if="server"><span class="k">网络累计</span>↑{{ fmtBytes(server.net.sent) }} ↓{{ fmtBytes(server.net.recv) }}</div>
         </div>
 
@@ -337,6 +360,8 @@ const trafficCycle = computed(() => {
   color: var(--muted);
 }
 .kv-grid .err { color: var(--el-color-danger); }
+.load-cell { display: flex; align-items: center; }
+.load-pct { margin-left: 8px; }
 
 .stat-row {
   display: flex;
