@@ -1,7 +1,7 @@
 """文件树增删改端点：列目录、用量统计、删除、重命名、移动、复制、建目录/文件、文本保存。"""
 import uuid
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -10,6 +10,7 @@ from app.core import qiniu_client
 from app.core.cache import TTLCache
 from app.deps import get_current_user, get_db
 from app.models.file_object import FileObject
+from app.schemas.fm import DeleteIn, MoveCopyIn, PathNameIn, RenameIn, SaveIn
 
 from .paths import _basename, _ext, _full, _guess_mime, _join, _parent_rel, _split
 from .tree import (
@@ -93,10 +94,11 @@ def stats(
 
 @router.post("/delete")
 def delete(
-    payload: dict = Body(...),
+    body: DeleteIn,
     db: Session = Depends(get_db),
     _: object = Depends(get_current_user),
 ):
+    payload = body.model_dump()
     cur = _split(payload.get("path"))
     items = payload.get("items") or []
     deleted: list[dict] = []
@@ -121,10 +123,11 @@ def delete(
 
 @router.post("/rename")
 def rename(
-    payload: dict = Body(...),
+    body: RenameIn,
     db: Session = Depends(get_db),
     _: object = Depends(get_current_user),
 ):
+    payload = body.model_dump()
     cur = _split(payload.get("path"))
     old = _split(payload.get("item"))
     new_name = (payload.get("name") or "").strip().strip("/")
@@ -143,10 +146,11 @@ def rename(
 
 @router.post("/move")
 def move(
-    payload: dict = Body(...),
+    body: MoveCopyIn,
     db: Session = Depends(get_db),
     _: object = Depends(get_current_user),
 ):
+    payload = body.model_dump()
     cur = _split(payload.get("path"))
     dest = _split(payload.get("destination"))
     for src in payload.get("sources") or []:
@@ -168,10 +172,11 @@ def move(
 
 @router.post("/copy")
 def copy(
-    payload: dict = Body(...),
+    body: MoveCopyIn,
     db: Session = Depends(get_db),
     _: object = Depends(get_current_user),
 ):
+    payload = body.model_dump()
     cur = _split(payload.get("path"))
     dest = _split(payload.get("destination"))
     for src in payload.get("sources") or []:
@@ -206,10 +211,11 @@ def copy(
 
 @router.post("/create-folder")
 def create_folder(
-    payload: dict = Body(...),
+    body: PathNameIn,
     db: Session = Depends(get_db),
     _: object = Depends(get_current_user),
 ):
+    payload = body.model_dump()
     cur = _split(payload.get("path"))
     name = (payload.get("name") or "").strip().strip("/")
     if not name:
@@ -224,10 +230,11 @@ def create_folder(
 
 @router.post("/create-file")
 def create_file(
-    payload: dict = Body(...),
+    body: PathNameIn,
     db: Session = Depends(get_db),
     _: object = Depends(get_current_user),
 ):
+    payload = body.model_dump()
     cur = _split(payload.get("path"))
     name = (payload.get("name") or "").strip().strip("/")
     if not name:
@@ -251,10 +258,11 @@ def create_file(
 
 @router.post("/save")
 def save(
-    payload: dict = Body(...),
+    body: SaveIn,
     db: Session = Depends(get_db),
     _: object = Depends(get_current_user),
 ):
+    payload = body.model_dump()
     rel = _split(payload.get("path"))
     content = (payload.get("content") or "").encode("utf-8")
     o = _get(db, rel)

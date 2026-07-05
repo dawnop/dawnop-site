@@ -3,7 +3,6 @@ import uuid
 
 from fastapi import (
     APIRouter,
-    Body,
     Depends,
     File,
     Form,
@@ -18,6 +17,7 @@ from app.core import qiniu_client
 from app.deps import get_current_user, get_db
 from app.models.file_object import FileObject
 from app.models.pending_upload import PendingUpload
+from app.schemas.fm import PathNameIn, RegisterIn
 
 from .paths import _basename, _ext, _full, _guess_mime, _join, _split
 from .tree import _ensure_dirs, _entry, _get
@@ -30,7 +30,7 @@ router = APIRouter()
 
 @router.post("/upload-token")
 def upload_token(
-    payload: dict = Body(...),
+    body: PathNameIn,
     db: Session = Depends(get_db),
     _: object = Depends(get_current_user),
 ):
@@ -38,6 +38,7 @@ def upload_token(
 
     SecretKey 不出后端；token 仅限本次 key、短时效。前端直传成功后调 /register 登记。
     """
+    payload = body.model_dump()
     target = _split(payload.get("path"))
     name = (payload.get("name") or "file").replace("\\", "/").strip("/")
     rel = _join(target, name)
@@ -60,7 +61,7 @@ def upload_token(
 
 @router.post("/register")
 def register(
-    payload: dict = Body(...),
+    body: RegisterIn,
     db: Session = Depends(get_db),
     _: object = Depends(get_current_user),
 ):
@@ -70,6 +71,7 @@ def register(
     （不轻信前端上报的大小）。校验通过才建行，因此「已登记」严格等价于
     「七牛上真实存在」，不会产生悬空引用。登记成功后清掉待登记账本行。
     """
+    payload = body.model_dump()
     rel = _split(payload.get("path"))
     key = payload.get("key")
     if not rel or not key:
