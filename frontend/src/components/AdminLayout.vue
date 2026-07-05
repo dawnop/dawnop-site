@@ -105,7 +105,7 @@ function logout() {
           <Fold v-else />
         </el-icon>
         <span class="brand"><img src="/logo.svg" alt="" class="brand-logo" /><span class="brand-text">dawnop 控制台</span></span>
-        <el-breadcrumb v-if="!fluid && crumbs.length" class="topbar-crumb" separator="/">
+        <el-breadcrumb v-if="crumbs.length" class="topbar-crumb" separator="/">
           <el-breadcrumb-item v-for="(c, i) in crumbs" :key="i" :to="c.to">
             {{ c.label }}
           </el-breadcrumb-item>

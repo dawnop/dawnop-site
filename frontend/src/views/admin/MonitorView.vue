@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { Refresh, TopRight } from '@element-plus/icons-vue'
+import { Refresh } from '@element-plus/icons-vue'
 import { monitorApi } from '../../api'
 import MiniChart from '../../components/MiniChart.vue'
 import HelpTip from '../../components/HelpTip.vue'
@@ -93,9 +93,6 @@ const loadInfo = computed(() => {
 const lh = computed(() => data.value?.lighthouse || null)
 const qn = computed(() => data.value?.qiniu || null)
 const vault = computed(() => data.value?.vault || null)
-function openVault() {
-  if (vault.value?.public_url) window.open(vault.value.public_url, '_blank', 'noopener')
-}
 
 const spaceTrend = computed(() =>
   (qn.value?.space_trend || []).map((p) => ({ label: labelFromUnix(p.t), value: p.v }))
@@ -211,9 +208,6 @@ const trafficCycle = computed(() => {
           <div v-if="vault.version"><span class="k">版本</span>{{ vault.version }}</div>
           <div v-if="vault.latency_ms != null"><span class="k">响应</span>{{ vault.latency_ms }} ms</div>
           <div v-if="vault.error" class="err"><span class="k">错误</span>{{ vault.error }}</div>
-        </div>
-        <div v-if="vault?.public_url" class="vault-actions">
-          <el-button type="primary" :icon="TopRight" @click="openVault">打开 Vault</el-button>
         </div>
       </el-card>
 
@@ -362,7 +356,6 @@ const trafficCycle = computed(() => {
 .load-pct { margin-left: 8px; }
 .vault-link { color: var(--accent); text-decoration: none; word-break: break-all; }
 .vault-link:hover { text-decoration: underline; }
-.vault-actions { margin-top: 14px; }
 
 .stat-row {
   display: flex;
@@ -391,6 +384,5 @@ const trafficCycle = computed(() => {
   .tiles { justify-content: space-around; gap: 14px 10px; }
   .tile { flex: 0 0 46%; }
   .stat-row { flex-direction: column; }
-  .vault-actions .el-button { width: 100%; }
 }
 </style>
