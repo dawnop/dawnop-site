@@ -13,14 +13,17 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import datetime
 
 import psutil
 import requests
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy.orm import Session
 
+from app.api.settings import get_setting
 from app.config import settings
 from app.core import qiniu_client, tencent_client
-from app.deps import get_current_user
+from app.deps import get_current_user, get_db
 
 router = APIRouter()
 
@@ -93,18 +96,23 @@ def _qiniu() -> dict:
         out["count"] = qiniu_client._last_nonzero(count["datas"]) or 0
         out["flow_30d"] = sum(x["value"] for x in flow)
         out["hits_30d"] = sum(x["value"] for x in hits)
-        out["quota"] = int(settings.storage_quota_gb) * 1024**3
         out["space_trend"] = [{"t": t, "v": v} for t, v in zip(space["times"], space["datas"])]
         out["flow_trend"] = [{"t": x["time"], "v": x["value"]} for x in flow]
     except Exception as e:  # noqa: BLE001
         out["error"] = str(e)
-    # CDN 流量（融合 CDN，真实用户侧下载量）独立容错：拿不到不影响源站/存储展示
+    # CDN 流量（融合 CDN，真实用户侧下载量）独立容错：拿不到不影响源站/存储展示。
+    # 取 31 天窗口（必含本月全部），再切出「本月至今」（配额条分母）与「近 30 天」（趋势）。
     try:
-        cdn = qiniu_client.cdn_flux_series(days=30)
-        out["cdn_flow_30d"] = sum(cdn["values"])
+        cdn = qiniu_client.cdn_flux_series(days=31)
+        now = time.time()
+        month_start = datetime(*time.localtime(now)[:2], 1).timestamp()
+        d30 = now - 30 * 86400
+        trend = [(t, v) for t, v in zip(cdn["times"], cdn["values"]) if t >= d30]
+        out["cdn_flow_month"] = sum(v for t, v in zip(cdn["times"], cdn["values"]) if t >= month_start)
+        out["cdn_flow_30d"] = sum(v for _, v in trend)
         out["cdn_peak_bps"] = qiniu_client.cdn_bandwidth_peak(days=30)
         out["cdn_domains"] = cdn["domains"]
-        out["cdn_trend"] = [{"t": t, "v": v} for t, v in zip(cdn["times"], cdn["values"])]
+        out["cdn_trend"] = [{"t": t, "v": v} for t, v in trend]
     except Exception as e:  # noqa: BLE001
         out["cdn_error"] = str(e)
     return out
@@ -136,6 +144,7 @@ def _vault() -> dict:
 @router.get("", summary="监控总览：本机 / 腾讯云 / 七牛 / Vault 用量快照 + 趋势")
 def overview(
     refresh: bool = Query(False, description="跳过三方数据缓存强制刷新"),
+    db: Session = Depends(get_db),
     _: object = Depends(get_current_user),
 ):
     now = time.time()
@@ -143,10 +152,15 @@ def overview(
         _cache["lighthouse"] = _lighthouse()
         _cache["qiniu"] = _qiniu()
         _cache["at"] = now
+    # 配额从全局设置（DB）实时读取并覆盖到七牛块——用量条分母，改设置即时生效（不受缓存影响）
+    qn = _cache["qiniu"]
+    if qn and qn.get("configured"):
+        qn["quota"] = int(get_setting(db, "storage_quota_gb")) * 1024**3
+        qn["cdn_quota"] = int(get_setting(db, "cdn_quota_gb")) * 1024**3
     return {
         "server": _server(),
         "lighthouse": _cache["lighthouse"],
-        "qiniu": _cache["qiniu"],
+        "qiniu": qn,
         "vault": _vault(),
         "cached_at": int(_cache["at"]),
     }

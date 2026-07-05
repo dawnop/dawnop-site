@@ -19,8 +19,10 @@ DEFAULTS = {
     # 文件管理：上传/下载并发数
     "upload_concurrency": 3,
     "download_concurrency": 3,
-    # 存储配额（GB），仅用量条展示
+    # 存储配额（GB），用量条分母（对应七牛「存储资源包」容量）
     "storage_quota_gb": env_settings.storage_quota_gb,
+    # CDN 流量配额（GB），监控页 CDN 流量条分母（对应七牛「CDN 流量资源包」，按月计）
+    "cdn_quota_gb": 10,
     # 文本在线预览/编辑的大小上限（KB），超过只给下载
     "text_preview_max_kb": 512,
 }
@@ -39,6 +41,7 @@ VALIDATORS = {
     "upload_concurrency": _int_range(1, 8),
     "download_concurrency": _int_range(1, 8),
     "storage_quota_gb": _int_range(1, 1024),
+    "cdn_quota_gb": _int_range(1, 10240),
     "text_preview_max_kb": _int_range(16, 10240),
 }
 

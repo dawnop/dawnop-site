@@ -194,22 +194,30 @@ const trafficCycle = computed(() => {
             <div class="kv-row"><span>已用 <b>{{ fmtBytes(qn.space) }}</b></span></div>
           </div>
 
-          <div class="stat-row">
-            <div class="stat"><div class="stat-v">{{ qn.count }}</div><div class="stat-l">文件对象</div></div>
-            <div class="stat">
-              <div class="stat-v">{{ fmtBytes(qn.cdn_flow_30d) }}</div>
-              <div class="stat-l">CDN 流量 · 30 天</div>
+          <div v-if="!qn.cdn_error && qn.cdn_quota" class="block">
+            <div class="block-t">
+              <span>CDN 流量 · 本月</span>
+              <span class="muted">配额 {{ fmtBytes(qn.cdn_quota) }}</span>
             </div>
-            <div class="stat"><div class="stat-v">{{ fmtBytes(qn.flow_30d) }}</div><div class="stat-l">源站流出 · 30 天</div></div>
-            <div class="stat"><div class="stat-v">{{ qn.hits_30d }}</div><div class="stat-l">请求次数 · 30 天</div></div>
-          </div>
-
-          <div v-if="qn.cdn_domains?.length || qn.cdn_peak_bps" class="cdn-meta">
-            <span v-if="qn.cdn_peak_bps">峰值带宽 {{ fmtMbps(qn.cdn_peak_bps) }}</span>
-            <span v-if="qn.cdn_domains?.length">加速域名 {{ qn.cdn_domains.join('、') }}</span>
+            <el-progress
+              :percentage="pct(qn.cdn_flow_month, qn.cdn_quota)"
+              :color="barColor(pct(qn.cdn_flow_month, qn.cdn_quota))"
+              :stroke-width="10"
+            />
+            <div class="kv-row">
+              <span>已用 <b>{{ fmtBytes(qn.cdn_flow_month) }}</b></span>
+              <span v-if="qn.cdn_peak_bps">峰值带宽 {{ fmtMbps(qn.cdn_peak_bps) }}</span>
+              <span v-if="qn.cdn_domains?.length" class="muted">{{ qn.cdn_domains.join('、') }}</span>
+            </div>
           </div>
           <el-alert v-if="qn.cdn_error" type="warning" :closable="false" show-icon
             :title="'CDN 用量获取失败：' + qn.cdn_error" class="mb" />
+
+          <div class="stat-row">
+            <div class="stat"><div class="stat-v">{{ qn.count }}</div><div class="stat-l">文件对象</div></div>
+            <div class="stat"><div class="stat-v">{{ fmtBytes(qn.flow_30d) }}</div><div class="stat-l">源站流出 · 30 天</div></div>
+            <div class="stat"><div class="stat-v">{{ qn.hits_30d }}</div><div class="stat-l">请求次数 · 30 天</div></div>
+          </div>
 
           <div class="trend">
             <div class="trend-t">CDN 流量 · 近 30 天</div>
@@ -317,7 +325,7 @@ const trafficCycle = computed(() => {
   margin: 4px 0 16px;
 }
 .stat {
-  flex: 1 1 calc(50% - 6px);
+  flex: 1 1 110px;
   min-width: 110px;
   text-align: center;
   padding: 10px 6px;
@@ -326,14 +334,6 @@ const trafficCycle = computed(() => {
 }
 .stat-v { font-size: 1.15rem; font-weight: 600; }
 .stat-l { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
-.cdn-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
-  margin: -6px 0 14px;
-  font-size: 0.8rem;
-  color: var(--muted);
-}
 
 .trend { margin-top: 14px; }
 .trend-t { font-size: 0.82rem; color: var(--muted); margin-bottom: 4px; }
