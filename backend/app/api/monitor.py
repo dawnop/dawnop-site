@@ -123,7 +123,7 @@ def _qiniu() -> dict:
 
 def _vault() -> dict:
     base = settings.vault_alive_url.rsplit("/alive", 1)[0]
-    out: dict = {"url": base}
+    out: dict = {"url": base, "public_url": settings.vault_public_url}
     t0 = time.time()
     try:
         r = _vault_http.get(settings.vault_alive_url, timeout=5)

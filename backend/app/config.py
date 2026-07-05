@@ -44,6 +44,8 @@ class Settings(BaseSettings):
 
     # Vaultwarden 存活探测（监控页「Vault」块）。后端与容器同机，走内网 127.0.0.1。
     vault_alive_url: str = "http://127.0.0.1:8222/alive"
+    # Vault 公网入口（监控页「打开 Vault」按钮跳转），供浏览器访问的地址
+    vault_public_url: str = "https://vault.dawnop.com"
 
     # 初始管理员（仅 seed_admin.py 使用）
     admin_username: str = "admin"

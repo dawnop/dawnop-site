@@ -4,6 +4,7 @@
 所有函数失败时抛 RuntimeError，由上层转换为 HTTP 错误。
 """
 import json
+import time
 from functools import lru_cache
 from urllib.parse import quote
 
@@ -313,10 +314,23 @@ def cdn_bandwidth_peak(days: int = 30) -> int:
 
 
 _GB = 1024**3
+# respack 财务接口有速率限制且变化慢；fm/stats 会高频调用（每次列目录），故带 TTL 缓存
+_respack_cache: dict = {"at": 0.0, "val": None}
 
 
-def respack_summary() -> dict:
-    """CDN 流量包 + 存储资源包 概览。返回 {cdn:{...}|None, storage:{...}|None}。
+def respack_summary(force: bool = False) -> dict:
+    """CDN 流量包 + 存储资源包 概览（TTL 缓存 300s）。返回 {cdn:{...}|None, storage:{...}|None}。"""
+    now = time.time()
+    if not force and _respack_cache["val"] is not None and now - _respack_cache["at"] < 300:
+        return _respack_cache["val"]
+    val = _respack_fetch()
+    _respack_cache["val"] = val
+    _respack_cache["at"] = now
+    return val
+
+
+def _respack_fetch() -> dict:
+    """实际拉取资源包概览（无缓存）。
 
     - CDN（流量）：用 list 的累计 used_amount/total_amount（按流量计，权威）→ {used,total,remain,expire,names}。
     - 存储（容量）：用 month-overview 的 total_surplus 作**容量**（list 的 total_amount 是 GB·月不适合当容量），

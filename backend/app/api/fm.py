@@ -219,13 +219,23 @@ def stats(
     remote = _space_cache["value"]
     files = db.query(func.count()).filter(FileObject.is_dir.is_(False)).scalar()
     dirs = db.query(func.count()).filter(FileObject.is_dir.is_(True)).scalar()
+    # 配额与监控页对齐：优先用七牛存储资源包容量，无包则回落全局设置（respack 自带 TTL 缓存）
+    quota = None
+    try:
+        sp = qiniu_client.respack_summary().get("storage")
+        if sp and sp.get("capacity"):
+            quota = int(sp["capacity"])
+    except Exception:
+        pass
+    if quota is None:
+        quota = int(get_setting(db, "storage_quota_gb")) * 1024**3
     return {
         "used": max(db_used, remote or 0),
         "used_local": db_used,
         "used_remote": remote,
         "files": int(files),
         "dirs": int(dirs),
-        "quota": int(get_setting(db, "storage_quota_gb")) * 1024**3,
+        "quota": quota,
     }
 
 

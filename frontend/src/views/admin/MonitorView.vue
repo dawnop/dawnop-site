@@ -1,9 +1,13 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, TopRight } from '@element-plus/icons-vue'
 import { monitorApi } from '../../api'
 import MiniChart from '../../components/MiniChart.vue'
 import HelpTip from '../../components/HelpTip.vue'
+import { useIsMobile } from '../../composables/useIsMobile'
+
+const isMobile = useIsMobile()
+const gaugeSize = computed(() => (isMobile.value ? 84 : 96))
 
 const data = ref(null)
 const loading = ref(true)
@@ -89,10 +93,10 @@ const loadInfo = computed(() => {
 const lh = computed(() => data.value?.lighthouse || null)
 const qn = computed(() => data.value?.qiniu || null)
 const vault = computed(() => data.value?.vault || null)
+function openVault() {
+  if (vault.value?.public_url) window.open(vault.value.public_url, '_blank', 'noopener')
+}
 
-const cpuTrend = computed(() =>
-  (lh.value?.cpu_trend || []).map((p) => ({ label: labelFromUnix(p.t), value: p.v }))
-)
 const spaceTrend = computed(() =>
   (qn.value?.space_trend || []).map((p) => ({ label: labelFromUnix(p.t), value: p.v }))
 )
@@ -141,48 +145,39 @@ const trafficCycle = computed(() => {
         <el-alert v-if="lh && !lh.configured" type="info" :closable="false" show-icon
           title="未配置腾讯云只读密钥，仅显示本机指标（流量包/到期信息不可用）" class="mb" />
 
-        <!-- 流量包 -->
-        <div v-if="lh?.traffic" class="block">
-          <div class="block-t">
-            <span>本月流量包</span>
-            <span class="muted">{{ trafficCycle }}</span>
-          </div>
-          <el-progress
-            :percentage="pct(lh.traffic.used, lh.traffic.total)"
-            :color="barColor(pct(lh.traffic.used, lh.traffic.total))"
-            :stroke-width="10"
-          />
-          <div class="kv-row">
-            <span>已用 <b>{{ fmtBytes(lh.traffic.used) }}</b> / {{ fmtBytes(lh.traffic.total) }}</span>
-            <span>剩余 {{ fmtBytes(lh.traffic.remaining) }}</span>
-            <el-tag v-if="lh.traffic.overflow > 0" type="danger" size="small">超额 {{ fmtBytes(lh.traffic.overflow) }}</el-tag>
-          </div>
-        </div>
-
-        <!-- 本机实时 -->
+        <!-- 本机实时 + 月流量包 表盘 -->
         <div v-if="server" class="tiles">
           <div class="tile">
             <div class="tile-l">CPU<span v-if="server.cpu_count" class="muted"> · {{ server.cpu_count }} 核</span></div>
-            <el-progress type="dashboard" :width="76" :percentage="Math.round(server.cpu_percent)" :color="barColor(server.cpu_percent)" />
+            <el-progress type="dashboard" :width="gaugeSize" :percentage="Math.round(server.cpu_percent)" :color="barColor(server.cpu_percent)" />
           </div>
           <div class="tile">
             <div class="tile-l">内存</div>
-            <el-progress type="dashboard" :width="76" :percentage="Math.round(server.mem.percent)" :color="barColor(server.mem.percent)" />
+            <el-progress type="dashboard" :width="gaugeSize" :percentage="Math.round(server.mem.percent)" :color="barColor(server.mem.percent)" />
             <div class="tile-sub">{{ fmtBytes(server.mem.used) }} / {{ fmtBytes(server.mem.total) }}</div>
           </div>
           <div class="tile">
             <div class="tile-l">磁盘</div>
-            <el-progress type="dashboard" :width="76" :percentage="Math.round(server.disk.percent)" :color="barColor(server.disk.percent)" />
+            <el-progress type="dashboard" :width="gaugeSize" :percentage="Math.round(server.disk.percent)" :color="barColor(server.disk.percent)" />
             <div class="tile-sub">{{ fmtBytes(server.disk.used) }} / {{ fmtBytes(server.disk.total) }}</div>
+          </div>
+          <div v-if="lh?.traffic" class="tile">
+            <div class="tile-l">月流量包</div>
+            <el-progress type="dashboard" :width="gaugeSize" :percentage="pct(lh.traffic.used, lh.traffic.total)" :color="barColor(pct(lh.traffic.used, lh.traffic.total))" />
+            <div class="tile-sub">{{ fmtBytes(lh.traffic.used) }} / {{ fmtBytes(lh.traffic.total) }}</div>
           </div>
         </div>
 
-        <div v-if="server || lh?.instance" class="kv-grid">
+        <div v-if="server || lh?.instance" class="kv-grid single">
           <div v-if="lh?.instance"><span class="k">规格</span>{{ lh.instance.cpu }} 核 {{ lh.instance.memory_gb }} GB</div>
           <div v-if="lh?.instance?.ip"><span class="k">公网 IP</span>{{ lh.instance.ip }}</div>
           <div v-if="lh?.instance?.expired_at">
             <span class="k">到期</span>{{ shortDate(lh.instance.expired_at) }}
             <span class="muted">（{{ daysUntil(lh.instance.expired_at) }} 天后）</span>
+          </div>
+          <div v-if="lh?.traffic">
+            <span class="k">流量周期</span>{{ trafficCycle }}
+            <span v-if="lh.traffic.overflow > 0" class="err"> · 超额 {{ fmtBytes(lh.traffic.overflow) }}</span>
           </div>
           <div v-if="server"><span class="k">运行</span>{{ fmtDuration(server.uptime) }}</div>
           <div v-if="loadInfo" class="load-cell">
@@ -195,12 +190,6 @@ const trafficCycle = computed(() => {
               近 1 / 5 / 15 分钟：{{ loadInfo.pcts.map((p) => p + '%').join(' / ') }}
             </HelpTip>
           </div>
-          <div v-if="server"><span class="k">网络累计</span>↑{{ fmtBytes(server.net.sent) }} ↓{{ fmtBytes(server.net.recv) }}</div>
-        </div>
-
-        <div v-if="cpuTrend.length" class="trend">
-          <div class="trend-t">CPU 使用率 · 近 30 天</div>
-          <MiniChart :points="cpuTrend" :format="(v) => v.toFixed(1) + ' %'" />
         </div>
       </el-card>
 
@@ -287,11 +276,17 @@ const trafficCycle = computed(() => {
             </el-tag>
           </div>
         </template>
-        <div v-if="vault" class="kv-grid">
-          <div><span class="k">地址</span>{{ vault.url }}</div>
+        <div v-if="vault" class="kv-grid single">
+          <div v-if="vault.public_url">
+            <span class="k">入口</span>
+            <a :href="vault.public_url" target="_blank" rel="noopener" class="vault-link">{{ vault.public_url }}</a>
+          </div>
           <div v-if="vault.version"><span class="k">版本</span>{{ vault.version }}</div>
           <div v-if="vault.latency_ms != null"><span class="k">响应</span>{{ vault.latency_ms }} ms</div>
           <div v-if="vault.error" class="err"><span class="k">错误</span>{{ vault.error }}</div>
+        </div>
+        <div v-if="vault?.public_url" class="vault-actions">
+          <el-button type="primary" :icon="TopRight" @click="openVault">打开 Vault</el-button>
         </div>
       </el-card>
     </div>
@@ -317,7 +312,6 @@ const trafficCycle = computed(() => {
   gap: 16px;
   align-items: start;
 }
-.mon-card:first-child { grid-column: 1 / -1; }
 .ch { display: flex; align-items: center; gap: 10px; }
 .ct { font-weight: 600; }
 
@@ -354,6 +348,7 @@ const trafficCycle = computed(() => {
   gap: 8px 16px;
   font-size: 0.85rem;
 }
+.kv-grid.single { grid-template-columns: 1fr; }
 .kv-grid .k {
   display: inline-block;
   min-width: 4.5em;
@@ -362,6 +357,9 @@ const trafficCycle = computed(() => {
 .kv-grid .err { color: var(--el-color-danger); }
 .load-cell { display: flex; align-items: center; }
 .load-pct { margin-left: 8px; }
+.vault-link { color: var(--accent); text-decoration: none; word-break: break-all; }
+.vault-link:hover { text-decoration: underline; }
+.vault-actions { margin-top: 14px; }
 
 .stat-row {
   display: flex;
@@ -387,7 +385,9 @@ const trafficCycle = computed(() => {
   .cards { grid-template-columns: 1fr; }
   .page-head { flex-wrap: wrap; gap: 10px; }
   .page-head .el-button { width: 100%; }
-  .tiles { justify-content: space-around; gap: 10px; }
+  .tiles { justify-content: space-around; gap: 14px 10px; }
+  .tile { flex: 0 0 46%; }
   .stat-row { flex-direction: column; }
+  .vault-actions .el-button { width: 100%; }
 }
 </style>
