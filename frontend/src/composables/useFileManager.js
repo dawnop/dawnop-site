@@ -8,8 +8,7 @@ import {
   Right, CopyDocument,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import * as fm from '../api/fmApi'
-import { settingsApi } from '../api'
+import { fmApi as fm, settingsApi } from '../api'
 import { useIsMobile } from './useIsMobile'
 import { fmtBytes, fmtMonthDay } from '../utils/format'
 

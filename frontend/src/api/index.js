@@ -1,5 +1,9 @@
 import client from './client'
 
+// 文件管理接口对接层单独成文件（接口面大且自成一体），此处以命名空间统一从 api 出口导出，
+// 使全站一律 `import { xxxApi } from '../api'`：用法 `import { fmApi } from '../api'` → `fmApi.listDir(...)`。
+export * as fmApi from './fmApi'
+
 // ---- 鉴权 ----
 export const authApi = {
   // 后端用 OAuth2 表单，需 application/x-www-form-urlencoded
