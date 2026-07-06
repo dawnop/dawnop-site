@@ -98,6 +98,17 @@ async function run(q) {
 }
 
 // —— 打开/关闭 ——
+// 锁滚动时补偿滚动条宽度，避免页面因滚动条消失而横向偏移（与 Element 弹窗一致）
+function lockScroll() {
+  const sbw = window.innerWidth - document.documentElement.clientWidth
+  document.body.style.overflow = 'hidden'
+  if (sbw > 0) document.body.style.paddingRight = sbw + 'px'
+}
+function unlockScroll() {
+  document.body.style.overflow = ''
+  document.body.style.paddingRight = ''
+}
+
 function close() {
   emit('update:modelValue', false)
 }
@@ -153,16 +164,16 @@ watch(
       searched.value = false
       active.value = 0
       loadRecent()
-      document.body.style.overflow = 'hidden'
+      lockScroll()
       nextTick(() => inputEl.value?.focus())
     } else {
-      document.body.style.overflow = ''
+      unlockScroll()
     }
   }
 )
 
 onBeforeUnmount(() => {
-  document.body.style.overflow = ''
+  unlockScroll()
 })
 </script>
 
