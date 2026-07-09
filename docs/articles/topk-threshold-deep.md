@@ -1,6 +1,6 @@
 ---
 title: 【TopK 优化系列 3】二分阈值
-summary: 前两篇都假设「一个大数组」，可我后来常遇到的是另一种：海量短向量、每条各自求 top-k。这一篇就为它而写——一个 warp 干一条，不去定位第 k 大，而是二分一个阈值 τ、让过线的恰好 k 个；计数全靠 ballot+popcount，没有 sort、没有 atomic、几乎不碰显存。再加上 early-stop 用精度换速度，最后在 A100 上算清楚它真正卡在哪（提示：是行长 R，不是 k）。
+summary: 前两篇都假设「一个大数组」，可我后来常遇到的是另一种：海量短向量、每条各自求 top-k。这一篇就为它而写：一个 warp 干一条，不去定位第 k 大，而是二分一个阈值 τ、让过线的恰好 k 个；计数全靠 ballot+popcount，没有 sort、没有 atomic、几乎不碰显存。再加上 early-stop 用精度换速度，最后在 A100 上算清楚它真正卡在哪（提示：是行长 R，不是 k）。
 ---
 
 > **TopK 优化系列**：[0 总览](/article/topk-optimization) · [1 Bitonic](/article/topk-bitonic-select) · [2 Radix](/article/topk-radix-select) · **3 二分阈值（本篇）**
@@ -13,7 +13,7 @@ topk-threshold
 
 ## 1. 为什么用 threshold 而不是 sort
 
-先说为什么是 threshold 而不是 sort。一个 warp 32 个 lane 处理长度 $R$ 的一行：每个 lane 负责 $R/32$ 个元素（lane $i$ 取下标 $i, i+32, i+64,\dots$，天然 coalesced）。在这种"一条向量铺在一个 warp 上"的布局里，sort 要 lane 间反复交换、很贵；而**数一数有多少元素过某个 threshold**，只要各 lane 本地比较、再做一次 warp reduction——便宜太多了。所以我把"求第 $k$ 大"转成"二分 threshold，让过线者恰好 $k$ 个"。
+先说为什么是 threshold 而不是 sort。一个 warp 32 个 lane 处理长度 $R$ 的一行：每个 lane 负责 $R/32$ 个元素（lane $i$ 取下标 $i, i+32, i+64,\dots$，天然 coalesced）。在这种"一条向量铺在一个 warp 上"的布局里，sort 要 lane 间反复交换、很贵；而**数一数有多少元素过某个 threshold**，只要各 lane 本地比较、再做一次 warp reduction，便宜太多了。所以我把"求第 $k$ 大"转成"二分 threshold，让过线者恰好 $k$ 个"。
 
 ## 2. warp 内求上下界与计数
 
@@ -176,7 +176,7 @@ int blocks  = (B * 32 + threads - 1) / threads;
 rowwise_topk<L><<<blocks, threads>>>(d_rows, R, k, B, d_out);   // L = R/32 编译期定
 ```
 
-没有 shared memory、没有 atomic、没有 block 间同步：每个 warp 自己吃一行、register 内二分、ballot 写出。$B$ 越大，可调度的 warp 越多、越能填满 SM——这就是 row-wise 海量小输入下它吞吐极高的根本。
+没有 shared memory、没有 atomic、没有 block 间同步：每个 warp 自己吃一行、register 内二分、ballot 写出。$B$ 越大，可调度的 warp 越多、越能填满 SM，这就是 row-wise 海量小输入下它吞吐极高的根本。
 
 ## 7. 算法总览图
 
@@ -188,7 +188,7 @@ topk-threshold-pipeline
 
 ## 8. 成本模型与适用边界
 
-**访存与计算形态。** 布局保证 coalesced 访存：相邻 lane 读相邻地址。整行一次性载进 register（`vals[L]`），二分每一轮都在 register 里比较、**不再碰显存**——每行的显存流量只有 $R$ 次读 + $k$ 次写。计算上每行 $\text{ITERS}$ 轮、每轮一次 `count_ge`（$L$ 次本地比较 + 5 步 warp reduction），**与 $k$ 无关**。
+**访存与计算形态。** 布局保证 coalesced 访存：相邻 lane 读相邻地址。整行一次性载进 register（`vals[L]`），二分每一轮都在 register 里比较、**不再碰显存**，每行的显存流量只有 $R$ 次读 + $k$ 次写。计算上每行 $\text{ITERS}$ 轮、每轮一次 `count_ge`（$L$ 次本地比较 + 5 步 warp reduction），**与 $k$ 无关**。
 
 **寄存器约束（A100）。** 每 lane 持 `vals[L]`、$L=R/32$，加临时量估每线程 $R_\text{thread}\approx L+20$；occupancy 公式同 [Bitonic 篇](/article/topk-bitonic-select) §6：$R_w=\lceil 32R_\text{thread}/256\rceil\times256$，$W=\min(64,\lfloor 65536/R_w\rfloor)$。代入：
 
@@ -206,4 +206,4 @@ topk-threshold-pipeline
 
 **迭代轮数。** 精确收敛需约 $\lceil\log_2\frac{hi-lo}{\epsilon}\rceil$（float 上至多约 $30$）轮；early-stop 固定 $\text{ITERS}$（如 $8$）把阈值定位到 $1/2^8$ 相对精度，且所有 warp 轮数一致、无尾部发散，对批量吞吐最友好。
 
-**适用边界。** 最佳区间是「$R$ 不大（$\lesssim 1024$）、batch $B$ 极多」的 row-wise 场景（逐行 softmax 后取 top-k、MoE 路由、稀疏 attention）。$R$ 太大就该回到单行用多 block 的 [Radix Select](/article/topk-radix-select)；$k$ 接近 $R$ 时二分仍有效但优势减弱。跟 radix 的分工很清楚：radix 适合「单个大数组、大 $k$」，这一路适合「海量小行、各自小 $k$」。三篇深入文到这儿就齐了——想从头看怎么挑，回 [导言](/article/topk-optimization) 那张选型图。
+**适用边界。** 最佳区间是「$R$ 不大（$\lesssim 1024$）、batch $B$ 极多」的 row-wise 场景（逐行 softmax 后取 top-k、MoE 路由、稀疏 attention）。$R$ 太大就该回到单行用多 block 的 [Radix Select](/article/topk-radix-select)；$k$ 接近 $R$ 时二分仍有效但优势减弱。跟 radix 的分工很清楚：radix 适合「单个大数组、大 $k$」，这一路适合「海量小行、各自小 $k$」。三篇深入文到这儿就齐了。想从头看怎么挑，回 [导言](/article/topk-optimization) 那张选型图。

@@ -1,6 +1,6 @@
 ---
 title: 【TopK 优化系列 2】Radix
-summary: 上一篇的 bitonic 在小 k 下很爽，可 k 一大片上就放不下了。这一篇换思路：不维护任何有序结构，改用 histogram 逐位定位第 k 大——片上只要一个 256-bin 计数器、跟 k 完全无关，连 median、任意分位数都扛得住。我会把浮点比特键变换、逐位 select 的完整 kernel，以及跟它绑死的四项优化（hierarchical atomics、write buffer、task rescheduling、adaptive scaling）一个个写清楚。
+summary: 上一篇的 bitonic 在小 k 下很爽，可 k 一大片上就放不下了。这一篇换思路：不维护任何有序结构，改用 histogram 逐位定位第 k 大，片上只要一个 256-bin 计数器、跟 k 完全无关，连 median、任意分位数都扛得住。我会把浮点比特键变换、逐位 select 的完整 kernel，以及跟它绑死的四项优化（hierarchical atomics、write buffer、task rescheduling、adaptive scaling）一个个写清楚。
 ---
 
 > **TopK 优化系列**：[0 总览](/article/topk-optimization) · [1 Bitonic](/article/topk-bitonic-select) · **2 Radix（本篇）** · [3 二分阈值](/article/topk-binary-threshold)
@@ -38,7 +38,7 @@ __device__ __forceinline__ float u2f_order(uint32_t u) {
 | $+1.0$ | `0x3F800000`（0） | `0xBF800000` |
 | $+3.0$ | `0x40400000`（0） | `0xC0400000` |
 
-ordered key 按无符号升序排列，恰好还原 $-2<-0<+0<+1<+3$ 的数值序。两条规则的来由我也想了一下：正数（符号位 0）彼此本就按 uint 有序，只需置符号位让它们整体大于负数；负数（符号位 1）**指数/尾数越大、数值反而越小**，序是反的，全位取反正好同时翻转符号位与高低序。有符号 `int` 更省事——只翻符号位（`u ^ 0x80000000`）；`uint` 无需变换。一个要点：必须 **MSB 优先**逐位处理，高位定序、低位细分。
+ordered key 按无符号升序排列，恰好还原 $-2<-0<+0<+1<+3$ 的数值序。两条规则的来由我也想了一下：正数（符号位 0）彼此本就按 uint 有序，只需置符号位让它们整体大于负数；负数（符号位 1）**指数/尾数越大、数值反而越小**，序是反的，全位取反正好同时翻转符号位与高低序。有符号 `int` 更省事，只翻符号位（`u ^ 0x80000000`）；`uint` 无需变换。一个要点：必须 **MSB 优先**逐位处理，高位定序、低位细分。
 
 ## 2. 逐位 select：完整多趟算法
 
@@ -101,7 +101,7 @@ __global__ void collect_kernel(const uint32_t* keys, int n, uint32_t thr,
 }
 ```
 
-每趟候选缩约 $1/256$，至多 $32/8=4$ 趟就能精确定位第 $k$ 大。片上自始至终只占一个 256 元素的 histogram，**跟 $k$ 无关**——这就是 radix 能扛 median / 任意分位数的根本。三步里最吃成本的是 histogram 的 atomic 和 collect 的 global 写，下面逐项收拾。
+每趟候选缩约 $1/256$，至多 $32/8=4$ 趟就能精确定位第 $k$ 大。片上自始至终只占一个 256 元素的 histogram，**跟 $k$ 无关**，这就是 radix 能扛 median / 任意分位数的根本。三步里最吃成本的是 histogram 的 atomic 和 collect 的 global 写，下面逐项收拾。
 
 ## 3. 瓶颈与第一项优化：hierarchical atomics
 
@@ -139,7 +139,7 @@ __global__ void histogram_kernel(const uint32_t* keys, int n,
 topk-atomics
 ```
 
-warp 内还能再降一层：先用 `__match_any_sync` 把同一 warp 里落入同一 bin 的线程合并计数，再由其中一个 lane 做 shared atomic——把"每元素一次 shared atomic"降到"每 warp 每 bin 一次"：
+warp 内还能再降一层：先用 `__match_any_sync` 把同一 warp 里落入同一 bin 的线程合并计数，再由其中一个 lane 做 shared atomic，把"每元素一次 shared atomic"降到"每 warp 每 bin 一次"：
 
 ```cpp
 // 替换内层的 atomicAdd(&s_hist[bin], 1)：
@@ -190,7 +190,7 @@ __global__ void collect_buffered(const uint32_t* keys, int n, uint32_t thr,
 
 ## 5. task rescheduling：批量场景保 occupancy
 
-再说个批量场景。批量 TopK（一堆独立的小输入各求 top-k）如果让每个任务各自迭代到收敛，会出现尾部低 occupancy：少数没收敛的任务占着几个 SM、其余全空转。我的解法是**横向对齐**——所有任务先一起跑第 1 趟 histogram，再一起跑第 2 趟……由一个调度 kernel 统一推进趟次，让每一趟都占满 SM，直到全部收敛。实现上把 per-task 的进度打平成数组，每趟对所有没完成的 task 并行处理：
+再说个批量场景。批量 TopK（一堆独立的小输入各求 top-k）如果让每个任务各自迭代到收敛，会出现尾部低 occupancy：少数没收敛的任务占着几个 SM、其余全空转。我的解法是**横向对齐**：所有任务先一起跑第 1 趟 histogram，再一起跑第 2 趟……由一个调度 kernel 统一推进趟次，让每一趟都占满 SM，直到全部收敛。实现上把 per-task 的进度打平成数组，每趟对所有没完成的 task 并行处理：
 
 ```cpp
 struct RadixTask {
@@ -216,7 +216,7 @@ __global__ void schedule_round(RadixTask* tasks, int numTasks) {
 
 ## 6. adaptive scaling：对抗坏分布
 
-radix 有个怕的输入：所有元素高位 bit 高度雷同（数值挤在一个窄区间），前几轮 histogram 切不动、白跑。对策挺巧——随机抓一个元素 $a_s$，把所有元素都减掉它：
+radix 有个怕的输入：所有元素高位 bit 高度雷同（数值挤在一个窄区间），前几轮 histogram 切不动、白跑。对策挺巧，随机抓一个元素 $a_s$，把所有元素都减掉它：
 
 ```cpp
 float as = values[hash(seed) % n];   // 随机基准
@@ -244,6 +244,6 @@ $$n+\frac{n}{256}+\frac{n}{256^2}+\cdots\approx n\cdot\frac{256}{255}\approx n,$
 
 即**首趟（读全量 $n$）主导**，后续趟几乎免费。算法因此**带宽受限**：理想耗时 $\approx\dfrac{(n+|\text{top-k}|)\times 4\text{B}}{\text{带宽}}$，A100 HBM2e 约 $1.9$ TB/s。histogram 的 atomic 经 hierarchical + warp 聚合降到「每 block 每 bin 常数次」、collect 的 global 写经 write buffer 合并，两者都不再是瓶颈。
 
-**与 $k$ 无关。** 片上只一个 256-bin histogram（$1$ KB shared），计数器跟 $k$ 无关，所以 occupancy 不随 $k$ 退化——这是 radix 对比 bitonic 的根本差异，也让它能直接求 median / 任意分位数（把 `kCur` 设成 $n/2$ 或任意名次就行）。
+**与 $k$ 无关。** 片上只一个 256-bin histogram（$1$ KB shared），计数器跟 $k$ 无关，所以 occupancy 不随 $k$ 退化，这是 radix 对比 bitonic 的根本差异，也让它能直接求 median / 任意分位数（把 `kCur` 设成 $n/2$ 或任意名次就行）。
 
 **交叉点。** [Bitonic Top-K](/article/topk-bitonic-select) 受寄存器限制（A100 上高占用区间 $k\lesssim 256$、硬上限约 $k\le 3680$），代价随 $k$ 涨；radix 的成本对 $k$ 近似平坦，所以 $k$ 大到约 $1024$ 以上时 radix 反超，而小 $k$（如 $k\le 256$）下 bitonic 全寄存器、无 atomic 更快。这个交叉点，就是导言里「自适应选型」按 $k$ 切换的依据。
