@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import fs from 'node:fs'
 import path from 'node:path'
 import vue from '@vitejs/plugin-vue'
@@ -25,7 +25,14 @@ function elementPlusStyleDeps() {
 
 // 产物 gzip -9 预压缩（服务器 gzip_static 直接发）；vue/router/axios 拆出稳定 vendor chunk。
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command, mode }) => {
+  // 静态资源 CDN：VITE_CDN_BASE 在 .env.local 配置（不入库，同备案号的做法）。
+  // 仅构建时生效——资源 URL 指向 CDN 加速域名回源缓存；index.html 与 /api 仍走源站。
+  // dev 保持 '/'；未配置则构建也走 '/'（fork 者零配置可用）。
+  const env = loadEnv(mode, process.cwd(), '')
+  const base = command === 'build' && env.VITE_CDN_BASE ? env.VITE_CDN_BASE : '/'
+  return {
+  base,
   plugins: [
     vue(),
     AutoImport({ resolvers: [ElementPlusResolver()] }),
@@ -64,4 +71,5 @@ export default defineConfig({
       },
     },
   },
+  }
 })
