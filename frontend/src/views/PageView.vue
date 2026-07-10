@@ -5,6 +5,7 @@ import { pagesApi } from '../api'
 import MarkdownView from '../components/MarkdownView.vue'
 import PostList from '../components/PostList.vue'
 import { stripFirstH1 } from '../utils/markdownTitle'
+import { fmtDate } from '../utils/format'
 
 const route = useRoute()
 const page = ref(null)
@@ -20,6 +21,7 @@ const displayContent = computed(() => {
 // 列表页文章
 const items = ref([])
 const total = ref(0)
+const latestDate = ref(null)
 const pageNum = ref(1)
 const size = 10
 
@@ -27,6 +29,8 @@ async function loadArticles(slug) {
   const { data } = await pagesApi.listArticles(slug, pageNum.value, size)
   items.value = data.items
   total.value = data.total
+  // 最近更新取全列表最新一篇（首页第一条即最新）；翻页时不覆盖，保持稳定
+  if (pageNum.value === 1) latestDate.value = data.items[0]?.created_at || null
 }
 
 function setMeta(desc) {
@@ -79,14 +83,22 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
   </el-result>
 
   <template v-else-if="page">
-    <h1 class="page-title">{{ page.title }}</h1>
-    <p v-if="page.description" class="page-desc">{{ page.description }}</p>
-
     <!-- 内容页 -->
-    <MarkdownView v-if="page.type === 'content'" :source="displayContent" />
+    <template v-if="page.type === 'content'">
+      <h1 class="page-title">{{ page.title }}</h1>
+      <p v-if="page.description" class="page-desc">{{ page.description }}</p>
+      <MarkdownView :source="displayContent" />
+    </template>
 
     <!-- 文章列表页 -->
     <template v-else>
+      <header class="list-header">
+        <h1 class="list-title">{{ page.title }}</h1>
+        <p v-if="page.description" class="list-subtitle">{{ page.description }}</p>
+        <p v-if="total" class="list-meta">
+          共 {{ total }} 篇<template v-if="latestDate"> · 最近更新 {{ fmtDate(latestDate) }}</template>
+        </p>
+      </header>
       <el-empty v-if="items.length === 0" description="该栏目下还没有文章" />
       <PostList v-else :items="items" />
       <div v-if="total > size" class="pager">
@@ -113,6 +125,39 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
   color: var(--muted);
   font-size: 1.02rem;
   line-height: 1.6;
+}
+.list-header {
+  margin: 8px 0 8px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--border);
+}
+.list-title {
+  margin: 0;
+  font-size: 2.1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--fg);
+}
+.list-subtitle {
+  margin: 14px 0 0;
+  max-width: 44em;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.7;
+}
+.list-meta {
+  margin: 14px 0 0;
+  color: #8b949e;
+  font-size: 0.85rem;
+}
+@media (max-width: 640px) {
+  .list-title {
+    font-size: 1.7rem;
+  }
+  .list-subtitle {
+    font-size: 1rem;
+  }
 }
 .pager {
   display: flex;
