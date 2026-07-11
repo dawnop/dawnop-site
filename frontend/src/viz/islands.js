@@ -43,7 +43,10 @@ export function createIslandManager() {
           continue
         }
         const release = acquireStyle(id, style)
-        const app = createApp(component)
+        // data-viz-props：markdown 围栏传入的 JSON（fence.js 已校验/归一），作为根 props。
+        // 无参数时按普通组件挂载，行为不变。
+        const props = node.dataset.vizProps ? JSON.parse(node.dataset.vizProps) : null
+        const app = props ? createApp(component, props) : createApp(component)
         app.mount(node)
         mounted.push({ app, release, node })
       } catch (e) {
