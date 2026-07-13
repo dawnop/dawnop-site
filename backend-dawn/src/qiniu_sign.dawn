@@ -1,0 +1,42 @@
+# Qiniu Kodo request signing (M6 knife 11 foundation). Pure Dawn over the crypto
+# module — reproduces the official qiniu SDK's HMAC-SHA1 signatures so fm can
+# mint upload tokens, private download URLs, and management tokens without the
+# SDK (which drags okhttp+gson). Cross-checked against the Python qiniu.Auth.
+use crypto.{hmac_sha1_b64url, b64url_encode}
+
+## Upload token for a specific key (spec: putPolicy → base64 → HMAC-SHA1 → token).
+## putPolicy is {"scope":"bucket:key","deadline":<unix>} in that key order (the
+## qiniu SDK's dict order), so the base64 matches byte-for-byte.
+pub fn upload_token(ak: String, sk: String, bucket: String, key: String, deadline: Int) -> String !io = {
+  # compact JSON, no spaces — matches the qiniu SDK's json.dumps output so the
+  # base64 and therefore the signature match byte-for-byte
+  let policy = "{\"scope\":\"$bucket:$key\",\"deadline\":$deadline}"
+  let encoded_policy = b64url_encode(policy)
+  let sign = hmac_sha1_b64url(sk, encoded_policy)
+  "$ak:$sign:$encoded_policy"
+}
+
+## A private download URL: append ?e=<deadline>, sign the whole thing, append
+## &token=ak:sign. `base_url` is the full https URL (with any imageView2 fop).
+pub fn private_url(ak: String, sk: String, base_url: String, deadline: Int) -> String !io = {
+  let sep = if contains(base_url, "?") { "&" } else { "?" }
+  let signed_url = "$base_url${sep}e=$deadline"
+  let sign = hmac_sha1_b64url(sk, signed_url)
+  "$signed_url&token=$ak:$sign"
+}
+
+## Management token (QBox) for BucketManager ops. `signing_str` is
+## "<path>?<query>\n" (plus the form body when the content type is form-encoded).
+pub fn management_token(ak: String, sk: String, signing_str: String) -> String !io = {
+  let sign = hmac_sha1_b64url(sk, signing_str)
+  "QBox $ak:$sign"
+}
+
+test "signatures match the qiniu SDK byte-for-byte" {
+  # cross-checked against qiniu.Auth("AKtest","SKtest") with fixed deadline
+  assert upload_token("AKtest", "SKtest", "mybucket", "path/to/key.jpg", 1783976183) ==
+    "AKtest:LdlhAwhBCGjF3a-wmS6FRzyLyik=:eyJzY29wZSI6Im15YnVja2V0OnBhdGgvdG8va2V5LmpwZyIsImRlYWRsaW5lIjoxNzgzOTc2MTgzfQ=="
+  assert private_url("AKtest", "SKtest", "https://cdn.example.com/a.jpg", 1783976183) ==
+    "https://cdn.example.com/a.jpg?e=1783976183&token=AKtest:qds6pILEK2BxpimglNVjrgvF1nU="
+  assert management_token("AKtest", "SKtest", "/stat/abc\n") == "QBox AKtest:uq4LtkfJVo-ZNXoftWh9gv1-zVs="
+}
