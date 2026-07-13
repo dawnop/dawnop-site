@@ -1,0 +1,109 @@
+# Crypto primitives for auth/qiniu/JWT (M6 knife 3). Pure Dawn over JDK
+# algorithms — no third-party jars. Strings cross to bytes via the utf8_bytes
+# builtin; byte[] stays inside single function bodies (spec §9.5).
+use java "java.lang.String"
+use java "java.security.MessageDigest"
+use java "java.util.Base64"
+use java "java.util.HexFormat"
+use java "java.util.UUID"
+use java "javax.crypto.Mac"
+use java "javax.crypto.spec.SecretKeySpec"
+
+## SHA-256 of a UTF-8 string, lowercase hex.
+pub fn sha256_hex(s: String) -> String !io = {
+  let md = MessageDigest.getInstance("SHA-256").expect("sha256")
+  let digest = md.digest(utf8_bytes(s)).expect("digest")
+  HexFormat.of().expect("hexfmt").formatHex(digest).expect("hex")
+}
+
+fn hmac(algo: String, key: String) -> Mac !io = {
+  let mac = Mac.getInstance(algo).expect("mac $algo")
+  mac.init(SecretKeySpec.new(utf8_bytes(key), algo))
+  mac
+}
+
+## HMAC-SHA256, lowercase hex (Tencent Cloud style digests).
+pub fn hmac_sha256_hex(key: String, msg: String) -> String !io = {
+  let sig = hmac("HmacSHA256", key).doFinal(utf8_bytes(msg)).expect("sig")
+  HexFormat.of().expect("hexfmt").formatHex(sig).expect("hex")
+}
+
+## HMAC-SHA256, URL-safe base64 without padding (JWT HS256 signatures).
+pub fn hmac_sha256_b64url_nopad(key: String, msg: String) -> String !io = {
+  let sig = hmac("HmacSHA256", key).doFinal(utf8_bytes(msg)).expect("sig")
+  Base64.getUrlEncoder().expect("enc").withoutPadding().expect("nopad").encodeToString(sig).expect("b64")
+}
+
+## HMAC-SHA1, URL-safe base64 with padding (qiniu signatures).
+pub fn hmac_sha1_b64url(key: String, msg: String) -> String !io = {
+  let sig = hmac("HmacSHA1", key).doFinal(utf8_bytes(msg)).expect("sig")
+  Base64.getUrlEncoder().expect("enc").encodeToString(sig).expect("b64")
+}
+
+## URL-safe base64 of a UTF-8 string, with padding (qiniu policy blobs).
+pub fn b64url_encode(s: String) -> String !io =
+  Base64.getUrlEncoder().expect("enc").encodeToString(utf8_bytes(s)).expect("b64")
+
+## URL-safe base64 without padding (JWT segments).
+pub fn b64url_encode_nopad(s: String) -> String !io =
+  Base64.getUrlEncoder().expect("enc").withoutPadding().expect("nopad").encodeToString(utf8_bytes(s)).expect("b64")
+
+## Decode URL-safe base64 (padding optional) back to a UTF-8 string.
+pub fn b64url_decode(s: String) -> Result[String, String] !io =
+  java_try(fn() => {
+    # the JDK URL decoder rejects missing padding; JWT segments come unpadded
+    let bytes = Base64.getUrlDecoder().expect("dec").decode(pad4(s)).expect("bytes")
+    String.new(bytes, "UTF-8")
+  })
+
+fn pad4(s: String) -> String =
+  match str_len(s) - str_len(s) / 4 * 4 {
+    0 -> s
+    2 -> s ++ "=="
+    3 -> s ++ "="
+    _ -> s # length % 4 == 1 is never valid base64; let the decoder report it
+  }
+
+## Constant-time equality of two strings (signature comparison).
+pub fn eq_const(a: String, b: String) -> Bool !io =
+  MessageDigest.isEqual(utf8_bytes(a), utf8_bytes(b))
+
+## A random 36-char UUID string (upload ids, opaque keys).
+pub fn uuid() -> String !io =
+  UUID.randomUUID().expect("uuid").toString().expect("str")
+
+# ---- tests (vectors cross-checked against Python hashlib/hmac) ----
+
+test "sha256 known vector" {
+  assert sha256_hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+}
+
+test "hmac vectors" {
+  let msg = "The quick brown fox jumps over the lazy dog"
+  assert hmac_sha256_hex("key", msg) == "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+  assert hmac_sha1_b64url("key", msg) == "3nybhbi3iqa8ino29wqQcBydtNk="
+  assert hmac_sha256_b64url_nopad("key", msg) == "97yD9DBThCSxMpjmqm-xQ-9NWaFJRhdZl0edvC0aPNg"
+}
+
+test "base64url round-trips, unpadded and multibyte" {
+  assert b64url_encode("你好") == "5L2g5aW9"
+  assert b64url_decode("5L2g5aW9") == Ok("你好")
+  let nopad = b64url_encode_nopad("ab")
+  assert nopad == "YWI"
+  assert b64url_decode(nopad) == Ok("ab")
+  match b64url_decode("!!!!") {
+    Ok(_) -> { assert false }
+    Err(m) -> { assert contains(m, "Exception") }
+  }
+}
+
+test "constant-time equality" {
+  assert eq_const("same", "same")
+  assert eq_const("same", "diff") == false
+}
+
+test "uuid shape" {
+  let u = uuid()
+  assert str_len(u) == 36
+  assert u != uuid()
+}
