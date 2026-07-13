@@ -100,6 +100,22 @@ pub fn list_published(c: Connection, tag: Option[String], page: Int, size: Int) 
   Ok((total, items))
 }
 
+## Published articles belonging to a page (article_list page), newest first, one
+## page. Returns (total, items-json). Matches GET /api/pages/{slug}/articles.
+pub fn list_by_page(c: Connection, page_id: Int, page: Int, size: Int) -> Result[(Int, List[Json]), String] !io = {
+  let offset = (page - 1) * size
+  let cnt = query(c, "select count(*) from articles where published = 1 and page_id = ?", [PInt(page_id)], [ColInt])?
+  let total = match get(cnt, 0) {
+    Some(r) -> int_at(r, 0)
+    None -> 0
+  }
+  let rows = query(c,
+    "select $LIST_COLS from articles a where a.published = 1 and a.page_id = ? order by a.created_at desc limit ? offset ?",
+    [PInt(page_id), PInt(size), PInt(offset)], list_col_types())?
+  let items = shape_items(c, rows, 0, [])?
+  Ok((total, items))
+}
+
 fn count_published(c: Connection, tag: Option[String]) -> Result[Int, String] !io = {
   let rows = match tag {
     Some(slug) ->

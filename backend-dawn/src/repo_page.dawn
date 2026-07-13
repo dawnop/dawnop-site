@@ -1,0 +1,75 @@
+# Page read model (M6 knife 8): nav items, page detail, and a page's article
+# list. Path is derived like the Python model: builtin pages map through a fixed
+# table, everything else is /p/{slug}.
+use java "java.sql.Connection"
+use sql.{PInt, PStr, Col, ColInt, ColStr, Cell, query, int_at, str_at, opt_str_at, bool_at}
+use json/value.{Json, JArr}
+use jsonx.{obj, jint, jstr, jbool, jopt_str, jdatetime}
+
+## Frontend path for a page: builtin routes are fixed, others are /p/{slug}.
+pub fn page_path(kind: String, slug: String) -> String =
+  if kind == "builtin" {
+    if slug == "home" { "/" } else if slug == "tags" { "/tags" } else { "/" }
+  } else {
+    "/p/$slug"
+  }
+
+## GET /api/pages/nav — visible nav items ordered by (nav_order, id).
+pub fn nav(c: Connection) -> Result[List[Json], String] !io = {
+  let rows = query(c,
+    "select id, title, slug, type, nav_order from pages where nav_visible = 1 order by nav_order, id",
+    [], [ColInt, ColStr, ColStr, ColStr, ColInt])?
+  Ok(map(rows, fn(r) => {
+    let kind = str_at(r, 3)
+    let slug = str_at(r, 2)
+    obj([
+      ("id", jint(int_at(r, 0))),
+      ("title", jstr(str_at(r, 1))),
+      ("slug", jstr(slug)),
+      ("type", jstr(kind)),
+      ("path", jstr(page_path(kind, slug))),
+      ("nav_order", jint(int_at(r, 4))),
+    ])
+  }))
+}
+
+const PAGE_COLS: String = "id, title, slug, type, description, content, auto_title, nav_visible, nav_order, created_at, updated_at"
+
+fn page_col_types() -> List[Col] =
+  [ColInt, ColStr, ColStr, ColStr, ColStr, ColStr, ColInt, ColInt, ColInt, ColStr, ColStr]
+
+## GET /api/pages/{slug} — full page. None when missing or a builtin page
+## (builtin pages are SPA routes, not content served here — matches FastAPI).
+pub fn by_slug(c: Connection, slug: String) -> Result[Option[Json], String] !io = {
+  let rows = query(c, "select $PAGE_COLS from pages where slug = ? and type != 'builtin'", [PStr(slug)], page_col_types())?
+  match get(rows, 0) {
+    Some(r) -> {
+      let kind = str_at(r, 3)
+      let s = str_at(r, 2)
+      Ok(Some(obj([
+        ("id", jint(int_at(r, 0))),
+        ("title", jstr(str_at(r, 1))),
+        ("slug", jstr(s)),
+        ("type", jstr(kind)),
+        ("path", jstr(page_path(kind, s))),
+        ("description", jopt_str(opt_str_at(r, 4))),
+        ("content", jopt_str(opt_str_at(r, 5))),
+        ("auto_title", jbool(bool_at(r, 6))),
+        ("nav_visible", jbool(bool_at(r, 7))),
+        ("nav_order", jint(int_at(r, 8))),
+        ("created_at", jdatetime(str_at(r, 9))),
+        ("updated_at", jdatetime(str_at(r, 10))),
+      ])))
+    }
+    None -> Ok(None)
+  }
+}
+
+## The page id for a slug (for the articles sub-listing). None when missing.
+pub fn id_of(c: Connection, slug: String) -> Result[Option[Int], String] !io = {
+  let rows = query(c, "select id from pages where slug = ?", [PStr(slug)], [ColInt])?
+  match get(rows, 0) {
+    Some(r) -> Ok(Some(int_at(r, 0)))
+    None -> Ok(None)
+  }
+}

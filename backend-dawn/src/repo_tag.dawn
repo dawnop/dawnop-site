@@ -1,0 +1,32 @@
+# Tag read model (M6 knife 8): public tag list and single tag, each with a count
+# of published articles carrying that tag.
+use java "java.sql.Connection"
+use sql.{PStr, Cell, ColInt, ColStr, query, int_at, str_at}
+use json/value.{Json}
+use jsonx.{obj, jint, jstr}
+
+# count only counts published articles (matches the public tag list)
+const TAG_SELECT: String = "select t.id, t.name, t.slug, (select count(*) from article_tags at join articles a on a.id = at.article_id where at.tag_id = t.id and a.published = 1) as cnt from tags t"
+
+fn tag_json(r: List[Cell]) -> Json =
+  obj([
+    ("id", jint(int_at(r, 0))),
+    ("name", jstr(str_at(r, 1))),
+    ("slug", jstr(str_at(r, 2))),
+    ("count", jint(int_at(r, 3))),
+  ])
+
+## GET /api/tags — all tags with published counts, ordered by name.
+pub fn list_all(c: Connection) -> Result[List[Json], String] !io = {
+  let rows = query(c, "$TAG_SELECT order by t.name", [], [ColInt, ColStr, ColStr, ColInt])?
+  Ok(map(rows, tag_json))
+}
+
+## GET /api/tags/{slug} — one tag. None when missing.
+pub fn by_slug(c: Connection, slug: String) -> Result[Option[Json], String] !io = {
+  let rows = query(c, "$TAG_SELECT where t.slug = ?", [PStr(slug)], [ColInt, ColStr, ColStr, ColInt])?
+  match get(rows, 0) {
+    Some(r) -> Ok(Some(tag_json(r)))
+    None -> Ok(None)
+  }
+}

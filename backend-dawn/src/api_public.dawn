@@ -1,12 +1,15 @@
 # Public read handlers (M6 knife 6/8). Handlers close over the db path and open
 # a connection per request via with_db. Errors map to the FastAPI JSON shape
 # {"detail": ...} through the web framework's Err branch.
+use java "java.sql.Connection"
 use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, query}
 use web/router.{Route, Get}
-use json/value.{Json}
+use json/value.{Json, JArr}
 use jsonx.{paginated, detail, obj, jstr}
 use db.{Db, with_db}
-use repo_article.{list_published, by_slug, bump_views}
+use repo_article.{list_published, list_by_page, by_slug, bump_views}
+use repo_page
+use repo_tag
 
 fn qint(req: Request, name: String, fallback: Int) -> Int =
   match query(req, name) {
@@ -66,10 +69,78 @@ fn map_get_or(m: Map[String, String], k: String, fallback: String) -> String =
     None -> fallback
   }
 
+## GET /api/pages/nav — visible nav items.
+pub fn get_nav(db: Db) -> Handler =
+  fn(req) =>
+  match with_db(db.path, db.ext, fn(c) => repo_page.nav(c)) {
+    Ok(items) -> Ok(json_ok(JArr(items)))
+    Err(m) -> Err(http_error(500, m))
+  }
+
+## GET /api/pages/{slug} — one page, 404 when absent.
+pub fn get_page(db: Db) -> Handler =
+  fn(req) => {
+    let slug = map_get_or(req.params, "slug", "")
+    match with_db(db.path, db.ext, fn(c) => repo_page.by_slug(c, slug)) {
+      Ok(Some(j)) -> Ok(json_ok(j))
+      Ok(None) -> Err(http_error(404, "页面不存在"))
+      Err(m) -> Err(http_error(500, m))
+    }
+  }
+
+## GET /api/pages/{slug}/articles — a page's published articles, paginated.
+pub fn get_page_articles(db: Db) -> Handler =
+  fn(req) => {
+    let slug = map_get_or(req.params, "slug", "")
+    let page = clamp(qint(req, "page", 1), 1, 1000000)
+    let size = clamp(qint(req, "size", 10), 1, 100)
+    match with_db(db.path, db.ext, fn(c) => fetch_page_articles(c, slug, page, size)) {
+      Ok(Some(pair)) -> {
+        let (total, items) = pair
+        Ok(json_ok(paginated(total, page, size, items)))
+      }
+      Ok(None) -> Err(http_error(404, "页面不存在"))
+      Err(m) -> Err(http_error(500, m))
+    }
+  }
+
+fn fetch_page_articles(c: Connection, slug: String, page: Int, size: Int) -> Result[Option[(Int, List[Json])], String] !io =
+  match repo_page.id_of(c, slug)? {
+    Some(pid) -> {
+      let pair = list_by_page(c, pid, page, size)?
+      Ok(Some(pair))
+    }
+    None -> Ok(None)
+  }
+
+## GET /api/tags — all tags with counts.
+pub fn get_tags(db: Db) -> Handler =
+  fn(req) =>
+  match with_db(db.path, db.ext, fn(c) => repo_tag.list_all(c)) {
+    Ok(items) -> Ok(json_ok(JArr(items)))
+    Err(m) -> Err(http_error(500, m))
+  }
+
+## GET /api/tags/{slug} — one tag, 404 when absent.
+pub fn get_tag(db: Db) -> Handler =
+  fn(req) => {
+    let slug = map_get_or(req.params, "slug", "")
+    match with_db(db.path, db.ext, fn(c) => repo_tag.by_slug(c, slug)) {
+      Ok(Some(j)) -> Ok(json_ok(j))
+      Ok(None) -> Err(http_error(404, "标签不存在"))
+      Err(m) -> Err(http_error(500, m))
+    }
+  }
+
 ## The public read routes, bound to a db handle.
 pub fn routes(db: Db) -> List[Route] =
   [
     Get("/api/health", health),
     Get("/api/articles", list_articles(db)),
     Get("/api/articles/{slug}", get_article(db)),
+    Get("/api/pages/nav", get_nav(db)),
+    Get("/api/pages/{slug}", get_page(db)),
+    Get("/api/pages/{slug}/articles", get_page_articles(db)),
+    Get("/api/tags", get_tags(db)),
+    Get("/api/tags/{slug}", get_tag(db)),
   ]
