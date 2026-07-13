@@ -2,14 +2,19 @@
 # rename, move. These never touch qiniu (rename/move only rewrite paths); the
 # qiniu-mutating endpoints (upload/delete/copy/save) are added separately.
 use java "java.sql.Connection"
-use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query}
+use java "java.lang.System"
+use java "java.net.URLEncoder"
+use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query, redirect}
 use web/router.{Route, Get, Post}
 use json/value.{Json}
+use jsonx.{obj, jstr}
 use db.{Db, with_db}
-use auth.{Auth, current_user}
+use auth.{Auth, Qiniu, current_user}
 use jsonread.{body_obj, str_or, str_list}
-use fm_paths.{fm_split, parent_rel, basename, fm_join}
-use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, reparent, get_row}
+use fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full}
+use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, reparent, get_row, ledger_insert}
+use crypto.{uuid}
+use qiniu_sign.{private_url, upload_token}
 
 fn guarded(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io =
   match current_user(a, req) {
@@ -146,11 +151,118 @@ fn do_move(c: Connection, sources: List[String], dest: String, cur: String, i: I
     }
   }
 
-## The pure-metadata fm routes (protected).
+# ---- qiniu URL / upload endpoints (read-only: sign & redirect, no mutation) ----
+
+fn now_secs() -> Int !io = System.currentTimeMillis() / 1000
+
+# the signed private URL for a stored file (deadline = now + configured expires)
+fn signed(q: Qiniu, key: String, suffix: String) -> String !io = {
+  let domain = strip_trailing_slash(q.domain)
+  let base = "$domain/$key$suffix"
+  private_url(q.ak, q.sk, base, now_secs() + q.expires)
+}
+
+fn strip_trailing_slash(s: String) -> String =
+  if ends_with(s, "/") && str_len(s) > 0 { strip_trailing_slash(substring(s, 0, str_len(s) - 1)) } else { s }
+
+## GET /api/fm/sign?path= — a signed URL for direct fetch (text preview).
+pub fn sign(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() => {
+    let rel = fm_split(qparam(req, "path"))
+    match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
+      Ok(Some(o)) ->
+        match o.key {
+          Some(k) -> Ok(json_ok(obj([("url", jstr(signed(a.qiniu, k, "")))])))
+          None -> Err(http_error(400, "该项没有对应的对象"))
+        }
+      Ok(None) -> Err(http_error(404, "文件不存在"))
+      Err(m) -> Err(http_error(500, m))
+    }
+  })
+
+## GET /api/fm/preview?path= — 302 to the signed URL (inline).
+pub fn preview(a: Auth) -> Handler =
+  fn(req) => guarded(a, req, fn() => redirect_to(a, req, ""))
+
+## GET /api/fm/download?path= — 302 to the signed URL with an attachment name.
+pub fn download(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() => {
+    let rel = fm_split(qparam(req, "path"))
+    redirect_to_named(a, rel)
+  })
+
+fn redirect_to(a: Auth, req: Request, suffix: String) -> Result[Response, HttpError] !io = {
+  let rel = fm_split(qparam(req, "path"))
+  match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
+    Ok(Some(o)) ->
+      match o.key {
+        Some(k) -> Ok(redirect(302, signed(a.qiniu, k, suffix)))
+        None -> Err(http_error(400, "该项没有对应的对象"))
+      }
+    Ok(None) -> Err(http_error(404, "文件不存在"))
+    Err(m) -> Err(http_error(500, m))
+  }
+}
+
+fn redirect_to_named(a: Auth, rel: String) -> Result[Response, HttpError] !io =
+  match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
+    Ok(Some(o)) ->
+      match o.key {
+        Some(k) -> Ok(redirect(302, signed(a.qiniu, k, "?attname=${url_q(basename(rel))}")))
+        None -> Err(http_error(400, "该项没有对应的对象"))
+      }
+    Ok(None) -> Err(http_error(404, "文件不存在"))
+    Err(m) -> Err(http_error(500, m))
+  }
+
+fn url_q(s: String) -> String !io = URLEncoder.encode(s, "UTF-8").expect("enc")
+
+## POST /api/fm/upload-token — mint a qiniu direct-upload token for a new key,
+## record the pending_uploads ledger row. {token, key, path, host}.
+pub fn upload_token_ep(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match body_obj(req.body) {
+        Ok(m) -> {
+          let rel = fm_split(str_or(m, "path", ""))
+          let e = ext(basename(rel))
+          let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
+          let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_secs() + a.qiniu.expires)
+          match with_db(a.db.path, a.db.ext, fn(c) => ledger(c, key, rel)) {
+            Ok(_x) -> Ok(json_ok(obj([
+              ("token", jstr(token)),
+              ("key", jstr(key)),
+              ("path", jstr(full(rel))),
+              ("host", jstr("https://upload.qiniup.com")),
+            ])))
+            Err(msg) -> Err(http_error(500, msg))
+          }
+        }
+        Err(e) -> Err(http_error(422, e))
+      })
+
+fn uuid_hex() -> String !io = join(split(uuid(), "-"), "")
+
+fn ledger(c: Connection, key: String, rel: String) -> Result[Int, String] !io =
+  ledger_insert(c, key, full(rel))
+
+fn qparam(req: Request, name: String) -> String =
+  match query(req, name) {
+    Some(v) -> v
+    None -> ""
+  }
+
+## The fm routes (protected). Static paths precede any captures.
 pub fn routes(a: Auth) -> List[Route] =
   [
     Get("/api/fm", fm_list(a)),
+    Get("/api/fm/sign", sign(a)),
+    Get("/api/fm/preview", preview(a)),
+    Get("/api/fm/download", download(a)),
     Post("/api/fm/create-folder", create_folder(a)),
     Post("/api/fm/rename", rename(a)),
     Post("/api/fm/move", move(a)),
+    Post("/api/fm/upload-token", upload_token_ep(a)),
   ]

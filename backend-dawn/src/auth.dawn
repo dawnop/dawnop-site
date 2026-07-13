@@ -13,9 +13,18 @@ use sql.{PStr, ColInt, ColStr, query, int_at, str_at}
 use jwt.{sign, verify}
 
 ## App context passed to protected handlers: the db, the JWT secret and token
-## lifetime, and the storage quota default (for settings). Named Auth for the
-## authentication it primarily carries.
-pub type Auth = { db: Db, secret: String, expire_min: Int, storage_quota: Int }
+## lifetime, the storage quota default (for settings), and the qiniu credentials
+## and bucket/domain (for fm). Named Auth for the authentication it carries.
+pub type Auth = {
+  db: Db,
+  secret: String,
+  expire_min: Int,
+  storage_quota: Int,
+  qiniu: Qiniu,
+}
+
+## Qiniu Kodo config for fm signing.
+pub type Qiniu = { ak: String, sk: String, bucket: String, domain: String, expires: Int }
 
 # ---- user lookup ----
 

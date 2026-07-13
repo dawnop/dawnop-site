@@ -10,7 +10,7 @@ use api_public
 use api_admin
 use api_admin2
 use api_fm
-use auth.{Auth, routes}
+use auth.{Auth, Qiniu, routes}
 
 pub fn main() -> Unit !io = {
   let cfg = load(env_or("DAWNOP_ENV", "backend/.env"))
@@ -22,7 +22,17 @@ pub fn main() -> Unit !io = {
   let secret = get_or(cfg, "SECRET_KEY", "dev-insecure-secret-change-me-before-deploying-to-production")
   let expire_min = parse_or(get_or(cfg, "ACCESS_TOKEN_EXPIRE_MINUTES", "1440"), 1440)
   let storage_quota = parse_or(get_or(cfg, "STORAGE_QUOTA_GB", "10"), 10)
-  let a = Auth { db: db, secret: secret, expire_min: expire_min, storage_quota: storage_quota }
+  let qiniu = Qiniu {
+    ak: get_or(cfg, "QINIU_ACCESS_KEY", ""),
+    sk: get_or(cfg, "QINIU_SECRET_KEY", ""),
+    bucket: get_or(cfg, "QINIU_BUCKET", ""),
+    domain: get_or(cfg, "QINIU_DOMAIN", ""),
+    expires: parse_or(get_or(cfg, "QINIU_TOKEN_EXPIRES", "3600"), 3600),
+  }
+  let a = Auth {
+    db: db, secret: secret, expire_min: expire_min,
+    storage_quota: storage_quota, qiniu: qiniu,
+  }
 
   println("backend-dawn starting: db=$db_path port=$port")
   # admin routes precede the public /api/{articles,pages,tags}/{slug} so the
