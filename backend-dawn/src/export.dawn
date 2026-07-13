@@ -1,0 +1,80 @@
+# Markdown export (M6 knife 9): reproduce app/api/articles.py's frontmatter and
+# file body. Symmetric with the frontend's parseFrontmatter, so export→new-post
+# round-trips (auto_title articles omit the title line — the H1 carries it).
+use java "java.sql.Connection"
+use java "java.net.URLEncoder"
+use sql.{PInt, ColInt, ColStr, query, str_at, int_at, bool_at}
+
+## Percent-encode for a Content-Disposition filename* (RFC 5987 / Python quote).
+## URLEncoder emits form encoding (space→'+'); fix '+' back to %20. Slugs have no
+## spaces, but keep the correction for safety.
+pub fn url_encode(s: String) -> String !io = {
+  let e = URLEncoder.encode(s, "UTF-8").expect("enc")
+  join(split(e, "+"), "%20")
+}
+
+## Minimal YAML scalar: quote when empty, edge-space/dash, or containing any of
+## : # [ ] { } > | * & ! % @ ` " ' newline; else bare. (matches _yaml_scalar)
+pub fn yaml_scalar(s: String) -> String =
+  if needs_quote(s) {
+    "\"" ++ join(split(join(split(s, "\\"), "\\\\"), "\""), "\\\"") ++ "\""
+  } else {
+    s
+  }
+
+fn needs_quote(s: String) -> Bool = {
+  let cps = code_points(s)
+  if len(cps) == 0 {
+    true
+  } else {
+    let first = cps[0]
+    let last = cps[len(cps) - 1]
+    first == 32 || first == 45 || last == 32 || fold(cps, false, fn(acc, c) => acc || is_special(c))
+  }
+}
+
+fn is_special(c: Int) -> Bool =
+  c == 58 || c == 35 || c == 91 || c == 93 || c == 123 || c == 125 || c == 62 || c == 124 ||
+  c == 42 || c == 38 || c == 33 || c == 37 || c == 64 || c == 96 || c == 34 || c == 39 || c == 10
+
+## Build the article's markdown (frontmatter + content). Returns (slug, body).
+pub fn export_markdown(c: Connection, id: Int) -> Result[Option[(String, String)], String] !io = {
+  let rows = query(c, "select title, slug, summary, content, published, auto_title from articles where id = ?", [PInt(id)], [ColStr, ColStr, ColStr, ColStr, ColInt, ColInt])?
+  match get(rows, 0) {
+    Some(r) -> {
+      let title = str_at(r, 0)
+      let slug = str_at(r, 1)
+      let summary = str_at(r, 2)
+      let content = str_at(r, 3)
+      let published = bool_at(r, 4)
+      let auto_title = bool_at(r, 5)
+      let tags = tag_names(c, id)?
+      let fm = frontmatter(title, slug, summary, published, auto_title, tags)
+      Ok(Some((slug, fm ++ content)))
+    }
+    None -> Ok(None)
+  }
+}
+
+fn tag_names(c: Connection, id: Int) -> Result[List[String], String] !io = {
+  let rows = query(c, "select t.name from tags t join article_tags at on at.tag_id = t.id where at.article_id = ? order by t.name", [PInt(id)], [ColStr])?
+  Ok(map(rows, fn(r) => str_at(r, 0)))
+}
+
+fn frontmatter(title: String, slug: String, summary: String, published: Bool, auto_title: Bool, tags: List[String]) -> String = {
+  let l1: List[String] = if auto_title { [] } else { ["title: ${yaml_scalar(title)}"] }
+  let l2: List[String] = if summary != "" { ["summary: ${yaml_scalar(summary)}"] } else { [] }
+  let l3: List[String] = ["slug: $slug"]
+  let l4: List[String] = if len(tags) > 0 { ["tags: [" ++ join(map(tags, yaml_scalar), ", ") ++ "]"] } else { [] }
+  let l5: List[String] = [if published { "published: true" } else { "published: false" }]
+  let lines = l1 ++ l2 ++ l3 ++ l4 ++ l5
+  "---\n" ++ join(lines, "\n") ++ "\n---\n\n"
+}
+
+test "yaml_scalar quotes only when needed" {
+  assert yaml_scalar("simple") == "simple"
+  assert yaml_scalar("has: colon") == "\"has: colon\""
+  assert yaml_scalar("") == "\"\""
+  assert yaml_scalar("-dash") == "\"-dash\""
+  assert yaml_scalar("trail ") == "\"trail \""
+}

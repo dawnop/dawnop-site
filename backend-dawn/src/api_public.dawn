@@ -7,7 +7,8 @@ use web/router.{Route, Get}
 use json/value.{Json, JArr}
 use jsonx.{paginated, detail, obj, jstr}
 use db.{Db, with_db}
-use repo_article.{list_published, list_by_page, by_slug, bump_views}
+use auth.{Auth, is_authed}
+use repo_article.{list_published, list_by_page, by_slug, by_slug_any, published_of, bump_views}
 use repo_page
 use repo_tag
 use repo_viz
@@ -48,21 +49,31 @@ pub fn list_articles(db: Db) -> Handler =
     }
   }
 
-## GET /api/articles/{slug} — one published article, 404 when absent.
-pub fn get_article(db: Db) -> Handler =
+## GET /api/articles/{slug} — one article. Drafts are visible only to a logged-in
+## admin (via Bearer or ?token=); anonymous requests 404 them. Views bump only
+## for an anonymous visitor on a published article. updated_at is intentionally
+## left unchanged on a view (a documented refinement of the FastAPI behavior).
+pub fn get_article(db: Db, a: Auth) -> Handler =
   fn(req) => {
     let slug = map_get_or(req.params, "slug", "")
-    # the detail GET bumps the view counter, then returns the article (a write,
-    # matching FastAPI). updated_at is intentionally left unchanged — a view is
-    # not a modification (documented refinement of the FastAPI behavior).
-    match with_db(db.path, db.ext, fn(c) => {
-      let _b = bump_views(c, slug)
-      by_slug(c, slug)
-    }) {
+    let authed = is_authed(a, req)
+    match with_db(db.path, db.ext, fn(c) => fetch_detail(c, slug, authed)) {
       Ok(Some(j)) -> Ok(json_ok(j))
       Ok(None) -> Err(http_error(404, "文章不存在"))
       Err(m) -> Err(http_error(500, m))
     }
+  }
+
+fn fetch_detail(c: Connection, slug: String, authed: Bool) -> Result[Option[Json], String] !io =
+  match published_of(c, slug)? {
+    None -> Ok(None)
+    Some(published) ->
+      if published == false && authed == false {
+        Ok(None)
+      } else {
+        let _b = if authed == false && published { bump_views(c, slug)? } else { 0 }
+        by_slug_any(c, slug)
+      }
   }
 
 fn map_get_or(m: Map[String, String], k: String, fallback: String) -> String =
@@ -160,14 +171,15 @@ pub fn get_viz(db: Db) -> Handler =
     }
   }
 
-## The public read routes, bound to a db handle.
-pub fn routes(db: Db) -> List[Route] =
+## The public read routes, bound to a db handle and the auth context (for the
+## optional draft-preview auth on article detail).
+pub fn routes(db: Db, a: Auth) -> List[Route] =
   [
     Get("/api/health", health),
     Get("/api/search", search(db)),
     Get("/api/viz/{slug}", get_viz(db)),
     Get("/api/articles", list_articles(db)),
-    Get("/api/articles/{slug}", get_article(db)),
+    Get("/api/articles/{slug}", get_article(db, a)),
     Get("/api/pages/nav", get_nav(db)),
     Get("/api/pages/{slug}", get_page(db)),
     Get("/api/pages/{slug}/articles", get_page_articles(db)),

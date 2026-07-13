@@ -2,7 +2,8 @@
 # handler authenticates first via auth.current_user; the request body is JSON
 # (create/update). Writes run on a connection with the FTS extension loaded.
 use java "java.sql.Connection"
-use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, text}
+use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, text, raw, with_header}
+use export.{export_markdown, url_encode}
 use web/router.{Route, Get, Post, Put, Delete}
 use json/value.{Json}
 use jsonx.{paginated, obj, jstr, jint}
@@ -154,6 +155,25 @@ fn update_then_read(c: Connection, id: Int, p: ArticlePatch) -> Result[Option[Js
   if ok { repo_article.by_id_admin(c, id) } else { Ok(None) }
 }
 
+## GET /api/articles/{article_id}/export — Markdown file with YAML frontmatter.
+pub fn export_md(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn(_u) =>
+      match parse_int(param(req, "article_id")) {
+        Some(id) ->
+          match with_db(a.db.path, a.db.ext, fn(c) => export_markdown(c, id)) {
+            Ok(Some(pair)) -> {
+              let (slug, body) = pair
+              Ok(with_header(
+                raw(200, "text/markdown; charset=utf-8", body),
+                "Content-Disposition", "attachment; filename*=UTF-8''${url_encode(slug)}.md"))
+            }
+            Ok(None) -> Err(http_error(404, "文章不存在"))
+            Err(m) -> Err(http_error(500, m))
+          }
+        None -> Err(http_error(422, "article_id must be an integer"))
+      })
+
 ## DELETE /api/articles/{article_id} — 204 on success.
 pub fn remove(a: Auth) -> Handler =
   fn(req) =>
@@ -177,6 +197,7 @@ pub fn routes(a: Auth) -> List[Route] =
     Get("/api/articles/admin", list_admin(a)),
     Get("/api/articles/admin/stats", admin_stats(a)),
     Get("/api/articles/admin/{article_id}", admin_get(a)),
+    Get("/api/articles/{article_id}/export", export_md(a)),
     Post("/api/articles", create(a)),
     Put("/api/articles/{article_id}", update(a)),
     Delete("/api/articles/{article_id}", remove(a)),

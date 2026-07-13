@@ -198,6 +198,44 @@ pub fn by_id_admin(c: Connection, id: Int) -> Result[Option[Json], String] !io =
   }
 }
 
+## The published flag for a slug (None when the slug is absent). Drives the
+## draft-preview / view-bump rules on the public detail endpoint.
+pub fn published_of(c: Connection, slug: String) -> Result[Option[Bool], String] !io = {
+  let rows = query(c, "select published from articles where slug = ?", [PStr(slug)], [ColInt])?
+  match get(rows, 0) {
+    Some(r) -> Ok(Some(int_at(r, 0) != 0))
+    None -> Ok(None)
+  }
+}
+
+## Full detail for any article by slug, regardless of published state and
+## without bumping views (draft preview for logged-in admins).
+pub fn by_slug_any(c: Connection, slug: String) -> Result[Option[Json], String] !io = {
+  let rows = query(c, "select $LIST_COLS from articles a where a.slug = ?", [PStr(slug)], list_col_types())?
+  match get(rows, 0) {
+    Some(r) -> {
+      let id = int_at(r, 0)
+      let tags = tags_json(c, id)?
+      Ok(Some(obj([
+        ("id", jint(id)),
+        ("title", jstr(str_at(r, 1))),
+        ("slug", jstr(str_at(r, 2))),
+        ("summary", jopt_str(opt_str_at(r, 3))),
+        ("content", jstr(str_at(r, 9))),
+        ("published", jbool(bool_at(r, 4))),
+        ("auto_title", jbool(bool_at(r, 10))),
+        ("page_id", jopt_int(opt_int_at(r, 5))),
+        ("word_count", jint(word_count(str_at(r, 9)))),
+        ("views", jint(int_at(r, 6))),
+        ("tags", JArr(tags)),
+        ("created_at", jdatetime(str_at(r, 7))),
+        ("updated_at", jdatetime(str_at(r, 8))),
+      ])))
+    }
+    None -> Ok(None)
+  }
+}
+
 ## Increment a published article's view counter (the detail GET is a write in
 ## the FastAPI contract). No-op for missing/unpublished slugs.
 pub fn bump_views(c: Connection, slug: String) -> Result[Int, String] !io =

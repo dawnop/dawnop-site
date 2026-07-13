@@ -26,7 +26,7 @@ pub fn main() -> Unit !io = {
   println("backend-dawn starting: db=$db_path port=$port")
   # admin routes precede the public /api/{articles,pages,tags}/{slug} so the
   # static /admin, /reorder, /merge, /cleanup paths win over the {slug} capture
-  serve_app(port, api_admin.routes(a) ++ api_admin2.routes(a) ++ api_public.routes(db) ++ routes(a), [
+  serve_app(port, api_admin.routes(a) ++ api_admin2.routes(a) ++ api_public.routes(db, a) ++ routes(a), [
     with_logging,
     fn(next) => with_cors(origin, next),
     fn(next) => with_body_limit(2000000, next),

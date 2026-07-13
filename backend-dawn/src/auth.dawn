@@ -118,6 +118,14 @@ pub fn current_user(a: Auth, req: Request) -> Result[String, HttpError] !io = {
 
 fn query_token(req: Request) -> Option[String] = map_get(req.query, "token")
 
+## Whether the request carries a valid token (optional auth). Used by endpoints
+## that behave differently for logged-in admins (e.g. draft preview).
+pub fn is_authed(a: Auth, req: Request) -> Bool !io =
+  match current_user(a, req) {
+    Ok(_u) -> true
+    Err(_e) -> false
+  }
+
 fn get_or_blank(m: Map[String, String], k: String) -> String =
   match map_get(m, k) {
     Some(v) -> v
