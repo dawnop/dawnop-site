@@ -12,6 +12,15 @@ pub fn entry_uri(bucket: String, key: String) -> String !io = b64url_encode("$bu
 pub fn entry_token(ak: String, sk: String, op: String, entry: String) -> String !io =
   management_token(ak, sk, "/$op/$entry\n")
 
+## QiniuMacAuth token (the statistics API, api.qiniuapi.com). Signs
+## "METHOD /path?query\nHost: host\nContent-Type: ct\n\n". Returns the full
+## "Qiniu ak:sign" Authorization value.
+pub fn qiniu_mac_token(ak: String, sk: String, method: String, path: String, query: String, host: String, content_type: String) -> String !io = {
+  let signing = "$method $path?$query\nHost: $host\nContent-Type: $content_type\n\n"
+  let sign = hmac_sha1_b64url(sk, signing)
+  "Qiniu $ak:$sign"
+}
+
 ## Upload token for a specific key (spec: putPolicy → base64 → HMAC-SHA1 → token).
 ## putPolicy is {"scope":"bucket:key","deadline":<unix>} in that key order (the
 ## qiniu SDK's dict order), so the base64 matches byte-for-byte.
@@ -51,4 +60,6 @@ test "signatures match the qiniu SDK byte-for-byte" {
   let entry = entry_uri("mybucket", "path/to/file.jpg")
   assert entry_token("AKtest", "SKtest", "stat", entry) == "QBox AKtest:a7a0HH5stgcmowbc-vWoHroXYJU="
   assert entry_token("AKtest", "SKtest", "delete", entry) == "QBox AKtest:-7Eh_fzs9TcII1AZPjkouLF26fc="
+  assert qiniu_mac_token("AKtest", "SKtest", "GET", "/v6/space", "bucket=mybucket&begin=20260701000000&end=20260714120000&g=day", "api.qiniuapi.com", "application/x-www-form-urlencoded") ==
+    "Qiniu AKtest:4tea02U1hxRrkWbTP1pUcrBOqmo="
 }

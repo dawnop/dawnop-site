@@ -8,15 +8,17 @@ use java "java.lang.Object"
 use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query, redirect, binary}
 use http.{fetch_bytes}
 use web/router.{Route, Get, Post}
-use jsonx.{obj, jstr}
+use jsonx.{obj, jstr, jint}
 use db.{Db, with_db}
 use auth.{Auth, Qiniu, current_user}
 use jsonread.{body_obj, str_or, str_list}
 use fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full}
-use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, ledger_insert, ledger_delete, search_files, subtree_rows, entry_json, delete_row, FileRow}
+use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, ledger_insert, ledger_delete, search_files, subtree_rows, entry_json, delete_row, stats_db, FileRow}
 use crypto.{uuid}
 use qiniu_sign.{private_url, upload_token}
-use qiniu_rs.{delete_obj, copy_obj, stat, upload_text}
+use qiniu_rs.{delete_obj, copy_obj, stat, upload_text, space_used}
+use java "java.time.LocalDate"
+use java "java.time.format.DateTimeFormatter"
 use json/value.{Json, JArr, JObj, JStr, JNum, JInt}
 use json/parser.{parse}
 
@@ -184,6 +186,40 @@ pub fn sign(a: Auth) -> Handler =
       Err(m) -> Err(http_error(500, m))
     }
   })
+
+## GET /api/fm/stats — storage usage: {used, used_local, used_remote, files,
+## dirs, quota}. Local (DB) figures are exact; remote/quota are live qiniu data.
+pub fn stats(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match with_db(a.db.path, a.db.ext, fn(c) => stats_db(c)) {
+        Ok(triple) -> {
+          let (used_local, files, dirs) = triple
+          let remote = space_used(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, begin_30d(), end_now())
+          let used = if used_local > remote { used_local } else { remote }
+          let quota = a.storage_quota * 1024 * 1024 * 1024
+          Ok(json_ok(obj([
+            ("used", jint(used)),
+            ("used_local", jint(used_local)),
+            ("used_remote", jint(remote)),
+            ("files", jint(files)),
+            ("dirs", jint(dirs)),
+            ("quota", jint(quota)),
+          ])))
+        }
+        Err(m) -> Err(http_error(500, m))
+      })
+
+fn begin_30d() -> String !io = {
+  let fmt = DateTimeFormatter.ofPattern("yyyyMMdd").expect("f")
+  let d = LocalDate.now().expect("now").minusDays(30).expect("d")
+  "${d.format(fmt).expect("s")}000000"
+}
+
+fn end_now() -> String !io = {
+  let fmt = DateTimeFormatter.ofPattern("yyyyMMdd").expect("f")
+  "${LocalDate.now().expect("now").format(fmt).expect("s")}235959"
+}
 
 ## GET /api/fm/content?path= — proxy the object bytes through the backend (the
 ## fallback when a cross-origin 302 to qiniu is CORS-blocked). Binary body (G6).
@@ -617,6 +653,7 @@ pub fn routes(a: Auth) -> List[Route] =
     Get("/api/fm/preview", preview(a)),
     Get("/api/fm/download", download(a)),
     Get("/api/fm/content", content(a)),
+    Get("/api/fm/stats", stats(a)),
     Get("/api/fm/search", fm_search(a)),
     Post("/api/fm/create-folder", create_folder(a)),
     Post("/api/fm/rename", rename(a)),

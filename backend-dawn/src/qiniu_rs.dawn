@@ -3,9 +3,45 @@
 # Pure Dawn over the http client — the official SDK drags okhttp+gson, so this
 # hand-rolls the three verbs fm needs.
 use http.{HttpResp, post, fetch}
-use qiniu_sign.{entry_uri, entry_token, management_token, upload_token}
+use qiniu_sign.{entry_uri, entry_token, management_token, upload_token, qiniu_mac_token}
+use json/value.{Json, JObj, JArr, JNum, JInt}
+use json/parser.{parse}
 
 const RS_HOST: String = "https://rs.qiniu.com"
+const STAT_HOST: String = "api.qiniuapi.com"
+
+## Latest daily storage bytes for a bucket over the last `days` (statistics API,
+## QiniuMacAuth). Returns the last non-zero data point, or 0 on any failure —
+## the local metadata sum is the authoritative fallback (stats takes the max).
+pub fn space_used(ak: String, sk: String, bucket: String, begin: String, end: String) -> Int !io = {
+  let query = "bucket=$bucket&begin=$begin&end=$end&g=day"
+  let path = "/v6/space"
+  let auth = qiniu_mac_token(ak, sk, "GET", path, query, STAT_HOST, "application/x-www-form-urlencoded")
+  let url = "https://$STAT_HOST$path?$query"
+  match fetch(url, [("Authorization", auth), ("Content-Type", "application/x-www-form-urlencoded")]) {
+    Ok(r) -> if r.status == 200 { last_data(r.body) } else { 0 }
+    Err(_) -> 0
+  }
+}
+
+# the space response is {"datas":[n,n,...],"times":[...]}; take the last data
+fn last_data(body: String) -> Int !io =
+  match parse(body) {
+    Ok(JObj(m)) ->
+      match map_get(m, "datas") {
+        Some(JArr(xs)) -> last_int(xs)
+        _ -> 0
+      }
+    _ -> 0
+  }
+
+fn last_int(xs: List[Json]) -> Int =
+  fold(xs, 0, fn(acc, j) =>
+      match j {
+        JInt(n) -> n
+        JNum(x) -> to_int(x)
+        _ -> acc
+      })
 const UP_HOST: String = "https://upload.qiniup.com"
 const BOUNDARY: String = "----DawnFmBoundary7MA4YWxkTrZu0gW"
 

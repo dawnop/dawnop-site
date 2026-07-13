@@ -164,6 +164,22 @@ pub fn insert_file(c: Connection, rel: String, key: String, content_type: String
 pub fn ledger_delete(c: Connection, key: String) -> Result[Int, String] !io =
   exec(c, "delete from pending_uploads where key = ?", [PStr(key)])
 
+## Local storage stats from the metadata: (used_bytes, file_count, dir_count).
+pub fn stats_db(c: Connection) -> Result[(Int, Int, Int), String] !io = {
+  let used = scalar_or0(c, "select coalesce(sum(size), 0) from files where is_dir = 0")?
+  let files = scalar_or0(c, "select count(*) from files where is_dir = 0")?
+  let dirs = scalar_or0(c, "select count(*) from files where is_dir = 1")?
+  Ok((used, files, dirs))
+}
+
+fn scalar_or0(c: Connection, q: String) -> Result[Int, String] !io = {
+  let rows = query(c, q, [], [ColInt])?
+  match get(rows, 0) {
+    Some(r) -> Ok(int_at(r, 0))
+    None -> Ok(0)
+  }
+}
+
 ## Record a signed upload key in the pending_uploads ledger (orphan tracking).
 pub fn ledger_insert(c: Connection, key: String, path: String) -> Result[Int, String] !io =
   exec(c, "insert into pending_uploads (key, path, created_at) values (?, ?, datetime('now')) on conflict(key) do update set path = excluded.path", [PStr(key), PStr(path)])
