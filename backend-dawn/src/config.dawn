@@ -41,11 +41,13 @@ fn unquote(s: String) -> String =
     s
   }
 
-## A config value, preferring the .env file then the process environment.
+## A config value, preferring the process environment then the .env file. This
+## matches pydantic-settings' precedence (env var wins over .env), so the Dawn
+## and FastAPI backends resolve shared keys like SECRET_KEY identically.
 pub fn lookup(cfg: Config, key: String) -> Option[String] !io =
-  match map_get(cfg.values, key) {
+  match System.getenv(key) {
     Some(v) -> Some(v)
-    None -> System.getenv(key)
+    None -> map_get(cfg.values, key)
   }
 
 ## A required value; panics at startup when absent (fail fast, not per request).

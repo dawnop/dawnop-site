@@ -1,0 +1,77 @@
+# JWT HS256 (M6 knife 7), interoperable with PyJWT: same secret, same claims
+# ({sub, exp}). Dawn-issued tokens verify under PyJWT and vice versa — the
+# signature covers the exact "header.payload" string, so byte layout need not
+# match, only the algorithm and secret.
+use java "java.lang.System"
+use crypto.{hmac_sha256_b64url_nopad, b64url_encode_nopad, b64url_decode, eq_const}
+use json/value.{Json, JObj, JNum, JStr}
+use json/parser.{parse}
+
+const HEADER_JSON: String = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}"
+
+fn now_secs() -> Int !io = System.currentTimeMillis() / 1000
+
+## Sign a token for `sub` valid for `exp_minutes`.
+pub fn sign(secret: String, sub: String, exp_minutes: Int) -> String !io = {
+  let head = b64url_encode_nopad(HEADER_JSON)
+  let exp = now_secs() + exp_minutes * 60
+  let payload = b64url_encode_nopad("{\"sub\":\"$sub\",\"exp\":$exp}")
+  let signing_input = "$head.$payload"
+  let sig = hmac_sha256_b64url_nopad(secret, signing_input)
+  "$signing_input.$sig"
+}
+
+## Verify a token's signature and expiry; Ok carries the subject.
+pub fn verify(secret: String, token: String) -> Result[String, String] !io = {
+  let parts = split(token, ".")
+  if len(parts) != 3 {
+    Err("malformed token")
+  } else {
+    let signing_input = "${parts[0]}.${parts[1]}"
+    let expected = hmac_sha256_b64url_nopad(secret, signing_input)
+    if eq_const(expected, parts[2]) == false {
+      Err("bad signature")
+    } else {
+      let payload = b64url_decode(parts[1])?
+      claims_of(payload)
+    }
+  }
+}
+
+fn claims_of(payload_json: String) -> Result[String, String] !io = {
+  let j = parse(payload_json)?
+  match j {
+    JObj(m) -> {
+      let exp_ok: Result[Bool, String] = match map_get(m, "exp") {
+        Some(JNum(t)) -> if to_float(now_secs()) < t { Ok(true) } else { Err("token expired") }
+        _ -> Err("no exp claim")
+      }
+      let _e = exp_ok?
+      let sub: Result[String, String] = match map_get(m, "sub") {
+        Some(JStr(s)) -> Ok(s)
+        _ -> Err("no sub claim")
+      }
+      sub
+    }
+    _ -> Err("payload is not an object")
+  }
+}
+
+test "sign then verify round-trips the subject" {
+  let tok = sign("secret", "admin", 60)
+  assert verify("secret", tok) == Ok("admin")
+}
+
+test "a tampered signature is rejected" {
+  let tok = sign("secret", "admin", 60)
+  assert verify("wrong-secret", tok) == Err("bad signature")
+}
+
+test "an expired token is rejected" {
+  let tok = sign("secret", "admin", 0 - 1)
+  assert verify("secret", tok) == Err("token expired")
+}
+
+test "malformed tokens are rejected" {
+  assert verify("secret", "not-a-jwt") == Err("malformed token")
+}

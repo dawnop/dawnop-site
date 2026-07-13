@@ -6,7 +6,8 @@ use config.{load, get_or}
 use db.{Db}
 use web/server.{serve_app}
 use web/middleware.{with_logging, with_cors, with_body_limit}
-use api_public.{routes}
+use api_public
+use auth.{Auth, routes}
 
 pub fn main() -> Unit !io = {
   let cfg = load(env_or("DAWNOP_ENV", "backend/.env"))
@@ -15,9 +16,12 @@ pub fn main() -> Unit !io = {
   let db = Db { path: db_path, ext: db_ext }
   let port = parse_or(get_or(cfg, "DAWN_PORT", "8001"), 8001)
   let origin = get_or(cfg, "DAWN_CORS_ORIGIN", "https://dawnop.com")
+  let secret = get_or(cfg, "SECRET_KEY", "dev-insecure-secret-change-me-before-deploying-to-production")
+  let expire_min = parse_or(get_or(cfg, "ACCESS_TOKEN_EXPIRE_MINUTES", "1440"), 1440)
+  let a = Auth { db: db, secret: secret, expire_min: expire_min }
 
   println("backend-dawn starting: db=$db_path port=$port")
-  serve_app(port, routes(db), [
+  serve_app(port, api_public.routes(db) ++ routes(a), [
     with_logging,
     fn(next) => with_cors(origin, next),
     fn(next) => with_body_limit(2000000, next),
