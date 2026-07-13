@@ -1,0 +1,37 @@
+# backend-dawn entry point (M6). Reads config, wires routes and middleware,
+# binds 127.0.0.1:PORT. nginx terminates TLS and reverse-proxies /api here
+# during the gradual cutover from the FastAPI backend.
+use java "java.lang.System"
+use config.{load, get_or}
+use db.{Db}
+use web/server.{serve_app}
+use web/middleware.{with_logging, with_cors, with_body_limit}
+use api_public.{routes}
+
+pub fn main() -> Unit !io = {
+  let cfg = load(env_or("DAWNOP_ENV", "backend/.env"))
+  let db_path = get_or(cfg, "DAWN_DB_PATH", "backend/dawnop.db")
+  let db_ext = get_or(cfg, "DAWN_SIMPLE_EXT", "backend/extensions/libsimple")
+  let db = Db { path: db_path, ext: db_ext }
+  let port = parse_or(get_or(cfg, "DAWN_PORT", "8001"), 8001)
+  let origin = get_or(cfg, "DAWN_CORS_ORIGIN", "https://dawnop.com")
+
+  println("backend-dawn starting: db=$db_path port=$port")
+  serve_app(port, routes(db), [
+    with_logging,
+    fn(next) => with_cors(origin, next),
+    fn(next) => with_body_limit(2000000, next),
+  ])
+}
+
+fn env_or(key: String, fallback: String) -> String !io =
+  match System.getenv(key) {
+    Some(v) -> v
+    None -> fallback
+  }
+
+fn parse_or(s: String, fallback: Int) -> Int =
+  match parse_int(s) {
+    Some(n) -> n
+    None -> fallback
+  }

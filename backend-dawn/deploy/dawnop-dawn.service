@@ -1,0 +1,26 @@
+[Unit]
+Description=dawnop.com backend, rewritten in Dawn (M6)
+After=network.target
+
+[Service]
+Type=simple
+# runs alongside the FastAPI service (dawnop-backend) during the gradual cutover;
+# nginx routes individual /api locations here as they are ported and verified.
+User=dawnop
+Group=dawnop
+WorkingDirectory=/opt/dawnop-dawn
+Environment=DAWNOP_ENV=/opt/dawnop-dawn/.env
+# JRE 21 (already installed for the playground runner); the app is a plain jar
+# whose manifest Class-Path points at lib/sqlite-jdbc-*.jar next to it.
+ExecStart=/usr/bin/java -Xmx256m -jar /opt/dawnop-dawn/backend-dawn.jar
+Restart=on-failure
+RestartSec=3
+# hardening (mirrors the FastAPI unit)
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/dawnop/data
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

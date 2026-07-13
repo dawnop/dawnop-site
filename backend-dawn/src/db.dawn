@@ -1,0 +1,34 @@
+# Database access (M6 knife 6). One connection per request (opened by with_db):
+# SQLite + virtual-thread-per-request would race on a shared Connection, and
+# opening is cheap on a memory-mapped file. WAL lets Python and Dawn share the
+# file during the gradual cutover (readers never block the single writer).
+use java "java.sql.Connection"
+use sql.{open_ext, exec, query, ColStr}
+
+## A database handle: the file path plus the FTS `simple` extension path. Passed
+## to handlers so each request can open its own connection (see with_db).
+pub type Db = { path: String, ext: String }
+
+## Open the app database at `path` in WAL mode with a busy timeout, and load the
+## FTS `simple` tokenizer extension. The extension is REQUIRED for any write to
+## `articles`: the article_fts sync triggers reference tokenize='simple', so a
+## connection without it fails every insert/update on articles ("no such
+## tokenizer: simple"). Reads are unaffected. `ext` is a path with or without
+## the platform suffix (SQLite appends .dylib/.so); "" skips loading.
+pub fn connect(path: String, ext: String) -> Connection !io = {
+  let c = open_ext("jdbc:sqlite:$path")
+  let _w = exec(c, "PRAGMA journal_mode=WAL", [])
+  let _b = exec(c, "PRAGMA busy_timeout=5000", [])
+  if ext != "" {
+    let _e = query(c, "select load_extension('$ext')", [], [ColStr])
+  }
+  c
+}
+
+## Open a connection, run `body`, and close it — the per-request lifecycle.
+pub fn with_db[T](path: String, ext: String, body: fn(Connection) -> T !io) -> T !io = {
+  let c = connect(path, ext)
+  let r = body(c)
+  c.close()
+  r
+}

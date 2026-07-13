@@ -1,0 +1,52 @@
+# JSON building helpers over the vendored json/value (M6 knife 6). Terser object
+# construction plus Option → JNull/value, matching the FastAPI wire shapes.
+use json/value.{Json, JNull, JBool, JInt, JStr, JArr, JObj}
+
+## Build an object from ordered (key, value) pairs.
+pub fn obj(pairs: List[(String, Json)]) -> Json = JObj(map_from(pairs))
+
+## An Int as JSON (renders without a decimal point).
+pub fn jint(n: Int) -> Json = JInt(n)
+
+pub fn jstr(s: String) -> Json = JStr(s)
+pub fn jbool(b: Bool) -> Json = JBool(b)
+
+pub fn jopt_int(o: Option[Int]) -> Json =
+  match o {
+    Some(n) -> JInt(n)
+    None -> JNull
+  }
+
+pub fn jopt_str(o: Option[String]) -> Json =
+  match o {
+    Some(s) -> JStr(s)
+    None -> JNull
+  }
+
+## A SQLite DATETIME ("YYYY-MM-DD HH:MM:SS[.ffffff]") as an ISO-8601 string with
+## a 'T' separator, matching Pydantic: a zero microsecond fraction is dropped
+## (a non-zero fraction is kept as stored).
+pub fn jdatetime(s: String) -> Json = JStr(iso_datetime(s))
+
+fn iso_datetime(s: String) -> String = join(split(drop_zero_frac(s), " "), "T")
+
+fn drop_zero_frac(s: String) -> String =
+  match split(s, ".") {
+    [whole, frac] -> if all_zero(frac) { whole } else { s }
+    _ -> s
+  }
+
+fn all_zero(s: String) -> Bool =
+  fold(code_points(s), true, fn(acc, c) => acc && c == 48)
+
+## Standard paginated envelope: {total, page, size, items}.
+pub fn paginated(total: Int, page: Int, size: Int, items: List[Json]) -> Json =
+  obj([
+    ("total", JInt(total)),
+    ("page", JInt(page)),
+    ("size", JInt(size)),
+    ("items", JArr(items)),
+  ])
+
+## The FastAPI error body shape: {"detail": message}.
+pub fn detail(message: String) -> Json = obj([("detail", JStr(message))])

@@ -1,0 +1,75 @@
+# Public read handlers (M6 knife 6/8). Handlers close over the db path and open
+# a connection per request via with_db. Errors map to the FastAPI JSON shape
+# {"detail": ...} through the web framework's Err branch.
+use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, query}
+use web/router.{Route, Get}
+use json/value.{Json}
+use jsonx.{paginated, detail, obj, jstr}
+use db.{Db, with_db}
+use repo_article.{list_published, by_slug, bump_views}
+
+fn qint(req: Request, name: String, fallback: Int) -> Int =
+  match query(req, name) {
+    Some(s) ->
+      match parse_int(s) {
+        Some(n) -> n
+        None -> fallback
+      }
+    None -> fallback
+  }
+
+fn clamp(n: Int, lo: Int, hi: Int) -> Int =
+  if n < lo { lo } else if n > hi { hi } else { n }
+
+## GET /api/health — liveness, matches the FastAPI shape.
+pub fn health(req: Request) -> Result[Response, HttpError] !io =
+  Ok(json_ok(mk_health()))
+
+fn mk_health() -> Json = obj([("status", jstr("ok")), ("app", jstr("dawnop-site"))])
+
+## GET /api/articles — published list, paginated, optional ?tag= filter.
+pub fn list_articles(db: Db) -> Handler =
+  fn(req) => {
+    let page = clamp(qint(req, "page", 1), 1, 1000000)
+    let size = clamp(qint(req, "size", 10), 1, 100)
+    let tag = query(req, "tag")
+    let outcome = with_db(db.path, db.ext, fn(c) => list_published(c, tag, page, size))
+    match outcome {
+      Ok(pair) -> {
+        let (total, items) = pair
+        Ok(json_ok(paginated(total, page, size, items)))
+      }
+      Err(m) -> Err(http_error(500, m))
+    }
+  }
+
+## GET /api/articles/{slug} — one published article, 404 when absent.
+pub fn get_article(db: Db) -> Handler =
+  fn(req) => {
+    let slug = map_get_or(req.params, "slug", "")
+    # the detail GET bumps the view counter, then returns the article (a write,
+    # matching FastAPI). updated_at is intentionally left unchanged — a view is
+    # not a modification (documented refinement of the FastAPI behavior).
+    match with_db(db.path, db.ext, fn(c) => {
+      let _b = bump_views(c, slug)
+      by_slug(c, slug)
+    }) {
+      Ok(Some(j)) -> Ok(json_ok(j))
+      Ok(None) -> Err(http_error(404, "文章不存在"))
+      Err(m) -> Err(http_error(500, m))
+    }
+  }
+
+fn map_get_or(m: Map[String, String], k: String, fallback: String) -> String =
+  match map_get(m, k) {
+    Some(v) -> v
+    None -> fallback
+  }
+
+## The public read routes, bound to a db handle.
+pub fn routes(db: Db) -> List[Route] =
+  [
+    Get("/api/health", health),
+    Get("/api/articles", list_articles(db)),
+    Get("/api/articles/{slug}", get_article(db)),
+  ]

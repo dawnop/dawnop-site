@@ -1,0 +1,158 @@
+# Article read model (M6 knife 6/8): queries against the shared SQLite plus the
+# row → JSON shaping that must match the FastAPI contract byte-for-byte in
+# structure. Word count is computed here (CJK chars + [A-Za-z0-9]+ runs), same
+# as the Python model's `word_count` property.
+use java "java.sql.Connection"
+use sql.{SqlV, PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, int_at, str_at, opt_int_at, opt_str_at, bool_at}
+use json/value.{Json, JArr}
+use jsonx.{obj, jint, jstr, jbool, jopt_int, jopt_str, jdatetime}
+
+# ---- word count (matches app/models/article.py) ----
+
+## CJK code points (U+4E00..U+9FFF) plus maximal ASCII-alphanumeric runs.
+pub fn word_count(content: String) -> Int =
+  count_words(code_points(content), 0, false, 0)
+
+fn count_words(cs: List[Int], i: Int, in_word: Bool, acc: Int) -> Int =
+  if i == len(cs) {
+    acc
+  } else {
+    let c = cs[i]
+    if is_cjk(c) {
+      count_words(cs, i + 1, false, acc + 1)
+    } else if is_alnum(c) {
+      count_words(cs, i + 1, true, if in_word { acc } else { acc + 1 })
+    } else {
+      count_words(cs, i + 1, false, acc)
+    }
+  }
+
+fn is_cjk(c: Int) -> Bool = c >= 19968 && c <= 40959
+
+fn is_alnum(c: Int) -> Bool =
+  (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+
+# ---- tag rows for an article ----
+
+## The tags of one article as JSON [{id,name,slug}], ordered by name (matches
+## the relationship's default ordering used by the API).
+pub fn tags_json(c: Connection, article_id: Int) -> Result[List[Json], String] !io = {
+  let rows = query(c,
+    "select t.id, t.name, t.slug from tags t join article_tags at on at.tag_id = t.id where at.article_id = ? order by t.name",
+    [PInt(article_id)], [ColInt, ColStr, ColStr])?
+  Ok(map(rows, fn(r) => obj([
+    ("id", jint(int_at(r, 0))),
+    ("name", jstr(str_at(r, 1))),
+    ("slug", jstr(str_at(r, 2))),
+  ])))
+}
+
+# ---- article list item (no content) ----
+
+# select list shared by list endpoints; column order fixes the accessor indices
+const LIST_COLS: String = "id, title, slug, summary, published, page_id, views, created_at, updated_at, content, auto_title"
+
+fn list_col_types() -> List[Col] =
+  [ColInt, ColStr, ColStr, ColStr, ColInt, ColInt, ColInt, ColStr, ColStr, ColStr, ColInt]
+
+## Shape one list row (with its tags) into the ArticleListItem JSON.
+fn list_item_json(c: Connection, r: List[Cell]) -> Result[Json, String] !io = {
+  let id = int_at(r, 0)
+  let tags = tags_json(c, id)?
+  Ok(obj([
+    ("id", jint(id)),
+    ("title", jstr(str_at(r, 1))),
+    ("slug", jstr(str_at(r, 2))),
+    ("summary", jopt_str(opt_str_at(r, 3))),
+    ("published", jbool(bool_at(r, 4))),
+    ("page_id", jopt_int(opt_int_at(r, 5))),
+    ("word_count", jint(word_count(str_at(r, 9)))),
+    ("views", jint(int_at(r, 6))),
+    ("tags", JArr(tags)),
+    ("created_at", jdatetime(str_at(r, 7))),
+    ("updated_at", jdatetime(str_at(r, 8))),
+  ]))
+}
+
+fn shape_items(c: Connection, rows: List[List[Cell]], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
+  if i == len(rows) {
+    Ok(acc)
+  } else {
+    let item = list_item_json(c, rows[i])?
+    shape_items(c, rows, i + 1, acc ++ [item])
+  }
+
+## Published articles, newest first, one page. Returns (total, items-json).
+pub fn list_published(c: Connection, tag: Option[String], page: Int, size: Int) -> Result[(Int, List[Json]), String] !io = {
+  let offset = (page - 1) * size
+  let total = count_published(c, tag)?
+  let rows = match tag {
+    Some(slug) ->
+      query(c,
+        "select $LIST_COLS from articles a where a.published = 1 and exists (select 1 from article_tags at join tags t on t.id = at.tag_id where at.article_id = a.id and t.slug = ?) order by a.created_at desc limit ? offset ?",
+        [PStr(slug), PInt(size), PInt(offset)], list_col_types())?
+    None ->
+      query(c,
+        "select $LIST_COLS from articles a where a.published = 1 order by a.created_at desc limit ? offset ?",
+        [PInt(size), PInt(offset)], list_col_types())?
+  }
+  let items = shape_items(c, rows, 0, [])?
+  Ok((total, items))
+}
+
+fn count_published(c: Connection, tag: Option[String]) -> Result[Int, String] !io = {
+  let rows = match tag {
+    Some(slug) ->
+      query(c,
+        "select count(*) from articles a where a.published = 1 and exists (select 1 from article_tags at join tags t on t.id = at.tag_id where at.article_id = a.id and t.slug = ?)",
+        [PStr(slug)], [ColInt])?
+    None -> query(c, "select count(*) from articles where published = 1", [], [ColInt])?
+  }
+  match get(rows, 0) {
+    Some(r) -> Ok(int_at(r, 0))
+    None -> Ok(0)
+  }
+}
+
+## Increment a published article's view counter (the detail GET is a write in
+## the FastAPI contract). No-op for missing/unpublished slugs.
+pub fn bump_views(c: Connection, slug: String) -> Result[Int, String] !io =
+  exec(c, "update articles set views = coalesce(views, 0) + 1, updated_at = updated_at where slug = ? and published = 1", [PStr(slug)])
+
+## One published article by slug, full detail (with content). None when missing
+## or unpublished. Views are bumped by the caller (a write).
+pub fn by_slug(c: Connection, slug: String) -> Result[Option[Json], String] !io = {
+  let rows = query(c,
+    "select $LIST_COLS from articles a where a.slug = ? and a.published = 1",
+    [PStr(slug)], list_col_types())?
+  match get(rows, 0) {
+    Some(r) -> {
+      let id = int_at(r, 0)
+      let tags = tags_json(c, id)?
+      Ok(Some(obj([
+        ("id", jint(id)),
+        ("title", jstr(str_at(r, 1))),
+        ("slug", jstr(str_at(r, 2))),
+        ("summary", jopt_str(opt_str_at(r, 3))),
+        ("content", jstr(str_at(r, 9))),
+        ("published", jbool(bool_at(r, 4))),
+        ("auto_title", jbool(bool_at(r, 10))),
+        ("page_id", jopt_int(opt_int_at(r, 5))),
+        ("word_count", jint(word_count(str_at(r, 9)))),
+        ("views", jint(int_at(r, 6))),
+        ("tags", JArr(tags)),
+        ("created_at", jdatetime(str_at(r, 7))),
+        ("updated_at", jdatetime(str_at(r, 8))),
+      ])))
+    }
+    None -> Ok(None)
+  }
+}
+
+test "word_count mixes CJK chars and ascii runs" {
+  assert word_count("hello world") == 2
+  assert word_count("你好世界") == 4
+  assert word_count("dawn 语言 v2") == 4
+  assert word_count("") == 0
+  assert word_count("a-b-c") == 3
+}

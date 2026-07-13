@@ -62,8 +62,10 @@ pub fn attachment(content_type: String, filename: String, body: String) -> Respo
   with_header(raw(200, content_type, body), "Content-Disposition", "attachment; filename=\"$filename\"")
 
 # The server's rendering of the Err branch and of its own 404/405.
+# backend-dawn divergence (M6): the key is "detail" to match FastAPI's error
+# body {"detail": ...}, which the frontend reads as error.response.data.detail.
 pub fn error_response(e: HttpError) -> Response =
-  json_response(e.status, JObj(map_from([("error", JStr(e.message))])))
+  json_response(e.status, JObj(map_from([("detail", JStr(e.message))])))
 
 # ---- request accessors ----
 
