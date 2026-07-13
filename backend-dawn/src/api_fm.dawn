@@ -1,0 +1,156 @@
+# File-manager handlers (M6 knife 11), pure-metadata subset: list, create-folder,
+# rename, move. These never touch qiniu (rename/move only rewrite paths); the
+# qiniu-mutating endpoints (upload/delete/copy/save) are added separately.
+use java "java.sql.Connection"
+use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query}
+use web/router.{Route, Get, Post}
+use json/value.{Json}
+use db.{Db, with_db}
+use auth.{Auth, current_user}
+use jsonread.{body_obj, str_or, str_list}
+use fm_paths.{fm_split, parent_rel, basename, fm_join}
+use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, reparent, get_row}
+
+fn guarded(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io =
+  match current_user(a, req) {
+    Ok(_u) -> body()
+    Err(e) -> Err(e)
+  }
+
+fn strip_slash(s: String) -> String = fm_split(s)
+
+## GET /api/fm?path= — directory listing (FsData).
+pub fn fm_list(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() => {
+    let path = match query(req, "path") {
+      Some(p) -> p
+      None -> ""
+    }
+    match with_db(a.db.path, a.db.ext, fn(c) => fs_data(c, fm_split(path))) {
+      Ok(j) -> Ok(json_ok(j))
+      Err(m) -> Err(http_error(500, m))
+    }
+  })
+
+## POST /api/fm/create-folder — {path, name}.
+pub fn create_folder(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match body_obj(req.body) {
+        Ok(m) -> {
+          let cur = fm_split(str_or(m, "path", ""))
+          let name = strip_slash(trim(str_or(m, "name", "")))
+          if name == "" {
+            Err(http_error(400, "缺少 name"))
+          } else {
+            let rel = fm_join(cur, name)
+            match with_db(a.db.path, a.db.ext, fn(c) => mk_folder(c, rel, cur)) {
+              Ok(Some(j)) -> Ok(json_ok(j))
+              Ok(None) -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
+              Err(msg) -> Err(http_error(500, msg))
+            }
+          }
+        }
+        Err(e) -> Err(http_error(422, e))
+      })
+
+fn mk_folder(c: Connection, rel: String, cur: String) -> Result[Option[Json], String] !io = {
+  let t = taken(c, rel)?
+  if t {
+    Ok(None)
+  } else {
+    let _e = ensure_dirs(c, rel)?
+    let _i = insert_folder(c, rel)?
+    let d = fs_data(c, cur)?
+    Ok(Some(d))
+  }
+}
+
+## POST /api/fm/rename — {path, item, name}.
+pub fn rename(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match body_obj(req.body) {
+        Ok(m) -> {
+          let cur = fm_split(str_or(m, "path", ""))
+          let old = fm_split(str_or(m, "item", ""))
+          let new_name = strip_slash(trim(str_or(m, "name", "")))
+          if old == "" || new_name == "" {
+            Err(http_error(400, "缺少 item / name"))
+          } else {
+            let new_rel = fm_join(parent_rel(old), new_name)
+            match with_db(a.db.path, a.db.ext, fn(c) => do_rename(c, old, new_rel, cur)) {
+              Ok(Some(j)) -> Ok(json_ok(j))
+              Ok(None) -> Err(http_error(409, "已存在同名项：${basename(new_rel)}"))
+              Err(msg) -> Err(http_error(500, msg))
+            }
+          }
+        }
+        Err(e) -> Err(http_error(422, e))
+      })
+
+fn do_rename(c: Connection, old: String, new_rel: String, cur: String) -> Result[Option[Json], String] !io =
+  if new_rel == old {
+    let d = fs_data(c, cur)?
+    Ok(Some(d))
+  } else {
+    let t = taken(c, new_rel)?
+    if t {
+      Ok(None)
+    } else {
+      let _r = reparent(c, old, new_rel)?
+      let d = fs_data(c, cur)?
+      Ok(Some(d))
+    }
+  }
+
+## POST /api/fm/move — {path, destination, sources[]}.
+pub fn move(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match body_obj(req.body) {
+        Ok(m) -> {
+          let cur = fm_split(str_or(m, "path", ""))
+          let dest = fm_split(str_or(m, "destination", ""))
+          let sources = str_list(m, "sources")
+          match with_db(a.db.path, a.db.ext, fn(c) => do_move(c, sources, dest, cur, 0)) {
+            Ok(j) -> Ok(json_ok(j))
+            Err(msg) -> Err(if contains(msg, "已存在") { http_error(409, msg) } else { http_error(500, msg) })
+          }
+        }
+        Err(e) -> Err(http_error(422, e))
+      })
+
+fn do_move(c: Connection, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
+  if i >= len(sources) {
+    fs_data(c, cur)
+  } else {
+    let src = fm_split(sources[i])
+    if src == "" {
+      do_move(c, sources, dest, cur, i + 1)
+    } else {
+      let new_rel = fm_join(dest, basename(src))
+      if new_rel == src || starts_with(new_rel, "$src/") {
+        do_move(c, sources, dest, cur, i + 1)
+      } else {
+        let t = taken(c, new_rel)?
+        if t {
+          Err("已存在同名项：${basename(new_rel)}")
+        } else {
+          let _e = ensure_dirs(c, new_rel)?
+          let _r = reparent(c, src, new_rel)?
+          do_move(c, sources, dest, cur, i + 1)
+        }
+      }
+    }
+  }
+
+## The pure-metadata fm routes (protected).
+pub fn routes(a: Auth) -> List[Route] =
+  [
+    Get("/api/fm", fm_list(a)),
+    Post("/api/fm/create-folder", create_folder(a)),
+    Post("/api/fm/rename", rename(a)),
+    Post("/api/fm/move", move(a)),
+  ]
