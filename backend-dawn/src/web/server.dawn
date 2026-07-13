@@ -31,10 +31,20 @@ fn write_response(ex: HttpExchange, r: Response) -> Unit !io = {
   set_extra_headers(headers, r.headers)
   ex.sendResponseHeaders(r.status, 0)
   let out = ex.getResponseBody().expect("response body")
-  let writer = OutputStreamWriter.new(out, "UTF-8")
-  writer.write(r.body)
-  writer.flush()
-  writer.close()
+  match r.bin {
+    Some(bytes) -> {
+      # binary body (G6): write the opaque byte[] verbatim
+      out.write(bytes)
+      out.flush()
+    }
+    None -> {
+      let writer = OutputStreamWriter.new(out, "UTF-8")
+      writer.write(r.body)
+      writer.flush()
+      writer.close()
+    }
+  }
+  out.close()
   ex.close()
 }
 

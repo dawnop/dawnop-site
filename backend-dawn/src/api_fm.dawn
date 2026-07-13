@@ -4,7 +4,9 @@
 use java "java.sql.Connection"
 use java "java.lang.System"
 use java "java.net.URLEncoder"
-use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query, redirect}
+use java "java.lang.Object"
+use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query, redirect, binary}
+use http.{fetch_bytes}
 use web/router.{Route, Get, Post}
 use jsonx.{obj, jstr}
 use db.{Db, with_db}
@@ -15,7 +17,6 @@ use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, 
 use crypto.{uuid}
 use qiniu_sign.{private_url, upload_token}
 use qiniu_rs.{delete_obj, copy_obj, stat, upload_text}
-use http.{HttpResp}
 use json/value.{Json, JArr, JObj, JStr, JNum, JInt}
 use json/parser.{parse}
 
@@ -183,6 +184,31 @@ pub fn sign(a: Auth) -> Handler =
       Err(m) -> Err(http_error(500, m))
     }
   })
+
+## GET /api/fm/content?path= — proxy the object bytes through the backend (the
+## fallback when a cross-origin 302 to qiniu is CORS-blocked). Binary body (G6).
+pub fn content(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() => {
+    let rel = fm_split(qparam(req, "path"))
+    match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
+      Ok(Some(o)) ->
+        match o.key {
+          Some(k) -> {
+            let url = signed(a.qiniu, k, "")
+            match fetch_bytes(url, []) {
+              Ok(bytes) -> Ok(binary(200, content_type_of(o.content_type), bytes))
+              Err(m) -> Err(http_error(502, m))
+            }
+          }
+          None -> Err(http_error(400, "该项没有对应的对象"))
+        }
+      Ok(None) -> Err(http_error(404, "文件不存在"))
+      Err(m) -> Err(http_error(500, m))
+    }
+  })
+
+fn content_type_of(ct: String) -> String = if ct == "" { "application/octet-stream" } else { ct }
 
 ## GET /api/fm/preview?path= — 302 to the signed URL (inline).
 pub fn preview(a: Auth) -> Handler =
@@ -590,6 +616,7 @@ pub fn routes(a: Auth) -> List[Route] =
     Get("/api/fm/sign", sign(a)),
     Get("/api/fm/preview", preview(a)),
     Get("/api/fm/download", download(a)),
+    Get("/api/fm/content", content(a)),
     Get("/api/fm/search", fm_search(a)),
     Post("/api/fm/create-folder", create_folder(a)),
     Post("/api/fm/rename", rename(a)),

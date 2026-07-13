@@ -11,8 +11,22 @@ use java "java.net.http.HttpRequest.BodyPublishers"
 use java "java.net.http.HttpResponse.BodyHandlers"
 use java "java.time.Duration"
 use java "java.lang.String"
+use java "java.lang.Object"
 
 pub type HttpResp = { status: Int, body: String }
+
+## A binary GET: the body is an opaque byte[] (Object, spec §9.5). Ok on 2xx,
+## Err otherwise. For the fm content proxy (fetch bytes from qiniu, stream out).
+pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[Object, String] !io =
+  java_try(fn() => {
+    let uri = URI.create(url).expect("uri")
+    let base = HttpRequest.newBuilder().expect("b").uri(uri).expect("b-uri")
+    let withHeaders = add_headers(base, headers, 0)
+    let nobody: BodyPublisher = BodyPublishers.noBody().expect("nobody")
+    let req = withHeaders.method("GET", nobody).expect("get").build().expect("req")
+    let resp = shared_client().send(req, BodyHandlers.ofByteArray().expect("bh")).expect("resp")
+    resp.body().expect("bytes")
+  })
 
 fn shared_client() -> HttpClient !io = {
   let timeout = Duration.ofSeconds(10).expect("d")

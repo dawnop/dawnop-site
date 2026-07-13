@@ -3,6 +3,7 @@
 # — the Ok branch is a rendered response, the Err branch is mapped to an HTTP
 # status by the server (JSON body {"error": message}). No exceptions anywhere:
 # panics are bugs, expected failures travel in Result.
+use java "java.lang.Object"
 use json/value.{Json, JStr, JObj}
 use json/render.{render}
 
@@ -16,13 +17,17 @@ pub type Request = {
   body: String,
 } derive Show
 
+# backend-dawn divergence (M6 G6): Response can carry a binary body — an opaque
+# byte[] (widened to Object, spec §9.5) for the fm proxy endpoints. `bin` = None
+# means a text body (`body`). No `derive Show` (Object is not printable).
 pub type Response = {
   status: Int,
   content_type: String,
   # extra response headers in emission order (Location, Content-Disposition, ...)
   headers: List[(String, String)],
   body: String,
-} derive Show
+  bin: Option[Object],
+}
 
 pub type HttpError = { status: Int, message: String } derive Show
 
@@ -37,17 +42,21 @@ pub fn http_error(status: Int, message: String) -> HttpError =
 # ---- response constructors ----
 
 pub fn text(status: Int, body: String) -> Response =
-  Response { status: status, content_type: "text/plain; charset=utf-8", headers: [], body: body }
+  Response { status: status, content_type: "text/plain; charset=utf-8", headers: [], body: body, bin: None }
 
 pub fn json_response(status: Int, j: Json) -> Response =
-  Response { status: status, content_type: "application/json; charset=utf-8", headers: [], body: render(j) }
+  Response { status: status, content_type: "application/json; charset=utf-8", headers: [], body: render(j), bin: None }
 
 pub fn json_ok(j: Json) -> Response = json_response(200, j)
 
 # A raw pre-rendered body (any content type) — escape hatch for services with
 # their own wire format.
 pub fn raw(status: Int, content_type: String, body: String) -> Response =
-  Response { status: status, content_type: content_type, headers: [], body: body }
+  Response { status: status, content_type: content_type, headers: [], body: body, bin: None }
+
+# A binary body: an opaque byte[] (Object) written verbatim (fm content proxy).
+pub fn binary(status: Int, content_type: String, bytes: Object) -> Response =
+  Response { status: status, content_type: content_type, headers: [], body: "", bin: Some(bytes) }
 
 # Append one response header (records are immutable — returns a new Response).
 pub fn with_header(r: Response, name: String, value: String) -> Response =
