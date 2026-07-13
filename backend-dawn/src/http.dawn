@@ -1,0 +1,80 @@
+# Minimal HTTP client (M6 knife 4) for outbound calls: qiniu management REST,
+# register's stat check, monitor probes. Pure Dawn over java.net.http. Network
+# failures land in Err via java_try; a non-2xx status is still Ok (the caller
+# inspects .status) — only transport errors are failures here.
+use java "java.net.URI"
+use java "java.net.http.HttpClient"
+use java "java.net.http.HttpRequest"
+use java "java.net.http.HttpRequest.Builder"
+use java "java.net.http.HttpRequest.BodyPublisher"
+use java "java.net.http.HttpRequest.BodyPublishers"
+use java "java.net.http.HttpResponse.BodyHandlers"
+use java "java.time.Duration"
+use java "java.lang.String"
+
+pub type HttpResp = { status: Int, body: String }
+
+fn shared_client() -> HttpClient !io = {
+  let timeout = Duration.ofSeconds(10).expect("d")
+  let cb = HttpClient.newBuilder().expect("cb").connectTimeout(timeout).expect("cb2")
+  cb.build().expect("client")
+}
+
+# apply (header_name, value) pairs onto a builder, threading the builder through
+fn add_headers(b: Builder, hs: List[(String, String)], i: Int) -> Builder !io =
+  if i == len(hs) {
+    b
+  } else {
+    let (k, v) = hs[i]
+    let b2 = b.header(k, v).expect("header")
+    add_headers(b2, hs, i + 1)
+  }
+
+fn send(method: String, url: String, headers: List[(String, String)], body: Option[String]) -> Result[HttpResp, String] !io =
+  java_try(fn() => {
+    let uri = URI.create(url).expect("uri")
+    let base = HttpRequest.newBuilder().expect("b").uri(uri).expect("b-uri")
+    let withHeaders = add_headers(base, headers, 0)
+    let publisher: BodyPublisher = match body {
+      Some(s) -> BodyPublishers.ofString(s).expect("pub")
+      None -> BodyPublishers.noBody().expect("nobody")
+    }
+    let req = withHeaders.method(method, publisher).expect("b-method").build().expect("req")
+    let resp = shared_client().send(req, BodyHandlers.ofString().expect("bh")).expect("resp")
+    HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body().expect("body")).expect("s") }
+  })
+
+pub fn fetch(url: String, headers: List[(String, String)]) -> Result[HttpResp, String] !io =
+  send("GET", url, headers, None)
+
+pub fn post(url: String, headers: List[(String, String)], body: String) -> Result[HttpResp, String] !io =
+  send("POST", url, headers, Some(body))
+
+pub fn post_form(url: String, headers: List[(String, String)], body: String) -> Result[HttpResp, String] !io =
+  post(url, headers ++ [("Content-Type", "application/x-www-form-urlencoded")], body)
+
+# ---- tests (network; hit the live health endpoint) ----
+
+test "GET a live endpoint returns 200 and a json body" {
+  match fetch("https://dawnop.com/api/health", []) {
+    Ok(r) -> {
+      assert r.status == 200
+      assert contains(r.body, "ok")
+    }
+    Err(m) -> panic("health check failed: $m")
+  }
+}
+
+test "a bad host is an Err, not a crash" {
+  match fetch("https://no-such-host.invalid/", []) {
+    Ok(_) -> { assert false }
+    Err(m) -> { assert str_len(m) > 0 }
+  }
+}
+
+test "custom headers are accepted" {
+  match fetch("https://dawnop.com/api/health", [("X-Probe", "dawn"), ("Accept", "application/json")]) {
+    Ok(r) -> { assert r.status == 200 }
+    Err(m) -> panic(m)
+  }
+}
