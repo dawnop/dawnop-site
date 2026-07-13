@@ -1,0 +1,350 @@
+# Protected admin handlers, part 2 (M6 knife 9): settings, tag admin ops, page
+# admin CRUD. Same guard/JSON-body pattern as api_admin.
+use java "java.sql.Connection"
+use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, text}
+use web/router.{Route, Get, Post, Put, Delete}
+use json/value.{Json, JArr, JInt, JNum}
+use jsonx.{obj, jstr, jint}
+use db.{Db, with_db}
+use auth.{Auth, current_user}
+use jsonread.{body_obj, has, str_or, bool_or, opt_int, str_list}
+use repo_settings
+use repo_tag
+use repo_page
+use repo_pagetag.{NewPage, create_page, page_kind, delete_page, reorder_pages, set_page_str, set_page_int, touch_page, regen_page_slug, page_title, tag_exists, rename_tag, merge_tags, cleanup_tags, delete_tag, target_published_count}
+
+fn param_int(req: Request, name: String) -> Option[Int] =
+  match map_get(req.params, name) {
+    Some(v) -> parse_int(v)
+    None -> None
+  }
+
+fn guarded(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io =
+  match current_user(a, req) {
+    Ok(_u) -> body()
+    Err(e) -> Err(e)
+  }
+
+fn int_field(m: Map[String, Json], key: String) -> Option[Int] =
+  match map_get(m, key) {
+    Some(JInt(n)) -> Some(n)
+    Some(JNum(x)) -> Some(to_int(x))
+    _ -> None
+  }
+
+fn classify_400(m: String) -> HttpError = http_error(400, m)
+
+# ---- settings ----
+
+## GET /api/settings — merged global settings.
+pub fn get_settings(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match with_db(a.db.path, a.db.ext, fn(c) => repo_settings.read_all(c, a.storage_quota)) {
+        Ok(j) -> Ok(json_ok(j))
+        Err(m) -> Err(http_error(500, m))
+      })
+
+## PUT /api/settings — validate & upsert known integer keys, return merged.
+pub fn put_settings(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match body_obj(req.body) {
+        Ok(m) ->
+          match with_db(a.db.path, a.db.ext, fn(c) => write_settings(c, m, a.storage_quota)) {
+            Ok(j) -> Ok(json_ok(j))
+            Err(msg) -> Err(classify_400(msg))
+          }
+        Err(e) -> Err(http_error(422, e))
+      })
+
+fn write_settings(c: Connection, m: Map[String, Json], storage_quota: Int) -> Result[Json, String] !io = {
+  let _w = apply_settings(c, map_keys(m), m, 0)?
+  repo_settings.read_all(c, storage_quota)
+}
+
+fn apply_settings(c: Connection, keys: List[String], m: Map[String, Json], i: Int) -> Result[Bool, String] !io =
+  if i == len(keys) {
+    Ok(true)
+  } else {
+    let key = keys[i]
+    let v = match int_field(m, key) {
+      Some(n) -> n
+      None -> 0 - 999999
+    }
+    let _p = repo_settings.put_one(c, key, v)?
+    apply_settings(c, keys, m, i + 1)
+  }
+
+# ---- tags admin ----
+
+## GET /api/tags/admin — all tags with counts (drafts included).
+pub fn tags_admin(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match with_db(a.db.path, a.db.ext, fn(c) => repo_tag.list_admin(c)) {
+        Ok(items) -> Ok(json_ok(JArr(items)))
+        Err(m) -> Err(http_error(500, m))
+      })
+
+## PUT /api/tags/{tag_id} — rename (slug regenerates).
+pub fn tag_rename(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match param_int(req, "tag_id") {
+        Some(id) ->
+          match body_obj(req.body) {
+            Ok(m) ->
+              match with_db(a.db.path, a.db.ext, fn(c) => rename_then_read(c, id, str_or(m, "name", ""))) {
+                Ok(Some(j)) -> Ok(json_ok(j))
+                Ok(None) -> Err(http_error(404, "标签不存在"))
+                Err(msg) -> Err(classify_400(msg))
+              }
+            Err(e) -> Err(http_error(422, e))
+          }
+        None -> Err(http_error(422, "tag_id must be an integer"))
+      })
+
+fn rename_then_read(c: Connection, id: Int, name: String) -> Result[Option[Json], String] !io = {
+  let ex = tag_exists(c, id)?
+  if ex == false {
+    Ok(None)
+  } else {
+    let _r = rename_tag(c, id, name)?
+    repo_tag.out_by_id(c, id)
+  }
+}
+
+## POST /api/tags/merge — merge source into target, return target with count.
+pub fn tag_merge(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match body_obj(req.body) {
+        Ok(m) -> {
+          let sid = int_field(m, "source_id")
+          let tid = int_field(m, "target_id")
+          match (sid, tid) {
+            (Some(s), Some(t)) ->
+              if s == t {
+                Err(http_error(400, "不能与自身合并"))
+              } else {
+                match with_db(a.db.path, a.db.ext, fn(c) => merge_then_read(c, s, t)) {
+                  Ok(Some(j)) -> Ok(json_ok(j))
+                  Ok(None) -> Err(http_error(404, "源标签或目标标签不存在"))
+                  Err(msg) -> Err(http_error(500, msg))
+                }
+              }
+            _ -> Err(http_error(422, "source_id 和 target_id 必填"))
+          }
+        }
+        Err(e) -> Err(http_error(422, e))
+      })
+
+fn merge_then_read(c: Connection, s: Int, t: Int) -> Result[Option[Json], String] !io = {
+  let se = tag_exists(c, s)?
+  let te = tag_exists(c, t)?
+  if se == false || te == false {
+    Ok(None)
+  } else {
+    let cnt = merge_tags(c, s, t)?
+    repo_tag.with_count(c, t, cnt)
+  }
+}
+
+## POST /api/tags/cleanup — delete unused tags, return {deleted}.
+pub fn tag_cleanup(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match with_db(a.db.path, a.db.ext, fn(c) => cleanup_tags(c)) {
+        Ok(n) -> Ok(json_ok(obj([("deleted", jint(n))])))
+        Err(m) -> Err(http_error(500, m))
+      })
+
+## DELETE /api/tags/{tag_id} — 204.
+pub fn tag_delete(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match param_int(req, "tag_id") {
+        Some(id) ->
+          match with_db(a.db.path, a.db.ext, fn(c) => delete_tag(c, id)) {
+            Ok(_n) -> Ok(text(204, ""))
+            Err(m) -> Err(http_error(500, m))
+          }
+        None -> Err(http_error(422, "tag_id must be an integer"))
+      })
+
+# ---- pages admin ----
+
+## GET /api/pages/admin — all pages.
+pub fn pages_admin(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match with_db(a.db.path, a.db.ext, fn(c) => repo_page.list_admin(c)) {
+        Ok(items) -> Ok(json_ok(JArr(items)))
+        Err(m) -> Err(http_error(500, m))
+      })
+
+## POST /api/pages — create; returns the created page (201).
+pub fn page_create(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match body_obj(req.body) {
+        Ok(m) ->
+          if str_or(m, "title", "") == "" {
+            Err(http_error(422, "标题不能为空"))
+          } else {
+            let np = NewPage {
+              title: trim(str_or(m, "title", "")),
+              slug_hint: str_or(m, "slug", ""),
+              kind: str_or(m, "type", "content"),
+              description: str_or(m, "description", ""),
+              content: str_or(m, "content", ""),
+              nav_visible: bool_or(m, "nav_visible", false),
+              nav_order: match int_field(m, "nav_order") { Some(n) -> n
+                None -> 0 },
+            }
+            match with_db(a.db.path, a.db.ext, fn(c) => page_create_read(c, np)) {
+              Ok(j) -> Ok(json_response(201, j))
+              Err(msg) -> Err(http_error(500, msg))
+            }
+          }
+        Err(e) -> Err(http_error(422, e))
+      })
+
+fn page_create_read(c: Connection, np: NewPage) -> Result[Json, String] !io = {
+  let id = create_page(c, np)?
+  match repo_page.by_id_admin(c, id)? {
+    Some(j) -> Ok(j)
+    None -> Err("created page vanished")
+  }
+}
+
+## PUT /api/pages/{page_id} — partial update (builtin pages: only nav fields).
+pub fn page_update(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match param_int(req, "page_id") {
+        Some(id) ->
+          match body_obj(req.body) {
+            Ok(m) ->
+              match with_db(a.db.path, a.db.ext, fn(c) => page_update_read(c, id, m)) {
+                Ok(Some(j)) -> Ok(json_ok(j))
+                Ok(None) -> Err(http_error(404, "页面不存在"))
+                Err(msg) -> Err(http_error(500, msg))
+              }
+            Err(e) -> Err(http_error(422, e))
+          }
+        None -> Err(http_error(422, "page_id must be an integer"))
+      })
+
+fn page_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Option[Json], String] !io =
+  match page_kind(c, id)? {
+    None -> Ok(None)
+    Some(kind) -> {
+      let builtin = kind == "builtin"
+      # builtin pages accept only title/nav_visible/nav_order (slug/type/content are routing roots)
+      let _t = if has(m, "title") { set_page_str(c, id, "title", trim(str_or(m, "title", "")))? } else { 0 }
+      let _nv = if has(m, "nav_visible") { set_page_int(c, id, "nav_visible", bool_int(bool_or(m, "nav_visible", false)))? } else { 0 }
+      let _no = if has(m, "nav_order") { set_page_int(c, id, "nav_order", nav_order_of(m))? } else { 0 }
+      let _de = if builtin == false && has(m, "description") { set_page_str(c, id, "description", str_or(m, "description", ""))? } else { 0 }
+      let _co = if builtin == false && has(m, "content") { set_page_str(c, id, "content", str_or(m, "content", ""))? } else { 0 }
+      let _sl = if builtin == false && has(m, "slug") { regen_page_slug(c, id, slug_base(c, id, m)?)? } else { 0 }
+      let _u = touch_page(c, id)?
+      repo_page.by_id_admin(c, id)
+    }
+  }
+
+fn slug_base(c: Connection, id: Int, m: Map[String, Json]) -> Result[String, String] !io = {
+  let s = str_or(m, "slug", "")
+  if s != "" {
+    Ok(s)
+  } else if has(m, "title") {
+    Ok(trim(str_or(m, "title", "")))
+  } else {
+    page_title(c, id)
+  }
+}
+
+fn nav_order_of(m: Map[String, Json]) -> Int =
+  match int_field(m, "nav_order") {
+    Some(n) -> n
+    None -> 0
+  }
+
+fn bool_int(b: Bool) -> Int = if b { 1 } else { 0 }
+
+## DELETE /api/pages/{page_id} — 204 (builtin pages are protected: 400).
+pub fn page_delete(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match param_int(req, "page_id") {
+        Some(id) ->
+          match with_db(a.db.path, a.db.ext, fn(c) => page_delete_guarded(c, id)) {
+            Ok(0) -> Err(http_error(404, "页面不存在"))
+            Ok(1) -> Ok(text(204, ""))
+            Ok(_o) -> Err(http_error(400, "内置页面不可删除，可在导航中隐藏"))
+            Err(m) -> Err(http_error(500, m))
+          }
+        None -> Err(http_error(422, "page_id must be an integer"))
+      })
+
+# returns 0=absent, 1=deleted, 2=builtin-refused
+fn page_delete_guarded(c: Connection, id: Int) -> Result[Int, String] !io =
+  match page_kind(c, id)? {
+    None -> Ok(0)
+    Some(kind) ->
+      if kind == "builtin" {
+        Ok(2)
+      } else {
+        let _d = delete_page(c, id)?
+        Ok(1)
+      }
+  }
+
+## POST /api/pages/reorder — set nav_order by id-list position, return admin list.
+pub fn page_reorder(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match body_obj(req.body) {
+        Ok(m) -> {
+          let ids = int_list(m, "ids")
+          match with_db(a.db.path, a.db.ext, fn(c) => reorder_read(c, ids)) {
+            Ok(items) -> Ok(json_ok(JArr(items)))
+            Err(msg) -> Err(http_error(500, msg))
+          }
+        }
+        Err(e) -> Err(http_error(422, e))
+      })
+
+fn reorder_read(c: Connection, ids: List[Int]) -> Result[List[Json], String] !io = {
+  let _r = reorder_pages(c, ids)?
+  repo_page.list_admin(c)
+}
+
+fn int_list(m: Map[String, Json], key: String) -> List[Int] =
+  match map_get(m, key) {
+    Some(JArr(xs)) -> fold(xs, [], fn(acc, j) =>
+        match j {
+          JInt(n) -> acc ++ [n]
+          JNum(x) -> acc ++ [to_int(x)]
+          _ -> acc
+        })
+    _ -> []
+  }
+
+## All part-2 admin routes. Static paths precede /{id} captures.
+pub fn routes(a: Auth) -> List[Route] =
+  [
+    Get("/api/settings", get_settings(a)),
+    Put("/api/settings", put_settings(a)),
+    Get("/api/tags/admin", tags_admin(a)),
+    Post("/api/tags/merge", tag_merge(a)),
+    Post("/api/tags/cleanup", tag_cleanup(a)),
+    Put("/api/tags/{tag_id}", tag_rename(a)),
+    Delete("/api/tags/{tag_id}", tag_delete(a)),
+    Get("/api/pages/admin", pages_admin(a)),
+    Post("/api/pages/reorder", page_reorder(a)),
+    Post("/api/pages", page_create(a)),
+    Put("/api/pages/{page_id}", page_update(a)),
+    Delete("/api/pages/{page_id}", page_delete(a)),
+  ]

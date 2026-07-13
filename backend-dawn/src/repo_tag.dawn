@@ -1,7 +1,7 @@
 # Tag read model (M6 knife 8): public tag list and single tag, each with a count
 # of published articles carrying that tag.
 use java "java.sql.Connection"
-use sql.{PStr, Cell, ColInt, ColStr, query, int_at, str_at}
+use sql.{PInt, PStr, Cell, ColInt, ColStr, query, int_at, str_at}
 use json/value.{Json}
 use jsonx.{obj, jint, jstr}
 
@@ -16,10 +16,46 @@ fn tag_json(r: List[Cell]) -> Json =
     ("count", jint(int_at(r, 3))),
   ])
 
-## GET /api/tags — all tags with published counts, ordered by name.
-pub fn list_all(c: Connection) -> Result[List[Json], String] !io = {
-  let rows = query(c, "$TAG_SELECT order by t.name", [], [ColInt, ColStr, ColStr, ColInt])?
+## GET /api/tags — public: only tags with ≥1 published article, ordered by
+## count desc then name (matches list_tags' inner join).
+pub fn list_public(c: Connection) -> Result[List[Json], String] !io = {
+  let rows = query(c, "$TAG_SELECT where cnt > 0 order by cnt desc, t.name", [], [ColInt, ColStr, ColStr, ColInt])?
   Ok(map(rows, tag_json))
+}
+
+## GET /api/tags/admin — all tags, count includes drafts, ordered by name.
+pub fn list_admin(c: Connection) -> Result[List[Json], String] !io = {
+  let rows = query(c,
+    "select t.id, t.name, t.slug, (select count(*) from article_tags at where at.tag_id = t.id) as cnt from tags t order by t.name",
+    [], [ColInt, ColStr, ColStr, ColInt])?
+  Ok(map(rows, tag_json))
+}
+
+## A tag as {id, name, slug} (TagOut, no count) — the rename response.
+pub fn out_by_id(c: Connection, id: Int) -> Result[Option[Json], String] !io = {
+  let rows = query(c, "select id, name, slug from tags where id = ?", [PInt(id)], [ColInt, ColStr, ColStr])?
+  match get(rows, 0) {
+    Some(r) -> Ok(Some(obj([
+      ("id", jint(int_at(r, 0))),
+      ("name", jstr(str_at(r, 1))),
+      ("slug", jstr(str_at(r, 2))),
+    ])))
+    None -> Ok(None)
+  }
+}
+
+## A tag as {id, name, slug, count} for a given id and count (merge response).
+pub fn with_count(c: Connection, id: Int, count: Int) -> Result[Option[Json], String] !io = {
+  let rows = query(c, "select id, name, slug from tags where id = ?", [PInt(id)], [ColInt, ColStr, ColStr])?
+  match get(rows, 0) {
+    Some(r) -> Ok(Some(obj([
+      ("id", jint(int_at(r, 0))),
+      ("name", jstr(str_at(r, 1))),
+      ("slug", jstr(str_at(r, 2))),
+      ("count", jint(count)),
+    ])))
+    None -> Ok(None)
+  }
 }
 
 ## GET /api/tags/{slug} — one tag. None when missing.

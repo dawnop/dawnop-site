@@ -1,0 +1,67 @@
+# Global settings (M6 knife 9): four integer keys stored JSON-encoded in the
+# settings table, merged over defaults on read. Unknown keys and out-of-range
+# values are rejected on write (matching app/api/settings.py).
+use java "java.sql.Connection"
+use sql.{PStr, ColStr, query, exec, str_at}
+use json/value.{Json}
+use jsonx.{obj, jint}
+
+# key, lo, hi — the validated integer settings; default supplied separately for storage
+pub fn defaults(storage_quota_gb: Int) -> List[(String, Int)] =
+  [
+    ("upload_concurrency", 3),
+    ("download_concurrency", 3),
+    ("storage_quota_gb", storage_quota_gb),
+    ("text_preview_max_kb", 512),
+  ]
+
+fn range_of(key: String) -> Option[(Int, Int)] =
+  match key {
+    "upload_concurrency" -> Some((1, 8))
+    "download_concurrency" -> Some((1, 8))
+    "storage_quota_gb" -> Some((1, 1024))
+    "text_preview_max_kb" -> Some((16, 10240))
+    _ -> None
+  }
+
+## Read all settings, defaults overlaid by stored rows (dirty rows fall back).
+pub fn read_all(c: Connection, storage_quota_gb: Int) -> Result[Json, String] !io = {
+  let ds = defaults(storage_quota_gb)
+  let pairs = read_loop(c, ds, 0, [])?
+  Ok(obj(pairs))
+}
+
+fn read_loop(c: Connection, ds: List[(String, Int)], i: Int, acc: List[(String, Json)]) -> Result[List[(String, Json)], String] !io =
+  if i == len(ds) {
+    Ok(acc)
+  } else {
+    let (key, dflt) = ds[i]
+    let v = stored_int(c, key, dflt)?
+    read_loop(c, ds, i + 1, acc ++ [(key, jint(v))])
+  }
+
+fn stored_int(c: Connection, key: String, dflt: Int) -> Result[Int, String] !io = {
+  let rows = query(c, "select value from settings where key = ?", [PStr(key)], [ColStr])?
+  match get(rows, 0) {
+    Some(r) ->
+      match parse_int(str_at(r, 0)) {
+        Some(n) -> Ok(n)
+        None -> Ok(dflt)
+      }
+    None -> Ok(dflt)
+  }
+}
+
+## Apply one setting write: reject unknown key (400) or out-of-range value (400),
+## else upsert. Value is stored as its plain integer text (JSON for an int).
+pub fn put_one(c: Connection, key: String, value: Int) -> Result[Bool, String] !io =
+  match range_of(key) {
+    None -> Err("未知配置项：$key")
+    Some((lo, hi)) ->
+      if value < lo || value > hi {
+        Err("$key 应为 $lo~$hi 的整数")
+      } else {
+        let _u = exec(c, "insert into settings (key, value) values (?, ?) on conflict(key) do update set value = excluded.value", [PStr(key), PStr(to_string(value))])?
+        Ok(true)
+      }
+  }

@@ -65,6 +65,40 @@ pub fn by_slug(c: Connection, slug: String) -> Result[Option[Json], String] !io 
   }
 }
 
+fn page_row_json(r: List[Cell]) -> Json = {
+  let kind = str_at(r, 3)
+  let s = str_at(r, 2)
+  obj([
+    ("id", jint(int_at(r, 0))),
+    ("title", jstr(str_at(r, 1))),
+    ("slug", jstr(s)),
+    ("type", jstr(kind)),
+    ("path", jstr(page_path(kind, s))),
+    ("description", jopt_str(opt_str_at(r, 4))),
+    ("content", jopt_str(opt_str_at(r, 5))),
+    ("auto_title", jbool(bool_at(r, 6))),
+    ("nav_visible", jbool(bool_at(r, 7))),
+    ("nav_order", jint(int_at(r, 8))),
+    ("created_at", jdatetime(str_at(r, 9))),
+    ("updated_at", jdatetime(str_at(r, 10))),
+  ])
+}
+
+## Full page by id (any type, including builtin) — for admin create/update/list.
+pub fn by_id_admin(c: Connection, id: Int) -> Result[Option[Json], String] !io = {
+  let rows = query(c, "select $PAGE_COLS from pages where id = ?", [PInt(id)], page_col_types())?
+  match get(rows, 0) {
+    Some(r) -> Ok(Some(page_row_json(r)))
+    None -> Ok(None)
+  }
+}
+
+## All pages ordered by (nav_order, id) — the admin list.
+pub fn list_admin(c: Connection) -> Result[List[Json], String] !io = {
+  let rows = query(c, "select $PAGE_COLS from pages order by nav_order, id", [], page_col_types())?
+  Ok(map(rows, page_row_json))
+}
+
 ## The page id for a slug (for the articles sub-listing). None when missing.
 pub fn id_of(c: Connection, slug: String) -> Result[Option[Int], String] !io = {
   let rows = query(c, "select id from pages where slug = ?", [PStr(slug)], [ColInt])?

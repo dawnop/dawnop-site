@@ -1,0 +1,144 @@
+# Page and tag write model (M6 knife 9): create/update/delete/reorder pages,
+# rename/merge/cleanup/delete tags. Mirrors app/api/pages.py and tags.py.
+use java "java.sql.Connection"
+use sql.{SqlV, PInt, PStr, PNull, ColInt, ColStr, Cell, query, exec, last_id, int_at, str_at}
+use slugify.{slugify}
+use repo_write.{unique_slug}
+
+fn bool_int(b: Bool) -> Int = if b { 1 } else { 0 }
+
+fn clip(s: String, n: Int) -> String = if str_len(s) > n { substring(s, 0, n) } else { s }
+
+# ---- pages ----
+
+pub type NewPage = {
+  title: String,
+  slug_hint: String,
+  kind: String,
+  description: String,
+  content: String,
+  nav_visible: Bool,
+  nav_order: Int,
+}
+
+## Create a page, returning its new id.
+pub fn create_page(c: Connection, p: NewPage) -> Result[Int, String] !io = {
+  let base = if p.slug_hint == "" { p.title } else { p.slug_hint }
+  let slug = unique_slug(c, "pages", base, None)?
+  let _i = exec(c,
+    "insert into pages (title, slug, type, description, content, nav_visible, nav_order, auto_title, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))",
+    [PStr(p.title), PStr(slug), PStr(p.kind), PStr(p.description), PStr(p.content), PInt(bool_int(p.nav_visible)), PInt(p.nav_order)])?
+  last_id(c)
+}
+
+## Whether a page id exists, and whether it is a builtin page.
+pub fn page_kind(c: Connection, id: Int) -> Result[Option[String], String] !io = {
+  let rows = query(c, "select type from pages where id = ?", [PInt(id)], [ColStr])?
+  match get(rows, 0) {
+    Some(r) -> Ok(Some(str_at(r, 0)))
+    None -> Ok(None)
+  }
+}
+
+pub fn set_page_str(c: Connection, id: Int, col: String, v: String) -> Result[Int, String] !io =
+  exec(c, "update pages set $col = ? where id = ?", [PStr(v), PInt(id)])
+
+pub fn set_page_int(c: Connection, id: Int, col: String, v: Int) -> Result[Int, String] !io =
+  exec(c, "update pages set $col = ? where id = ?", [PInt(v), PInt(id)])
+
+pub fn touch_page(c: Connection, id: Int) -> Result[Int, String] !io =
+  exec(c, "update pages set updated_at = datetime('now') where id = ?", [PInt(id)])
+
+pub fn regen_page_slug(c: Connection, id: Int, base: String) -> Result[Int, String] !io = {
+  let slug = unique_slug(c, "pages", base, Some(id))?
+  exec(c, "update pages set slug = ? where id = ?", [PStr(slug), PInt(id)])
+}
+
+pub fn page_title(c: Connection, id: Int) -> Result[String, String] !io = {
+  let rows = query(c, "select title from pages where id = ?", [PInt(id)], [ColStr])?
+  match get(rows, 0) {
+    Some(r) -> Ok(str_at(r, 0))
+    None -> Ok("")
+  }
+}
+
+## Delete a page; articles pointing at it have page_id nulled first.
+pub fn delete_page(c: Connection, id: Int) -> Result[Int, String] !io = {
+  let _u = exec(c, "update articles set page_id = null where page_id = ?", [PInt(id)])?
+  exec(c, "delete from pages where id = ?", [PInt(id)])
+}
+
+## Reorder: assign nav_order by position in the id list.
+pub fn reorder_pages(c: Connection, ids: List[Int]) -> Result[Int, String] !io =
+  reorder_loop(c, ids, 0)
+
+fn reorder_loop(c: Connection, ids: List[Int], i: Int) -> Result[Int, String] !io =
+  if i == len(ids) {
+    Ok(0)
+  } else {
+    let _u = exec(c, "update pages set nav_order = ? where id = ?", [PInt(i), PInt(ids[i])])?
+    reorder_loop(c, ids, i + 1)
+  }
+
+# ---- tags ----
+
+pub fn tag_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
+  let rows = query(c, "select count(*) from tags where id = ?", [PInt(id)], [ColInt])?
+  match get(rows, 0) {
+    Some(r) -> Ok(int_at(r, 0) != 0)
+    None -> Ok(false)
+  }
+}
+
+## Rename a tag, regenerating slug. Err on empty name or a duplicate name.
+pub fn rename_tag(c: Connection, id: Int, raw: String) -> Result[Bool, String] !io = {
+  let name = clip(trim(raw), 64)
+  if name == "" {
+    Err("标签名不能为空")
+  } else {
+    let dup = query(c, "select name from tags where lower(name) = ? and id != ?", [PStr(to_lower(name)), PInt(id)], [ColStr])?
+    match get(dup, 0) {
+      Some(r) -> Err("已存在同名标签「${str_at(r, 0)}」，如需归并请用合并功能")
+      None -> {
+        let slug = unique_slug(c, "tags", name, Some(id))?
+        let _u = exec(c, "update tags set name = ?, slug = ? where id = ?", [PStr(name), PStr(slug), PInt(id)])?
+        Ok(true)
+      }
+    }
+  }
+}
+
+## Merge source into target: move article links (skipping dups), delete source.
+pub fn merge_tags(c: Connection, source_id: Int, target_id: Int) -> Result[Int, String] !io = {
+  let _m = exec(c,
+    "insert into article_tags (article_id, tag_id) select at.article_id, ? from article_tags at where at.tag_id = ? and at.article_id not in (select article_id from article_tags where tag_id = ?)",
+    [PInt(target_id), PInt(source_id), PInt(target_id)])?
+  let _d = exec(c, "delete from article_tags where tag_id = ?", [PInt(source_id)])?
+  let _dt = exec(c, "delete from tags where id = ?", [PInt(source_id)])?
+  target_published_count(c, target_id)
+}
+
+pub fn target_published_count(c: Connection, target_id: Int) -> Result[Int, String] !io = {
+  let rows = query(c, "select count(*) from article_tags where tag_id = ?", [PInt(target_id)], [ColInt])?
+  match get(rows, 0) {
+    Some(r) -> Ok(int_at(r, 0))
+    None -> Ok(0)
+  }
+}
+
+## Delete tags used by no article; returns how many were removed.
+pub fn cleanup_tags(c: Connection) -> Result[Int, String] !io = {
+  let rows = query(c, "select count(*) from tags where id not in (select distinct tag_id from article_tags)", [], [ColInt])?
+  let n = match get(rows, 0) {
+    Some(r) -> int_at(r, 0)
+    None -> 0
+  }
+  let _d = exec(c, "delete from tags where id not in (select distinct tag_id from article_tags)", [])?
+  Ok(n)
+}
+
+## Delete a tag and its article links.
+pub fn delete_tag(c: Connection, id: Int) -> Result[Int, String] !io = {
+  let _l = exec(c, "delete from article_tags where tag_id = ?", [PInt(id)])?
+  exec(c, "delete from tags where id = ?", [PInt(id)])
+}

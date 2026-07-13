@@ -116,7 +116,7 @@ fn fetch_page_articles(c: Connection, slug: String, page: Int, size: Int) -> Res
 ## GET /api/tags — all tags with counts.
 pub fn get_tags(db: Db) -> Handler =
   fn(req) =>
-  match with_db(db.path, db.ext, fn(c) => repo_tag.list_all(c)) {
+  match with_db(db.path, db.ext, fn(c) => repo_tag.list_public(c)) {
     Ok(items) -> Ok(json_ok(JArr(items)))
     Err(m) -> Err(http_error(500, m))
   }

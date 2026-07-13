@@ -12,8 +12,10 @@ use db.{Db, with_db}
 use sql.{PStr, ColInt, ColStr, query, int_at, str_at}
 use jwt.{sign, verify}
 
-## Auth context: the db plus the JWT secret and token lifetime (minutes).
-pub type Auth = { db: Db, secret: String, expire_min: Int }
+## App context passed to protected handlers: the db, the JWT secret and token
+## lifetime, and the storage quota default (for settings). Named Auth for the
+## authentication it primarily carries.
+pub type Auth = { db: Db, secret: String, expire_min: Int, storage_quota: Int }
 
 # ---- user lookup ----
 

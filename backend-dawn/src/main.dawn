@@ -8,6 +8,7 @@ use web/server.{serve_app}
 use web/middleware.{with_logging, with_cors, with_body_limit}
 use api_public
 use api_admin
+use api_admin2
 use auth.{Auth, routes}
 
 pub fn main() -> Unit !io = {
@@ -19,11 +20,13 @@ pub fn main() -> Unit !io = {
   let origin = get_or(cfg, "DAWN_CORS_ORIGIN", "https://dawnop.com")
   let secret = get_or(cfg, "SECRET_KEY", "dev-insecure-secret-change-me-before-deploying-to-production")
   let expire_min = parse_or(get_or(cfg, "ACCESS_TOKEN_EXPIRE_MINUTES", "1440"), 1440)
-  let a = Auth { db: db, secret: secret, expire_min: expire_min }
+  let storage_quota = parse_or(get_or(cfg, "STORAGE_QUOTA_GB", "10"), 10)
+  let a = Auth { db: db, secret: secret, expire_min: expire_min, storage_quota: storage_quota }
 
   println("backend-dawn starting: db=$db_path port=$port")
-  # admin article routes precede the public /api/articles/{slug} so /admin wins
-  serve_app(port, api_admin.routes(a) ++ api_public.routes(db) ++ routes(a), [
+  # admin routes precede the public /api/{articles,pages,tags}/{slug} so the
+  # static /admin, /reorder, /merge, /cleanup paths win over the {slug} capture
+  serve_app(port, api_admin.routes(a) ++ api_admin2.routes(a) ++ api_public.routes(db) ++ routes(a), [
     with_logging,
     fn(next) => with_cors(origin, next),
     fn(next) => with_body_limit(2000000, next),
