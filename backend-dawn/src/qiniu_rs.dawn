@@ -3,9 +3,31 @@
 # Pure Dawn over the http client — the official SDK drags okhttp+gson, so this
 # hand-rolls the three verbs fm needs.
 use http.{HttpResp, post, fetch}
-use qiniu_sign.{entry_uri, entry_token, management_token}
+use qiniu_sign.{entry_uri, entry_token, management_token, upload_token}
 
 const RS_HOST: String = "https://rs.qiniu.com"
+const UP_HOST: String = "https://upload.qiniup.com"
+const BOUNDARY: String = "----DawnFmBoundary7MA4YWxkTrZu0gW"
+
+## Upload TEXT content to a key via qiniu's multipart form API. Binary content
+## needs the byte[] path (G6); text (save/create-file) rides as a String body.
+## `deadline` is the upload-token expiry (unix seconds).
+pub fn upload_text(ak: String, sk: String, bucket: String, key: String, content: String, mime: String, deadline: Int) -> Result[Bool, String] !io = {
+  let token = upload_token(ak, sk, bucket, key, deadline)
+  let body = multipart(token, key, content, mime)
+  let ct = "multipart/form-data; boundary=$BOUNDARY"
+  let r = post("$UP_HOST/", [("Content-Type", ct)], body)?
+  Ok(r.status == 200)
+}
+
+fn multipart(token: String, key: String, content: String, mime: String) -> String = {
+  let nl = from_code_points([13, 10]) # CRLF (Dawn has no \r escape)
+  let d = "--$BOUNDARY$nl"
+  let end = "--$BOUNDARY--$nl"
+  let field = fn(name: String, value: String) => "${d}Content-Disposition: form-data; name=\"$name\"$nl$nl$value$nl"
+  let file = "${d}Content-Disposition: form-data; name=\"file\"; filename=\"$key\"${nl}Content-Type: $mime$nl$nl$content$nl"
+  field("token", token) ++ field("key", key) ++ file ++ end
+}
 
 fn hdr(ak: String, sk: String, op: String, entry: String) -> List[(String, String)] !io =
   [("Authorization", entry_token(ak, sk, op, entry))]
