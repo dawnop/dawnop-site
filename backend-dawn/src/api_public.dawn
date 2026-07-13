@@ -10,6 +10,7 @@ use db.{Db, with_db}
 use repo_article.{list_published, list_by_page, by_slug, bump_views}
 use repo_page
 use repo_tag
+use search.{search_published}
 
 fn qint(req: Request, name: String, fallback: Int) -> Int =
   match query(req, name) {
@@ -132,10 +133,26 @@ pub fn get_tag(db: Db) -> Handler =
     }
   }
 
+## GET /api/search?q=&page=&size= — full-text search over published articles.
+pub fn search(db: Db) -> Handler =
+  fn(req) => {
+    let q = match query(req, "q") {
+      Some(s) -> s
+      None -> ""
+    }
+    let page = clamp(qint(req, "page", 1), 1, 1000000)
+    let size = clamp(qint(req, "size", 10), 1, 50)
+    match with_db(db.path, db.ext, fn(c) => search_published(c, q, page, size)) {
+      Ok(j) -> Ok(json_ok(j))
+      Err(m) -> Err(http_error(500, m))
+    }
+  }
+
 ## The public read routes, bound to a db handle.
 pub fn routes(db: Db) -> List[Route] =
   [
     Get("/api/health", health),
+    Get("/api/search", search(db)),
     Get("/api/articles", list_articles(db)),
     Get("/api/articles/{slug}", get_article(db)),
     Get("/api/pages/nav", get_nav(db)),

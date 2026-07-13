@@ -1,0 +1,324 @@
+# Full-text search (M6 knife 10). The ranking is delegated to the SAME SQLite
+# FTS5 query FastAPI runs (simple_query + bm25), so order and totals match
+# exactly — Dawn only reimplements the server-side highlight HTML (escape +
+# <mark> wrapping + a markdown-stripped excerpt window).
+use java "java.sql.Connection"
+use sql.{SqlV, PInt, PStr, Cell, ColInt, ColStr, query, str_at, int_at}
+use json/value.{Json, JArr}
+use jsonx.{obj, jint, jstr, jdatetime}
+use repo_article.{word_count, tags_json}
+
+# ---- HTML escape (matches Python html.escape, quote=True) ----
+
+pub fn html_escape(s: String) -> String = {
+  let a = replace(s, "&", "&amp;")
+  let b = replace(a, "<", "&lt;")
+  let d = replace(b, ">", "&gt;")
+  let e = replace(d, "\"", "&quot;")
+  replace(e, "'", "&#x27;")
+}
+
+fn replace(s: String, from: String, to: String) -> String = join(split(s, from), to)
+
+# ---- <mark> wrapping on escaped text (case-insensitive, term order) ----
+
+## Wrap each occurrence of an (escaped) term in <mark>. Operates on already-
+## escaped text with escaped terms, left-to-right, case-insensitive.
+pub fn mark(escaped: String, terms: List[String]) -> String = {
+  let esc_terms = filter(map(terms, html_escape), fn(t) => t != "")
+  if len(esc_terms) == 0 { escaped } else { mark_scan(code_points(escaped), esc_terms, 0, "") }
+}
+
+fn mark_scan(cps: List[Int], terms: List[String], i: Int, acc: String) -> String =
+  if i >= len(cps) {
+    acc
+  } else {
+    match first_match(cps, terms, i, 0) {
+      Some(len_cp) -> {
+        let matched = from_code_points(slice(cps, i, i + len_cp))
+        mark_scan(cps, terms, i + len_cp, acc ++ "<mark>" ++ matched ++ "</mark>")
+      }
+      None -> mark_scan(cps, terms, i + 1, acc ++ from_code_points(slice(cps, i, i + 1)))
+    }
+  }
+
+fn first_match(cps: List[Int], terms: List[String], i: Int, ti: Int) -> Option[Int] =
+  if ti >= len(terms) {
+    None
+  } else {
+    let tcps = code_points(terms[ti])
+    let tl = len(tcps)
+    if tl > 0 && i + tl <= len(cps) && ci_eq(slice(cps, i, i + tl), tcps) {
+      Some(tl)
+    } else {
+      first_match(cps, terms, i, ti + 1)
+    }
+  }
+
+fn ci_eq(a: List[Int], b: List[Int]) -> Bool = to_lower(from_code_points(a)) == to_lower(from_code_points(b))
+
+fn slice(xs: List[Int], from: Int, to: Int) -> List[Int] = map(range(from, to), fn(i) => xs[i])
+
+# ---- markdown → plain text (rough, for the excerpt window) ----
+
+pub fn strip_md(s: String) -> String = {
+  let a = drop_between(s, "```", "```", " ")
+  let b = drop_between(a, "`", "`", " ")
+  let d = drop_images(b)
+  let e = drop_links(d)
+  let f = drop_symbols(e)
+  collapse_ws(f)
+}
+
+# replace each open..close (inclusive) span with `repl`
+fn drop_between(s: String, open: String, close: String, repl: String) -> String =
+  match index_of(s, open, 0) {
+    Some(i) ->
+      match index_of(s, close, i + str_len(open)) {
+        Some(j) -> substring(s, 0, i) ++ repl ++ drop_between(substring(s, j + str_len(close), str_len(s)), open, close, repl)
+        None -> s
+      }
+    None -> s
+  }
+
+# ![...](...) -> space
+fn drop_images(s: String) -> String =
+  match index_of(s, "![", 0) {
+    Some(i) ->
+      match paren_end(s, i) {
+        Some(after) -> substring(s, 0, i) ++ " " ++ drop_images(substring(s, after, str_len(s)))
+        None -> substring(s, 0, i + 2) ++ drop_images(substring(s, i + 2, str_len(s)))
+      }
+    None -> s
+  }
+
+# [text](...) -> text
+fn drop_links(s: String) -> String =
+  match index_of(s, "[", 0) {
+    Some(i) ->
+      match link_text(s, i) {
+        Some((txt, after)) -> substring(s, 0, i) ++ txt ++ drop_links(substring(s, after, str_len(s)))
+        None -> substring(s, 0, i + 1) ++ drop_links(substring(s, i + 1, str_len(s)))
+      }
+    None -> s
+  }
+
+# at "[" position i: expect [txt](url); return (txt, index-after-`)`)
+fn link_text(s: String, i: Int) -> Option[(String, Int)] =
+  match index_of(s, "]", i) {
+    Some(rb) ->
+      if rb + 1 < str_len(s) && substring(s, rb + 1, rb + 2) == "(" {
+        match index_of(s, ")", rb + 2) {
+          Some(rp) -> Some((substring(s, i + 1, rb), rp + 1))
+          None -> None
+        }
+      } else {
+        None
+      }
+    None -> None
+  }
+
+# from a "![" at i: find the closing ")" of the following (...) ; return index after
+fn paren_end(s: String, i: Int) -> Option[Int] =
+  match index_of(s, "]", i) {
+    Some(rb) ->
+      if rb + 1 < str_len(s) && substring(s, rb + 1, rb + 2) == "(" {
+        match index_of(s, ")", rb + 2) {
+          Some(rp) -> Some(rp + 1)
+          None -> None
+        }
+      } else {
+        None
+      }
+    None -> None
+  }
+
+# drop markdown symbols [#>*_~`] (backtick already gone); replace with space
+fn drop_symbols(s: String) -> String =
+  from_code_points(map(code_points(s), fn(c) => if is_md_sym(c) { 32 } else { c }))
+
+fn is_md_sym(c: Int) -> Bool =
+  c == 35 || c == 62 || c == 42 || c == 95 || c == 126 || c == 96 # # > * _ ~ `
+
+# collapse runs of ASCII whitespace to a single space, trim ends
+fn collapse_ws(s: String) -> String = trim(collapse(code_points(s), 0, false, ""))
+
+fn collapse(cps: List[Int], i: Int, last_ws: Bool, acc: String) -> String =
+  if i >= len(cps) {
+    acc
+  } else {
+    let c = cps[i]
+    if is_ws(c) {
+      if last_ws { collapse(cps, i + 1, true, acc) } else { collapse(cps, i + 1, true, acc ++ " ") }
+    } else {
+      collapse(cps, i + 1, false, acc ++ from_code_points([c]))
+    }
+  }
+
+fn is_ws(c: Int) -> Bool = c == 32 || c == 9 || c == 10 || c == 13 || c == 12
+
+# index of `needle` in `s` at or after `from`, by code-point index
+fn index_of(s: String, needle: String, from: Int) -> Option[Int] = {
+  let cps = code_points(s)
+  let ncps = code_points(needle)
+  find_at(cps, ncps, from)
+}
+
+fn find_at(cps: List[Int], ncps: List[Int], i: Int) -> Option[Int] =
+  if i + len(ncps) > len(cps) {
+    None
+  } else if eq_at(cps, ncps, i) {
+    Some(i)
+  } else {
+    find_at(cps, ncps, i + 1)
+  }
+
+fn eq_at(cps: List[Int], ncps: List[Int], i: Int) -> Bool =
+  fold(range(0, len(ncps)), true, fn(acc, k) => acc && cps[i + k] == ncps[k])
+
+# ---- highlight builders ----
+
+pub fn title_html(title: String, terms: List[String]) -> String = mark(html_escape(title), terms)
+
+## Excerpt: a ~150-char window around the first matching term, highlighted.
+pub fn excerpt_html(content: String, summary: String, terms: List[String]) -> String = {
+  let stripped = strip_md(content)
+  let base = if str_len(stripped) > 0 { stripped } else { summary }
+  if str_len(base) == 0 {
+    ""
+  } else {
+    let bcps = code_points(base)
+    let low = to_lower(base)
+    let pos = first_term_pos(low, terms, 0 - 1)
+    let width = 150
+    if pos == 0 - 1 {
+      let seg = from_code_points(slice(bcps, 0, min2(width, len(bcps))))
+      mark(html_escape(seg), terms) ++ (if len(bcps) > width { "…" } else { "" })
+    } else {
+      let start = max2(0, pos - width / 3)
+      let end = min2(len(bcps), start + width)
+      let seg = from_code_points(slice(bcps, start, end))
+      let pre = if start > 0 { "…" } else { "" }
+      let suf = if end < len(bcps) { "…" } else { "" }
+      pre ++ mark(html_escape(seg), terms) ++ suf
+    }
+  }
+}
+
+fn first_term_pos(low: String, terms: List[String], best: Int) -> Int =
+  fold(terms, 0 - 1, fn(acc, t) =>
+      match index_of(low, to_lower(t), 0) {
+        Some(i) -> if acc == 0 - 1 || i < acc { i } else { acc }
+        None -> acc
+      })
+
+fn min2(a: Int, b: Int) -> Int = if a < b { a } else { b }
+fn max2(a: Int, b: Int) -> Int = if a > b { a } else { b }
+
+# ---- query (SQLite FTS, ranking delegated) ----
+
+## Search published articles. Returns the full response JSON. Uses the simple
+## FTS tokenizer (production/local); falls back to LIKE via java_try on FTS error.
+pub fn search_published(c: Connection, q: String, page: Int, size: Int) -> Result[Json, String] !io = {
+  let query_str = trim(q)
+  let terms = filter(split(query_str, " "), fn(t) => t != "")
+  if len(terms) == 0 {
+    Ok(empty_result(page, size, query_str))
+  } else {
+    let offset = (page - 1) * size
+    let collected = collect_ids(c, query_str, terms, offset, size)?
+    let (total, ids) = collected
+    let items = build_items(c, ids, terms, 0, [])?
+    Ok(obj([
+      ("total", jint(total)),
+      ("page", jint(page)),
+      ("size", jint(size)),
+      ("query", jstr(query_str)),
+      ("items", JArr(items)),
+    ]))
+  }
+}
+
+fn empty_result(page: Int, size: Int, q: String) -> Json =
+  obj([("total", jint(0)), ("page", jint(page)), ("size", jint(size)), ("query", jstr(q)), ("items", JArr([]))])
+
+# simple tokenizer path (matches _simple_query); LIKE fallback on FTS error
+fn collect_ids(c: Connection, q: String, terms: List[String], offset: Int, size: Int) -> Result[(Int, List[Int]), String] !io = {
+  let fts = simple_query(c, q, offset, size)
+  match fts {
+    Ok(pair) -> Ok(pair)
+    Err(_) -> like_query(c, terms, offset, size)
+  }
+}
+
+fn simple_query(c: Connection, q: String, offset: Int, size: Int) -> Result[(Int, List[Int]), String] !io = {
+  let tot = query(c,
+    "select count(*) from article_fts join articles a on a.id = article_fts.rowid where article_fts match simple_query(?) and a.published = 1",
+    [PStr(q)], [ColInt])?
+  let total = first_int(tot)
+  let rows = query(c,
+    "select a.id from article_fts join articles a on a.id = article_fts.rowid where article_fts match simple_query(?) and a.published = 1 order by bm25(article_fts, 10.0, 4.0, 1.0) limit ? offset ?",
+    [PStr(q), PInt(size), PInt(offset)], [ColInt])?
+  Ok((total, map(rows, fn(r) => int_at(r, 0))))
+}
+
+# LIKE fallback (single-term subset; matches the common case). Terms ANDed.
+fn like_query(c: Connection, terms: List[String], offset: Int, size: Int) -> Result[(Int, List[Int]), String] !io = {
+  let first = terms[0]
+  let pat = "%$first%"
+  let tot = query(c, "select count(*) from articles where published = 1 and (title like ? or summary like ? or content like ?)", [PStr(pat), PStr(pat), PStr(pat)], [ColInt])?
+  let total = first_int(tot)
+  let rows = query(c, "select id from articles where published = 1 and (title like ? or summary like ? or content like ?) order by created_at desc limit ? offset ?", [PStr(pat), PStr(pat), PStr(pat), PInt(size), PInt(offset)], [ColInt])?
+  Ok((total, map(rows, fn(r) => int_at(r, 0))))
+}
+
+fn first_int(rows: List[List[Cell]]) -> Int =
+  match get(rows, 0) {
+    Some(r) -> int_at(r, 0)
+    None -> 0
+  }
+
+fn build_items(c: Connection, ids: List[Int], terms: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
+  if i >= len(ids) {
+    Ok(acc)
+  } else {
+    let item = item_for(c, ids[i], terms)?
+    match item {
+      Some(j) -> build_items(c, ids, terms, i + 1, acc ++ [j])
+      None -> build_items(c, ids, terms, i + 1, acc)
+    }
+  }
+
+fn item_for(c: Connection, id: Int, terms: List[String]) -> Result[Option[Json], String] !io = {
+  let rows = query(c, "select id, title, slug, created_at, content, summary from articles where id = ?", [PInt(id)], [ColInt, ColStr, ColStr, ColStr, ColStr, ColStr])?
+  match get(rows, 0) {
+    Some(r) -> {
+      let tags = tags_json(c, id)?
+      let title = str_at(r, 1)
+      let content = str_at(r, 4)
+      let summary = str_at(r, 5)
+      Ok(Some(obj([
+        ("id", jint(int_at(r, 0))),
+        ("title", jstr(title)),
+        ("slug", jstr(str_at(r, 2))),
+        ("created_at", jdatetime(str_at(r, 3))),
+        ("word_count", jint(word_count(content))),
+        ("tags", JArr(tags)),
+        ("title_html", jstr(title_html(title, terms))),
+        ("excerpt_html", jstr(excerpt_html(content, summary, terms))),
+      ])))
+    }
+    None -> Ok(None)
+  }
+}
+
+test "html_escape and title highlight" {
+  assert html_escape("a<b>&\"'") == "a&lt;b&gt;&amp;&quot;&#x27;"
+  assert title_html("Dawnop-site", ["dawn"]) == "<mark>Dawn</mark>op-site"
+  assert mark("hello world", ["WORLD"]) == "hello <mark>world</mark>"
+}
+
+test "strip_md removes fences and symbols" {
+  assert strip_md("# Title\n\n```\ncode\n```\ntext `x` here") == "Title text here"
+  assert strip_md("a [link](http://x) b") == "a link b"
+}
