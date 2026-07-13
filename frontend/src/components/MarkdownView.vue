@@ -182,6 +182,12 @@ onBeforeUnmount(() => islands.unmountAll())
   font-size: 1.02rem;
   color: #24292f;
 }
+/* 正文段落/列表：消除末行孤立词 */
+.markdown-body :deep(p),
+.markdown-body :deep(li),
+.markdown-body :deep(blockquote) {
+  text-wrap: pretty;
+}
 .markdown-body :deep(h1),
 .markdown-body :deep(h2),
 .markdown-body :deep(h3) {
@@ -190,6 +196,8 @@ onBeforeUnmount(() => islands.unmountAll())
   line-height: 1.35;
   font-weight: 650;
   scroll-margin-top: 80px;
+  /* 小标题折行时均衡各行长度 */
+  text-wrap: balance;
 }
 .markdown-body :deep(h2) {
   padding-bottom: 0.3em;

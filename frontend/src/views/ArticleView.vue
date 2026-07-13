@@ -152,15 +152,19 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
 .article {
   max-width: 720px;
   margin: 0 auto;
+  container-type: inline-size;
 }
 .head {
   margin-bottom: 28px;
 }
 .title {
-  font-size: 2.4rem;
+  /* 字号按文章栏宽（720px 容器）伸缩，而非整窗 vw */
+  font-size: clamp(1.7rem, 4.6cqi, 2.1rem);
   line-height: 1.25;
   letter-spacing: -0.01em;
   margin: 0 0 14px;
+  text-align: center;
+  text-wrap: balance;
 }
 .meta {
   color: #8b949e;
