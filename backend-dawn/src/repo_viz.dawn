@@ -1,0 +1,116 @@
+# Viz component model (M6 knife 10): CRUD for the embedded Vue components that
+# ```viz fences mount. slug must match ^[a-z0-9]+(-[a-z0-9]+)*$; source required.
+use java "java.sql.Connection"
+use sql.{PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, last_id, int_at, str_at}
+use json/value.{Json}
+use jsonx.{obj, jint, jstr, jdatetime}
+
+## slug: lowercase alnum segments joined by single dashes, no leading/trailing/
+## double dash. Empty is invalid.
+pub fn valid_slug(s: String) -> Bool =
+  str_len(s) > 0 && no_edge_dash(s) && only_slug_chars(s) && no_double_dash(s)
+
+fn no_edge_dash(s: String) -> Bool = starts_with(s, "-") == false && ends_with(s, "-") == false
+
+fn no_double_dash(s: String) -> Bool = contains(s, "--") == false
+
+fn only_slug_chars(s: String) -> Bool =
+  fold(code_points(s), true, fn(acc, c) => acc && is_slug_char(c))
+
+fn is_slug_char(c: Int) -> Bool =
+  (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 45 # a-z 0-9 -
+
+const OUT_COLS: String = "id, slug, name, source, compiled, style, created_at, updated_at"
+
+fn out_col_types() -> List[Col] = [ColInt, ColStr, ColStr, ColStr, ColStr, ColStr, ColStr, ColStr]
+
+fn out_json(r: List[Cell]) -> Json =
+  obj([
+    ("id", jint(int_at(r, 0))),
+    ("slug", jstr(str_at(r, 1))),
+    ("name", jstr(str_at(r, 2))),
+    ("source", jstr(str_at(r, 3))),
+    ("compiled", jstr(str_at(r, 4))),
+    ("style", jstr(str_at(r, 5))),
+    ("created_at", jdatetime(str_at(r, 6))),
+    ("updated_at", jdatetime(str_at(r, 7))),
+  ])
+
+## GET /api/viz — all components (admin, full VizOut).
+pub fn list_all(c: Connection) -> Result[List[Json], String] !io = {
+  let rows = query(c, "select $OUT_COLS from viz_components order by slug", [], out_col_types())?
+  Ok(map(rows, out_json))
+}
+
+## Full component by id (VizOut) — create/update response.
+pub fn by_id(c: Connection, id: Int) -> Result[Option[Json], String] !io = {
+  let rows = query(c, "select $OUT_COLS from viz_components where id = ?", [PInt(id)], out_col_types())?
+  match get(rows, 0) {
+    Some(r) -> Ok(Some(out_json(r)))
+    None -> Ok(None)
+  }
+}
+
+## GET /api/viz/{slug} — public component {slug, name, compiled, style}.
+pub fn by_slug_public(c: Connection, slug: String) -> Result[Option[Json], String] !io = {
+  let rows = query(c, "select slug, name, compiled, style from viz_components where slug = ?", [PStr(slug)], [ColStr, ColStr, ColStr, ColStr])?
+  match get(rows, 0) {
+    Some(r) -> Ok(Some(obj([
+      ("slug", jstr(str_at(r, 0))),
+      ("name", jstr(str_at(r, 1))),
+      ("compiled", jstr(str_at(r, 2))),
+      ("style", jstr(str_at(r, 3))),
+    ])))
+    None -> Ok(None)
+  }
+}
+
+pub fn slug_free(c: Connection, slug: String, exclude: Option[Int]) -> Result[Bool, String] !io = {
+  let rows = match exclude {
+    Some(id) -> query(c, "select count(*) from viz_components where slug = ? and id != ?", [PStr(slug), PInt(id)], [ColInt])?
+    None -> query(c, "select count(*) from viz_components where slug = ?", [PStr(slug)], [ColInt])?
+  }
+  match get(rows, 0) {
+    Some(r) -> Ok(int_at(r, 0) == 0)
+    None -> Ok(true)
+  }
+}
+
+pub fn viz_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
+  let rows = query(c, "select count(*) from viz_components where id = ?", [PInt(id)], [ColInt])?
+  match get(rows, 0) {
+    Some(r) -> Ok(int_at(r, 0) != 0)
+    None -> Ok(false)
+  }
+}
+
+pub type NewViz = { slug: String, name: String, source: String, compiled: String, style: String }
+
+## Create a component; caller validates slug/source and uniqueness first.
+pub fn create_viz(c: Connection, v: NewViz) -> Result[Int, String] !io = {
+  let _i = exec(c,
+    "insert into viz_components (slug, name, source, compiled, style, created_at, updated_at) values (?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
+    [PStr(v.slug), PStr(v.name), PStr(v.source), PStr(v.compiled), PStr(v.style)])?
+  last_id(c)
+}
+
+pub fn set_viz_str(c: Connection, id: Int, col: String, val: String) -> Result[Int, String] !io =
+  exec(c, "update viz_components set $col = ? where id = ?", [PStr(val), PInt(id)])
+
+pub fn touch_viz(c: Connection, id: Int) -> Result[Int, String] !io =
+  exec(c, "update viz_components set updated_at = datetime('now') where id = ?", [PInt(id)])
+
+pub fn delete_viz(c: Connection, id: Int) -> Result[Int, String] !io =
+  exec(c, "delete from viz_components where id = ?", [PInt(id)])
+
+test "valid_slug accepts clean slugs, rejects the rest" {
+  assert valid_slug("dawn-trait-orphan")
+  assert valid_slug("about-timeline")
+  assert valid_slug("abc123")
+  assert valid_slug("-lead") == false
+  assert valid_slug("trail-") == false
+  assert valid_slug("dou--ble") == false
+  assert valid_slug("Upper") == false
+  assert valid_slug("has space") == false
+  assert valid_slug("") == false
+}

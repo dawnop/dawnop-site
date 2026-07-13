@@ -11,6 +11,7 @@ use jsonread.{body_obj, has, str_or, bool_or, opt_int, str_list}
 use repo_settings
 use repo_tag
 use repo_page
+use repo_viz.{NewViz, valid_slug, slug_free, viz_exists, create_viz, set_viz_str, touch_viz, delete_viz, list_all, by_id}
 use repo_pagetag.{NewPage, create_page, page_kind, delete_page, reorder_pages, set_page_str, set_page_int, touch_page, regen_page_slug, page_title, tag_exists, rename_tag, merge_tags, cleanup_tags, delete_tag, target_published_count}
 
 fn param_int(req: Request, name: String) -> Option[Int] =
@@ -332,6 +333,108 @@ fn int_list(m: Map[String, Json], key: String) -> List[Int] =
     _ -> []
   }
 
+# ---- viz admin ----
+
+## GET /api/viz — all components (admin).
+pub fn viz_list(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match with_db(a.db.path, a.db.ext, fn(c) => list_all(c)) {
+        Ok(items) -> Ok(json_ok(JArr(items)))
+        Err(m) -> Err(http_error(500, m))
+      })
+
+## POST /api/viz — create (201). slug format + uniqueness + source required.
+pub fn viz_create(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match body_obj(req.body) {
+        Ok(m) -> {
+          let slug = str_or(m, "slug", "")
+          let source = str_or(m, "source", "")
+          if valid_slug(slug) == false {
+            Err(http_error(422, "slug 格式非法"))
+          } else if trim(source) == "" {
+            Err(http_error(422, "source 不能为空"))
+          } else {
+            let nv = NewViz {
+              slug: slug, name: str_or(m, "name", ""), source: source,
+              compiled: str_or(m, "compiled", ""), style: str_or(m, "style", ""),
+            }
+            match with_db(a.db.path, a.db.ext, fn(c) => viz_create_read(c, nv)) {
+              Ok(Some(j)) -> Ok(json_response(201, j))
+              Ok(None) -> Err(http_error(409, "标识 $slug 已存在"))
+              Err(msg) -> Err(http_error(500, msg))
+            }
+          }
+        }
+        Err(e) -> Err(http_error(422, e))
+      })
+
+fn viz_create_read(c: Connection, nv: NewViz) -> Result[Option[Json], String] !io = {
+  let free = slug_free(c, nv.slug, None)?
+  if free == false {
+    Ok(None)
+  } else {
+    let id = create_viz(c, nv)?
+    by_id(c, id)
+  }
+}
+
+## PUT /api/viz/{viz_id} — partial update.
+pub fn viz_update(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match param_int(req, "viz_id") {
+        Some(id) ->
+          match body_obj(req.body) {
+            Ok(m) ->
+              match with_db(a.db.path, a.db.ext, fn(c) => viz_update_read(c, id, m)) {
+                Ok(Some(j)) -> Ok(json_ok(j))
+                Ok(None) -> Err(http_error(404, "组件不存在"))
+                Err(msg) -> Err(if contains(msg, "已存在") { http_error(409, msg) } else { http_error(422, msg) })
+              }
+            Err(e) -> Err(http_error(422, e))
+          }
+        None -> Err(http_error(422, "viz_id must be an integer"))
+      })
+
+fn viz_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Option[Json], String] !io = {
+  let ex = viz_exists(c, id)?
+  if ex == false {
+    Ok(None)
+  } else {
+    let _sl = if has(m, "slug") { update_viz_slug(c, id, str_or(m, "slug", ""))? } else { 0 }
+    let _na = if has(m, "name") { set_viz_str(c, id, "name", str_or(m, "name", ""))? } else { 0 }
+    let _so = if has(m, "source") { set_viz_str(c, id, "source", str_or(m, "source", ""))? } else { 0 }
+    let _co = if has(m, "compiled") { set_viz_str(c, id, "compiled", str_or(m, "compiled", ""))? } else { 0 }
+    let _st = if has(m, "style") { set_viz_str(c, id, "style", str_or(m, "style", ""))? } else { 0 }
+    let _t = touch_viz(c, id)?
+    by_id(c, id)
+  }
+}
+
+fn update_viz_slug(c: Connection, id: Int, slug: String) -> Result[Int, String] !io =
+  if valid_slug(slug) == false {
+    Err("slug 格式非法")
+  } else {
+    let free = slug_free(c, slug, Some(id))?
+    if free == false { Err("标识 $slug 已存在") } else { set_viz_str(c, id, "slug", slug) }
+  }
+
+## DELETE /api/viz/{viz_id} — 204.
+pub fn viz_delete(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match param_int(req, "viz_id") {
+        Some(id) ->
+          match with_db(a.db.path, a.db.ext, fn(c) => delete_viz(c, id)) {
+            Ok(_n) -> Ok(text(204, ""))
+            Err(m) -> Err(http_error(500, m))
+          }
+        None -> Err(http_error(422, "viz_id must be an integer"))
+      })
+
 ## All part-2 admin routes. Static paths precede /{id} captures.
 pub fn routes(a: Auth) -> List[Route] =
   [
@@ -347,4 +450,8 @@ pub fn routes(a: Auth) -> List[Route] =
     Post("/api/pages", page_create(a)),
     Put("/api/pages/{page_id}", page_update(a)),
     Delete("/api/pages/{page_id}", page_delete(a)),
+    Get("/api/viz", viz_list(a)),
+    Post("/api/viz", viz_create(a)),
+    Put("/api/viz/{viz_id}", viz_update(a)),
+    Delete("/api/viz/{viz_id}", viz_delete(a)),
   ]

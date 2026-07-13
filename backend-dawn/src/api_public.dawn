@@ -10,6 +10,7 @@ use db.{Db, with_db}
 use repo_article.{list_published, list_by_page, by_slug, bump_views}
 use repo_page
 use repo_tag
+use repo_viz
 use search.{search_published}
 
 fn qint(req: Request, name: String, fallback: Int) -> Int =
@@ -148,11 +149,23 @@ pub fn search(db: Db) -> Handler =
     }
   }
 
+## GET /api/viz/{slug} — public component for readers to mount.
+pub fn get_viz(db: Db) -> Handler =
+  fn(req) => {
+    let slug = map_get_or(req.params, "slug", "")
+    match with_db(db.path, db.ext, fn(c) => repo_viz.by_slug_public(c, slug)) {
+      Ok(Some(j)) -> Ok(json_ok(j))
+      Ok(None) -> Err(http_error(404, "组件不存在"))
+      Err(m) -> Err(http_error(500, m))
+    }
+  }
+
 ## The public read routes, bound to a db handle.
 pub fn routes(db: Db) -> List[Route] =
   [
     Get("/api/health", health),
     Get("/api/search", search(db)),
+    Get("/api/viz/{slug}", get_viz(db)),
     Get("/api/articles", list_articles(db)),
     Get("/api/articles/{slug}", get_article(db)),
     Get("/api/pages/nav", get_nav(db)),
