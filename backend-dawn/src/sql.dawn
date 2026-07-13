@@ -1,0 +1,237 @@
+# Thin JDBC wrapper for SQLite (M6 knife 2b). Pure Dawn over java.sql — the
+# driver jar rides on --cp (lib/sqlite-jdbc-*.jar). Expected SQL failures
+# (bad statement, constraint) come back as Err via java_try; connection-level
+# failures (cannot open, driver missing) panic — they are deploy bugs.
+use java "java.sql.Connection"
+use java "java.sql.DriverManager"
+use java "java.sql.PreparedStatement"
+use java "java.sql.ResultSet"
+use java "java.util.Properties"
+
+## A bind parameter. Dawn lists are homogeneous, so mixed-type binds travel
+## in this ADT: `[PInt(1), PStr("x"), PNull]`.
+pub type SqlV =
+  | PInt(v: Int)
+  | PFloat(v: Float)
+  | PStr(v: String)
+  | PNull
+
+## Expected static type of one selected column, in select-list order.
+pub type Col =
+  | ColInt
+  | ColFloat
+  | ColStr
+
+## One cell of a fetched row. NULL is VNull regardless of the declared column type.
+pub type Cell =
+  | VInt(v: Int)
+  | VFloat(v: Float)
+  | VStr(v: String)
+  | VNull
+derive Show
+
+## Open a database. Panics when the connection cannot be made — a service
+## that cannot reach its database has no useful degraded mode.
+pub fn open(url: String) -> Connection !io =
+  DriverManager.getConnection(url).expect("db connect failed: $url")
+
+## Open with `enable_load_extension` so `select load_extension(...)` works
+## (the FTS `simple` tokenizer rides in via this).
+pub fn open_ext(url: String) -> Connection !io = {
+  let props = Properties.new()
+  props.setProperty("enable_load_extension", "true")
+  DriverManager.getConnection(url, props).expect("db connect failed: $url")
+}
+
+fn bind(st: PreparedStatement, ps: List[SqlV]) -> Unit !io = {
+  for i in range(0, len(ps)) {
+    match ps[i] {
+      PInt(n) -> st.setLong(i + 1, n)
+      PFloat(x) -> st.setDouble(i + 1, x)
+      PStr(s) -> st.setString(i + 1, s)
+      PNull -> st.setNull(i + 1, 0) # 0 = java.sql.Types.NULL (static fields are not importable)
+    }
+  }
+}
+
+fn cell_of(rs: ResultSet, col: Col, i: Int) -> Cell !io =
+  match col {
+    ColInt -> {
+      let n = rs.getLong(i)
+      if rs.wasNull() { VNull } else { VInt(n) }
+    }
+    ColFloat -> {
+      let x = rs.getDouble(i)
+      if rs.wasNull() { VNull } else { VFloat(x) }
+    }
+    ColStr ->
+      match rs.getString(i) {
+        Some(s) -> VStr(s)
+        None -> VNull
+      }
+  }
+
+fn row_of(rs: ResultSet, cols: List[Col]) -> List[Cell] !io =
+  map(range(0, len(cols)), fn(i) => cell_of(rs, cols[i], i + 1))
+
+fn rows_of(rs: ResultSet, cols: List[Col]) -> List[List[Cell]] !io =
+  if rs.next() { [row_of(rs, cols)] ++ rows_of(rs, cols) } else { [] }
+
+## Run a select; `cols` declares the select list's types in order.
+## Rows are fully materialized and the statement is closed before returning.
+pub fn query(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[List[Cell]], String] !io =
+  java_try(fn() => {
+    let st = c.prepareStatement(q).expect("prepare")
+    bind(st, ps)
+    let rs = st.executeQuery().expect("result set")
+    let rows = rows_of(rs, cols)
+    st.close()
+    rows
+  })
+
+## Run an insert/update/delete/DDL; Ok carries the affected row count.
+pub fn exec(c: Connection, q: String, ps: List[SqlV]) -> Result[Int, String] !io =
+  java_try(fn() => {
+    let st = c.prepareStatement(q).expect("prepare")
+    bind(st, ps)
+    let n = st.executeUpdate()
+    st.close()
+    n
+  })
+
+## Single-value convenience: first column of the first row as Int.
+## Err when the query fails or returns no rows.
+pub fn scalar_int(c: Connection, q: String, ps: List[SqlV]) -> Result[Int, String] !io = {
+  let rows = query(c, q, ps, [ColInt])?
+  match get(rows, 0) {
+    Some(row) -> Ok(int_at(row, 0))
+    None -> Err("scalar query returned no rows: $q")
+  }
+}
+
+## rowid of the last insert on this connection.
+pub fn last_id(c: Connection) -> Result[Int, String] !io =
+  scalar_int(c, "select last_insert_rowid()", [])
+
+## Run `body` in a transaction: commit on Ok, roll back on Err. A transaction
+## left open by a panicked request is rolled back on entry (no try/finally in
+## Dawn — this is the recovery point).
+pub fn with_tx[T](c: Connection, body: fn() -> Result[T, String] !io) -> Result[T, String] !io = {
+  if c.getAutoCommit() == false {
+    c.rollback()
+    c.setAutoCommit(true)
+  }
+  c.setAutoCommit(false)
+  let r = body()
+  match r {
+    Ok(v) -> {
+      c.commit()
+      c.setAutoCommit(true)
+      Ok(v)
+    }
+    Err(m) -> {
+      c.rollback()
+      c.setAutoCommit(true)
+      Err(m)
+    }
+  }
+}
+
+# ---- typed row accessors (mismatch = repo-layer bug, hence panic) ----
+
+pub fn int_at(row: List[Cell], i: Int) -> Int =
+  match row[i] {
+    VInt(n) -> n
+    other -> panic("column $i is not an Int: ${to_string(other)}")
+  }
+
+pub fn float_at(row: List[Cell], i: Int) -> Float =
+  match row[i] {
+    VFloat(x) -> x
+    other -> panic("column $i is not a Float: ${to_string(other)}")
+  }
+
+pub fn str_at(row: List[Cell], i: Int) -> String =
+  match row[i] {
+    VStr(s) -> s
+    other -> panic("column $i is not a String: ${to_string(other)}")
+  }
+
+## SQLite stores booleans as 0/1 integers.
+pub fn bool_at(row: List[Cell], i: Int) -> Bool = int_at(row, i) != 0
+
+pub fn opt_str_at(row: List[Cell], i: Int) -> Option[String] =
+  match row[i] {
+    VStr(s) -> Some(s)
+    VNull -> None
+    other -> panic("column $i is not a nullable String: ${to_string(other)}")
+  }
+
+pub fn opt_int_at(row: List[Cell], i: Int) -> Option[Int] =
+  match row[i] {
+    VInt(n) -> Some(n)
+    VNull -> None
+    other -> panic("column $i is not a nullable Int: ${to_string(other)}")
+  }
+
+# ---- tests (need --cp lib/sqlite-jdbc-*.jar) ----
+
+test "exec and query round-trip, nulls map to VNull" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table t (a integer, b text, x real)", []) == Ok(0)
+  assert exec(c, "insert into t values (?, ?, ?)", [PInt(42), PStr("hi"), PFloat(1.5)]) == Ok(1)
+  assert exec(c, "insert into t values (?, null, null)", [PInt(7)]) == Ok(1)
+  match query(c, "select a, b, x from t order by a", [], [ColInt, ColStr, ColFloat]) {
+    Ok(rows) -> {
+      assert len(rows) == 2
+      assert int_at(rows[0], 0) == 7
+      assert opt_str_at(rows[0], 1) == None
+      assert int_at(rows[1], 0) == 42
+      assert str_at(rows[1], 1) == "hi"
+      assert float_at(rows[1], 2) == 1.5
+    }
+    Err(m) -> panic(m)
+  }
+}
+
+test "an SQL error is an Err, not a crash" {
+  let c = open("jdbc:sqlite::memory:")
+  match query(c, "select * from missing_table", [], []) {
+    Ok(_) -> { assert false }
+    Err(m) -> { assert contains(m, "SQL") }
+  }
+}
+
+test "scalar_int and last_id" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table t (id integer primary key, v text)", []) == Ok(0)
+  assert exec(c, "insert into t (v) values ('a')", []) == Ok(1)
+  assert last_id(c) == Ok(1)
+  assert scalar_int(c, "select count(*) from t", []) == Ok(1)
+}
+
+test "with_tx commits on Ok and rolls back on Err" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table t (v integer)", []) == Ok(0)
+  let ok: Result[Bool, String] = with_tx(c, fn() => {
+    let _n = exec(c, "insert into t values (1)", [])?
+    Ok(true)
+  })
+  assert ok == Ok(true)
+  let failed: Result[Bool, String] = with_tx(c, fn() => {
+    let _n = exec(c, "insert into t values (2)", [])?
+    Err("abort")
+  })
+  assert failed == Err("abort")
+  assert scalar_int(c, "select count(*) from t", []) == Ok(1)
+}
+
+test "unique constraint violation is an expected Err" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table t (slug text unique)", []) == Ok(0)
+  assert exec(c, "insert into t values ('a')", []) == Ok(1)
+  match exec(c, "insert into t values ('a')", []) {
+    Ok(_) -> { assert false }
+    Err(m) -> { assert contains(m, "UNIQUE") }
+  }
+}
