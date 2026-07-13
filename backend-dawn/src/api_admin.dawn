@@ -1,0 +1,183 @@
+# Protected admin handlers (M6 knife 9): article CRUD, admin list, stats. Every
+# handler authenticates first via auth.current_user; the request body is JSON
+# (create/update). Writes run on a connection with the FTS extension loaded.
+use java "java.sql.Connection"
+use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, text}
+use web/router.{Route, Get, Post, Put, Delete}
+use json/value.{Json}
+use jsonx.{paginated, obj, jstr, jint}
+use db.{Db, with_db}
+use auth.{Auth, current_user}
+use jsonread.{body_obj, has, str_or, bool_or, opt_int, str_list}
+use repo_article
+use repo_write.{NewArticle, ArticlePatch, create_article, update_article, delete_article, article_exists, unique_slug, resolve_tags, validate_page_ref}
+
+fn qint(req: Request, name: String, fallback: Int) -> Int =
+  match map_get(req.query, name) {
+    Some(s) ->
+      match parse_int(s) {
+        Some(n) -> n
+        None -> fallback
+      }
+    None -> fallback
+  }
+
+fn clamp(n: Int, lo: Int, hi: Int) -> Int =
+  if n < lo { lo } else if n > hi { hi } else { n }
+
+fn param(req: Request, name: String) -> String =
+  match map_get(req.params, name) {
+    Some(v) -> v
+    None -> ""
+  }
+
+# guard: run body only if authenticated, else 401
+fn guarded(a: Auth, req: Request, body: fn(String) -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io =
+  match current_user(a, req) {
+    Ok(user) -> body(user)
+    Err(e) -> Err(e)
+  }
+
+## GET /api/articles/admin — all articles, optional ?published= filter.
+pub fn list_admin(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn(_u) => {
+    let page = clamp(qint(req, "page", 1), 1, 1000000)
+    let size = clamp(qint(req, "size", 10), 1, 100)
+    let pub_filter: Option[Bool] = match map_get(req.query, "published") {
+      Some("true") -> Some(true)
+      Some("false") -> Some(false)
+      _ -> None
+    }
+    match with_db(a.db.path, a.db.ext, fn(c) => repo_article.list_admin(c, pub_filter, page, size)) {
+      Ok(pair) -> {
+        let (total, items) = pair
+        Ok(json_ok(paginated(total, page, size, items)))
+      }
+      Err(m) -> Err(http_error(500, m))
+    }
+  })
+
+## GET /api/articles/admin/stats — counts and total views.
+pub fn admin_stats(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn(_u) =>
+      match with_db(a.db.path, a.db.ext, fn(c) => repo_article.stats(c)) {
+        Ok(j) -> Ok(json_ok(j))
+        Err(m) -> Err(http_error(500, m))
+      })
+
+## GET /api/articles/admin/{article_id} — one article (any status).
+pub fn admin_get(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn(_u) =>
+      match parse_int(param(req, "article_id")) {
+        Some(id) ->
+          match with_db(a.db.path, a.db.ext, fn(c) => repo_article.by_id_admin(c, id)) {
+            Ok(Some(j)) -> Ok(json_ok(j))
+            Ok(None) -> Err(http_error(404, "文章不存在"))
+            Err(m) -> Err(http_error(500, m))
+          }
+        None -> Err(http_error(422, "article_id must be an integer"))
+      })
+
+## POST /api/articles — create; returns the created article (201).
+pub fn create(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn(_u) =>
+      match body_obj(req.body) {
+        Ok(m) -> {
+          if has(m, "title") == false || str_or(m, "title", "") == "" {
+            Err(http_error(422, "标题不能为空"))
+          } else {
+            let na = NewArticle {
+              title: trim(str_or(m, "title", "")),
+              slug_hint: str_or(m, "slug", ""),
+              summary: str_or(m, "summary", ""),
+              content: str_or(m, "content", ""),
+              published: bool_or(m, "published", false),
+              auto_title: bool_or(m, "auto_title", false),
+              page_id: opt_int(m, "page_id"),
+              tags: str_list(m, "tags"),
+            }
+            match with_db(a.db.path, a.db.ext, fn(c) => create_then_read(c, na)) {
+              Ok(j) -> Ok(json_response(201, j))
+              Err(m2) -> Err(classify(m2))
+            }
+          }
+        }
+        Err(e) -> Err(http_error(422, e))
+      })
+
+fn create_then_read(c: Connection, na: NewArticle) -> Result[Json, String] !io = {
+  let id = create_article(c, na)?
+  match repo_article.by_id_admin(c, id)? {
+    Some(j) -> Ok(j)
+    None -> Err("created article vanished")
+  }
+}
+
+## PUT /api/articles/{article_id} — partial update; returns the updated article.
+pub fn update(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn(_u) =>
+      match parse_int(param(req, "article_id")) {
+        Some(id) ->
+          match body_obj(req.body) {
+            Ok(m) -> {
+              let p = patch_of(m)
+              match with_db(a.db.path, a.db.ext, fn(c) => update_then_read(c, id, p)) {
+                Ok(Some(j)) -> Ok(json_ok(j))
+                Ok(None) -> Err(http_error(404, "文章不存在"))
+                Err(m2) -> Err(classify(m2))
+              }
+            }
+            Err(e) -> Err(http_error(422, e))
+          }
+        None -> Err(http_error(422, "article_id must be an integer"))
+      })
+
+fn patch_of(m: Map[String, Json]) -> ArticlePatch =
+  ArticlePatch {
+    has_title: has(m, "title"), title: trim(str_or(m, "title", "")),
+    has_slug: has(m, "slug"), slug: str_or(m, "slug", ""),
+    has_summary: has(m, "summary"), summary: str_or(m, "summary", ""),
+    has_content: has(m, "content"), content: str_or(m, "content", ""),
+    has_published: has(m, "published"), published: bool_or(m, "published", false),
+    has_auto_title: has(m, "auto_title"), auto_title: bool_or(m, "auto_title", false),
+    has_page_id: has(m, "page_id"), page_id: opt_int(m, "page_id"),
+    has_tags: has(m, "tags"), tags: str_list(m, "tags"),
+  }
+
+fn update_then_read(c: Connection, id: Int, p: ArticlePatch) -> Result[Option[Json], String] !io = {
+  let ok = update_article(c, id, p)?
+  if ok { repo_article.by_id_admin(c, id) } else { Ok(None) }
+}
+
+## DELETE /api/articles/{article_id} — 204 on success.
+pub fn remove(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn(_u) =>
+      match parse_int(param(req, "article_id")) {
+        Some(id) ->
+          match with_db(a.db.path, a.db.ext, fn(c) => delete_article(c, id)) {
+            Ok(_n) -> Ok(text(204, ""))
+            Err(m) -> Err(http_error(500, m))
+          }
+        None -> Err(http_error(422, "article_id must be an integer"))
+      })
+
+# page_id validation failures are 400, everything else 500
+fn classify(m: String) -> HttpError =
+  if contains(m, "所属页面") { http_error(400, m) } else { http_error(500, m) }
+
+## The admin article routes (protected). Static admin paths precede /{id}.
+pub fn routes(a: Auth) -> List[Route] =
+  [
+    Get("/api/articles/admin", list_admin(a)),
+    Get("/api/articles/admin/stats", admin_stats(a)),
+    Get("/api/articles/admin/{article_id}", admin_get(a)),
+    Post("/api/articles", create(a)),
+    Put("/api/articles/{article_id}", update(a)),
+    Delete("/api/articles/{article_id}", remove(a)),
+  ]

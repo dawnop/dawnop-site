@@ -1,0 +1,240 @@
+# Article write model (M6 knife 9): unique slug generation, tag resolution
+# (find-or-create), page reference validation, and article create/update/delete.
+# All writes need the connection to have the FTS `simple` extension loaded
+# (the article_fts triggers use it) — db.connect handles that.
+use java "java.sql.Connection"
+use sql.{SqlV, PInt, PStr, PNull, Col, ColInt, ColStr, Cell, open, query, exec, scalar_int, last_id, int_at, str_at}
+use slugify.{slugify}
+
+# ---- unique slug ----
+
+## slugify(base) then append -2, -3, ... until free. `exclude` skips one id
+## (for update). `table` is "articles" or "tags".
+pub fn unique_slug(c: Connection, table: String, base: String, exclude: Option[Int]) -> Result[String, String] !io = {
+  let root = slugify(base)
+  dedup(c, table, root, root, 2, exclude)
+}
+
+fn dedup(c: Connection, table: String, root: String, candidate: String, n: Int, exclude: Option[Int]) -> Result[String, String] !io = {
+  let taken = slug_taken(c, table, candidate, exclude)?
+  if taken {
+    dedup(c, table, root, "$root-$n", n + 1, exclude)
+  } else {
+    Ok(candidate)
+  }
+}
+
+fn slug_taken(c: Connection, table: String, candidate: String, exclude: Option[Int]) -> Result[Bool, String] !io = {
+  let rows = match exclude {
+    Some(id) -> query(c, "select count(*) from $table where slug = ? and id != ?", [PStr(candidate), PInt(id)], [ColInt])?
+    None -> query(c, "select count(*) from $table where slug = ?", [PStr(candidate)], [ColInt])?
+  }
+  match get(rows, 0) {
+    Some(r) -> Ok(int_at(r, 0) != 0)
+    None -> Ok(false)
+  }
+}
+
+# ---- tag resolution (find-or-create by lowercased name) ----
+
+## Resolve tag names to ids, creating missing tags. De-duplicates by lowercase
+## name, trims, caps length at 64 and count at 20 (matches resolve_tags).
+pub fn resolve_tags(c: Connection, names: List[String]) -> Result[List[Int], String] !io =
+  resolve_loop(c, names, 0, [], [])
+
+fn resolve_loop(c: Connection, names: List[String], i: Int, seen: List[String], acc: List[Int]) -> Result[List[Int], String] !io =
+  if i == len(names) || len(acc) >= 20 {
+    Ok(acc)
+  } else {
+    let name = clip(trim(names[i]), 64)
+    let key = to_lower(name)
+    if name == "" || member(seen, key) {
+      resolve_loop(c, names, i + 1, seen, acc)
+    } else {
+      let id = tag_id_of(c, name, key)?
+      resolve_loop(c, names, i + 1, seen ++ [key], acc ++ [id])
+    }
+  }
+
+fn tag_id_of(c: Connection, name: String, key: String) -> Result[Int, String] !io = {
+  let existing = query(c, "select id from tags where lower(name) = ?", [PStr(key)], [ColInt])?
+  match get(existing, 0) {
+    Some(r) -> Ok(int_at(r, 0))
+    None -> {
+      let slug = unique_slug(c, "tags", name, None)?
+      let _i = exec(c, "insert into tags (name, slug, created_at) values (?, ?, datetime('now'))", [PStr(name), PStr(slug)])?
+      last_id(c)
+    }
+  }
+}
+
+fn set_article_tags(c: Connection, article_id: Int, tag_ids: List[Int]) -> Result[Int, String] !io = {
+  let _d = exec(c, "delete from article_tags where article_id = ?", [PInt(article_id)])?
+  link_tags(c, article_id, tag_ids, 0)
+}
+
+fn link_tags(c: Connection, article_id: Int, tag_ids: List[Int], i: Int) -> Result[Int, String] !io =
+  if i == len(tag_ids) {
+    Ok(0)
+  } else {
+    let _l = exec(c, "insert into article_tags (article_id, tag_id) values (?, ?)", [PInt(article_id), PInt(tag_ids[i])])?
+    link_tags(c, article_id, tag_ids, i + 1)
+  }
+
+# ---- page reference validation ----
+
+## A page_id must reference an existing article_list page (or be None).
+pub fn validate_page_ref(c: Connection, page_id: Option[Int]) -> Result[Bool, String] !io =
+  match page_id {
+    None -> Ok(true)
+    Some(id) -> {
+      let rows = query(c, "select count(*) from pages where id = ? and type = 'article_list'", [PInt(id)], [ColInt])?
+      match get(rows, 0) {
+        Some(r) -> if int_at(r, 0) != 0 { Ok(true) } else { Err("所属页面不存在或不是文章列表页") }
+        None -> Err("所属页面不存在或不是文章列表页")
+      }
+    }
+  }
+
+# ---- create / update / delete ----
+
+pub type NewArticle = {
+  title: String,
+  slug_hint: String,
+  summary: String,
+  content: String,
+  published: Bool,
+  auto_title: Bool,
+  page_id: Option[Int],
+  tags: List[String],
+}
+
+## Insert an article, returning its new id. Validates page_id and tags.
+pub fn create_article(c: Connection, a: NewArticle) -> Result[Int, String] !io = {
+  let _v = validate_page_ref(c, a.page_id)?
+  let base = if a.slug_hint == "" { a.title } else { a.slug_hint }
+  let slug = unique_slug(c, "articles", base, None)?
+  let pid = match a.page_id {
+    Some(id) -> PInt(id)
+    None -> PNull
+  }
+  let _i = exec(c,
+    "insert into articles (title, slug, summary, content, published, auto_title, page_id, views, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))",
+    [PStr(a.title), PStr(slug), PStr(a.summary), PStr(a.content), PInt(bool_int(a.published)), PInt(bool_int(a.auto_title)), pid])?
+  let id = last_id(c)?
+  let ids = resolve_tags(c, a.tags)?
+  let _t = set_article_tags(c, id, ids)?
+  Ok(id)
+}
+
+## A partial update. Present fields override; slug regenerates only when a slug
+## or title is supplied; page_id and tags validated/synced when present. Matches
+## FastAPI's exclude_unset PATCH semantics. `has_*` flags mark presence.
+pub type ArticlePatch = {
+  has_title: Bool, title: String,
+  has_slug: Bool, slug: String,
+  has_summary: Bool, summary: String,
+  has_content: Bool, content: String,
+  has_published: Bool, published: Bool,
+  has_auto_title: Bool, auto_title: Bool,
+  has_page_id: Bool, page_id: Option[Int],
+  has_tags: Bool, tags: List[String],
+}
+
+## Update an article. Ok(true) on success, Ok(false) when the id is absent.
+pub fn update_article(c: Connection, id: Int, p: ArticlePatch) -> Result[Bool, String] !io = {
+  let exists = article_exists(c, id)?
+  if exists == false {
+    Ok(false)
+  } else {
+    let _v = if p.has_page_id { validate_page_ref(c, p.page_id)? } else { true }
+    let _s = if p.has_title { set_str(c, id, "title", p.title)? } else { 0 }
+    let _su = if p.has_summary { set_str(c, id, "summary", p.summary)? } else { 0 }
+    let _co = if p.has_content { set_str(c, id, "content", p.content)? } else { 0 }
+    let _pu = if p.has_published { set_int(c, id, "published", bool_int(p.published))? } else { 0 }
+    let _at = if p.has_auto_title { set_int(c, id, "auto_title", bool_int(p.auto_title))? } else { 0 }
+    let _pi = if p.has_page_id { set_page_id(c, id, p.page_id)? } else { 0 }
+    let _sl = if p.has_slug { set_slug(c, id, p)? } else { 0 }
+    let _tg = if p.has_tags {
+      let ids = resolve_tags(c, p.tags)?
+      set_article_tags(c, id, ids)?
+    } else {
+      0
+    }
+    let _u = exec(c, "update articles set updated_at = datetime('now') where id = ?", [PInt(id)])?
+    Ok(true)
+  }
+}
+
+fn set_str(c: Connection, id: Int, col: String, v: String) -> Result[Int, String] !io =
+  exec(c, "update articles set $col = ? where id = ?", [PStr(v), PInt(id)])
+
+fn set_int(c: Connection, id: Int, col: String, v: Int) -> Result[Int, String] !io =
+  exec(c, "update articles set $col = ? where id = ?", [PInt(v), PInt(id)])
+
+fn set_page_id(c: Connection, id: Int, page_id: Option[Int]) -> Result[Int, String] !io = {
+  let pid = match page_id {
+    Some(x) -> PInt(x)
+    None -> PNull
+  }
+  exec(c, "update articles set page_id = ? where id = ?", [pid, PInt(id)])
+}
+
+fn set_slug(c: Connection, id: Int, p: ArticlePatch) -> Result[Int, String] !io = {
+  let base = if p.slug != "" { p.slug } else if p.has_title { p.title } else { current_title(c, id)? }
+  let slug = unique_slug(c, "articles", base, Some(id))?
+  exec(c, "update articles set slug = ? where id = ?", [PStr(slug), PInt(id)])
+}
+
+fn current_title(c: Connection, id: Int) -> Result[String, String] !io = {
+  let rows = query(c, "select title from articles where id = ?", [PInt(id)], [ColStr])?
+  match get(rows, 0) {
+    Some(r) -> Ok(str_at(r, 0))
+    None -> Ok("")
+  }
+}
+
+## Delete an article and its tag links. Ok(rows) — 0 means it did not exist.
+pub fn delete_article(c: Connection, id: Int) -> Result[Int, String] !io = {
+  let _l = exec(c, "delete from article_tags where article_id = ?", [PInt(id)])?
+  exec(c, "delete from articles where id = ?", [PInt(id)])
+}
+
+## Whether an article id exists.
+pub fn article_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
+  let rows = query(c, "select count(*) from articles where id = ?", [PInt(id)], [ColInt])?
+  match get(rows, 0) {
+    Some(r) -> Ok(int_at(r, 0) != 0)
+    None -> Ok(false)
+  }
+}
+
+fn bool_int(b: Bool) -> Int = if b { 1 } else { 0 }
+
+fn clip(s: String, n: Int) -> String = if str_len(s) > n { substring(s, 0, n) } else { s }
+
+fn member(xs: List[String], x: String) -> Bool =
+  fold(xs, false, fn(acc, y) => acc || y == x)
+
+# tests need --cp lib/sqlite-jdbc; use db.connect for FTS-safe writes
+
+test "unique_slug appends suffixes on collision" {
+  let c = open("jdbc:sqlite::memory:")
+  let _1 = exec(c, "create table articles (id integer primary key, slug text)", [])
+  let _2 = exec(c, "insert into articles (slug) values ('hello')", [])
+  assert unique_slug(c, "articles", "Hello", None) == Ok("hello-2")
+  assert unique_slug(c, "articles", "fresh", None) == Ok("fresh")
+}
+
+test "resolve_tags finds or creates, dedups by lowercase" {
+  let c = open("jdbc:sqlite::memory:")
+  let _1 = exec(c, "create table tags (id integer primary key, name text, slug text, created_at text)", [])
+  let _2 = exec(c, "insert into tags (name, slug) values ('JVM', 'jvm')", [])
+  match resolve_tags(c, ["JVM", "jvm", "Kotlin", ""]) {
+    Ok(ids) -> {
+      assert len(ids) == 2
+      assert scalar_int(c, "select count(*) from tags", []) == Ok(2)
+    }
+    Err(e) -> panic(e)
+  }
+}

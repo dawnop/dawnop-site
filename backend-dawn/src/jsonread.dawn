@@ -1,0 +1,76 @@
+# Reading fields out of a parsed request body (M6 knife 9). All accessors take
+# the JObj entries map; presence checks support FastAPI's exclude_unset (PATCH)
+# semantics — a key absent from the body is left untouched on update.
+use json/value.{Json, JObj, JBool, JNum, JInt, JStr, JArr, JNull}
+use json/parser.{parse}
+
+## Parse a request body into its top-level object entries. Err on non-objects.
+pub fn body_obj(body: String) -> Result[Map[String, Json], String] !io = {
+  let j = parse(body)?
+  match j {
+    JObj(m) -> Ok(m)
+    _ -> Err("request body must be a JSON object")
+  }
+}
+
+pub fn has(m: Map[String, Json], key: String) -> Bool =
+  match map_get(m, key) {
+    Some(_) -> true
+    None -> false
+  }
+
+pub fn str_or(m: Map[String, Json], key: String, fallback: String) -> String =
+  match map_get(m, key) {
+    Some(JStr(s)) -> s
+    _ -> fallback
+  }
+
+pub fn bool_or(m: Map[String, Json], key: String, fallback: Bool) -> Bool =
+  match map_get(m, key) {
+    Some(JBool(b)) -> b
+    _ -> fallback
+  }
+
+## An optional integer field: absent or null → None, JInt/JNum → Some.
+pub fn opt_int(m: Map[String, Json], key: String) -> Option[Int] =
+  match map_get(m, key) {
+    Some(JInt(n)) -> Some(n)
+    Some(JNum(x)) -> Some(to_int(x))
+    _ -> None
+  }
+
+## A string-list field (tags): absent → [], else the JStr items.
+pub fn str_list(m: Map[String, Json], key: String) -> List[String] =
+  match map_get(m, key) {
+    Some(JArr(xs)) -> filter_map_str(xs)
+    _ -> []
+  }
+
+fn filter_map_str(xs: List[Json]) -> List[String] =
+  fold(xs, [], fn(acc, j) =>
+      match j {
+        JStr(s) -> acc ++ [s]
+        _ -> acc
+      })
+
+test "reads fields and honors presence" {
+  match body_obj("{\"title\":\"Hi\",\"published\":true,\"page_id\":3,\"tags\":[\"a\",\"b\"]}") {
+    Ok(m) -> {
+      assert str_or(m, "title", "") == "Hi"
+      assert bool_or(m, "published", false)
+      assert opt_int(m, "page_id") == Some(3)
+      assert str_list(m, "tags") == ["a", "b"]
+      assert has(m, "title")
+      assert has(m, "missing") == false
+      assert opt_int(m, "missing") == None
+    }
+    Err(e) -> panic(e)
+  }
+}
+
+test "null page_id reads as None" {
+  match body_obj("{\"page_id\":null}") {
+    Ok(m) -> { assert opt_int(m, "page_id") == None }
+    Err(e) -> panic(e)
+  }
+}

@@ -7,6 +7,7 @@ use db.{Db}
 use web/server.{serve_app}
 use web/middleware.{with_logging, with_cors, with_body_limit}
 use api_public
+use api_admin
 use auth.{Auth, routes}
 
 pub fn main() -> Unit !io = {
@@ -21,7 +22,8 @@ pub fn main() -> Unit !io = {
   let a = Auth { db: db, secret: secret, expire_min: expire_min }
 
   println("backend-dawn starting: db=$db_path port=$port")
-  serve_app(port, api_public.routes(db) ++ routes(a), [
+  # admin article routes precede the public /api/articles/{slug} so /admin wins
+  serve_app(port, api_admin.routes(a) ++ api_public.routes(db) ++ routes(a), [
     with_logging,
     fn(next) => with_cors(origin, next),
     fn(next) => with_body_limit(2000000, next),

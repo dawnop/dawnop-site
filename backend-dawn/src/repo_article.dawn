@@ -100,6 +100,47 @@ pub fn list_published(c: Connection, tag: Option[String], page: Int, size: Int) 
   Ok((total, items))
 }
 
+## Admin list: all articles (optionally filtered by published), newest first.
+## `pub_filter` = Some(true|false) filters, None = all. Returns (total, items).
+pub fn list_admin(c: Connection, pub_filter: Option[Bool], page: Int, size: Int) -> Result[(Int, List[Json]), String] !io = {
+  let offset = (page - 1) * size
+  let where = match pub_filter {
+    Some(true) -> "where a.published = 1"
+    Some(false) -> "where a.published = 0"
+    None -> ""
+  }
+  let cnt = query(c, "select count(*) from articles a $where", [], [ColInt])?
+  let total = match get(cnt, 0) {
+    Some(r) -> int_at(r, 0)
+    None -> 0
+  }
+  let rows = query(c, "select $LIST_COLS from articles a $where order by a.created_at desc limit ? offset ?", [PInt(size), PInt(offset)], list_col_types())?
+  let items = shape_items(c, rows, 0, [])?
+  Ok((total, items))
+}
+
+## Admin stats: {total, published, drafts, total_views}.
+pub fn stats(c: Connection) -> Result[Json, String] !io = {
+  let total = scalar0(c, "select count(*) from articles")?
+  let published = scalar0(c, "select count(*) from articles where published = 1")?
+  let drafts = scalar0(c, "select count(*) from articles where published = 0")?
+  let views = scalar0(c, "select coalesce(sum(views), 0) from articles")?
+  Ok(obj([
+    ("total", jint(total)),
+    ("published", jint(published)),
+    ("drafts", jint(drafts)),
+    ("total_views", jint(views)),
+  ]))
+}
+
+fn scalar0(c: Connection, q: String) -> Result[Int, String] !io = {
+  let rows = query(c, q, [], [ColInt])?
+  match get(rows, 0) {
+    Some(r) -> Ok(int_at(r, 0))
+    None -> Ok(0)
+  }
+}
+
 ## Published articles belonging to a page (article_list page), newest first, one
 ## page. Returns (total, items-json). Matches GET /api/pages/{slug}/articles.
 pub fn list_by_page(c: Connection, page_id: Int, page: Int, size: Int) -> Result[(Int, List[Json]), String] !io = {
@@ -127,6 +168,33 @@ fn count_published(c: Connection, tag: Option[String]) -> Result[Int, String] !i
   match get(rows, 0) {
     Some(r) -> Ok(int_at(r, 0))
     None -> Ok(0)
+  }
+}
+
+## Full article detail by id, ignoring the published filter and not bumping
+## views — for the admin get and the create/update responses.
+pub fn by_id_admin(c: Connection, id: Int) -> Result[Option[Json], String] !io = {
+  let rows = query(c, "select $LIST_COLS from articles a where a.id = ?", [PInt(id)], list_col_types())?
+  match get(rows, 0) {
+    Some(r) -> {
+      let tags = tags_json(c, id)?
+      Ok(Some(obj([
+        ("id", jint(id)),
+        ("title", jstr(str_at(r, 1))),
+        ("slug", jstr(str_at(r, 2))),
+        ("summary", jopt_str(opt_str_at(r, 3))),
+        ("content", jstr(str_at(r, 9))),
+        ("published", jbool(bool_at(r, 4))),
+        ("auto_title", jbool(bool_at(r, 10))),
+        ("page_id", jopt_int(opt_int_at(r, 5))),
+        ("word_count", jint(word_count(str_at(r, 9)))),
+        ("views", jint(int_at(r, 6))),
+        ("tags", JArr(tags)),
+        ("created_at", jdatetime(str_at(r, 7))),
+        ("updated_at", jdatetime(str_at(r, 8))),
+      ])))
+    }
+    None -> Ok(None)
   }
 }
 
