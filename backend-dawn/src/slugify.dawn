@@ -1,0 +1,54 @@
+# Slug generation (M6 knife 9), matching app/core/slug.py: lowercase, replace
+# every run of non-word characters with a single dash, strip dashes/underscores
+# from the ends, empty → "article". "Word" is Unicode letter-or-digit or '_'
+# (Python's \w under re.UNICODE — so accented letters and CJK are kept).
+use java "java.lang.Character"
+
+fn is_word(cp: Int) -> Bool !io = Character.isLetterOrDigit(cp) || cp == 95
+
+## Slugify a title. Deterministic; does not touch the database.
+pub fn slugify(text: String) -> String !io = {
+  let cps = code_points(to_lower(trim(text)))
+  let out = collapse(cps, 0, [], false)
+  let stripped = strip_edges(out)
+  if str_len(stripped) == 0 { "article" } else { stripped }
+}
+
+# fold code points, turning non-word runs into single dashes (45 = '-')
+fn collapse(cps: List[Int], i: Int, acc: List[Int], last_dash: Bool) -> List[Int] !io =
+  if i == len(cps) {
+    acc
+  } else {
+    let cp = cps[i]
+    if is_word(cp) {
+      collapse(cps, i + 1, acc ++ [cp], false)
+    } else if last_dash {
+      collapse(cps, i + 1, acc, true)
+    } else {
+      collapse(cps, i + 1, acc ++ [45], true)
+    }
+  }
+
+# strip leading/trailing '-' (45) and '_' (95)
+fn strip_edges(cps: List[Int]) -> String = from_code_points(drop_trailing(drop_leading(cps)))
+
+fn drop_leading(cps: List[Int]) -> List[Int] =
+  if len(cps) > 0 && is_edge(cps[0]) { drop_leading(tail_ints(cps)) } else { cps }
+
+fn drop_trailing(cps: List[Int]) -> List[Int] =
+  if len(cps) > 0 && is_edge(cps[len(cps) - 1]) { drop_trailing(init_ints(cps)) } else { cps }
+
+fn is_edge(cp: Int) -> Bool = cp == 45 || cp == 95
+
+fn tail_ints(xs: List[Int]) -> List[Int] = map(range(1, len(xs)), fn(i) => xs[i])
+
+fn init_ints(xs: List[Int]) -> List[Int] = map(range(0, len(xs) - 1), fn(i) => xs[i])
+
+test "slugify matches the Python vectors" {
+  assert slugify("Hello World!") == "hello-world"
+  assert slugify("你好 世界 -- test") == "你好-世界-test"
+  assert slugify("  Mixed_CASE 123  ") == "mixed_case-123"
+  assert slugify("---") == "article"
+  assert slugify("café résumé") == "café-résumé"
+  assert slugify("a...b") == "a-b"
+}
