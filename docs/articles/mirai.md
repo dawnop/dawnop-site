@@ -1,5 +1,5 @@
 ---
-title: mirai：把 PyTorch 算子编译成 TensorFlow 自定义算子
+title: Mirai：把 PyTorch 算子编译成 TensorFlow 自定义算子
 summary: 线上还在 TensorFlow，研发全挪到了 PyTorch，中间这道坎怎么迈？mirai 的做法是在 PTX 这一层握手：借 torch.compile 把 PyTorch 函数调优成 Triton kernel，抠出 PTX，再包成一个能直接部署的 TF 自定义算子。这篇拆解从生成到落地的整条流水线，以及每一步背后那些「不这么做就跑不通」的细节。
 tags: [AI Infra, 编译器, PyTorch, TensorFlow, CUDA]
 ---
