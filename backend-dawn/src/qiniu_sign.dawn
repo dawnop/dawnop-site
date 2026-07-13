@@ -4,6 +4,14 @@
 # SDK (which drags okhttp+gson). Cross-checked against the Python qiniu.Auth.
 use crypto.{hmac_sha1_b64url, b64url_encode}
 
+## The EncodedEntryURI for a management op: base64url(bucket:key), with padding.
+pub fn entry_uri(bucket: String, key: String) -> String !io = b64url_encode("$bucket:$key")
+
+## Management token for an entry-based op (stat/delete/copy/move). `op` is the
+## verb path segment like "stat", "delete". Returns the QBox Authorization value.
+pub fn entry_token(ak: String, sk: String, op: String, entry: String) -> String !io =
+  management_token(ak, sk, "/$op/$entry\n")
+
 ## Upload token for a specific key (spec: putPolicy → base64 → HMAC-SHA1 → token).
 ## putPolicy is {"scope":"bucket:key","deadline":<unix>} in that key order (the
 ## qiniu SDK's dict order), so the base64 matches byte-for-byte.
@@ -39,4 +47,8 @@ test "signatures match the qiniu SDK byte-for-byte" {
   assert private_url("AKtest", "SKtest", "https://cdn.example.com/a.jpg", 1783976183) ==
     "https://cdn.example.com/a.jpg?e=1783976183&token=AKtest:qds6pILEK2BxpimglNVjrgvF1nU="
   assert management_token("AKtest", "SKtest", "/stat/abc\n") == "QBox AKtest:uq4LtkfJVo-ZNXoftWh9gv1-zVs="
+  assert entry_uri("mybucket", "path/to/file.jpg") == "bXlidWNrZXQ6cGF0aC90by9maWxlLmpwZw=="
+  let entry = entry_uri("mybucket", "path/to/file.jpg")
+  assert entry_token("AKtest", "SKtest", "stat", entry) == "QBox AKtest:a7a0HH5stgcmowbc-vWoHroXYJU="
+  assert entry_token("AKtest", "SKtest", "delete", entry) == "QBox AKtest:-7Eh_fzs9TcII1AZPjkouLF26fc="
 }

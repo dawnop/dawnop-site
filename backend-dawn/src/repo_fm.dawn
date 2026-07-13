@@ -89,6 +89,22 @@ fn entries_of(rows: List[FileRow], i: Int, acc: List[Json]) -> Result[List[Json]
     entries_of(rows, i + 1, acc ++ [e])
   }
 
+## GET /api/fm/search: files under `base` (deep or direct children) whose
+## basename contains `needle` (case-insensitive). Returns {files:[entry...]}.
+pub fn search_files(c: Connection, base: String, needle: String, deep: Bool) -> Result[Json, String] !io = {
+  let rows = if base == "" {
+    query(c, "select $COLS from files", [], col_types())?
+  } else {
+    query(c, "select $COLS from files where path like ?", [PStr("$base/%")], col_types())?
+  }
+  let all = map(rows, row_of)
+  let scoped = if deep { all } else { filter(all, fn(o) => parent_rel(o.path) == base) }
+  let matched = if needle == "" { scoped } else { filter(scoped, fn(o) => contains(to_lower(basename(o.path)), needle)) }
+  let sorted = sort_by(matched, fn(a, b) => cmp_entry(a, b))
+  let files = entries_of(sorted, 0, [])?
+  Ok(obj([("files", JArr(files))]))
+}
+
 pub fn get_row(c: Connection, rel: String) -> Result[Option[FileRow], String] !io = {
   let rows = query(c, "select $COLS from files where path = ?", [PStr(rel)], col_types())?
   match get(rows, 0) {
@@ -127,6 +143,26 @@ fn str_split(s: String, sep: String) -> List[String] = split(s, sep)
 ## Insert a folder row.
 pub fn insert_folder(c: Connection, rel: String) -> Result[Int, String] !io =
   exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, datetime('now'), datetime('now'))", [PStr(rel)])
+
+## A rel plus its whole subtree (for delete), leaf files first is not required.
+pub fn subtree_rows(c: Connection, rel: String) -> Result[List[FileRow], String] !io = {
+  let rows = query(c, "select $COLS from files where path = ? or path like ?", [PStr(rel), PStr("$rel/%")], col_types())?
+  Ok(map(rows, row_of))
+}
+
+## The DirEntry JSON for a row (public — delete returns these).
+pub fn entry_json(o: FileRow) -> Json !io = entry(o)
+
+pub fn delete_row(c: Connection, path: String) -> Result[Int, String] !io =
+  exec(c, "delete from files where path = ?", [PStr(path)])
+
+## Insert a file row (register). key/content_type/size from the verified object.
+pub fn insert_file(c: Connection, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =
+  exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, ?, ?, datetime('now'), datetime('now')) on conflict(path) do update set key = excluded.key, content_type = excluded.content_type, size = excluded.size, updated_at = datetime('now')",
+    [PStr(rel), PStr(key), PStr(content_type), PInt(size)])
+
+pub fn ledger_delete(c: Connection, key: String) -> Result[Int, String] !io =
+  exec(c, "delete from pending_uploads where key = ?", [PStr(key)])
 
 ## Record a signed upload key in the pending_uploads ledger (orphan tracking).
 pub fn ledger_insert(c: Connection, key: String, path: String) -> Result[Int, String] !io =

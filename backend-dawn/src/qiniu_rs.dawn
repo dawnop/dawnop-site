@@ -1,0 +1,36 @@
+# Qiniu Kodo management API (M6 knife 11): stat / delete / copy over the bucket
+# manager REST endpoints, authenticated with QBox management tokens (qiniu_sign).
+# Pure Dawn over the http client — the official SDK drags okhttp+gson, so this
+# hand-rolls the three verbs fm needs.
+use http.{HttpResp, post, fetch}
+use qiniu_sign.{entry_uri, entry_token, management_token}
+
+const RS_HOST: String = "https://rs.qiniu.com"
+
+fn hdr(ak: String, sk: String, op: String, entry: String) -> List[(String, String)] !io =
+  [("Authorization", entry_token(ak, sk, op, entry))]
+
+## stat an object; Ok(HttpResp) — status 200 with a JSON body when it exists,
+## 612 when it does not. Transport failure is Err.
+pub fn stat(ak: String, sk: String, bucket: String, key: String) -> Result[HttpResp, String] !io = {
+  let entry = entry_uri(bucket, key)
+  fetch("$RS_HOST/stat/$entry", hdr(ak, sk, "stat", entry))
+}
+
+## delete an object. Ok on 200; a missing object (612) is also Ok (idempotent).
+pub fn delete_obj(ak: String, sk: String, bucket: String, key: String) -> Result[Bool, String] !io = {
+  let entry = entry_uri(bucket, key)
+  let r = post("$RS_HOST/delete/$entry", hdr(ak, sk, "delete", entry), "")?
+  Ok(r.status == 200 || r.status == 612)
+}
+
+## copy src→dst within a bucket (force overwrite). The signed path spans both
+## entries plus /force/true.
+pub fn copy_obj(ak: String, sk: String, bucket: String, src_key: String, dst_key: String) -> Result[Bool, String] !io = {
+  let src = entry_uri(bucket, src_key)
+  let dst = entry_uri(bucket, dst_key)
+  let path = "/copy/$src/$dst/force/true"
+  let auth = management_token(ak, sk, "$path\n")
+  let r = post("$RS_HOST$path", [("Authorization", auth)], "")?
+  Ok(r.status == 200)
+}

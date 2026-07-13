@@ -6,15 +6,16 @@ use java "java.lang.System"
 use java "java.net.URLEncoder"
 use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query, redirect}
 use web/router.{Route, Get, Post}
-use json/value.{Json}
 use jsonx.{obj, jstr}
 use db.{Db, with_db}
 use auth.{Auth, Qiniu, current_user}
 use jsonread.{body_obj, str_or, str_list}
 use fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full}
-use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, reparent, get_row, ledger_insert}
+use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, reparent, get_row, ledger_insert, search_files, subtree_rows, entry_json, delete_row, FileRow}
 use crypto.{uuid}
 use qiniu_sign.{private_url, upload_token}
+use qiniu_rs.{delete_obj}
+use json/value.{Json, JArr, JObj, JStr}
 
 fn guarded(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io =
   match current_user(a, req) {
@@ -254,6 +255,94 @@ fn qparam(req: Request, name: String) -> String =
     None -> ""
   }
 
+## POST /api/fm/delete — {path, items:[{path}]}. Deletes each item's subtree:
+## the qiniu object for every file, then the DB row. Returns FsData + {deleted}.
+pub fn delete(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match body_obj(req.body) {
+        Ok(m) -> {
+          let cur = fm_split(str_or(m, "path", ""))
+          let items = item_paths(m)
+          match with_db(a.db.path, a.db.ext, fn(c) => do_delete(a.qiniu, c, items, 0, [])) {
+            Ok(deleted) -> {
+              match with_db(a.db.path, a.db.ext, fn(c) => fs_data(c, cur)) {
+                Ok(base) -> Ok(json_ok(merge_deleted(base, deleted)))
+                Err(m2) -> Err(http_error(500, m2))
+              }
+            }
+            Err(msg) -> Err(http_error(502, msg))
+          }
+        }
+        Err(e) -> Err(http_error(422, e))
+      })
+
+# items is [{path: "qiniu://..."}]; extract the split rel paths
+fn item_paths(m: Map[String, Json]) -> List[String] =
+  match map_get(m, "items") {
+    Some(JArr(xs)) -> fold(xs, [], fn(acc, j) =>
+        match j {
+          JObj(im) ->
+            match map_get(im, "path") {
+              Some(JStr(p)) -> acc ++ [fm_split(p)]
+              _ -> acc
+            }
+          _ -> acc
+        })
+    _ -> []
+  }
+
+fn do_delete(q: Qiniu, c: Connection, items: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
+  if i >= len(items) {
+    Ok(acc)
+  } else {
+    let rel = items[i]
+    if rel == "" {
+      do_delete(q, c, items, i + 1, acc)
+    } else {
+      let rows = subtree_rows(c, rel)?
+      let d2 = delete_rows(q, c, rows, 0, acc)?
+      do_delete(q, c, items, i + 1, d2)
+    }
+  }
+
+fn delete_rows(q: Qiniu, c: Connection, rows: List[FileRow], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
+  if i >= len(rows) {
+    Ok(acc)
+  } else {
+    let o = rows[i]
+    let _obj = if o.is_dir == false {
+      match o.key {
+        Some(k) -> delete_obj(q.ak, q.sk, q.bucket, k)?
+        None -> true
+      }
+    } else {
+      true
+    }
+    let e = entry_json(o)
+    let _d = delete_row(c, o.path)?
+    delete_rows(q, c, rows, i + 1, acc ++ [e])
+  }
+
+fn merge_deleted(base: Json, deleted: List[Json]) -> Json =
+  match base {
+    JObj(bm) -> JObj(map_insert(bm, "deleted", JArr(deleted)))
+    _ -> base
+  }
+
+## GET /api/fm/search?path=&filter=&deep= — filename search over the tree.
+pub fn fm_search(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() => {
+    let base = fm_split(qparam(req, "path"))
+    let needle = to_lower(trim(qparam(req, "filter")))
+    let deep = qparam(req, "deep") != ""
+    match with_db(a.db.path, a.db.ext, fn(c) => search_files(c, base, needle, deep)) {
+      Ok(j) -> Ok(json_ok(j))
+      Err(m) -> Err(http_error(500, m))
+    }
+  })
+
 ## The fm routes (protected). Static paths precede any captures.
 pub fn routes(a: Auth) -> List[Route] =
   [
@@ -261,8 +350,10 @@ pub fn routes(a: Auth) -> List[Route] =
     Get("/api/fm/sign", sign(a)),
     Get("/api/fm/preview", preview(a)),
     Get("/api/fm/download", download(a)),
+    Get("/api/fm/search", fm_search(a)),
     Post("/api/fm/create-folder", create_folder(a)),
     Post("/api/fm/rename", rename(a)),
     Post("/api/fm/move", move(a)),
+    Post("/api/fm/delete", delete(a)),
     Post("/api/fm/upload-token", upload_token_ep(a)),
   ]
