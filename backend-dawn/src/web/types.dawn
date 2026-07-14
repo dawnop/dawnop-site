@@ -96,6 +96,28 @@ pub fn param_int(req: Request, name: String) -> Result[Int, HttpError] = {
 
 pub fn query(req: Request, name: String) -> Option[String] = map_get(req.query, name)
 
+# Strict pagination reader matching FastAPI's Query(ge=lo, le=hi): an absent
+# param yields the default; a present one that is non-integer or out of [lo, hi]
+# is a 422 whose {"detail"} reproduces pydantic's message byte-for-byte (the
+# FastAPI error handler joins loc and msg with a fullwidth colon). hi < 0 means
+# no upper bound (FastAPI's `page` is ge=1 with no le).
+pub fn query_int_bounded(req: Request, name: String, default: Int, lo: Int, hi: Int) -> Result[Int, HttpError] =
+  match map_get(req.query, name) {
+    None -> Ok(default)
+    Some(s) ->
+      match parse_int(s) {
+        None -> Err(http_error(422, "${name}：Input should be a valid integer, unable to parse string as an integer"))
+        Some(n) ->
+          if n < lo {
+            Err(http_error(422, "${name}：Input should be greater than or equal to ${to_string(lo)}"))
+          } else if hi >= 0 && n > hi {
+            Err(http_error(422, "${name}：Input should be less than or equal to ${to_string(hi)}"))
+          } else {
+            Ok(n)
+          }
+      }
+  }
+
 # A request header, looked up case-insensitively (the name is lowercased here;
 # the server lowercases keys when building the map).
 pub fn header(req: Request, name: String) -> Option[String] =
@@ -114,6 +136,34 @@ test "param reads captures and flags missing ones" {
     Err(e) -> { assert e.status == 500 }
     Ok(_) -> { assert false }
   }
+}
+
+test "query_int_bounded: absent uses default, out-of-range and non-int are 422" {
+  let h: Map[String, String] = map_empty()
+  let mk = fn(q: Map[String, String]) => Request {
+    method: "GET", path: "/a", params: map_empty(), query: q, headers: h, body: "",
+  }
+  # absent -> default
+  assert query_int_bounded(mk(map_empty()), "page", 1, 1, -1) == Ok(1)
+  # in range
+  assert query_int_bounded(mk(map_from([("size", "20")])), "size", 10, 1, 100) == Ok(20)
+  # below min -> 422
+  match query_int_bounded(mk(map_from([("page", "0")])), "page", 1, 1, -1) {
+    Err(e) -> { assert e.status == 422 }
+    Ok(_) -> { assert false }
+  }
+  # above max -> 422
+  match query_int_bounded(mk(map_from([("size", "999")])), "size", 10, 1, 50) {
+    Err(e) -> { assert e.status == 422 }
+    Ok(_) -> { assert false }
+  }
+  # non-integer -> 422
+  match query_int_bounded(mk(map_from([("page", "abc")])), "page", 1, 1, -1) {
+    Err(e) -> { assert e.status == 422 }
+    Ok(_) -> { assert false }
+  }
+  # no upper bound (hi < 0): a huge page is fine
+  assert query_int_bounded(mk(map_from([("page", "99999")])), "page", 1, 1, -1) == Ok(99999)
 }
 
 test "param_int rejects non-numbers as a client error" {

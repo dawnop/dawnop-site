@@ -168,7 +168,7 @@ pub fn tag_delete(a: Auth) -> Handler =
       match param_int(req, "tag_id") {
         Some(id) ->
           match with_db(a.db.path, a.db.ext, fn(c) => delete_tag(c, id)) {
-            Ok(_n) -> Ok(text(204, ""))
+            Ok(n) -> if n == 0 { Err(http_error(404, "标签不存在")) } else { Ok(text(204, "")) }
             Err(m) -> Err(http_error(500, m))
           }
         None -> Err(http_error(422, "tag_id must be an integer"))
@@ -191,7 +191,7 @@ pub fn page_create(a: Auth) -> Handler =
   guarded(a, req, fn() =>
       match body_obj(req.body) {
         Ok(m) ->
-          if str_or(m, "title", "") == "" {
+          if trim(str_or(m, "title", "")) == "" {
             Err(http_error(422, "标题不能为空"))
           } else {
             let np = NewPage {
@@ -429,7 +429,7 @@ pub fn viz_delete(a: Auth) -> Handler =
       match param_int(req, "viz_id") {
         Some(id) ->
           match with_db(a.db.path, a.db.ext, fn(c) => delete_viz(c, id)) {
-            Ok(_n) -> Ok(text(204, ""))
+            Ok(n) -> if n == 0 { Err(http_error(404, "组件不存在")) } else { Ok(text(204, "")) }
             Err(m) -> Err(http_error(500, m))
           }
         None -> Err(http_error(422, "viz_id must be an integer"))

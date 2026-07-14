@@ -102,8 +102,13 @@ fn rev[T](xs: List[T]) -> List[T] =
 fn build_request(ex: HttpExchange) -> Request !io = {
   let uri = ex.getRequestURI().expect("uri")
   let no_query: Map[String, String] = map_from([])
+  # Query params follow form-urlencoded semantics ('+' means space), matching
+  # Starlette/FastAPI; URI.getQuery() percent-decodes %XX but leaves '+' literal.
   let q = match uri.getQuery() {
-    Some(s) -> map_from(parse_query(s))
+    Some(s) -> map_from(map(parse_query(s), fn(kv) => {
+      let (k, v) = kv
+      (k, replace_plus(v))
+    }))
     None -> no_query
   }
   Request {

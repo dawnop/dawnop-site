@@ -2,7 +2,7 @@
 # handler authenticates first via auth.current_user; the request body is JSON
 # (create/update). Writes run on a connection with the FTS extension loaded.
 use java "java.sql.Connection"
-use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, text, raw, with_header}
+use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, text, raw, with_header, query_int_bounded}
 use export.{export_markdown, url_encode}
 use web/router.{Route, Get, Post, Put, Delete}
 use json/value.{Json}
@@ -12,19 +12,6 @@ use auth.{Auth, current_user}
 use jsonread.{body_obj, has, str_or, bool_or, opt_int, str_list}
 use repo_article
 use repo_write.{NewArticle, ArticlePatch, create_article, update_article, delete_article, article_exists, unique_slug, resolve_tags, validate_page_ref}
-
-fn qint(req: Request, name: String, fallback: Int) -> Int =
-  match map_get(req.query, name) {
-    Some(s) ->
-      match parse_int(s) {
-        Some(n) -> n
-        None -> fallback
-      }
-    None -> fallback
-  }
-
-fn clamp(n: Int, lo: Int, hi: Int) -> Int =
-  if n < lo { lo } else if n > hi { hi } else { n }
 
 fn param(req: Request, name: String) -> String =
   match map_get(req.params, name) {
@@ -43,8 +30,8 @@ fn guarded(a: Auth, req: Request, body: fn(String) -> Result[Response, HttpError
 pub fn list_admin(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn(_u) => {
-    let page = clamp(qint(req, "page", 1), 1, 1000000)
-    let size = clamp(qint(req, "size", 10), 1, 100)
+    let page = query_int_bounded(req, "page", 1, 1, -1)?
+    let size = query_int_bounded(req, "size", 10, 1, 100)?
     let pub_filter: Option[Bool] = match map_get(req.query, "published") {
       Some("true") -> Some(true)
       Some("false") -> Some(false)
@@ -88,7 +75,7 @@ pub fn create(a: Auth) -> Handler =
   guarded(a, req, fn(_u) =>
       match body_obj(req.body) {
         Ok(m) -> {
-          if has(m, "title") == false || str_or(m, "title", "") == "" {
+          if has(m, "title") == false || trim(str_or(m, "title", "")) == "" {
             Err(http_error(422, "标题不能为空"))
           } else {
             let na = NewArticle {
@@ -181,7 +168,7 @@ pub fn remove(a: Auth) -> Handler =
       match parse_int(param(req, "article_id")) {
         Some(id) ->
           match with_db(a.db.path, a.db.ext, fn(c) => delete_article(c, id)) {
-            Ok(_n) -> Ok(text(204, ""))
+            Ok(n) -> if n == 0 { Err(http_error(404, "文章不存在")) } else { Ok(text(204, "")) }
             Err(m) -> Err(http_error(500, m))
           }
         None -> Err(http_error(422, "article_id must be an integer"))
