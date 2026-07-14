@@ -1,0 +1,414 @@
+# Monitor page backend (M6 knife 12), mirroring backend/app/api/monitor.py:
+# four independent, fault-tolerant blocks — local server (/proc, psutil
+# semantics), Tencent Lighthouse (TC3), qiniu (kodo series + CDN + respack),
+# Vaultwarden probe. A failing item lands in its own *_error field, never 500s.
+use java "java.lang.System"
+use java "java.lang.Runtime"
+use java "java.lang.Thread"
+use java "java.io.File"
+use java "java.lang.management.ManagementFactory"
+use java "java.lang.management.OperatingSystemMXBean"
+use java "java.time.Instant"
+use java "java.time.LocalDateTime"
+use java "java.time.ZoneOffset"
+use java "java.time.format.DateTimeFormatter"
+use java "java.util.concurrent.atomic.AtomicReference"
+use auth.{Auth}
+use tencent_client
+use ttl.{cache_get, cache_put}
+use qiniu_stats.{field, int_of, last_nonzero, kodo_series, flow_series, cdn_domains, cdn_tune, respack_summary}
+use http.{fetch}
+use json/value.{Json, JNull, JBool, JNum, JInt, JStr, JArr, JObj}
+use json/render.{render}
+use json/parser.{parse}
+use jsonx.{obj, jint, jstr, jbool}
+
+# ---- server: the local machine, /proc first (production is Linux), JMX fallback ----
+
+pub fn server_block() -> Json !io = {
+  let rt = Runtime.getRuntime().expect("rt")
+  let procs = rt.availableProcessors()
+  let root = File.new("/")
+  let dtotal = root.getTotalSpace()
+  let dfree = root.getUsableSpace()
+  let disk = obj([
+    ("total", jint(dtotal)),
+    ("used", jint(dtotal - dfree)),
+    ("percent", JNum(pct(dtotal - dfree, dtotal))),
+  ])
+  match read_file("/proc/stat") {
+    Ok(_probe) -> obj([
+      ("cpu_percent", JNum(cpu_percent())),
+      ("cpu_count", jint(procs)),
+      ("load", loadavg()),
+      ("mem", meminfo()),
+      ("disk", disk),
+      ("net", net_totals()),
+      ("boot_time", jint(now_s() - uptime_s())),
+      ("uptime", jint(uptime_s())),
+    ])
+    # dev machines (macOS) have no /proc; approximate — production never takes this path
+    Err(_m) -> {
+      let total_mem = rt.maxMemory()
+      let free_mem = rt.freeMemory()
+      let jvm_up = ManagementFactory.getRuntimeMXBean().expect("rmx").getUptime() / 1000
+      let load1 = ManagementFactory.getOperatingSystemMXBean().expect("os").getSystemLoadAverage()
+      let cpu = clip100(load1 * 100.0 / to_float(procs))
+      obj([
+        ("cpu_percent", JNum(round1(cpu))),
+        ("cpu_count", jint(procs)),
+        ("load", JArr([JNum(load1), JNull, JNull])),
+        ("mem", obj([
+          ("total", jint(total_mem)),
+          ("used", jint(total_mem - free_mem)),
+          ("percent", JNum(pct(total_mem - free_mem, total_mem))),
+        ])),
+        ("disk", disk),
+        ("net", obj([("sent", jint(0)), ("recv", jint(0))])),
+        ("boot_time", jint(now_s() - jvm_up)),
+        ("uptime", jint(jvm_up)),
+      ])
+    }
+  }
+}
+
+fn now_s() -> Int !io = System.currentTimeMillis() / 1000
+
+# psutil cpu_percent(interval=0.3): busy/total delta over a 300ms window
+fn cpu_percent() -> Float !io = {
+  let (b1, t1) = cpu_sample()
+  Thread.sleep(300)
+  let (b2, t2) = cpu_sample()
+  if t2 - t1 <= 0 {
+    0.0
+  } else {
+    round1(to_float(b2 - b1) * 100.0 / to_float(t2 - t1))
+  }
+}
+
+# (busy, total) jiffies from the aggregate cpu line; idle = idle + iowait
+fn cpu_sample() -> (Int, Int) !io =
+  match read_file("/proc/stat") {
+    Ok(text) -> {
+      let fs = fields_of(split(text, "\n")[0])
+      let upto = if len(fs) < 9 { len(fs) } else { 9 }
+      let total = fold(range(1, upto), 0, fn(acc, i) => acc + parse_or0(fs[i]))
+      let idle = if len(fs) > 5 { parse_or0(fs[4]) + parse_or0(fs[5]) } else { 0 }
+      (total - idle, total)
+    }
+    Err(_m) -> (0, 0)
+  }
+
+fn loadavg() -> Json !io =
+  match read_file("/proc/loadavg") {
+    Ok(text) -> {
+      let fs = fields_of(text)
+      JArr(map(range(0, 3), fn(i) =>
+          match parse_float(fs[i]) {
+            Some(x) -> JNum(x)
+            None -> JNull
+          }))
+    }
+    Err(_m) -> JArr([JNull, JNull, JNull])
+  }
+
+# MemTotal/MemAvailable in kB; used/percent match psutil (total - available)
+fn meminfo() -> Json !io =
+  match read_file("/proc/meminfo") {
+    Ok(text) -> {
+      let total = meminfo_kb(text, "MemTotal") * 1024
+      let avail = meminfo_kb(text, "MemAvailable") * 1024
+      obj([
+        ("total", jint(total)),
+        ("used", jint(total - avail)),
+        ("percent", JNum(pct(total - avail, total))),
+      ])
+    }
+    Err(_m) -> obj([("total", jint(0)), ("used", jint(0)), ("percent", JNum(0.0))])
+  }
+
+fn meminfo_kb(text: String, key: String) -> Int =
+  fold(split(text, "\n"), 0, fn(acc, line) =>
+    if starts_with(line, "$key:") {
+      let fs = fields_of(line)
+      if len(fs) > 1 { parse_or0(fs[1]) } else { acc }
+    } else {
+      acc
+    })
+
+# cumulative bytes over every interface (psutil net_io_counters aggregates all)
+fn net_totals() -> Json !io =
+  match read_file("/proc/net/dev") {
+    Ok(text) -> {
+      let (sent, recv) = fold(split(text, "\n"), (0, 0), fn(acc: (Int, Int), line) =>
+        if contains(line, ":") {
+          let (s, r) = acc
+          let parts = split(line, ":")
+          let fs = fields_of(join(rest1(parts), ":"))
+          if len(fs) > 8 {
+            (s + parse_or0(fs[8]), r + parse_or0(fs[0]))
+          } else {
+            acc
+          }
+        } else {
+          acc
+        })
+      obj([("sent", jint(sent)), ("recv", jint(recv))])
+    }
+    Err(_m) -> obj([("sent", jint(0)), ("recv", jint(0))])
+  }
+
+fn rest1(xs: List[String]) -> List[String] = map(range(1, len(xs)), fn(i) => xs[i])
+
+fn uptime_s() -> Int !io =
+  match read_file("/proc/uptime") {
+    Ok(text) ->
+      match parse_float(fields_of(text)[0]) {
+        Some(x) -> to_int(x)
+        None -> 0
+      }
+    Err(_m) -> 0
+  }
+
+fn fields_of(line: String) -> List[String] = filter(split(line, " "), fn(s) => s != "")
+
+fn parse_or0(s: String) -> Int =
+  match parse_int(s) {
+    Some(n) -> n
+    None -> 0
+  }
+
+fn pct(used: Int, total: Int) -> Float =
+  if total == 0 { 0.0 } else { round1(to_float(used) * 100.0 / to_float(total)) }
+
+fn round1(x: Float) -> Float = to_float(to_int(x * 10.0)) / 10.0
+
+fn clip100(x: Float) -> Float = if x > 100.0 { 100.0 } else { x }
+
+# ---- lighthouse: traffic package + instance + cpu trend (each fault-isolated) ----
+
+pub fn lighthouse_block(secret_id: String, secret_key: String, region: String, instance: String) -> Json !io =
+  if secret_id == "" || secret_key == "" {
+    obj([("configured", jbool(false))])
+  } else {
+    let traffic = match traffic_fetch(secret_id, secret_key, region, instance) {
+      Ok(t) -> [("traffic", t)]
+      Err(m) -> [("traffic_error", jstr(m))]
+    }
+    let inst = match instance_fetch(secret_id, secret_key, region, instance) {
+      Ok(v) -> [("instance", v)]
+      Err(m) -> [("instance_error", jstr(m))]
+    }
+    let trend = match cpu_trend_fetch(secret_id, secret_key, region, instance) {
+      Ok(v) -> [("cpu_trend", v)]
+      Err(m) -> [("cpu_trend_error", jstr(m))]
+    }
+    obj([("configured", jbool(true))] ++ traffic ++ inst ++ trend)
+  }
+
+# the Response body, or Err on an API-level Error (Code + Message)
+fn tc_resp(action: String, j: Json) -> Result[Json, String] = {
+  let resp = field(j, "Response")
+  match field(resp, "Error") {
+    JObj(_e) -> {
+      let err = field(resp, "Error")
+      Err("$action 失败: ${jstr_plain(field(err, "Code"))} ${jstr_plain(field(err, "Message"))}")
+    }
+    _ -> Ok(resp),
+  }
+}
+
+fn jstr_plain(j: Json) -> String =
+  match j {
+    JStr(s) -> s
+    _ -> "",
+  }
+
+fn traffic_fetch(id: String, key: String, region: String, instance: String) -> Result[Json, String] !io = {
+  let j = tencent_client.call(id, key, "lighthouse", "DescribeInstancesTrafficPackages", "2020-03-24", region, "{\"InstanceIds\":[\"$instance\"]}")?
+  let resp = tc_resp("DescribeInstancesTrafficPackages", j)?
+  match arr0(field(resp, "InstanceTrafficPackageSet")) {
+    Some(inst) ->
+      match arr0(field(inst, "TrafficPackageSet")) {
+        Some(p) -> Ok(obj([
+          ("used", JInt(int_of(field(p, "TrafficUsed")))),
+          ("total", JInt(int_of(field(p, "TrafficPackageTotal")))),
+          ("remaining", JInt(int_of(field(p, "TrafficPackageRemaining")))),
+          ("overflow", JInt(int_of(field(p, "TrafficOverflow")))),
+          ("start", field(p, "StartTime")),
+          ("end", field(p, "EndTime")),
+          ("status", field(p, "Status")),
+        ]))
+        None -> Err("流量包列表为空")
+      }
+    None -> Err("未找到该实例的流量包")
+  }
+}
+
+fn instance_fetch(id: String, key: String, region: String, instance: String) -> Result[Json, String] !io = {
+  let j = tencent_client.call(id, key, "lighthouse", "DescribeInstances", "2020-03-24", region, "{\"InstanceIds\":[\"$instance\"]}")?
+  let resp = tc_resp("DescribeInstances", j)?
+  match arr0(field(resp, "InstanceSet")) {
+    Some(s) -> {
+      let ip = match arr0(field(s, "PublicAddresses")) {
+        Some(a) -> a
+        None -> JNull
+      }
+      Ok(obj([
+        ("name", field(s, "InstanceName")),
+        ("cpu", JInt(int_of(field(s, "CPU")))),
+        ("memory_gb", JInt(int_of(field(s, "Memory")))),
+        ("state", field(s, "InstanceState")),
+        ("ip", ip),
+        ("disk_gb", JInt(int_of(field(field(s, "SystemDisk"), "DiskSize")))),
+        ("expired_at", field(s, "ExpiredTime")),
+        ("created_at", field(s, "CreatedTime")),
+      ]))
+    }
+    None -> Err("未找到实例")
+  }
+}
+
+# QCE/LIGHTHOUSE CpuUsage, daily points over 30 days, via the monitor service
+fn cpu_trend_fetch(id: String, key: String, region: String, instance: String) -> Result[Json, String] !io = {
+  let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss").expect("f")
+  let zone = ZoneOffset.ofHours(0).expect("z")
+  let now = LocalDateTime.ofInstant(Instant.now().expect("i"), zone).expect("now")
+  let start = now.minusDays(30).expect("s")
+  let payload = "{\"Namespace\":\"QCE/LIGHTHOUSE\",\"MetricName\":\"CpuUsage\",\"Period\":86400,\"StartTime\":\"${start.format(fmt).expect("fs")}+00:00\",\"EndTime\":\"${now.format(fmt).expect("fe")}+00:00\",\"Instances\":[{\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"$instance\"}]}]}"
+  let j = tencent_client.call(id, key, "monitor", "GetMonitorData", "2018-07-24", region, payload)?
+  let resp = tc_resp("GetMonitorData", j)?
+  match arr0(field(resp, "DataPoints")) {
+    Some(dp) -> {
+      let ts = arr_of(field(dp, "Timestamps"))
+      let vs = arr_of(field(dp, "Values"))
+      let n = if len(ts) < len(vs) { len(ts) } else { len(vs) }
+      Ok(JArr(map(range(0, n), fn(i) => obj([
+        ("t", JInt(int_of(ts[i]))),
+        ("v", vs[i]),
+      ]))))
+    }
+    None -> Ok(JArr([]))
+  }
+}
+
+fn arr0(j: Json) -> Option[Json] =
+  match j {
+    JArr(xs) -> get(xs, 0)
+    _ -> None,
+  }
+
+fn arr_of(j: Json) -> List[Json] =
+  match j {
+    JArr(xs) -> xs
+    _ -> [],
+  }
+
+# ---- qiniu: kodo series + CDN + respack (three fault-isolated groups) ----
+
+## The qiniu block WITHOUT quota — the caller injects quota from the settings
+## table after the cache, exactly like the FastAPI handler.
+pub fn qiniu_block(a: Auth, respack_cell: AtomicReference) -> Json !io =
+  if a.qiniu.ak == "" {
+    obj([("configured", jbool(false))])
+  } else {
+    let base = [("configured", jbool(true)), ("bucket", jstr(a.qiniu.bucket))]
+    let main = match kodo_stats(a) {
+      Ok(entries) -> entries
+      Err(m) -> [("error", jstr(m))]
+    }
+    let cdn = match cdn_stats(a) {
+      Ok(entries) -> entries
+      Err(m) -> [("cdn_error", jstr(m))]
+    }
+    let packs = match respack_cached(a, respack_cell) {
+      Ok(j) -> [("cdn_pack", field(j, "cdn")), ("storage_pack", field(j, "storage"))]
+      Err(m) -> [("respack_error", jstr(m))]
+    }
+    obj(base ++ main ++ cdn ++ packs)
+  }
+
+fn kodo_stats(a: Auth) -> Result[List[(String, Json)], String] !io = {
+  let (stimes, sdatas) = kodo_series(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "space", 30)?
+  let (_ctimes, cdatas) = kodo_series(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "count", 30)?
+  let flow = flow_series(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "flow", 30)?
+  let hits = flow_series(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "hits", 30)?
+  Ok([
+    ("space", jint(last_nonzero(sdatas))),
+    ("count", jint(last_nonzero(cdatas))),
+    ("flow_30d", jint(sum_snd(flow))),
+    ("hits_30d", jint(sum_snd(hits))),
+    ("space_trend", trend_int(stimes, sdatas)),
+    ("flow_trend", JArr(map(flow, fn(p) => {
+      let (t, v) = p
+      obj([("t", jstr(t)), ("v", jint(v))])
+    }))),
+  ])
+}
+
+fn sum_snd(xs: List[(String, Int)]) -> Int =
+  fold(xs, 0, fn(acc, p) => {
+    let (_t, v) = p
+    acc + v
+  })
+
+fn cdn_stats(a: Auth) -> Result[List[(String, Json)], String] !io = {
+  let domains = cdn_domains(a.qiniu.ak, a.qiniu.sk)?
+  let (ftimes, fvalues) = cdn_tune(a.qiniu.ak, a.qiniu.sk, "flux", 30, domains)?
+  let (_btimes, bvalues) = cdn_tune(a.qiniu.ak, a.qiniu.sk, "bandwidth", 30, domains)?
+  let peak = fold(bvalues, 0, fn(acc, v) => if v > acc { v } else { acc })
+  Ok([
+    ("cdn_flow_30d", jint(fold(fvalues, 0, fn(acc, v) => acc + v))),
+    ("cdn_peak_bps", jint(peak)),
+    ("cdn_domains", JArr(map(domains, fn(d) => JStr(d)))),
+    ("cdn_trend", trend_int(ftimes, fvalues)),
+  ])
+}
+
+fn trend_int(times: List[Int], values: List[Int]) -> Json = {
+  let n = if len(times) < len(values) { len(times) } else { len(values) }
+  JArr(map(range(0, n), fn(i) => obj([("t", jint(times[i])), ("v", jint(values[i]))])))
+}
+
+## respack balances through a 300s TTL cell (the billing API is rate-limited;
+## fm stats shares this cell so directory listings stay cheap).
+pub fn respack_cached(a: Auth, cell: AtomicReference) -> Result[Json, String] !io =
+  match cache_get(cell, 300) {
+    Some(s) -> parse(s)
+    None -> {
+      let j = respack_summary(a.qiniu.ak, a.qiniu.sk)?
+      cache_put(cell, render(j))
+      Ok(j)
+    }
+  }
+
+# ---- vault: alive probe + version ----
+
+pub fn vault_block(alive_url: String, public_url: String) -> Json !io = {
+  let base = if ends_with(alive_url, "/alive") {
+    substring(alive_url, 0, str_len(alive_url) - 6)
+  } else {
+    alive_url
+  }
+  let head = [("url", jstr(base)), ("public_url", jstr(public_url))]
+  let t0 = System.currentTimeMillis()
+  match fetch(alive_url, []) {
+    Ok(r) -> {
+      let probe = [
+        ("alive", jbool(r.status == 200)),
+        ("latency_ms", jint(System.currentTimeMillis() - t0)),
+      ]
+      let no_version: List[(String, Json)] = []
+      let version = match fetch("$base/api/config", []) {
+        Ok(c) ->
+          match parse(c.body) {
+            Ok(cfg) -> [("version", field(cfg, "version"))]
+            Err(_m) -> no_version
+          }
+        Err(_m) -> no_version,
+      }
+      obj(head ++ probe ++ version)
+    }
+    Err(m) -> obj(head ++ [("alive", jbool(false)), ("error", jstr(m))])
+  }
+}

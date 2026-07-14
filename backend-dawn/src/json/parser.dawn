@@ -3,7 +3,7 @@
 # Recursive-descent JSON parser (RFC 8259). Threads the position through Result,
 # never panics, and caps nesting depth so pathological input can't blow the stack.
 use json/lexer.{peek, skip_ws, is_digit, scan_string, scan_number}
-use json/value.{Json, JNull, JBool, JNum, JStr, JArr, JObj}
+use json/value.{Json, JNull, JBool, JNum, JInt, JStr, JArr, JObj}
 
 pub const MAX_DEPTH: Int = 512
 
@@ -79,6 +79,18 @@ fn parse_object(src: List[Int], i0: Int, depth: Int) -> Result[(Json, Int), Stri
   }
 }
 
+# true when the number literal src[i..j) is an integer (no fraction / exponent)
+fn is_int_literal(src: List[Int], i: Int, j: Int) -> Bool = {
+  var k = i
+  var isint = true
+  while k < j {
+    let c = peek(src, k)
+    if c == '.' || c == 'e' || c == 'E' { isint = false }
+    k = k + 1
+  }
+  isint
+}
+
 fn parse_value(src: List[Int], i0: Int, depth: Int) -> Result[(Json, Int), String] = {
   if depth > MAX_DEPTH {
     Err("maximum nesting depth exceeded")
@@ -100,7 +112,10 @@ fn parse_value(src: List[Int], i0: Int, depth: Int) -> Result[(Json, Int), Strin
       parse_lit(src, i, "null", JNull)
     } else if c == '-' || is_digit(c) {
       let (f, j) = scan_number(src, i)?
-      Ok((JNum(f), j))
+      # preserve integer-ness: a literal with no '.'/'e'/'E' round-trips as JInt,
+      # so parse→render doesn't turn 42 into 42.0 (the fm/monitor TTL caches
+      # round-trip responses through render/parse and must not corrupt byte counts)
+      if is_int_literal(src, i, j) { Ok((JInt(to_int(f)), j)) } else { Ok((JNum(f), j)) }
     } else {
       Err("unexpected character")
     }

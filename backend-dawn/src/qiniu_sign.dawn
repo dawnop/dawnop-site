@@ -15,8 +15,15 @@ pub fn entry_token(ak: String, sk: String, op: String, entry: String) -> String 
 ## QiniuMacAuth token (the statistics API, api.qiniuapi.com). Signs
 ## "METHOD /path?query\nHost: host\nContent-Type: ct\n\n". Returns the full
 ## "Qiniu ak:sign" Authorization value.
-pub fn qiniu_mac_token(ak: String, sk: String, method: String, path: String, query: String, host: String, content_type: String) -> String !io = {
-  let signing = "$method $path?$query\nHost: $host\nContent-Type: $content_type\n\n"
+pub fn qiniu_mac_token(ak: String, sk: String, method: String, path: String, query: String, host: String, content_type: String) -> String !io =
+  qiniu_mac(ak, sk, method, "$path?$query", host, content_type, "")
+
+## General QiniuMacAuth (CDN / billing APIs too): `path_query` is the path with
+## its query string if any; `body` participates in the signature for JSON
+## requests (matches the SDK: body is appended when content-type is set and
+## not application/octet-stream).
+pub fn qiniu_mac(ak: String, sk: String, method: String, path_query: String, host: String, content_type: String, body: String) -> String !io = {
+  let signing = "$method $path_query\nHost: $host\nContent-Type: $content_type\n\n$body"
   let sign = hmac_sha1_b64url(sk, signing)
   "Qiniu $ak:$sign"
 }
@@ -62,4 +69,12 @@ test "signatures match the qiniu SDK byte-for-byte" {
   assert entry_token("AKtest", "SKtest", "delete", entry) == "QBox AKtest:-7Eh_fzs9TcII1AZPjkouLF26fc="
   assert qiniu_mac_token("AKtest", "SKtest", "GET", "/v6/space", "bucket=mybucket&begin=20260701000000&end=20260714120000&g=day", "api.qiniuapi.com", "application/x-www-form-urlencoded") ==
     "Qiniu AKtest:4tea02U1hxRrkWbTP1pUcrBOqmo="
+  # cross-checked against qiniu.QiniuMacAuth("AKtest","SKtest").token_of_request
+  assert qiniu_mac("AKtest", "SKtest", "POST", "/v2/tune/flux", "fusion.qiniuapi.com", "application/json",
+      "{\"domains\":\"a.com;b.com\",\"startDate\":\"2026-06-14\",\"endDate\":\"2026-07-14\",\"granularity\":\"day\"}") ==
+    "Qiniu AKtest:716FuHT8Wo0muPljCsrV9uNPuxE="
+  assert qiniu_mac("AKtest", "SKtest", "GET", "/domain?limit=100", "api.qiniu.com", "application/json", "") ==
+    "Qiniu AKtest:NkIHWnHFAVdnaXMKYl-2OE1foYk="
+  assert qiniu_mac("AKtest", "SKtest", "GET", "/billing-api/v1/respack/list", "api.qiniu.com", "application/json", "") ==
+    "Qiniu AKtest:0ymmWdvrL7R-Ru70v3DT0glRFic="
 }

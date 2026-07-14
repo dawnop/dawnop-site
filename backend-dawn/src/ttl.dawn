@@ -1,0 +1,46 @@
+# A TTL cache cell (M6 knife 12): the monitor page and fm stats memoize
+# third-party API snapshots (tencent / qiniu billing) the way the FastAPI
+# backend's TTLCache does. The cell is an AtomicReference[String] holding
+# "epoch|payload"; Dawn has no global mutable state, so main creates cells and
+# threads them into the route closures.
+use java "java.util.concurrent.atomic.AtomicReference"
+use java "java.lang.System"
+use java "java.lang.String"
+
+pub fn new_cell() -> AtomicReference !io = AtomicReference.new("")
+
+## The cached payload when the cell holds one younger than `ttl_s` seconds.
+pub fn cache_get(cell: AtomicReference, ttl_s: Int) -> Option[String] !io = {
+  let s = String.valueOf(cell.get().expect("cell")).expect("s")
+  if s == "" {
+    None
+  } else {
+    let parts = split(s, "|")
+    match parse_int(parts[0]) {
+      Some(ts) ->
+        if now_s() - ts < ttl_s {
+          Some(join(rest(parts), "|"))
+        } else {
+          None
+        }
+      None -> None
+    }
+  }
+}
+
+## Store a payload with the current time. The payload may contain "|" (only the
+## first separator is structural).
+pub fn cache_put(cell: AtomicReference, payload: String) -> Unit !io =
+  cell.set("${now_s()}|$payload")
+
+fn now_s() -> Int !io = System.currentTimeMillis() / 1000
+
+fn rest(xs: List[String]) -> List[String] = map(range(1, len(xs)), fn(i) => xs[i])
+
+test "cache: put then get within ttl, miss when empty" {
+  let cell = new_cell()
+  assert cache_get(cell, 60) == None
+  cache_put(cell, "{\"a\":1}|tail")
+  assert cache_get(cell, 60) == Some("{\"a\":1}|tail")
+  assert cache_get(cell, 0) == None
+}

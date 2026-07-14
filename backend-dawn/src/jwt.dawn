@@ -4,7 +4,7 @@
 # match, only the algorithm and secret.
 use java "java.lang.System"
 use crypto.{hmac_sha256_b64url_nopad, b64url_encode_nopad, b64url_decode, eq_const}
-use json/value.{Json, JObj, JNum, JStr}
+use json/value.{Json, JObj, JNum, JInt, JStr}
 use json/parser.{parse}
 
 const HEADER_JSON: String = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}"
@@ -42,7 +42,10 @@ fn claims_of(payload_json: String) -> Result[String, String] !io = {
   let j = parse(payload_json)?
   match j {
     JObj(m) -> {
+      # exp is an integer unix time; PyJWT emits it without a fraction, so it
+      # parses as JInt now (JNum kept for any float-encoded producer)
       let exp_ok: Result[Bool, String] = match map_get(m, "exp") {
+        Some(JInt(t)) -> if now_secs() < t { Ok(true) } else { Err("token expired") }
         Some(JNum(t)) -> if to_float(now_secs()) < t { Ok(true) } else { Err("token expired") }
         _ -> Err("no exp claim")
       }

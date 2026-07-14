@@ -1,0 +1,99 @@
+# Monitor endpoint (M6 knife 12), protected. Aggregates the four blocks; the
+# third-party pair (lighthouse + qiniu) memoizes in a 120s TTL cell like the
+# FastAPI TTLCache, `?refresh=1` busts it. server/vault stay live every call.
+use java "java.lang.System"
+use java "java.util.concurrent.atomic.AtomicReference"
+use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query}
+use web/router.{Route, Get}
+use auth.{Auth, current_user}
+use db.{with_db}
+use repo_settings.{setting_int}
+use ttl.{cache_get, cache_put}
+use monitor.{server_block, lighthouse_block, qiniu_block, vault_block}
+use qiniu_stats.{field}
+use json/value.{Json, JNull, JBool, JInt, JObj}
+use json/render.{render}
+use json/parser.{parse}
+use jsonx.{obj, jint}
+
+## The monitor config (Tencent Lighthouse creds/instance + Vault URLs), read
+## once at startup from .env.
+pub type MonCfg = {
+  tencent_id: String,
+  tencent_key: String,
+  region: String,
+  instance: String,
+  vault_alive: String,
+  vault_public: String,
+}
+
+## GET /api/monitor — live resource snapshot {server, lighthouse, qiniu, vault,
+## cached_at}. Quota is read from the settings table on every request (editing
+## the setting takes effect immediately, unaffected by the cache).
+pub fn get_monitor(a: Auth, cfg: MonCfg, cell: AtomicReference, respack_cell: AtomicReference) -> Handler =
+  fn(req) =>
+    match current_user(a, req) {
+      Ok(_u) -> {
+        let refresh = match query(req, "refresh") {
+          Some(v) -> v == "1" || v == "true"
+          None -> false
+        }
+        let third = third_party(a, cfg, cell, respack_cell, refresh)
+        let qn = with_quota(a, field(third, "qiniu"))
+        Ok(json_ok(obj([
+          ("server", server_block()),
+          ("lighthouse", field(third, "lighthouse")),
+          ("qiniu", qn),
+          ("vault", vault_block(cfg.vault_alive, cfg.vault_public)),
+          ("cached_at", field(third, "cached_at")),
+        ])))
+      }
+      Err(e) -> Err(e)
+    }
+
+# the cached pair {lighthouse, qiniu, cached_at}; refilled past 120s or on refresh
+fn third_party(a: Auth, cfg: MonCfg, cell: AtomicReference, respack_cell: AtomicReference, refresh: Bool) -> Json !io = {
+  let cached: Option[String] = if refresh { None } else { cache_get(cell, 120) }
+  match cached {
+    Some(s) ->
+      match parse(s) {
+        Ok(j) -> j
+        Err(_m) -> refill(a, cfg, cell, respack_cell)
+      }
+    None -> refill(a, cfg, cell, respack_cell)
+  }
+}
+
+fn refill(a: Auth, cfg: MonCfg, cell: AtomicReference, respack_cell: AtomicReference) -> Json !io = {
+  let j = obj([
+    ("lighthouse", lighthouse_block(cfg.tencent_id, cfg.tencent_key, cfg.region, cfg.instance)),
+    ("qiniu", qiniu_block(a, respack_cell)),
+    ("cached_at", jint(now_s())),
+  ])
+  cache_put(cell, render(j))
+  j
+}
+
+fn now_s() -> Int !io = System.currentTimeMillis() / 1000
+
+# inject quota (settings table over the .env default) when qiniu is configured
+fn with_quota(a: Auth, qn: Json) -> Json !io =
+  match field(qn, "configured") {
+    JBool(on) ->
+      if on {
+        let gb = match with_db(a.db.path, a.db.ext, fn(c) => setting_int(c, "storage_quota_gb", a.storage_quota)) {
+          Ok(n) -> n
+          Err(_m) -> a.storage_quota
+        }
+        match qn {
+          JObj(m) -> JObj(map_insert(m, "quota", JInt(gb * 1024 * 1024 * 1024)))
+          _ -> qn
+        }
+      } else {
+        qn
+      }
+    _ -> qn,
+  }
+
+pub fn mon_routes(a: Auth, cfg: MonCfg, cell: AtomicReference, respack_cell: AtomicReference) -> List[Route] =
+  [Get("/api/monitor", get_monitor(a, cfg, cell, respack_cell))]

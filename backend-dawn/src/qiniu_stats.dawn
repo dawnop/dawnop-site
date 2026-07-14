@@ -1,0 +1,268 @@
+# Qiniu statistics / CDN / billing APIs (M6 knife 12, monitor page + fm stats).
+# Mirrors backend/app/core/qiniu_client/{stats,cdn}.py: Kodo v6 series on
+# api.qiniuapi.com, CDN domains + tune on api.qiniu.com / fusion.qiniuapi.com,
+# respack balances on the (undocumented, observed) billing-api. All requests
+# sign with QiniuMacAuth (qiniu_mac); JSON POSTs include the body in the
+# signature. Endpoints use http:// like the Python client (scheme is unsigned).
+use java "java.time.LocalDateTime"
+use java "java.time.ZoneId"
+use java "java.time.ZonedDateTime"
+use java "java.time.format.DateTimeFormatter"
+use http.{HttpResp, fetch, post}
+use qiniu_sign.{qiniu_mac}
+use json/value.{Json, JNull, JBool, JNum, JInt, JStr, JArr, JObj}
+use json/render.{render}
+use jsonx.{obj, jstr}
+use json/parser.{parse}
+
+const STAT_HOST: String = "api.qiniuapi.com"
+const API_HOST: String = "api.qiniu.com"
+const FUSION_HOST: String = "fusion.qiniuapi.com"
+const GB: Float = 1073741824.0
+
+# ---- signed requests ----
+
+fn stat_get(ak: String, sk: String, path_query: String) -> Result[Json, String] !io = {
+  let ct = "application/x-www-form-urlencoded"
+  let auth = qiniu_mac(ak, sk, "GET", path_query, STAT_HOST, ct, "")
+  let r = fetch("http://$STAT_HOST$path_query", [("Authorization", auth), ("Content-Type", ct)])?
+  if r.status == 200 { parse(r.body) } else { Err("七牛统计失败 $path_query: ${to_string(r.status)}") }
+}
+
+fn mac_json(ak: String, sk: String, method: String, host: String, path_query: String, body: String) -> Result[Json, String] !io = {
+  let ct = "application/json"
+  let auth = qiniu_mac(ak, sk, method, path_query, host, ct, body)
+  let headers = [("Authorization", auth), ("Content-Type", ct)]
+  let url = "http://$host$path_query"
+  let r = if method == "POST" { post(url, headers, body)? } else { fetch(url, headers)? }
+  if r.status == 200 { parse(r.body) } else { Err("七牛 CDN 接口失败 $path_query: ${to_string(r.status)}") }
+}
+
+# ---- kodo v6 series (space / count / blob_io) ----
+
+fn day_range(days: Int) -> (String, String) !io = {
+  let d = DateTimeFormatter.ofPattern("yyyyMMdd").expect("f")
+  let full = DateTimeFormatter.ofPattern("yyyyMMddHHmmss").expect("f")
+  let now = LocalDateTime.now().expect("now")
+  let begin = now.minusDays(days).expect("b").format(d).expect("s")
+  ("${begin}000000", now.format(full).expect("s"))
+}
+
+## Storage bytes (space) or object count (count) by day. Returns (times, datas).
+pub fn kodo_series(ak: String, sk: String, bucket: String, what: String, days: Int) -> Result[(List[Int], List[Int]), String] !io = {
+  let (begin, end) = day_range(days)
+  let j = stat_get(ak, sk, "/v6/$what?bucket=$bucket&begin=$begin&end=$end&g=day")?
+  Ok((int_list(field(j, "times")), int_list(field(j, "datas"))))
+}
+
+## Origin traffic (select=flow, bytes) or requests (select=hits) by day.
+## blob_io answers a list [{time, values:{<select>: n}}], unlike space/count.
+pub fn flow_series(ak: String, sk: String, bucket: String, select: String, days: Int) -> Result[List[(String, Int)], String] !io = {
+  let (begin, end) = day_range(days)
+  let j = stat_get(ak, sk, "/v6/blob_io?\$bucket=$bucket&select=$select&begin=$begin&end=$end&g=day")?
+  match j {
+    JArr(items) -> Ok(map(items, fn(it) =>
+        (str_or_empty(field(it, "time")), int_of(field(field(it, "values"), select)))))
+    _ -> Ok([])
+  }
+}
+
+## The latest non-zero data point (stats lag by up to an hour, so the last
+## point is often still 0 — mirror Python's _last_nonzero).
+pub fn last_nonzero(datas: List[Int]) -> Int =
+  fold(datas, 0, fn(acc, v) => if v != 0 { v } else { acc })
+
+# ---- CDN (fusion) ----
+
+## All CDN domains on the account (the custom storage domain rides fusion CDN).
+pub fn cdn_domains(ak: String, sk: String) -> Result[List[String], String] !io = {
+  let j = mac_json(ak, sk, "GET", API_HOST, "/domain?limit=100", "")?
+  match field(j, "domains") {
+    JArr(ds) -> Ok(fold(ds, [], fn(acc: List[String], d) =>
+        match field(d, "name") {
+          JStr(n) -> acc ++ [n]
+          _ -> acc
+        }))
+    _ -> Ok([])
+  }
+}
+
+## flux (bytes) or bandwidth (bps) by day, summed across domains and regions.
+## Returns (times as unix seconds, totals). CDN buckets days in Beijing time.
+pub fn cdn_tune(ak: String, sk: String, kind: String, days: Int, domains: List[String]) -> Result[(List[Int], List[Int]), String] !io =
+  if len(domains) == 0 {
+    Ok(([], []))
+  } else {
+    let d = DateTimeFormatter.ofPattern("yyyy-MM-dd").expect("f")
+    let now = LocalDateTime.now().expect("now")
+    let body = render(obj([
+      ("domains", jstr(join(domains, ";"))),
+      ("startDate", jstr(now.minusDays(days).expect("s").format(d).expect("fs"))),
+      ("endDate", jstr(now.format(d).expect("fe"))),
+      ("granularity", jstr("day")),
+    ]))
+    let j = mac_json(ak, sk, "POST", FUSION_HOST, "/v2/tune/$kind", body)?
+    let time_strs = str_list(field(j, "time"))
+    let zeros = map(time_strs, fn(_t) => 0)
+    let totals = fold(leaf_arrays(field(j, "data")), zeros, fn(acc: List[Int], arr) =>
+      map(range(0, len(acc)), fn(i) => acc[i] + int_of(at(arr, i))))
+    Ok((map(time_strs, day_epoch), totals))
+  }
+
+# "yyyy-MM-dd HH:mm:ss" in the local zone → unix seconds (matches strptime().timestamp())
+fn day_epoch(s: String) -> Int !io = {
+  let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").expect("f")
+  let zone = ZoneId.systemDefault().expect("z")
+  LocalDateTime.parse(s, fmt).expect("t").atZone(zone).expect("zt").toEpochSecond()
+}
+
+# every per-region value array under data.{domain}.{region}
+fn leaf_arrays(data: Json) -> List[List[Json]] = {
+  let none: List[List[Json]] = []
+  match data {
+    JObj(doms) -> fold(map_entries(doms), none, fn(acc: List[List[Json]], de) => {
+      let (_dom, regions) = de
+      match regions {
+        JObj(rm) -> acc ++ fold(map_entries(rm), none, fn(acc2: List[List[Json]], re) => {
+          let (_r, arr) = re
+          match arr {
+            JArr(xs) -> acc2 ++ [xs]
+            _ -> acc2
+          }
+        })
+        _ -> acc
+      }
+    })
+    _ -> none,
+  }
+}
+
+# ---- respack (traffic / storage package balances) ----
+
+## CDN traffic pack + storage pack overview, shaped exactly like Python's
+## respack_summary: {"cdn": {...}|null, "storage": {...}|null}. Callers wrap it
+## in a TTL cache (the billing API is rate-limited and slow-moving).
+pub fn respack_summary(ak: String, sk: String) -> Result[Json, String] !io = {
+  let listing = mac_json(ak, sk, "GET", API_HOST, "/billing-api/v1/respack/list", "")?
+  let active = filter(arr_items(field(listing, "data")), fn(d) => int_of(field(d, "status")) == 2)
+
+  let cdn_items = filter(active, fn(d) => contains(str_or_empty(field(d, "respack_name")), "流量"))
+  let cdn = if len(cdn_items) == 0 {
+    JNull
+  } else {
+    let used = sum_amount(cdn_items, "used_amount") * GB
+    let total = sum_amount(cdn_items, "total_amount") * GB
+    let remain = if total > used { total - used } else { 0.0 }
+    obj([
+      ("used", JInt(to_int(used))),
+      ("total", JInt(to_int(total))),
+      ("remain", JInt(to_int(remain))),
+      ("expire", min_str(map(cdn_items, fn(d) => str_or_empty(field(d, "effective_end"))))),
+      ("names", JArr(map(cdn_items, fn(d) => JStr(str_or_empty(field(d, "respack_name")))))),
+    ])
+  }
+
+  let store_items = filter(active, fn(d) => contains(str_or_empty(field(d, "respack_name")), "存储"))
+  let overview = mac_json(ak, sk, "GET", API_HOST, "/billing-api/v1/respack/month-overview", "")?
+  let store_ov = filter(arr_items(field(overview, "data")), fn(o) => contains(str_or_empty(field(o, "item_name")), "存储"))
+  let storage = if len(store_ov) == 0 {
+    JNull
+  } else {
+    let capacity = sum_amount(store_ov, "total_surplus") * GB
+    obj([
+      ("capacity", JInt(to_int(capacity))),
+      ("expire", min_str(map(store_items, fn(d) => str_or_empty(field(d, "effective_end"))))),
+      ("names", JArr(map(store_ov, fn(o) => JStr(str_or_empty(field(o, "item_name")))))),
+    ])
+  }
+  Ok(obj([("cdn", cdn), ("storage", storage)]))
+}
+
+fn sum_amount(items: List[Json], key: String) -> Float =
+  fold(items, 0.0, fn(acc, d) => acc + num_of(field(d, key)))
+
+# min of the non-empty strings (ISO datetimes order lexicographically); null when none
+fn min_str(xs: List[String]) -> Json = {
+  let present = filter(xs, fn(s) => s != "")
+  fold(present, JNull, fn(acc, s) =>
+    match acc {
+      JStr(cur) -> if s < cur { JStr(s) } else { acc }
+      _ -> JStr(s)
+    })
+}
+
+# ---- json coercion helpers (billing numbers arrive as ints, floats or strings) ----
+
+pub fn field(j: Json, key: String) -> Json =
+  match j {
+    JObj(m) ->
+      match map_get(m, key) {
+        Some(v) -> v
+        None -> JNull
+      }
+    _ -> JNull,
+  }
+
+pub fn int_of(j: Json) -> Int =
+  match j {
+    JInt(n) -> n
+    JNum(x) -> to_int(x)
+    JStr(s) ->
+      match parse_int(s) {
+        Some(n) -> n
+        None -> 0
+      }
+    _ -> 0,
+  }
+
+pub fn num_of(j: Json) -> Float =
+  match j {
+    JInt(n) -> to_float(n)
+    JNum(x) -> x
+    JStr(s) ->
+      match parse_float(s) {
+        Some(x) -> x
+        None -> 0.0
+      }
+    _ -> 0.0,
+  }
+
+fn str_or_empty(j: Json) -> String =
+  match j {
+    JStr(s) -> s
+    _ -> "",
+  }
+
+fn arr_items(j: Json) -> List[Json] =
+  match j {
+    JArr(xs) -> xs
+    _ -> [],
+  }
+
+fn str_list(j: Json) -> List[String] = map(arr_items(j), str_or_empty)
+
+fn int_list(j: Json) -> List[Int] = map(arr_items(j), int_of)
+
+fn at(xs: List[Json], i: Int) -> Json =
+  match get(xs, i) {
+    Some(v) -> v
+    None -> JNull,
+  }
+
+test "last_nonzero skips trailing zeros" {
+  assert last_nonzero([1, 5, 0, 0]) == 5
+  assert last_nonzero([0, 0]) == 0
+  assert last_nonzero([]) == 0
+}
+
+test "min_str picks the earliest non-empty" {
+  assert min_str(["2026-09-01", "", "2026-08-01"]) == JStr("2026-08-01")
+  assert min_str([""]) == JNull
+}
+
+test "coercions accept ints, floats and strings" {
+  assert int_of(JStr("42")) == 42
+  assert num_of(JStr("1.5")) == 1.5
+  assert num_of(JInt(2)) == 2.0
+  assert int_of(JNull) == 0
+}

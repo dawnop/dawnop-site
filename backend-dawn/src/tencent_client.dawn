@@ -1,0 +1,58 @@
+# Tencent Cloud v3 client (M6 knife 12) for the monitor page. Assembles the full
+# TC3-HMAC-SHA256 canonical request / string-to-sign / Authorization and POSTs
+# via the http client. Signing is tencent_sign (byte-for-byte vs the reference);
+# every call is read-only (DescribeInstances*, GetMonitorData) — safe.
+use java "java.lang.System"
+use java "java.time.Instant"
+use java "java.time.LocalDate"
+use java "java.time.ZoneOffset"
+use java "java.time.format.DateTimeFormatter"
+use crypto.{sha256_hex}
+use tencent_sign.{tc3_signature}
+use http.{HttpResp, post}
+use json/value.{Json}
+use json/parser.{parse}
+
+## Call a Tencent Cloud v3 action. `payload` is a compact JSON body string.
+## Returns the parsed Response JSON, or Err on transport / non-200.
+pub fn call(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[Json, String] !io = {
+  let host = "$service.tencentcloudapi.com"
+  let ts = System.currentTimeMillis() / 1000
+  let date = utc_date(ts)
+  let ct = "application/json; charset=utf-8"
+
+  let canonical_headers = "content-type:$ct\nhost:$host\nx-tc-action:${to_lower(action)}\n"
+  let signed_headers = "content-type;host;x-tc-action"
+  let payload_hash = sha256_hex(payload)
+  let canonical_request = "POST\n/\n\n$canonical_headers\n$signed_headers\n$payload_hash"
+
+  let scope = "$date/$service/tc3_request"
+  let string_to_sign = "TC3-HMAC-SHA256\n$ts\n$scope\n${sha256_hex(canonical_request)}"
+  let signature = tc3_signature(secret_key, date, service, string_to_sign)
+  let auth = "TC3-HMAC-SHA256 Credential=$secret_id/$scope, SignedHeaders=$signed_headers, Signature=$signature"
+
+  # no explicit Host header: java.net.http restricts it and auto-sets it from
+  # the URI, which equals the signed canonical host
+  let headers = [
+    ("Authorization", auth),
+    ("Content-Type", ct),
+    ("X-TC-Action", action),
+    ("X-TC-Version", version),
+    ("X-TC-Timestamp", to_string(ts)),
+    ("X-TC-Region", region),
+  ]
+  let r = post("https://$host", headers, payload)?
+  if r.status == 200 {
+    parse(r.body)
+  } else {
+    Err("tencent $action HTTP ${to_string(r.status)}: ${r.body}")
+  }
+}
+
+fn utc_date(ts: Int) -> String !io = {
+  let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd").expect("f")
+  let d = LocalDate.ofInstant(java_instant(ts), ZoneOffset.ofHours(0).expect("z")).expect("d")
+  d.format(fmt).expect("s")
+}
+
+fn java_instant(ts: Int) -> Instant !io = Instant.ofEpochSecond(ts).expect("i")

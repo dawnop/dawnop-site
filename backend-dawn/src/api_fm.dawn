@@ -5,6 +5,7 @@ use java "java.sql.Connection"
 use java "java.lang.System"
 use java "java.net.URLEncoder"
 use java "java.lang.Object"
+use java "java.util.concurrent.atomic.AtomicReference"
 use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query, redirect, binary}
 use http.{fetch_bytes}
 use web/router.{Route, Get, Post}
@@ -14,12 +15,15 @@ use auth.{Auth, Qiniu, current_user}
 use jsonread.{body_obj, str_or, str_list}
 use fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full}
 use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, ledger_insert, ledger_delete, search_files, subtree_rows, entry_json, delete_row, stats_db, FileRow}
+use repo_settings.{setting_int}
 use crypto.{uuid}
 use qiniu_sign.{private_url, upload_token}
-use qiniu_rs.{delete_obj, copy_obj, stat, upload_text, space_used}
-use java "java.time.LocalDate"
-use java "java.time.format.DateTimeFormatter"
-use json/value.{Json, JArr, JObj, JStr, JNum, JInt}
+use qiniu_rs.{delete_obj, copy_obj, stat, upload_text}
+use qiniu_stats.{kodo_series, last_nonzero, field, int_of}
+use monitor.{respack_cached}
+use ttl.{cache_get, cache_put}
+use json/value.{Json, JNull, JArr, JObj, JStr, JNum, JInt}
+use json/render.{render}
 use json/parser.{parse}
 
 fn guarded(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io =
@@ -188,37 +192,68 @@ pub fn sign(a: Auth) -> Handler =
   })
 
 ## GET /api/fm/stats — storage usage: {used, used_local, used_remote, files,
-## dirs, quota}. Local (DB) figures are exact; remote/quota are live qiniu data.
-pub fn stats(a: Auth) -> Handler =
+## dirs, quota}. Local (DB) figures are exact; remote is the 600s-cached qiniu
+## bucket space (null when unavailable); quota prefers the storage respack
+## capacity over the settings value, like the FastAPI handler.
+pub fn stats(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReference) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
       match with_db(a.db.path, a.db.ext, fn(c) => stats_db(c)) {
         Ok(triple) -> {
           let (used_local, files, dirs) = triple
-          let remote = space_used(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, begin_30d(), end_now())
-          let used = if used_local > remote { used_local } else { remote }
-          let quota = a.storage_quota * 1024 * 1024 * 1024
+          let remote = remote_space(a, space_cell)
+          let remote_n = int_of(remote)
+          let used = if used_local > remote_n { used_local } else { remote_n }
           Ok(json_ok(obj([
             ("used", jint(used)),
             ("used_local", jint(used_local)),
-            ("used_remote", jint(remote)),
+            ("used_remote", remote),
             ("files", jint(files)),
             ("dirs", jint(dirs)),
-            ("quota", jint(quota)),
+            ("quota", jint(quota_bytes(a, respack_cell))),
           ])))
         }
         Err(m) -> Err(http_error(500, m))
       })
 
-fn begin_30d() -> String !io = {
-  let fmt = DateTimeFormatter.ofPattern("yyyyMMdd").expect("f")
-  let d = LocalDate.now().expect("now").minusDays(30).expect("d")
-  "${d.format(fmt).expect("s")}000000"
-}
+# qiniu bucket space through a 600s TTL cell: 7-day series, last non-zero point;
+# JNull on failure or no data (stats lag by up to an hour) — the null caches too
+fn remote_space(a: Auth, cell: AtomicReference) -> Json !io =
+  match cache_get(cell, 600) {
+    Some(s) ->
+      match parse(s) {
+        Ok(j) -> j
+        Err(_m) -> JNull
+      }
+    None -> {
+      let j = match kodo_series(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "space", 7) {
+        Ok(pair) -> {
+          let (_times, datas) = pair
+          let v = last_nonzero(datas)
+          if v == 0 { JNull } else { JInt(v) }
+        }
+        Err(_m) -> JNull
+      }
+      cache_put(cell, render(j))
+      j
+    }
+  }
 
-fn end_now() -> String !io = {
-  let fmt = DateTimeFormatter.ofPattern("yyyyMMdd").expect("f")
-  "${LocalDate.now().expect("now").format(fmt).expect("s")}235959"
+# quota: storage respack capacity when present, else the settings-table value
+fn quota_bytes(a: Auth, respack_cell: AtomicReference) -> Int !io = {
+  let cap = match respack_cached(a, respack_cell) {
+    Ok(j) -> int_of(field(field(j, "storage"), "capacity"))
+    Err(_m) -> 0
+  }
+  if cap > 0 {
+    cap
+  } else {
+    let gb = match with_db(a.db.path, a.db.ext, fn(c) => setting_int(c, "storage_quota_gb", a.storage_quota)) {
+      Ok(n) -> n
+      Err(_m) -> a.storage_quota
+    }
+    gb * 1024 * 1024 * 1024
+  }
 }
 
 ## GET /api/fm/content?path= — proxy the object bytes through the backend (the
@@ -645,15 +680,17 @@ pub fn fm_search(a: Auth) -> Handler =
     }
   })
 
-## The fm routes (protected). Static paths precede any captures.
-pub fn routes(a: Auth) -> List[Route] =
+## The fm routes (protected). Static paths precede any captures. The two TTL
+## cells memoize qiniu bucket-space (600s) and respack balances (300s, shared
+## with the monitor page) for the stats endpoint.
+pub fn routes(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReference) -> List[Route] =
   [
     Get("/api/fm", fm_list(a)),
     Get("/api/fm/sign", sign(a)),
     Get("/api/fm/preview", preview(a)),
     Get("/api/fm/download", download(a)),
     Get("/api/fm/content", content(a)),
-    Get("/api/fm/stats", stats(a)),
+    Get("/api/fm/stats", stats(a, space_cell, respack_cell)),
     Get("/api/fm/search", fm_search(a)),
     Post("/api/fm/create-folder", create_folder(a)),
     Post("/api/fm/rename", rename(a)),

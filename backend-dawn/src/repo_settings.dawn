@@ -52,6 +52,11 @@ fn stored_int(c: Connection, key: String, dflt: Int) -> Result[Int, String] !io 
   }
 }
 
+## One integer setting: the stored row over the supplied default. The monitor
+## and fm stats quota reads this (admin edits beat the .env default).
+pub fn setting_int(c: Connection, key: String, dflt: Int) -> Result[Int, String] !io =
+  stored_int(c, key, dflt)
+
 ## Apply one setting write: reject unknown key (400) or out-of-range value (400),
 ## else upsert. Value is stored as its plain integer text (JSON for an int).
 pub fn put_one(c: Connection, key: String, value: Int) -> Result[Bool, String] !io =
