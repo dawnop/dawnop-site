@@ -9,13 +9,22 @@ Type=simple
 User=dawnop
 Group=dawnop
 WorkingDirectory=/opt/dawnop-dawn
-Environment=DAWNOP_ENV=/opt/dawnop-dawn/.env
-# JRE 21 (already installed for the playground runner); the app is a plain jar
-# whose manifest Class-Path points at lib/sqlite-jdbc-*.jar next to it.
-ExecStart=/usr/bin/java -Xmx256m -jar /opt/dawnop-dawn/backend-dawn.jar
+# share the FastAPI .env for secrets (SECRET_KEY / QINIU_* / TENCENT_* / VAULT_*),
+# single source of truth; Dawn-specific non-secret config is passed below and,
+# being process env, wins over the file (config.dawn is env-first).
+Environment=DAWNOP_ENV=/opt/dawnop/backend/.env
+Environment=DAWN_DB_PATH=/opt/dawnop/data/dawnop.db
+Environment=DAWN_SIMPLE_EXT=/opt/dawnop/backend/extensions/libsimple
+Environment=DAWN_PORT=8001
+# JRE 21 (already installed for the playground runner). Launch with an explicit
+# -cp (Main-Class is `main`): the jar's manifest Class-Path is an absolute build
+# path, so `-jar` wouldn't find the libs here; `-cp` ignores the manifest and
+# names the jars at their deployed location.
+ExecStart=/usr/bin/java -Xmx256m -cp /opt/dawnop-dawn/backend-dawn.jar:/opt/dawnop-dawn/lib/sqlite-jdbc-3.36.0.3.jar:/opt/dawnop-dawn/lib/jbcrypt-0.4.jar main
 Restart=on-failure
 RestartSec=3
-# hardening (mirrors the FastAPI unit)
+# hardening (mirrors the FastAPI unit). /opt/dawnop/data holds the shared DB +
+# WAL/SHM (writable); the jar dir and libsimple.so are read-only, which is fine.
 NoNewPrivileges=true
 ProtectSystem=strict
 ReadWritePaths=/opt/dawnop/data

@@ -36,9 +36,10 @@ fn out_json(r: List[Cell]) -> Json =
     ("updated_at", jdatetime(str_at(r, 7))),
   ])
 
-## GET /api/viz — all components (admin, full VizOut).
+## GET /api/viz — all components (admin, full VizOut). Ordered newest-edited
+## first to match app/api/viz.py (order_by updated_at desc).
 pub fn list_all(c: Connection) -> Result[List[Json], String] !io = {
-  let rows = query(c, "select $OUT_COLS from viz_components order by slug", [], out_col_types())?
+  let rows = query(c, "select $OUT_COLS from viz_components order by updated_at desc", [], out_col_types())?
   Ok(map(rows, out_json))
 }
 
