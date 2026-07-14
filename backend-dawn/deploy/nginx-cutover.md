@@ -26,6 +26,51 @@ Order matters: nginx picks exact (`=`) and regex (`~`) matches over the prefix
 with `curl -s https://dawnop.com/api/... | diff` against the FastAPI response
 before moving to the next.
 
+## Phase 2 — full cutover (knives 8–12 done)
+
+The Dawn backend now serves **every** `/api` route FastAPI does, verified by a
+route-table diff, with a single exception: `POST /api/fm/upload` (the backend
+proxy-upload backup path, deferred to M6.5 with WebDAV — both need binary
+request bodies). So the final state inverts the default: `/api/` catch-all goes
+to Dawn, with one carve-out kept on Python.
+
+```nginx
+# fm proxy-upload (multipart binary request body) stays on FastAPI until M6.5;
+# the browser never hits it (it direct-uploads via /upload-token + /register)
+location = /api/fm/upload {
+    proxy_pass http://127.0.0.1:8000;
+}
+
+# everything else on /api → Dawn backend (M6)
+location /api/ {
+    proxy_pass http://127.0.0.1:8001;
+}
+```
+
+`dav.dawnop.com` is a separate vhost and is untouched — WebDAV stays on Python
+(M6.5). Once this is live and observed clean, `dawnop-backend` (uvicorn) can be
+scaled down to serve only `/api/fm/upload` + `/dav`, or left as-is until M6.5
+retires it entirely.
+
+**Rollback** is a one-line revert: point `location /api/` back at `:8000` and
+`nginx -s reload`. Because both backends share the same SQLite file (WAL) and
+qiniu bucket, there is no data migration to undo — cutover and rollback are pure
+routing changes.
+
+### Recommended rollout order (each = one `nginx -s reload`, diffable)
+
+1. `= /api/health` — smoke.
+2. Public reads — `GET /api/articles*`, `/api/pages*`, `/api/tags*`, `/api/viz`,
+   `/api/search`. Read-only on the shared DB, zero risk.
+3. `/api/auth/*` — confirm the JWT issued by Dawn is accepted by FastAPI and
+   vice-versa (same `SECRET_KEY`; already cross-verified locally).
+4. Admin writes — `/api/articles` (POST/PUT/DELETE), `/api/pages`, `/api/tags`,
+   `/api/viz`, `/api/settings`. Writes to `articles` need `libsimple` loaded
+   (see prereqs) — the Dawn `db.connect` loads it per connection.
+5. `/api/fm/*` (except `upload`) and `/api/monitor`.
+6. Flip the catch-all to Dawn + keep the `= /api/fm/upload` carve-out (the block
+   above). Delete the now-redundant per-endpoint blocks.
+
 Prereqs on the server:
 - `openjdk-21-jre-headless` (already present for the playground runner).
 - `lib/sqlite-jdbc-*.jar` next to `backend-dawn.jar` (rsynced with the app).
