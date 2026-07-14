@@ -5,8 +5,10 @@ use java "java.sql.Connection"
 use java "java.lang.System"
 use java "java.net.URLEncoder"
 use java "java.lang.Object"
+use java "java.lang.String"
 use java "java.util.concurrent.atomic.AtomicReference"
-use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query, redirect, binary}
+use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query, redirect, binary, header}
+use multipart.{Part, boundary_of, parse_multipart, part_named}
 use http.{fetch_bytes}
 use web/router.{Route, Get, Post}
 use jsonx.{obj, jstr, jint}
@@ -18,7 +20,7 @@ use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, 
 use repo_settings.{setting_int}
 use crypto.{uuid}
 use qiniu_sign.{private_url, upload_token}
-use qiniu_rs.{delete_obj, copy_obj, stat, upload_text}
+use qiniu_rs.{delete_obj, copy_obj, stat, upload_text, upload_bytes}
 use qiniu_stats.{kodo_series, last_nonzero, field, int_of}
 use monitor.{respack_cached}
 use ttl.{cache_get, cache_put}
@@ -683,6 +685,120 @@ pub fn fm_search(a: Auth) -> Handler =
 ## The fm routes (protected). Static paths precede any captures. The two TTL
 ## cells memoize qiniu bucket-space (600s) and respack balances (300s, shared
 ## with the monitor page) for the stats endpoint.
+## POST /api/fm/upload — multipart proxy upload (M6.5). Backup path for non-browser
+## clients; the web app direct-uploads (upload-token + register). The file bytes
+## ride through the backend (qiniu won't accept a client PUT), recovered byte-exact
+## from the latin-1 request body (Request.raw) via the multipart parser, then
+## re-POSTed to qiniu. Matches FastAPI: form field `path` (target dir) + file part.
+pub fn upload(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match header(req, "content-type") {
+        None -> Err(http_error(422, "expected multipart/form-data"))
+        Some(ct) ->
+          match boundary_of(ct) {
+            None -> Err(http_error(422, "missing multipart boundary"))
+            Some(b) -> {
+              let parts = parse_multipart(req.raw, b)
+              match part_named(parts, "file") {
+                None -> Err(http_error(422, "missing file part"))
+                Some(fp) -> do_upload(a, upload_path_field(parts), fp)
+              }
+            }
+          }
+      })
+
+# the `path` form field (target directory), recovered from latin-1 to UTF-8
+fn upload_path_field(parts: List[Part]) -> String !io =
+  match part_named(parts, "path") {
+    Some(pp) -> utf8_of(pp.content)
+    None -> ""
+  }
+
+# a latin-1 string re-decoded as UTF-8: recovers text fields (path, filename) that
+# arrived UTF-8-encoded but were read as latin-1 to keep binary parts byte-exact.
+fn utf8_of(latin1: String) -> String !io = String.new(latin1_bytes(latin1), "UTF-8")
+
+fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpError] !io = {
+  let target = fm_split(path_field)
+  let name = sanitize_name(utf8_of(fp.filename))
+  let rel = fm_join(target, name)
+  let mime = if fp.content_type != "" { fp.content_type } else { upload_mime(name) }
+  let size = str_len(fp.content) # fp.content is latin-1: one char per source byte
+  match run_upload(a, rel, fp.content, mime, size) {
+    Ok(j) -> Ok(json_ok(j))
+    Err(m) -> Err(http_error(502, m))
+  }
+}
+
+fn run_upload(a: Auth, rel: String, content_l1: String, mime: String, size: Int) -> Result[Json, String] !io = {
+  let existing = with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel))?
+  let key = upload_key(existing)
+  let _up = upload_bytes(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content_l1, mime, now_secs() + a.qiniu.expires)?
+  with_db(a.db.path, a.db.ext, fn(c) => upsert_upload(c, rel, key, mime, size))
+}
+
+# reuse an existing file's key (overwrite in place, matching FastAPI), else a fresh
+# uuid; a directory at that path is not a file so it gets a fresh key too.
+fn upload_key(existing: Option[FileRow]) -> String !io =
+  match existing {
+    Some(o) ->
+      match o.key {
+        Some(k) -> if o.is_dir == false { k } else { uuid_hex() }
+        None -> uuid_hex()
+      }
+    None -> uuid_hex()
+  }
+
+fn upsert_upload(c: Connection, rel: String, key: String, mime: String, size: Int) -> Result[Json, String] !io = {
+  let _e = ensure_dirs(c, rel)?
+  let _i = insert_file(c, rel, key, mime, size)?
+  match get_row(c, rel)? {
+    Some(o) -> Ok(entry_json(o))
+    None -> Err("uploaded file vanished")
+  }
+}
+
+# FastAPI: name = (filename or "file").replace("\\","/").strip("/") — backslashes
+# to slashes, then strip leading/trailing slashes (internal ones survive).
+fn sanitize_name(n: String) -> String = {
+  let base = if n == "" { "file" } else { n }
+  strip_slashes(join(split(base, "\\"), "/"))
+}
+
+fn strip_slashes(s: String) -> String = {
+  let segs = split(s, "/")
+  let lo = first_nonempty(segs, 0)
+  let hi = last_nonempty(segs, len(segs) - 1)
+  if lo > hi { "" } else { join(map(range(lo, hi + 1), fn(i) => segs[i]), "/") }
+}
+
+fn first_nonempty(xs: List[String], i: Int) -> Int =
+  if i >= len(xs) { len(xs) } else if xs[i] != "" { i } else { first_nonempty(xs, i + 1) }
+
+fn last_nonempty(xs: List[String], i: Int) -> Int =
+  if i < 0 { -1 } else if xs[i] != "" { i } else { last_nonempty(xs, i - 1) }
+
+# mime fallback for a file part with no Content-Type (rare; browsers/curl send one).
+# Mirrors mimetypes.guess_type's common cases with the octet-stream default.
+fn upload_mime(name: String) -> String =
+  match ext(name) {
+    "png" -> "image/png"
+    "jpg" -> "image/jpeg"
+    "jpeg" -> "image/jpeg"
+    "gif" -> "image/gif"
+    "webp" -> "image/webp"
+    "svg" -> "image/svg+xml"
+    "pdf" -> "application/pdf"
+    "txt" -> "text/plain"
+    "md" -> "text/markdown"
+    "json" -> "application/json"
+    "html" -> "text/html"
+    "css" -> "text/css"
+    "js" -> "text/javascript"
+    _ -> "application/octet-stream"
+  }
+
 pub fn routes(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReference) -> List[Route] =
   [
     Get("/api/fm", fm_list(a)),
@@ -701,4 +817,5 @@ pub fn routes(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReferenc
     Post("/api/fm/create-file", create_file(a)),
     Post("/api/fm/register", register(a)),
     Post("/api/fm/upload-token", upload_token_ep(a)),
+    Post("/api/fm/upload", upload(a)),
   ]

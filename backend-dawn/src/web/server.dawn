@@ -14,13 +14,15 @@ use java "java.util.Iterator"
 use web/types.{Request, Response, HttpError, Handler, Middleware, http_error, error_response}
 use web/router.{Route, Dispatch, Found, NoPath, WrongMethod, dispatch}
 
-# Read the whole request body as a UTF-8 string. The byte[] is opaque and cannot
-# cross a Dawn function boundary (spec §9.5 — arrays are not nameable), so it is
-# consumed inline: read it, hand it straight to String.new.
-fn read_body(ex: HttpExchange) -> String !io = {
+# Read the whole request body once, decoded two ways: UTF-8 (`body`, the default
+# for JSON/text/form handlers) and ISO-8859-1 (`raw`, a lossless byte<->char map
+# so binary handlers — multipart upload, later WebDAV PUT — recover exact file
+# bytes via latin1_bytes). The byte[] is opaque (spec §9.5) so it is consumed
+# inline; both String.new calls read the same local array.
+fn read_body(ex: HttpExchange) -> (String, String) !io = {
   let stream = ex.getRequestBody().expect("request body")
   let bytes = stream.readAllBytes().expect("request bytes")
-  String.new(bytes, "UTF-8")
+  (String.new(bytes, "UTF-8"), String.new(bytes, "ISO-8859-1"))
 }
 
 # Write a response. Length 0 selects chunked transfer encoding, so we never
@@ -111,13 +113,15 @@ fn build_request(ex: HttpExchange) -> Request !io = {
     }))
     None -> no_query
   }
+  let (body, raw) = read_body(ex)
   Request {
     method: ex.getRequestMethod().expect("method"),
     path: uri.getPath().expect("path"),
     params: no_query,
     query: q,
     headers: read_headers(ex),
-    body: read_body(ex),
+    body: body,
+    raw: raw,
   }
 }
 
