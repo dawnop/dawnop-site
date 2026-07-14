@@ -52,6 +52,16 @@ location /api/ {
 scaled down to serve only `/api/fm/upload` + `/dav`, or left as-is until M6.5
 retires it entirely.
 
+> **Status: executed on 2026-07-14** (this exact block is live). Verified by
+> framing signature (all `/api` → Dawn's chunked responses, `/api/fm/upload` →
+> uvicorn's `Content-Length`) and a self-cleaning `login → create → read →
+> update → monitor → delete → 404` round-trip over HTTPS on the live store
+> (article count returned to its starting value; FTS `simple` triggers fired on
+> create/update/delete). Post-flip: `NRestarts=0`, ~150 MiB, zero 5xx/panic.
+> uvicorn stays up for `/api/fm/upload` + one-line rollback. Only remaining step
+> is retiring uvicorn after a clean observation window (blocked on M6.5 for the
+> `/api/fm/upload` endpoint, or keep FastAPI running solely for it).
+
 **Rollback** is a one-line revert: point `location /api/` back at `:8000` and
 `nginx -s reload`. Because both backends share the same SQLite file (WAL) and
 qiniu bucket, there is no data migration to undo — cutover and rollback are pure
