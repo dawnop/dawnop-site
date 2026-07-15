@@ -58,28 +58,9 @@ pub fn ts(s: String) -> Int !io = {
   ldt.atZone(ZoneId.systemDefault().expect("zone")).expect("zdt").toEpochSecond()
 }
 
-# ---- code-point index helpers ----
-
-fn index_of(s: String, needle: String) -> Option[Int] = find(code_points(s), code_points(needle), 0)
-
-fn last_index_of(s: String, needle: String) -> Option[Int] = {
-  let cps = code_points(s)
-  let ncps = code_points(needle)
-  find_last(cps, ncps, len(cps) - len(ncps))
-}
-
-fn find(cps: List[Int], ncps: List[Int], i: Int) -> Option[Int] =
-  if i + len(ncps) > len(cps) { None }
-else if eq_at(cps, ncps, i) { Some(i) }
-else { find(cps, ncps, i + 1) }
-
-fn find_last(cps: List[Int], ncps: List[Int], i: Int) -> Option[Int] =
-  if i < 0 { None }
-else if eq_at(cps, ncps, i) { Some(i) }
-else { find_last(cps, ncps, i - 1) }
-
-fn eq_at(cps: List[Int], ncps: List[Int], i: Int) -> Bool =
-  len(ncps) > 0 && fold(range(0, len(ncps)), true, fn(acc, k) => acc && cps[i + k] == ncps[k])
+# Substring search (fm_split/parent_rel/basename/ext) now uses the builtin
+# `index_of`/`last_index_of` (core/string): code-point indices, consistent with
+# `substring`. The hand-written code-point recursion this file used to carry is gone.
 
 test "path helpers" {
   assert fm_split("qiniu://a/b/c.txt") == "a/b/c.txt"

@@ -15,8 +15,7 @@ pub type Part = {
 fn crlf() -> String = from_code_points([13, 10])
 fn crlf2() -> String = from_code_points([13, 10, 13, 10])
 
-fn take(xs: List[String], k: Int) -> List[String] = map(range(0, k), fn(i) => xs[i])
-fn drop1(xs: List[String]) -> List[String] = map(range(1, len(xs)), fn(i) => xs[i])
+fn drop1(xs: List[String]) -> List[String] = drop(xs, 1)
 
 ## The substring after the first occurrence of `sep`; None if `sep` is absent.
 fn after(s: String, sep: String) -> Option[String] = {

@@ -72,9 +72,9 @@ pub fn strip_md(s: String) -> String = {
 
 # replace each open..close (inclusive) span with `repl`
 fn drop_between(s: String, open: String, close: String, repl: String) -> String =
-  match index_of(s, open, 0) {
+  match index_of_from(s, open, 0) {
     Some(i) ->
-      match index_of(s, close, i + str_len(open)) {
+      match index_of_from(s, close, i + str_len(open)) {
         Some(j) -> substring(s, 0, i) ++ repl ++ drop_between(substring(s, j + str_len(close), str_len(s)), open, close, repl)
         None -> s
       }
@@ -83,7 +83,7 @@ fn drop_between(s: String, open: String, close: String, repl: String) -> String 
 
 # ![...](...) -> space
 fn drop_images(s: String) -> String =
-  match index_of(s, "![", 0) {
+  match index_of_from(s, "![", 0) {
     Some(i) ->
       match paren_end(s, i) {
         Some(after) -> substring(s, 0, i) ++ " " ++ drop_images(substring(s, after, str_len(s)))
@@ -94,7 +94,7 @@ fn drop_images(s: String) -> String =
 
 # [text](...) -> text
 fn drop_links(s: String) -> String =
-  match index_of(s, "[", 0) {
+  match index_of_from(s, "[", 0) {
     Some(i) ->
       match link_text(s, i) {
         Some((txt, after)) -> substring(s, 0, i) ++ txt ++ drop_links(substring(s, after, str_len(s)))
@@ -105,10 +105,10 @@ fn drop_links(s: String) -> String =
 
 # at "[" position i: expect [txt](url); return (txt, index-after-`)`)
 fn link_text(s: String, i: Int) -> Option[(String, Int)] =
-  match index_of(s, "]", i) {
+  match index_of_from(s, "]", i) {
     Some(rb) ->
       if rb + 1 < str_len(s) && substring(s, rb + 1, rb + 2) == "(" {
-        match index_of(s, ")", rb + 2) {
+        match index_of_from(s, ")", rb + 2) {
           Some(rp) -> Some((substring(s, i + 1, rb), rp + 1))
           None -> None
         }
@@ -120,10 +120,10 @@ fn link_text(s: String, i: Int) -> Option[(String, Int)] =
 
 # from a "![" at i: find the closing ")" of the following (...) ; return index after
 fn paren_end(s: String, i: Int) -> Option[Int] =
-  match index_of(s, "]", i) {
+  match index_of_from(s, "]", i) {
     Some(rb) ->
       if rb + 1 < str_len(s) && substring(s, rb + 1, rb + 2) == "(" {
-        match index_of(s, ")", rb + 2) {
+        match index_of_from(s, ")", rb + 2) {
           Some(rp) -> Some(rp + 1)
           None -> None
         }
@@ -158,7 +158,7 @@ fn collapse(cps: List[Int], i: Int, last_ws: Bool, acc: String) -> String =
 fn is_ws(c: Int) -> Bool = c == 32 || c == 9 || c == 10 || c == 13 || c == 12
 
 # index of `needle` in `s` at or after `from`, by code-point index
-fn index_of(s: String, needle: String, from: Int) -> Option[Int] = {
+fn index_of_from(s: String, needle: String, from: Int) -> Option[Int] = {
   let cps = code_points(s)
   let ncps = code_points(needle)
   find_at(cps, ncps, from)
@@ -207,7 +207,7 @@ pub fn excerpt_html(content: String, summary: String, terms: List[String]) -> St
 
 fn first_term_pos(low: String, terms: List[String], best: Int) -> Int =
   fold(terms, 0 - 1, fn(acc, t) =>
-      match index_of(low, to_lower(t), 0) {
+      match index_of_from(low, to_lower(t), 0) {
         Some(i) -> if acc == 0 - 1 || i < acc { i } else { acc }
         None -> acc
       })
