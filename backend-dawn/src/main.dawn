@@ -12,6 +12,7 @@ use api_admin2
 use api_fm
 use api_monitor.{MonCfg, mon_routes}
 use auth.{Auth, Qiniu, routes}
+use webdav.{dav_routes}
 use ttl.{new_cell}
 
 pub fn main() -> Unit !io = {
@@ -49,11 +50,12 @@ pub fn main() -> Unit !io = {
   let mon_cell = new_cell()
   let respack_cell = new_cell()
   let space_cell = new_cell()
+  let dav_cell = new_cell()
 
   println("backend-dawn starting: db=$db_path port=$port")
   # admin routes precede the public /api/{articles,pages,tags}/{slug} so the
   # static /admin, /reorder, /merge, /cleanup paths win over the {slug} capture
-  serve_app(port, api_admin.routes(a) ++ api_admin2.routes(a) ++ api_fm.routes(a, space_cell, respack_cell) ++ mon_routes(a, moncfg, mon_cell, respack_cell) ++ api_public.routes(db, a) ++ routes(a), [
+  serve_app(port, api_admin.routes(a) ++ api_admin2.routes(a) ++ api_fm.routes(a, space_cell, respack_cell) ++ mon_routes(a, moncfg, mon_cell, respack_cell) ++ api_public.routes(db, a) ++ routes(a) ++ dav_routes(a, dav_cell), [
     with_logging,
     fn(next) => with_cors(origin, next),
     fn(next) => with_body_limit(2000000, next),

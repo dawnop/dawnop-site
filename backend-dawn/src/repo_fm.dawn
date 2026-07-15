@@ -48,7 +48,7 @@ fn entry(o: FileRow) -> Json !io = {
 }
 
 ## Direct children of a directory, dirs-first then case-insensitive path order.
-fn children(c: Connection, parent: String) -> Result[List[FileRow], String] !io = {
+pub fn children(c: Connection, parent: String) -> Result[List[FileRow], String] !io = {
   let rows = if parent == "" {
     query(c, "select $COLS from files", [], col_types())?
   } else {

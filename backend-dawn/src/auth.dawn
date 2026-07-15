@@ -46,6 +46,15 @@ fn verify_password(plain: String, hashed: String) -> Bool !io = {
   }
 }
 
+## Verify a username/password against the users table (jBCrypt). For WebDAV's
+## HTTP Basic auth — same credential store as JWT login. False on unknown user,
+## wrong password, or a malformed hash (never a 500).
+pub fn check_basic(c: Connection, username: String, password: String) -> Result[Bool, String] !io =
+  match hash_of(c, username)? {
+    Some(h) -> Ok(verify_password(password, h))
+    None -> Ok(false)
+  }
+
 fn hash_of(c: Connection, username: String) -> Result[Option[String], String] !io = {
   let rows = query(c, "select password_hash from users where username = ?", [PStr(username)], [ColStr])?
   match get(rows, 0) {

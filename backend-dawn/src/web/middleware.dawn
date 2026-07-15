@@ -19,21 +19,30 @@ pub fn with_logging(next: Handler) -> Handler =
     out
   }
 
-# Reject bodies over a byte budget before the handler sees them.
+# Reject bodies over a byte budget before the handler sees them. Upload paths
+# (/dav WebDAV PUT, /api/fm/upload) carry file bytes and are bounded by nginx
+# (client_max_body_size) instead, so they are exempt from this small JSON limit.
 pub fn with_body_limit(limit: Int, next: Handler) -> Handler =
   fn(req) =>
-  if str_len(req.body) > limit {
+  if is_upload_path(req.path) == false && str_len(req.body) > limit {
     Err(HttpError { status: 413, message: "request body exceeds $limit bytes" })
   } else {
     next(req)
   }
+
+fn is_upload_path(path: String) -> Bool =
+  starts_with(path, "/dav") || path == "/api/fm/upload"
 
 # CORS: answer preflight OPTIONS directly, and stamp Access-Control-* on every
 # response. `origin` is the single allowed origin (browsers require an exact
 # echo, not "*", when credentials are involved).
 pub fn with_cors(origin: String, next: Handler) -> Handler =
   fn(req) =>
-  if req.method == "OPTIONS" {
+  if starts_with(req.path, "/dav") {
+    # WebDAV is not browser-CORS traffic; let its own OPTIONS (DAV headers) through
+    # and don't stamp Access-Control-* on WebDAV responses.
+    next(req)
+  } else if req.method == "OPTIONS" {
     Ok(cors_headers(origin, text(204, "")))
   } else {
     match next(req) {

@@ -1,0 +1,576 @@
+# Read/write WebDAV over the FileObject path<->key tree (M6.5 knife 2), matching
+# app/api/webdav.py. Read: OPTIONS/PROPFIND/HEAD/GET. Write: PUT/DELETE/MKCOL/
+# MOVE/COPY/LOCK/UNLOCK. Broadcasts DAV class 1,2 (LOCK is a fake grant so macOS
+# Finder mounts writable). Writes reuse the fm repo primitives; rename/move only
+# changes path, copy really copies the qiniu object, overwrite writes a new key
+# then deletes the old (CDN caches by URL). HTTP Basic auth (bcrypt + TTL cache).
+#
+# First-version limits vs FastAPI (documented, not bugs): PUT reads the body into
+# memory (latin-1 raw) rather than streaming to a temp file — fine within the dav
+# vhost's client_max_body_size; and GET proxies the whole object without Range
+# (302-redirect clients still go direct to qiniu). Both are follow-up optimizations.
+use java "java.sql.Connection"
+use java "java.lang.String"
+use java "java.lang.System"
+use java "java.util.Base64"
+use java "java.net.URI"
+use java "java.net.URLDecoder"
+use java "java.text.SimpleDateFormat"
+use java "java.util.Date"
+use java "java.util.Locale"
+use java "java.util.TimeZone"
+use java "java.util.concurrent.atomic.AtomicReference"
+use web/types.{Request, Response, HttpError, Handler, http_error, text, raw, binary, redirect, with_header, header}
+use web/router.{Route, Method}
+use db.{Db, with_db}
+use auth.{Auth, Qiniu, check_basic}
+use repo_fm.{FileRow, get_row, children, subtree_rows, ensure_dirs, insert_file, insert_folder, delete_row, reparent}
+use fm_paths.{basename, parent_rel, ext, ts}
+use qiniu_sign.{private_url}
+use qiniu_rs.{delete_obj, copy_obj, upload_bytes}
+use crypto.{sha256_hex, uuid}
+use http.{fetch_bytes}
+use ttl.{cache_get, cache_put}
+use export.{url_encode}
+
+const AUTH_TTL: Int = 300
+const REDIRECT_CLIENTS: List[String] = ["rclone", "cyberduck", "mountain duck", "raidrive", "webdavlib"]
+
+# ---- small string helpers ----
+
+fn now_secs() -> Int !io = System.currentTimeMillis() / 1000
+
+fn header_or(req: Request, name: String, dflt: String) -> String =
+  match header(req, name) { Some(v) -> v None -> dflt }
+
+fn path_segs(rel: String) -> List[String] = filter(split(rel, "/"), fn(s) => s != "")
+
+# Python str.strip("/") — remove leading and trailing slashes, keep internal.
+fn strip_slashes(s: String) -> String = join(path_segs(s), "/")
+
+fn uuid_hex() -> String !io = join(split(uuid(), "-"), "")
+
+fn contains_ci(hay: String, needle: String) -> Bool = contains(to_lower(hay), needle)
+
+# XML text escaping (& < >), matching xml.sax.saxutils.escape; & must go first.
+fn xml_escape(s: String) -> String = {
+  let a = join(split(s, "&"), "&amp;")
+  let b = join(split(a, "<"), "&lt;")
+  join(split(b, ">"), "&gt;")
+}
+
+# ---- dates (HTTP RFC1123 and ISO8601, both GMT) ----
+
+fn http_date(t: Int) -> String !io = fmt_date("EEE, dd MMM yyyy HH:mm:ss 'GMT'", t)
+
+fn iso_date(t: Int) -> String !io = fmt_date("yyyy-MM-dd'T'HH:mm:ss'Z'", t)
+
+fn fmt_date(pattern: String, t: Int) -> String !io = {
+  let loc = Locale.forLanguageTag("en-US").expect("loc")
+  let f = SimpleDateFormat.new(pattern, loc)
+  let _z = f.setTimeZone(TimeZone.getTimeZone("GMT").expect("tz"))
+  f.format(Date.new(t * 1000)).expect("fmt")
+}
+
+# ---- prefix / rel / href ----
+
+# The externally visible WebDAV root prefix (drives href and Destination). nginx
+# on dav.dawnop.com sends `X-Dav-Prefix: /` -> "" so hrefs come out /foo; direct
+# :8001/dav access (no header) defaults to /dav.
+fn dav_prefix(req: Request) -> String = {
+  let raw = header_or(req, "x-dav-prefix", "/dav")
+  let p = "/" ++ strip_slashes(raw)
+  if p == "/" { "" } else { p }
+}
+
+fn dav_rel(req: Request) -> String =
+  match map_get(req.params, "rest") { Some(r) -> strip_slashes(r) None -> "" }
+
+fn href(prefix: String, rel: String, is_dir: Bool) -> String !io = {
+  let path = join(map(path_segs(rel), url_encode), "/")
+  let base =
+    if path == "" {
+      if prefix != "" { prefix ++ "/" } else { "/" }
+    } else {
+      "$prefix/$path"
+    }
+  if is_dir && ends_with(base, "/") == false { base ++ "/" } else { base }
+}
+
+# ---- PROPFIND XML ----
+
+fn multistatus(inner: String) -> String =
+  "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\">$inner</D:multistatus>"
+
+fn response_xml(prefix: String, rel: String, name: String, is_dir: Bool, size: Int, mime: String, mtime: Int, ctime: Int, etag: String) -> String !io = {
+  let typ = if is_dir { "<D:collection/>" } else { "" }
+  let extra =
+    if is_dir {
+      ""
+    } else {
+      let m = if mime == "" { "application/octet-stream" } else { mime }
+      let etag_xml = if etag == "" { "" } else { "<D:getetag>${xml_escape(etag)}</D:getetag>" }
+      "<D:getcontentlength>$size</D:getcontentlength><D:getcontenttype>${xml_escape(m)}</D:getcontenttype>$etag_xml"
+    }
+  "<D:response><D:href>${xml_escape(href(prefix, rel, is_dir))}</D:href>" ++
+  "<D:propstat><D:prop>" ++
+  "<D:displayname>${xml_escape(name)}</D:displayname>" ++
+  "<D:resourcetype>$typ</D:resourcetype>" ++
+  "<D:getlastmodified>${http_date(mtime)}</D:getlastmodified>" ++
+  "<D:creationdate>${iso_date(ctime)}</D:creationdate>" ++
+  "$extra</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>"
+}
+
+# A row's <D:response>. FileRow has no created_at column, so creationdate reuses
+# updated_at (a minor, documented divergence from FastAPI's o.created_at).
+fn entry_xml(prefix: String, o: FileRow) -> String !io = {
+  let t = ts(o.updated_at)
+  let etag = if o.is_dir { "" } else { key_etag(o.key) }
+  response_xml(prefix, o.path, basename(o.path), o.is_dir, o.size, o.content_type, t, t, etag)
+}
+
+fn key_etag(k: Option[String]) -> String = match k { Some(v) -> "\"$v\"" None -> "" }
+
+fn kids_xml(prefix: String, rows: List[FileRow]) -> String !io =
+  fold(rows, "", fn(acc, o) => acc ++ entry_xml(prefix, o))
+
+fn propfind(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io = {
+  let prefix = dav_prefix(req)
+  let depth = header_or(req, "depth", "1")
+  match with_db(a.db.path, a.db.ext, fn(c) => propfind_body(c, prefix, rel, depth)) {
+    Ok(Some(body)) -> Ok(raw(207, "application/xml; charset=\"utf-8\"", body))
+    Ok(None) -> Err(http_error(404, "资源不存在"))
+    Err(m) -> Err(http_error(500, m))
+  }
+}
+
+fn propfind_body(c: Connection, prefix: String, rel: String, depth: String) -> Result[Option[String], String] !io =
+  if rel == "" {
+    let now = now_secs()
+    let self_xml = response_xml(prefix, "", "", true, 0, "", now, now, "")
+    let kids: List[FileRow] = if depth != "0" { children(c, "")? } else { [] }
+    Ok(Some(multistatus(self_xml ++ kids_xml(prefix, kids))))
+  } else {
+    match get_row(c, rel)? {
+      None -> Ok(None)
+      Some(o) -> {
+        let self_xml = entry_xml(prefix, o)
+        let kids: List[FileRow] = if depth != "0" && o.is_dir { children(c, rel)? } else { [] }
+        Ok(Some(multistatus(self_xml ++ kids_xml(prefix, kids))))
+      }
+    }
+  }
+
+# ---- GET / HEAD ----
+
+fn follows_redirect(req: Request) -> Bool = {
+  let ua = header_or(req, "user-agent", "")
+  fold(REDIRECT_CLIENTS, false, fn(acc, tag) => acc || contains_ci(ua, tag))
+}
+
+fn signed_url(q: Qiniu, key: String) -> String !io = {
+  let domain = if ends_with(q.domain, "/") { substring(q.domain, 0, str_len(q.domain) - 1) } else { q.domain }
+  private_url(q.ak, q.sk, "$domain/$key", now_secs() + q.expires)
+}
+
+fn get_or_head(a: Auth, req: Request, rel: String, head: Bool) -> Result[Response, HttpError] !io =
+  if rel == "" {
+    Err(http_error(405, "不能下载目录"))
+  } else {
+    match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
+      Ok(None) -> Err(http_error(404, "资源不存在"))
+      Ok(Some(o)) ->
+        if o.is_dir {
+          Err(http_error(405, "不能下载目录"))
+        } else {
+          match o.key {
+            None -> Err(http_error(405, "不能下载目录"))
+            Some(k) -> serve_file(a, req, o, k, head)
+          }
+        }
+      Err(m) -> Err(http_error(500, m))
+    }
+  }
+
+fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Result[Response, HttpError] !io = {
+  let mime = if o.content_type == "" { "application/octet-stream" } else { o.content_type }
+  let etag = "\"$key\""
+  let lastmod = http_date(ts(o.updated_at))
+  if head {
+    Ok(with_meta(raw(200, mime, ""), o.size, etag, lastmod))
+  } else if follows_redirect(req) {
+    Ok(redirect(302, signed_url(a.qiniu, key)))
+  } else {
+    match fetch_bytes(signed_url(a.qiniu, key), [("Accept-Encoding", "identity")]) {
+      Ok(bytes) -> Ok(add_headers(binary(200, mime, bytes), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
+      Err(m) -> Err(http_error(502, m))
+    }
+  }
+}
+
+fn with_meta(r: Response, size: Int, etag: String, lastmod: String) -> Response =
+  add_headers(r, [("Content-Length", to_string(size)), ("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)])
+
+fn add_headers(r: Response, hs: List[(String, String)]) -> Response =
+  fold(hs, r, fn(acc, kv) => {
+    let (k, v) = kv
+    with_header(acc, k, v)
+  })
+
+# ---- write helpers ----
+
+fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {
+  let parent = parent_rel(rel)
+  if parent == "" { Ok(true) } else {
+    match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, parent))? {
+      Some(_) -> Ok(true)
+      None -> Ok(false)
+    }
+  }
+}
+
+# a minimal mime guess for PUT (mirrors mimetypes' common cases, octet-stream default)
+fn guess_mime(name: String) -> String =
+  match ext(name) {
+    "png" -> "image/png"
+    "jpg" -> "image/jpeg"
+    "jpeg" -> "image/jpeg"
+    "gif" -> "image/gif"
+    "webp" -> "image/webp"
+    "svg" -> "image/svg+xml"
+    "pdf" -> "application/pdf"
+    "txt" -> "text/plain"
+    "md" -> "text/markdown"
+    "json" -> "application/json"
+    "html" -> "text/html"
+    "css" -> "text/css"
+    "js" -> "text/javascript"
+    _ -> "application/octet-stream"
+  }
+
+# ---- PUT ----
+
+fn put(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io =
+  if rel == "" {
+    Err(http_error(405, "不能写入根"))
+  } else {
+    match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
+      Ok(Some(o)) -> if o.is_dir { Err(http_error(405, "目标是目录")) } else { put_do(a, req, rel, Some(o)) }
+      Ok(None) -> put_do(a, req, rel, None)
+      Err(m) -> Err(http_error(500, m))
+    }
+  }
+
+fn put_do(a: Auth, req: Request, rel: String, existing: Option[FileRow]) -> Result[Response, HttpError] !io =
+  match parent_exists(a, rel) {
+    Err(m) -> Err(http_error(500, m))
+    Ok(false) -> Err(http_error(409, "父目录不存在"))
+    Ok(true) -> {
+      let mime = guess_mime(basename(rel))
+      let e = ext(basename(rel))
+      let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
+      let content = req.raw
+      match upload_bytes(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_secs() + a.qiniu.expires) {
+        Ok(_) -> put_commit(a, rel, key, mime, str_len(content), existing)
+        Err(m) -> Err(http_error(502, m))
+      }
+    }
+  }
+
+fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int, existing: Option[FileRow]) -> Result[Response, HttpError] !io =
+  match with_db(a.db.path, a.db.ext, fn(c) => insert_file(c, rel, key, mime, size)) {
+    Err(m) -> Err(http_error(500, m))
+    Ok(_) -> {
+      let _d = delete_superseded(a.qiniu, existing, key)
+      match existing {
+        Some(_) -> Ok(text(204, ""))
+        None -> Ok(text(201, ""))
+      }
+    }
+  }
+
+# best-effort delete of the replaced object (ignore failure)
+fn delete_superseded(q: Qiniu, existing: Option[FileRow], new_key: String) -> Result[Bool, String] !io =
+  match existing {
+    Some(o) -> match o.key {
+      Some(ok) -> if ok != new_key { delete_obj(q.ak, q.sk, q.bucket, ok) } else { Ok(true) }
+      None -> Ok(true)
+    }
+    None -> Ok(true)
+  }
+
+# ---- DELETE ----
+
+fn del(a: Auth, rel: String) -> Result[Response, HttpError] !io =
+  if rel == "" {
+    Err(http_error(405, "不能删除根"))
+  } else {
+    match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
+      Ok(None) -> Err(http_error(404, "资源不存在"))
+      Ok(Some(_)) -> purge(a, rel)
+      Err(m) -> Err(http_error(500, m))
+    }
+  }
+
+fn purge(a: Auth, rel: String) -> Result[Response, HttpError] !io =
+  match with_db(a.db.path, a.db.ext, fn(c) => subtree_rows(c, rel)) {
+    Err(m) -> Err(http_error(500, m))
+    Ok(rows) -> {
+      let _q = del_qiniu(a.qiniu, rows, 0)
+      match with_db(a.db.path, a.db.ext, fn(c) => del_rows(c, rows, 0)) {
+        Ok(_) -> Ok(text(204, ""))
+        Err(m) -> Err(http_error(500, m))
+      }
+    }
+  }
+
+fn del_qiniu(q: Qiniu, rows: List[FileRow], i: Int) -> Int !io =
+  if i >= len(rows) { 0 } else {
+    let o = rows[i]
+    let _r: Result[Bool, String] = match o.key {
+      Some(k) -> if o.is_dir { Ok(true) } else { delete_obj(q.ak, q.sk, q.bucket, k) }
+      None -> Ok(true)
+    }
+    del_qiniu(q, rows, i + 1)
+  }
+
+fn del_rows(c: Connection, rows: List[FileRow], i: Int) -> Result[Int, String] !io =
+  if i >= len(rows) { Ok(0) } else {
+    let _d = delete_row(c, rows[i].path)?
+    del_rows(c, rows, i + 1)
+  }
+
+# ---- MKCOL ----
+
+fn mkcol(a: Auth, rel: String) -> Result[Response, HttpError] !io =
+  if rel == "" {
+    Err(http_error(405, "根已存在"))
+  } else {
+    match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
+      Ok(Some(_)) -> Err(http_error(405, "已存在同名项"))
+      Ok(None) ->
+        match parent_exists(a, rel) {
+          Err(m) -> Err(http_error(500, m))
+          Ok(false) -> Err(http_error(409, "父目录不存在"))
+          Ok(true) ->
+            match with_db(a.db.path, a.db.ext, fn(c) => insert_folder(c, rel)) {
+              Ok(_) -> Ok(text(201, ""))
+              Err(m) -> Err(http_error(500, m))
+            }
+        }
+      Err(m) -> Err(http_error(500, m))
+    }
+  }
+
+# ---- MOVE / COPY ----
+
+fn uri_path(u: String) -> String !io = URI.create(u).expect("uri").getPath().expect("path")
+
+fn dest_rel(req: Request) -> Option[String] !io =
+  match header(req, "destination") {
+    None -> None
+    Some(d) -> {
+      let path = uri_path(d)
+      let prefix = dav_prefix(req)
+      let stripped = if prefix != "" && starts_with(path, prefix) { substring(path, str_len(prefix), str_len(path)) } else { path }
+      let decoded = URLDecoder.decode(stripped, "UTF-8").expect("dec")
+      Some(strip_slashes(decoded))
+    }
+  }
+
+fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Response, HttpError] !io =
+  if rel == "" {
+    Err(http_error(405, "不能操作根"))
+  } else {
+    match dest_rel(req) {
+      None -> Err(http_error(400, "缺少 Destination"))
+      Some(dst) ->
+        if dst == "" {
+          Err(http_error(400, "非法目标"))
+        } else if dst == rel || starts_with(dst, rel ++ "/") {
+          Err(http_error(409, "不能移动/复制到自身或子目录"))
+        } else {
+          mc_check_src(a, req, rel, dst, is_move)
+        }
+    }
+  }
+
+fn mc_check_src(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) -> Result[Response, HttpError] !io =
+  match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
+    Ok(None) -> Err(http_error(404, "源不存在"))
+    Ok(Some(_)) -> mc_check_dst(a, req, rel, dst, is_move)
+    Err(m) -> Err(http_error(500, m))
+  }
+
+fn mc_check_dst(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) -> Result[Response, HttpError] !io =
+  match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, dst)) {
+    Err(m) -> Err(http_error(500, m))
+    Ok(dst_existing) -> {
+      let overwrite = to_upper(header_or(req, "overwrite", "T")) != "F"
+      match dst_existing {
+        Some(_) -> if overwrite == false { Err(http_error(412, "目标已存在")) } else { mc_purge_then(a, rel, dst, is_move, true) }
+        None -> mc_require_parent(a, rel, dst, is_move, false)
+      }
+    }
+  }
+
+fn mc_purge_then(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =
+  match purge_silent(a, dst) {
+    Err(m) -> Err(http_error(500, m))
+    Ok(_) -> mc_require_parent(a, rel, dst, is_move, dst_existed)
+  }
+
+# delete the dst subtree (rows + qiniu) without producing a Response
+fn purge_silent(a: Auth, rel: String) -> Result[Int, String] !io =
+  match with_db(a.db.path, a.db.ext, fn(c) => subtree_rows(c, rel))? {
+    rows -> {
+      let _q = del_qiniu(a.qiniu, rows, 0)
+      with_db(a.db.path, a.db.ext, fn(c) => del_rows(c, rows, 0))
+    }
+  }
+
+fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =
+  match parent_exists(a, dst) {
+    Err(m) -> Err(http_error(500, m))
+    Ok(false) -> Err(http_error(409, "父目录不存在"))
+    Ok(true) -> mc_apply(a, rel, dst, is_move, dst_existed)
+  }
+
+fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io = {
+  let outcome: Result[Int, String] =
+    if is_move {
+      with_db(a.db.path, a.db.ext, fn(c) => reparent(c, rel, dst))
+    } else {
+      copy_subtree(a, rel, dst)
+    }
+  match outcome {
+    Err(m) -> if contains(m, "七牛") { Err(http_error(502, m)) } else { Err(http_error(500, m)) }
+    Ok(_) -> if dst_existed { Ok(text(204, "")) } else { Ok(text(201, "")) }
+  }
+}
+
+# COPY: recreate dirs, and for each file copy the qiniu object to a fresh key.
+fn copy_subtree(a: Auth, rel: String, dst: String) -> Result[Int, String] !io =
+  match with_db(a.db.path, a.db.ext, fn(c) => subtree_rows(c, rel))? {
+    rows -> copy_rows(a, rel, dst, rows, 0)
+  }
+
+fn copy_rows(a: Auth, rel: String, dst: String, rows: List[FileRow], i: Int) -> Result[Int, String] !io =
+  if i >= len(rows) { Ok(0) } else {
+    let o = rows[i]
+    let dst_path = dst ++ substring(o.path, str_len(rel), str_len(o.path))
+    let _step =
+      if o.is_dir {
+        with_db(a.db.path, a.db.ext, fn(c) => insert_folder(c, dst_path))?
+      } else {
+        copy_one_file(a, o, dst_path)?
+      }
+    copy_rows(a, rel, dst, rows, i + 1)
+  }
+
+fn copy_one_file(a: Auth, o: FileRow, dst_path: String) -> Result[Int, String] !io = {
+  let new_key = uuid_hex()
+  let src_key = match o.key { Some(k) -> k None -> "" }
+  let _c = copy_obj(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, src_key, new_key)?
+  with_db(a.db.path, a.db.ext, fn(c) => insert_file(c, dst_path, new_key, o.content_type, o.size))
+}
+
+# ---- LOCK (fake) / UNLOCK ----
+
+fn lock_response(req: Request, rel: String) -> Response !io = {
+  let prefix = dav_prefix(req)
+  let token = "opaquelocktoken:" ++ uuid()
+  let body =
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:prop xmlns:D=\"DAV:\"><D:lockdiscovery><D:activelock>" ++
+    "<D:locktype><D:write/></D:locktype><D:lockscope><D:exclusive/></D:lockscope>" ++
+    "<D:depth>infinity</D:depth><D:timeout>Second-3600</D:timeout>" ++
+    "<D:locktoken><D:href>$token</D:href></D:locktoken>" ++
+    "<D:lockroot><D:href>${xml_escape(href(prefix, rel, false))}</D:href></D:lockroot>" ++
+    "</D:activelock></D:lockdiscovery></D:prop>"
+  with_header(raw(200, "application/xml; charset=\"utf-8\"", body), "Lock-Token", "<$token>")
+}
+
+# ---- OPTIONS ----
+
+const ALLOW: String = "OPTIONS, PROPFIND, HEAD, GET, PUT, DELETE, MKCOL, MOVE, COPY, LOCK, UNLOCK"
+
+fn options_response() -> Response =
+  add_headers(text(200, ""), [("DAV", "1, 2"), ("Allow", ALLOW), ("MS-Author-Via", "DAV"), ("Content-Length", "0")])
+
+# ---- auth ----
+
+fn unauthorized() -> Response =
+  with_header(text(401, "需要认证"), "WWW-Authenticate", "Basic realm=\"dawnop-webdav\"")
+
+# None = authorized; Some(resp) = the 401 to return. A single-admin TTL cache
+# (keyed by sha256("user:pass")) skips bcrypt on the mount's high-frequency calls.
+fn dav_auth(a: Auth, cell: AtomicReference, req: Request) -> Option[Response] !io =
+  match header(req, "authorization") {
+    None -> Some(unauthorized())
+    Some(h) ->
+      if starts_with(h, "Basic ") == false {
+        Some(unauthorized())
+      } else {
+        let raw_cred = b64_decode(substring(h, 6, str_len(h)))
+        let parts = split(raw_cred, ":")
+        if len(parts) < 2 {
+          Some(unauthorized())
+        } else {
+          let user = parts[0]
+          let pass = join(drop_first(parts), ":")
+          let key = sha256_hex(raw_cred)
+          match cache_get(cell, AUTH_TTL) {
+            Some(cached) -> if cached == key { None } else { verify_cache(a, cell, user, pass, key) }
+            None -> verify_cache(a, cell, user, pass, key)
+          }
+        }
+      }
+  }
+
+fn drop_first(xs: List[String]) -> List[String] = map(range(1, len(xs)), fn(i) => xs[i])
+
+fn b64_decode(s: String) -> String !io =
+  String.new(Base64.getDecoder().expect("dec").decode(s).expect("bytes"), "UTF-8")
+
+fn verify_cache(a: Auth, cell: AtomicReference, user: String, pass: String, key: String) -> Option[Response] !io =
+  match with_db(a.db.path, a.db.ext, fn(c) => check_basic(c, user, pass)) {
+    Ok(true) -> {
+      let _p = cache_put(cell, key)
+      None
+    }
+    _ -> Some(unauthorized())
+  }
+
+# ---- routes ----
+
+fn dav_handler(a: Auth, cell: AtomicReference, method: String) -> Handler =
+  fn(req) =>
+    if method == "OPTIONS" {
+      Ok(options_response())
+    } else {
+      match dav_auth(a, cell, req) {
+        Some(resp) -> Ok(resp)
+        None -> {
+          let rel = dav_rel(req)
+          match method {
+            "PROPFIND" -> propfind(a, req, rel)
+            "HEAD" -> get_or_head(a, req, rel, true)
+            "GET" -> get_or_head(a, req, rel, false)
+            "PUT" -> put(a, req, rel)
+            "DELETE" -> del(a, rel)
+            "MKCOL" -> mkcol(a, rel)
+            "MOVE" -> move_or_copy(a, req, rel, true)
+            "COPY" -> move_or_copy(a, req, rel, false)
+            "LOCK" -> Ok(lock_response(req, rel))
+            "UNLOCK" -> Ok(text(204, ""))
+            _ -> Err(http_error(405, "method not allowed"))
+          }
+        }
+      }
+    }
+
+## All WebDAV routes under /dav/{rest*} (the tail matches /dav and any depth).
+pub fn dav_routes(a: Auth, cell: AtomicReference) -> List[Route] = {
+  let verbs = ["OPTIONS", "PROPFIND", "HEAD", "GET", "PUT", "DELETE", "MKCOL", "MOVE", "COPY", "LOCK", "UNLOCK"]
+  map(verbs, fn(v) => Method(v, "/dav/{rest*}", dav_handler(a, cell, v)))
+}
