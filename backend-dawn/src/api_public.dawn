@@ -3,7 +3,7 @@
 # {"detail": ...} through the web framework's Err branch.
 use java "java.sql.Connection"
 use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, query, query_int_bounded}
-use web/router.{Route, Get}
+use web/router.{Route, route_get}
 use json/value.{Json, JArr}
 use jsonx.{paginated, detail, obj, jstr}
 use db.{Db, with_db}
@@ -162,14 +162,14 @@ pub fn get_viz(db: Db) -> Handler =
 ## optional draft-preview auth on article detail).
 pub fn routes(db: Db, a: Auth) -> List[Route] =
   [
-    Get("/api/health", health),
-    Get("/api/search", search(db)),
-    Get("/api/viz/{slug}", get_viz(db)),
-    Get("/api/articles", list_articles(db)),
-    Get("/api/articles/{slug}", get_article(db, a)),
-    Get("/api/pages/nav", get_nav(db)),
-    Get("/api/pages/{slug}", get_page(db)),
-    Get("/api/pages/{slug}/articles", get_page_articles(db)),
-    Get("/api/tags", get_tags(db)),
-    Get("/api/tags/{slug}", get_tag(db)),
+    route_get("/api/health", health),
+    route_get("/api/search", search(db)),
+    route_get("/api/viz/{slug}", get_viz(db)),
+    route_get("/api/articles", list_articles(db)),
+    route_get("/api/articles/{slug}", get_article(db, a)),
+    route_get("/api/pages/nav", get_nav(db)),
+    route_get("/api/pages/{slug}", get_page(db)),
+    route_get("/api/pages/{slug}/articles", get_page_articles(db)),
+    route_get("/api/tags", get_tags(db)),
+    route_get("/api/tags/{slug}", get_tag(db)),
   ]

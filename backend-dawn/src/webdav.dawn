@@ -21,7 +21,7 @@ use java "java.util.Locale"
 use java "java.util.TimeZone"
 use java "java.util.concurrent.atomic.AtomicReference"
 use web/types.{Request, Response, HttpError, Handler, http_error, text, raw, binary, redirect, with_header, header}
-use web/router.{Route, Method}
+use web/router.{Route, route_method_of, tagged}
 use db.{Db, with_db}
 use auth.{Auth, Qiniu, check_basic}
 use repo_fm.{FileRow, get_row, children, subtree_rows, ensure_dirs, insert_file, insert_folder, delete_row, reparent}
@@ -572,5 +572,7 @@ fn dav_handler(a: Auth, cell: AtomicReference, method: String) -> Handler =
 ## All WebDAV routes under /dav/{rest*} (the tail matches /dav and any depth).
 pub fn dav_routes(a: Auth, cell: AtomicReference) -> List[Route] = {
   let verbs = ["OPTIONS", "PROPFIND", "HEAD", "GET", "PUT", "DELETE", "MKCOL", "MOVE", "COPY", "LOCK", "UNLOCK"]
-  map(verbs, fn(v) => Method(v, "/dav/{rest*}", dav_handler(a, cell, v)))
+  # raw-body: WebDAV PUT carries file bytes (bounded by nginx, not the JSON limit).
+  # no-cors: WebDAV is not browser traffic — skip the CORS middleware entirely.
+  map(verbs, fn(v) => tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, cell, v)), ["raw-body", "no-cors"]))
 }

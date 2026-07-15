@@ -4,7 +4,7 @@
 use java "java.lang.System"
 use java "java.util.concurrent.atomic.AtomicReference"
 use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query}
-use web/router.{Route, Get}
+use web/router.{Route, route_get}
 use auth.{Auth, current_user}
 use db.{with_db}
 use repo_settings.{setting_int}
@@ -96,4 +96,4 @@ fn with_quota(a: Auth, qn: Json) -> Json !io =
   }
 
 pub fn mon_routes(a: Auth, cfg: MonCfg, cell: AtomicReference, respack_cell: AtomicReference) -> List[Route] =
-  [Get("/api/monitor", get_monitor(a, cfg, cell, respack_cell))]
+  [route_get("/api/monitor", get_monitor(a, cfg, cell, respack_cell))]

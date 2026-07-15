@@ -10,7 +10,7 @@ use java "java.util.concurrent.atomic.AtomicReference"
 use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query, redirect, binary, header}
 use multipart.{Part, boundary_of, parse_multipart, part_named}
 use http.{fetch_bytes}
-use web/router.{Route, Get, Post}
+use web/router.{Route, route_get, route_post, tagged}
 use jsonx.{obj, jstr, jint}
 use db.{Db, with_db}
 use auth.{Auth, Qiniu, current_user}
@@ -801,21 +801,22 @@ fn upload_mime(name: String) -> String =
 
 pub fn routes(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReference) -> List[Route] =
   [
-    Get("/api/fm", fm_list(a)),
-    Get("/api/fm/sign", sign(a)),
-    Get("/api/fm/preview", preview(a)),
-    Get("/api/fm/download", download(a)),
-    Get("/api/fm/content", content(a)),
-    Get("/api/fm/stats", stats(a, space_cell, respack_cell)),
-    Get("/api/fm/search", fm_search(a)),
-    Post("/api/fm/create-folder", create_folder(a)),
-    Post("/api/fm/rename", rename(a)),
-    Post("/api/fm/move", move(a)),
-    Post("/api/fm/delete", delete(a)),
-    Post("/api/fm/copy", copy(a)),
-    Post("/api/fm/save", save(a)),
-    Post("/api/fm/create-file", create_file(a)),
-    Post("/api/fm/register", register(a)),
-    Post("/api/fm/upload-token", upload_token_ep(a)),
-    Post("/api/fm/upload", upload(a)),
+    route_get("/api/fm", fm_list(a)),
+    route_get("/api/fm/sign", sign(a)),
+    route_get("/api/fm/preview", preview(a)),
+    route_get("/api/fm/download", download(a)),
+    route_get("/api/fm/content", content(a)),
+    route_get("/api/fm/stats", stats(a, space_cell, respack_cell)),
+    route_get("/api/fm/search", fm_search(a)),
+    route_post("/api/fm/create-folder", create_folder(a)),
+    route_post("/api/fm/rename", rename(a)),
+    route_post("/api/fm/move", move(a)),
+    route_post("/api/fm/delete", delete(a)),
+    route_post("/api/fm/copy", copy(a)),
+    route_post("/api/fm/save", save(a)),
+    route_post("/api/fm/create-file", create_file(a)),
+    route_post("/api/fm/register", register(a)),
+    route_post("/api/fm/upload-token", upload_token_ep(a)),
+    # raw-body: multipart proxy upload carries file bytes (bounded by nginx).
+    tagged(route_post("/api/fm/upload", upload(a)), ["raw-body"]),
   ]

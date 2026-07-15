@@ -11,8 +11,8 @@ use java "java.util.concurrent.CountDownLatch"
 use java "java.io.OutputStreamWriter"
 use java "java.lang.String"
 use java "java.util.Iterator"
-use web/types.{Request, Response, HttpError, Handler, Middleware, http_error, error_response}
-use web/router.{Route, Dispatch, Found, NoPath, WrongMethod, dispatch}
+use web/types.{Request, Response, HttpError, Handler, Middleware, RouteMeta, http_error, error_response}
+use web/router.{Route, Dispatch, Found, NoPath, WrongMethod, dispatch, route_meta}
 
 # Read the whole request body once, decoded two ways: UTF-8 (`body`, the default
 # for JSON/text/form handlers) and ISO-8859-1 (`raw`, a lossless byte<->char map
@@ -122,31 +122,50 @@ fn build_request(ex: HttpExchange) -> Request !io = {
     headers: read_headers(ex),
     body: body,
     raw: raw,
+    # filled in by `handle` after dispatch; unmatched requests keep None
+    route: None,
   }
 }
 
-# The routing core, itself shaped like a handler so middleware can wrap it —
-# a logging middleware sees 404s and 405s too. The matched route's captures
-# are injected as a fresh Request (records are immutable).
-fn route_request(routes: List[Route], req: Request) -> Result[Response, HttpError] !io =
-  match dispatch(routes, req.method, req.path) {
+# Execute an already-computed dispatch decision, itself shaped like a handler so
+# middleware can wrap it — a logging middleware sees 404s and 405s too. The
+# matched route's captures are injected as a fresh Request (records are immutable).
+fn run_dispatch(d: Dispatch, req: Request) -> Result[Response, HttpError] !io =
+  match d {
     NoPath -> Err(http_error(404, "not found"))
     WrongMethod -> Err(http_error(405, "method not allowed"))
-    Found(handler, params) -> {
-      handler(Request { ..req, params: params })
+    Found(route, params) -> {
+      route.handler(Request { ..req, params: params })
     }
   }
 
+# The metadata middleware get for the matched route. Unmatched (404) and
+# wrong-method (405) requests carry no route, hence no tags.
+fn meta_of(d: Dispatch) -> Option[RouteMeta] =
+  match d {
+    Found(route, _) -> Some(route_meta(route))
+    NoPath -> None
+    WrongMethod -> None
+  }
+
 fn handle(routes: List[Route], middleware: List[Middleware], ex: HttpExchange) -> Unit !io = {
-  # first middleware in the list is outermost: [a, b] runs a(b(routing))
-  let app = fold(rev(middleware), fn(req: Request) => route_request(routes, req), fn(h, m) => m(h))
   # a handler panic is isolated to this request: catch_panic turns it into a 500
   # instead of resetting the connection or leaking the virtual thread (spec §9.8).
-  let outcome = catch_panic(fn() =>
-      match app(build_request(ex)) {
-        Ok(r) -> r
-        Err(e) -> error_response(e)
-      })
+  let outcome = catch_panic(fn() => {
+    let req0 = build_request(ex)
+    # dispatch once: the decision's metadata rides in the Request (so middleware
+    # can read route.tags) and the very same decision is executed by run_dispatch
+    # below — no second table walk.
+    let d = dispatch(routes, req0.method, req0.path)
+    let req = Request { ..req0, route: meta_of(d) }
+    # first middleware in the list is outermost: [a, b] runs a(b(core)). Middleware
+    # still wraps the core, so CORS preflight and logging cover unmatched requests.
+    let app = fold(rev(middleware), fn(rq: Request) => run_dispatch(d, rq), fn(h, m) => m(h))
+    match app(req) {
+      Ok(r) -> r
+      Err(e) -> error_response(e)
+    }
+  })
   let response = match outcome {
     Ok(r) -> r
     Err(m) -> {

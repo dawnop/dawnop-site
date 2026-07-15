@@ -4,7 +4,7 @@
 use java "java.sql.Connection"
 use java "org.mindrot.jbcrypt.BCrypt"
 use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, header}
-use web/router.{Route, Get, Post}
+use web/router.{Route, route_get, route_post}
 use web/server.{parse_form}
 use json/value.{Json}
 use jsonx.{obj, jint, jstr, jdatetime}
@@ -153,6 +153,6 @@ fn get_or_blank(m: Map[String, String], k: String) -> String =
 ## The auth routes.
 pub fn routes(a: Auth) -> List[Route] =
   [
-    Post("/api/auth/login", login(a)),
-    Get("/api/auth/me", me(a)),
+    route_post("/api/auth/login", login(a)),
+    route_get("/api/auth/me", me(a)),
   ]

@@ -19,28 +19,35 @@ pub fn with_logging(next: Handler) -> Handler =
     out
   }
 
-# Reject bodies over a byte budget before the handler sees them. Upload paths
-# (/dav WebDAV PUT, /api/fm/upload) carry file bytes and are bounded by nginx
-# (client_max_body_size) instead, so they are exempt from this small JSON limit.
+# True if the matched route carries `tag`. Middleware read the route's tags
+# (filled in by the server after dispatch) instead of hardcoding paths, so
+# exemptions live next to the route declaration. Unmatched requests (404/405)
+# carry no route, hence no tags — false.
+fn route_has_tag(req: Request, tag: String) -> Bool =
+  match req.route {
+    Some(m) -> find(m.tags, fn(t) => t == tag) != None
+    None -> false
+  }
+
+# Reject bodies over a byte budget before the handler sees them. Upload routes
+# (WebDAV PUT, /api/fm/upload) carry file bytes and are bounded by nginx
+# (client_max_body_size) instead — they opt out with the "raw-body" tag.
 pub fn with_body_limit(limit: Int, next: Handler) -> Handler =
   fn(req) =>
-  if is_upload_path(req.path) == false && str_len(req.body) > limit {
+  if route_has_tag(req, "raw-body") == false && str_len(req.body) > limit {
     Err(HttpError { status: 413, message: "request body exceeds $limit bytes" })
   } else {
     next(req)
   }
 
-fn is_upload_path(path: String) -> Bool =
-  starts_with(path, "/dav") || path == "/api/fm/upload"
-
 # CORS: answer preflight OPTIONS directly, and stamp Access-Control-* on every
 # response. `origin` is the single allowed origin (browsers require an exact
-# echo, not "*", when credentials are involved).
+# echo, not "*", when credentials are involved). Routes tagged "no-cors" (WebDAV)
+# are not browser traffic: their own OPTIONS (DAV headers) passes through and no
+# Access-Control-* is stamped.
 pub fn with_cors(origin: String, next: Handler) -> Handler =
   fn(req) =>
-  if starts_with(req.path, "/dav") {
-    # WebDAV is not browser-CORS traffic; let its own OPTIONS (DAV headers) through
-    # and don't stamp Access-Control-* on WebDAV responses.
+  if route_has_tag(req, "no-cors") {
     next(req)
   } else if req.method == "OPTIONS" {
     Ok(cors_headers(origin, text(204, "")))

@@ -2,7 +2,7 @@
 # admin CRUD. Same guard/JSON-body pattern as api_admin.
 use java "java.sql.Connection"
 use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, text}
-use web/router.{Route, Get, Post, Put, Delete}
+use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json, JArr, JInt, JNum}
 use jsonx.{obj, jstr, jint}
 use db.{Db, with_db}
@@ -438,20 +438,20 @@ pub fn viz_delete(a: Auth) -> Handler =
 ## All part-2 admin routes. Static paths precede /{id} captures.
 pub fn routes(a: Auth) -> List[Route] =
   [
-    Get("/api/settings", get_settings(a)),
-    Put("/api/settings", put_settings(a)),
-    Get("/api/tags/admin", tags_admin(a)),
-    Post("/api/tags/merge", tag_merge(a)),
-    Post("/api/tags/cleanup", tag_cleanup(a)),
-    Put("/api/tags/{tag_id}", tag_rename(a)),
-    Delete("/api/tags/{tag_id}", tag_delete(a)),
-    Get("/api/pages/admin", pages_admin(a)),
-    Post("/api/pages/reorder", page_reorder(a)),
-    Post("/api/pages", page_create(a)),
-    Put("/api/pages/{page_id}", page_update(a)),
-    Delete("/api/pages/{page_id}", page_delete(a)),
-    Get("/api/viz", viz_list(a)),
-    Post("/api/viz", viz_create(a)),
-    Put("/api/viz/{viz_id}", viz_update(a)),
-    Delete("/api/viz/{viz_id}", viz_delete(a)),
+    route_get("/api/settings", get_settings(a)),
+    route_put("/api/settings", put_settings(a)),
+    route_get("/api/tags/admin", tags_admin(a)),
+    route_post("/api/tags/merge", tag_merge(a)),
+    route_post("/api/tags/cleanup", tag_cleanup(a)),
+    route_put("/api/tags/{tag_id}", tag_rename(a)),
+    route_delete("/api/tags/{tag_id}", tag_delete(a)),
+    route_get("/api/pages/admin", pages_admin(a)),
+    route_post("/api/pages/reorder", page_reorder(a)),
+    route_post("/api/pages", page_create(a)),
+    route_put("/api/pages/{page_id}", page_update(a)),
+    route_delete("/api/pages/{page_id}", page_delete(a)),
+    route_get("/api/viz", viz_list(a)),
+    route_post("/api/viz", viz_create(a)),
+    route_put("/api/viz/{viz_id}", viz_update(a)),
+    route_delete("/api/viz/{viz_id}", viz_delete(a)),
   ]

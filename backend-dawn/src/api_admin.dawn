@@ -4,7 +4,7 @@
 use java "java.sql.Connection"
 use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, text, raw, with_header, query_int_bounded}
 use export.{export_markdown, url_encode}
-use web/router.{Route, Get, Post, Put, Delete}
+use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json}
 use jsonx.{paginated, obj, jstr, jint}
 use db.{Db, with_db}
@@ -181,11 +181,11 @@ fn classify(m: String) -> HttpError =
 ## The admin article routes (protected). Static admin paths precede /{id}.
 pub fn routes(a: Auth) -> List[Route] =
   [
-    Get("/api/articles/admin", list_admin(a)),
-    Get("/api/articles/admin/stats", admin_stats(a)),
-    Get("/api/articles/admin/{article_id}", admin_get(a)),
-    Get("/api/articles/{article_id}/export", export_md(a)),
-    Post("/api/articles", create(a)),
-    Put("/api/articles/{article_id}", update(a)),
-    Delete("/api/articles/{article_id}", remove(a)),
+    route_get("/api/articles/admin", list_admin(a)),
+    route_get("/api/articles/admin/stats", admin_stats(a)),
+    route_get("/api/articles/admin/{article_id}", admin_get(a)),
+    route_get("/api/articles/{article_id}/export", export_md(a)),
+    route_post("/api/articles", create(a)),
+    route_put("/api/articles/{article_id}", update(a)),
+    route_delete("/api/articles/{article_id}", remove(a)),
   ]
