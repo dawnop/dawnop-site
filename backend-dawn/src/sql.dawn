@@ -6,6 +6,7 @@ use java "java.sql.Connection"
 use java "java.sql.DriverManager"
 use java "java.sql.PreparedStatement"
 use java "java.sql.ResultSet"
+use java "java.sql.ResultSetMetaData"
 use java "java.util.Properties"
 
 ## A bind parameter. Dawn lists are homogeneous, so mixed-type binds travel
@@ -29,6 +30,13 @@ pub type Cell =
   | VStr(v: String)
   | VNull
 derive Show
+
+## A fetched row that knows its column names, so cells can be read by name
+## (`row.col_int("views")`) instead of by a fragile positional index. `names`
+## maps a column label to its 0-based position and is shared across all rows of
+## one result (the map is immutable). Names come straight from the JDBC result
+## metadata — a rename in the SELECT flows through with no hand-kept name list.
+pub type Row = { cells: List[Cell], names: Map[String, Int] }
 
 ## Open a database. Panics when the connection cannot be made — a service
 ## that cannot reach its database has no useful degraded mode.
@@ -85,6 +93,28 @@ pub fn query(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Resul
     bind(st, ps)
     let rs = st.executeQuery().expect("result set")
     let rows = rows_of(rs, cols)
+    st.close()
+    rows
+  })
+
+## Column label -> 0-based position, read from the result metadata (available
+## before the first row is fetched). Duplicate labels resolve to the last one.
+fn names_of(rs: ResultSet) -> Map[String, Int] !io = {
+  let md = rs.getMetaData().expect("result metadata")
+  let n = md.getColumnCount()
+  map_from(map(range(0, n), fn(i) => (md.getColumnLabel(i + 1).expect("column label"), i)))
+}
+
+## Like `query`, but each row carries its column names for read-by-name access
+## (`row.col_int("id")`, `row.col_opt_str("summary")`, ...). `cols` still declares
+## the select list's types in order; the names come from the driver's metadata.
+pub fn query_rows(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[Row], String] !io =
+  java_try(fn() => {
+    let st = c.prepareStatement(q).expect("prepare")
+    bind(st, ps)
+    let rs = st.executeQuery().expect("result set")
+    let names = names_of(rs)
+    let rows = map(rows_of(rs, cols), fn(cells) => Row { cells: cells, names: names })
     st.close()
     rows
   })
@@ -174,6 +204,23 @@ pub fn opt_int_at(row: List[Cell], i: Int) -> Option[Int] =
     other -> panic("column $i is not a nullable Int: ${to_string(other)}")
   }
 
+# ---- read-by-name accessors (Row from query_rows) ----
+# A missing name is a repo-layer bug (the column is not in the select list),
+# hence panic — same stance as a positional type mismatch above.
+
+fn col_idx(r: Row, name: String) -> Int =
+  match map_get(r.names, name) {
+    Some(i) -> i
+    None -> panic("no such column: $name (have ${to_string(map_keys(r.names))})")
+  }
+
+pub fn col_int(r: Row, name: String) -> Int = int_at(r.cells, col_idx(r, name))
+pub fn col_float(r: Row, name: String) -> Float = float_at(r.cells, col_idx(r, name))
+pub fn col_str(r: Row, name: String) -> String = str_at(r.cells, col_idx(r, name))
+pub fn col_bool(r: Row, name: String) -> Bool = bool_at(r.cells, col_idx(r, name))
+pub fn col_opt_str(r: Row, name: String) -> Option[String] = opt_str_at(r.cells, col_idx(r, name))
+pub fn col_opt_int(r: Row, name: String) -> Option[Int] = opt_int_at(r.cells, col_idx(r, name))
+
 # ---- tests (need --cp lib/sqlite-jdbc-*.jar) ----
 
 test "exec and query round-trip, nulls map to VNull" {
@@ -189,6 +236,40 @@ test "exec and query round-trip, nulls map to VNull" {
       assert int_at(rows[1], 0) == 42
       assert str_at(rows[1], 1) == "hi"
       assert float_at(rows[1], 2) == 1.5
+    }
+    Err(m) -> panic(m)
+  }
+}
+
+test "query_rows reads cells by column name (order-independent)" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table t (id integer, title text, summary text, views integer)", []) == Ok(0)
+  assert exec(c, "insert into t values (?, ?, ?, ?)", [PInt(1), PStr("hi"), PNull, PInt(9)]) == Ok(1)
+  assert exec(c, "insert into t values (?, ?, ?, ?)", [PInt(2), PStr("yo"), PStr("s"), PInt(0)]) == Ok(1)
+  # select list order deliberately differs from table order — names still resolve
+  match query_rows(c, "select views, id, summary, title from t order by id",
+      [], [ColInt, ColInt, ColStr, ColStr]) {
+    Ok(rows) -> {
+      assert len(rows) == 2
+      assert rows[0].col_int("id") == 1
+      assert rows[0].col_str("title") == "hi"
+      assert rows[0].col_opt_str("summary") == None
+      assert rows[0].col_int("views") == 9
+      assert rows[1].col_opt_str("summary") == Some("s")
+      # an aliased expression is addressable by its alias
+      match query_rows(c, "select count(*) as n from t", [], [ColInt]) {
+        Ok(rs2) -> { assert rs2[0].col_int("n") == 2 }
+        Err(m) -> panic(m)
+      }
+      # a table-qualified column (`x.id`) is addressable by its bare name — this is
+      # what repo_article's `select t.id, t.name, ...` tag query relies on
+      match query_rows(c, "select x.id, x.title from t x where x.id = 1", [], [ColInt, ColStr]) {
+        Ok(rs3) -> {
+          assert rs3[0].col_int("id") == 1
+          assert rs3[0].col_str("title") == "hi"
+        }
+        Err(m) -> panic(m)
+      }
     }
     Err(m) -> panic(m)
   }

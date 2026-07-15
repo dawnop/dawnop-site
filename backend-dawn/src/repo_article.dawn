@@ -3,7 +3,7 @@
 # structure. Word count is computed here (CJK chars + [A-Za-z0-9]+ runs), same
 # as the Python model's `word_count` property.
 use java "java.sql.Connection"
-use sql.{SqlV, PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, int_at, str_at, opt_int_at, opt_str_at, bool_at}
+use sql.{SqlV, PInt, PStr, Col, ColInt, ColStr, Row, query, query_rows, exec, int_at, col_int, col_str, col_bool, col_opt_int, col_opt_str}
 use json/value.{Json, JArr}
 use jsonx.{obj, jint, jstr, jbool, jopt_int, jopt_str, jdatetime}
 
@@ -37,44 +37,47 @@ fn is_alnum(c: Int) -> Bool =
 ## The tags of one article as JSON [{id,name,slug}], ordered by name (matches
 ## the relationship's default ordering used by the API).
 pub fn tags_json(c: Connection, article_id: Int) -> Result[List[Json], String] !io = {
-  let rows = query(c,
+  let rows = query_rows(c,
     "select t.id, t.name, t.slug from tags t join article_tags at on at.tag_id = t.id where at.article_id = ? order by t.name",
     [PInt(article_id)], [ColInt, ColStr, ColStr])?
   Ok(map(rows, fn(r) => obj([
-    ("id", jint(int_at(r, 0))),
-    ("name", jstr(str_at(r, 1))),
-    ("slug", jstr(str_at(r, 2))),
+    ("id", jint(r.col_int("id"))),
+    ("name", jstr(r.col_str("name"))),
+    ("slug", jstr(r.col_str("slug"))),
   ])))
 }
 
 # ---- article list item (no content) ----
 
-# select list shared by list endpoints; column order fixes the accessor indices
+# select list shared by list endpoints. `LIST_COLS` and `list_col_types()` are
+# both in select-list order (the driver still needs the column types in order);
+# cells are read back by NAME (`r.col_str("title")`), so reordering this list no
+# longer silently shifts the accessors — a wrong name panics loudly instead.
 const LIST_COLS: String = "id, title, slug, summary, published, page_id, views, created_at, updated_at, content, auto_title"
 
 fn list_col_types() -> List[Col] =
   [ColInt, ColStr, ColStr, ColStr, ColInt, ColInt, ColInt, ColStr, ColStr, ColStr, ColInt]
 
 ## Shape one list row (with its tags) into the ArticleListItem JSON.
-fn list_item_json(c: Connection, r: List[Cell]) -> Result[Json, String] !io = {
-  let id = int_at(r, 0)
+fn list_item_json(c: Connection, r: Row) -> Result[Json, String] !io = {
+  let id = r.col_int("id")
   let tags = tags_json(c, id)?
   Ok(obj([
     ("id", jint(id)),
-    ("title", jstr(str_at(r, 1))),
-    ("slug", jstr(str_at(r, 2))),
-    ("summary", jopt_str(opt_str_at(r, 3))),
-    ("published", jbool(bool_at(r, 4))),
-    ("page_id", jopt_int(opt_int_at(r, 5))),
-    ("word_count", jint(word_count(str_at(r, 9)))),
-    ("views", jint(int_at(r, 6))),
+    ("title", jstr(r.col_str("title"))),
+    ("slug", jstr(r.col_str("slug"))),
+    ("summary", jopt_str(r.col_opt_str("summary"))),
+    ("published", jbool(r.col_bool("published"))),
+    ("page_id", jopt_int(r.col_opt_int("page_id"))),
+    ("word_count", jint(word_count(r.col_str("content")))),
+    ("views", jint(r.col_int("views"))),
     ("tags", JArr(tags)),
-    ("created_at", jdatetime(str_at(r, 7))),
-    ("updated_at", jdatetime(str_at(r, 8))),
+    ("created_at", jdatetime(r.col_str("created_at"))),
+    ("updated_at", jdatetime(r.col_str("updated_at"))),
   ]))
 }
 
-fn shape_items(c: Connection, rows: List[List[Cell]], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
+fn shape_items(c: Connection, rows: List[Row], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
   if i == len(rows) {
     Ok(acc)
   } else {
@@ -82,17 +85,39 @@ fn shape_items(c: Connection, rows: List[List[Cell]], i: Int, acc: List[Json]) -
     shape_items(c, rows, i + 1, acc ++ [item])
   }
 
+## Shape one full-detail row (with content + tags) into the Article JSON. Shared
+## by the admin-get and both public detail paths; `id` is read from the row.
+fn detail_json(c: Connection, r: Row) -> Result[Json, String] !io = {
+  let id = r.col_int("id")
+  let tags = tags_json(c, id)?
+  Ok(obj([
+    ("id", jint(id)),
+    ("title", jstr(r.col_str("title"))),
+    ("slug", jstr(r.col_str("slug"))),
+    ("summary", jopt_str(r.col_opt_str("summary"))),
+    ("content", jstr(r.col_str("content"))),
+    ("published", jbool(r.col_bool("published"))),
+    ("auto_title", jbool(r.col_bool("auto_title"))),
+    ("page_id", jopt_int(r.col_opt_int("page_id"))),
+    ("word_count", jint(word_count(r.col_str("content")))),
+    ("views", jint(r.col_int("views"))),
+    ("tags", JArr(tags)),
+    ("created_at", jdatetime(r.col_str("created_at"))),
+    ("updated_at", jdatetime(r.col_str("updated_at"))),
+  ]))
+}
+
 ## Published articles, newest first, one page. Returns (total, items-json).
 pub fn list_published(c: Connection, tag: Option[String], page: Int, size: Int) -> Result[(Int, List[Json]), String] !io = {
   let offset = (page - 1) * size
   let total = count_published(c, tag)?
   let rows = match tag {
     Some(slug) ->
-      query(c,
+      query_rows(c,
         "select $LIST_COLS from articles a where a.published = 1 and exists (select 1 from article_tags at join tags t on t.id = at.tag_id where at.article_id = a.id and t.slug = ?) order by a.created_at desc limit ? offset ?",
         [PStr(slug), PInt(size), PInt(offset)], list_col_types())?
     None ->
-      query(c,
+      query_rows(c,
         "select $LIST_COLS from articles a where a.published = 1 order by a.created_at desc limit ? offset ?",
         [PInt(size), PInt(offset)], list_col_types())?
   }
@@ -114,7 +139,7 @@ pub fn list_admin(c: Connection, pub_filter: Option[Bool], page: Int, size: Int)
     Some(r) -> int_at(r, 0)
     None -> 0
   }
-  let rows = query(c, "select $LIST_COLS from articles a $where order by a.created_at desc limit ? offset ?", [PInt(size), PInt(offset)], list_col_types())?
+  let rows = query_rows(c, "select $LIST_COLS from articles a $where order by a.created_at desc limit ? offset ?", [PInt(size), PInt(offset)], list_col_types())?
   let items = shape_items(c, rows, 0, [])?
   Ok((total, items))
 }
@@ -150,7 +175,7 @@ pub fn list_by_page(c: Connection, page_id: Int, page: Int, size: Int) -> Result
     Some(r) -> int_at(r, 0)
     None -> 0
   }
-  let rows = query(c,
+  let rows = query_rows(c,
     "select $LIST_COLS from articles a where a.published = 1 and a.page_id = ? order by a.created_at desc limit ? offset ?",
     [PInt(page_id), PInt(size), PInt(offset)], list_col_types())?
   let items = shape_items(c, rows, 0, [])?
@@ -174,26 +199,9 @@ fn count_published(c: Connection, tag: Option[String]) -> Result[Int, String] !i
 ## Full article detail by id, ignoring the published filter and not bumping
 ## views — for the admin get and the create/update responses.
 pub fn by_id_admin(c: Connection, id: Int) -> Result[Option[Json], String] !io = {
-  let rows = query(c, "select $LIST_COLS from articles a where a.id = ?", [PInt(id)], list_col_types())?
+  let rows = query_rows(c, "select $LIST_COLS from articles a where a.id = ?", [PInt(id)], list_col_types())?
   match get(rows, 0) {
-    Some(r) -> {
-      let tags = tags_json(c, id)?
-      Ok(Some(obj([
-        ("id", jint(id)),
-        ("title", jstr(str_at(r, 1))),
-        ("slug", jstr(str_at(r, 2))),
-        ("summary", jopt_str(opt_str_at(r, 3))),
-        ("content", jstr(str_at(r, 9))),
-        ("published", jbool(bool_at(r, 4))),
-        ("auto_title", jbool(bool_at(r, 10))),
-        ("page_id", jopt_int(opt_int_at(r, 5))),
-        ("word_count", jint(word_count(str_at(r, 9)))),
-        ("views", jint(int_at(r, 6))),
-        ("tags", JArr(tags)),
-        ("created_at", jdatetime(str_at(r, 7))),
-        ("updated_at", jdatetime(str_at(r, 8))),
-      ])))
-    }
+    Some(r) -> Ok(Some(detail_json(c, r)?))
     None -> Ok(None)
   }
 }
@@ -211,27 +219,9 @@ pub fn published_of(c: Connection, slug: String) -> Result[Option[Bool], String]
 ## Full detail for any article by slug, regardless of published state and
 ## without bumping views (draft preview for logged-in admins).
 pub fn by_slug_any(c: Connection, slug: String) -> Result[Option[Json], String] !io = {
-  let rows = query(c, "select $LIST_COLS from articles a where a.slug = ?", [PStr(slug)], list_col_types())?
+  let rows = query_rows(c, "select $LIST_COLS from articles a where a.slug = ?", [PStr(slug)], list_col_types())?
   match get(rows, 0) {
-    Some(r) -> {
-      let id = int_at(r, 0)
-      let tags = tags_json(c, id)?
-      Ok(Some(obj([
-        ("id", jint(id)),
-        ("title", jstr(str_at(r, 1))),
-        ("slug", jstr(str_at(r, 2))),
-        ("summary", jopt_str(opt_str_at(r, 3))),
-        ("content", jstr(str_at(r, 9))),
-        ("published", jbool(bool_at(r, 4))),
-        ("auto_title", jbool(bool_at(r, 10))),
-        ("page_id", jopt_int(opt_int_at(r, 5))),
-        ("word_count", jint(word_count(str_at(r, 9)))),
-        ("views", jint(int_at(r, 6))),
-        ("tags", JArr(tags)),
-        ("created_at", jdatetime(str_at(r, 7))),
-        ("updated_at", jdatetime(str_at(r, 8))),
-      ])))
-    }
+    Some(r) -> Ok(Some(detail_json(c, r)?))
     None -> Ok(None)
   }
 }
@@ -244,29 +234,11 @@ pub fn bump_views(c: Connection, slug: String) -> Result[Int, String] !io =
 ## One published article by slug, full detail (with content). None when missing
 ## or unpublished. Views are bumped by the caller (a write).
 pub fn by_slug(c: Connection, slug: String) -> Result[Option[Json], String] !io = {
-  let rows = query(c,
+  let rows = query_rows(c,
     "select $LIST_COLS from articles a where a.slug = ? and a.published = 1",
     [PStr(slug)], list_col_types())?
   match get(rows, 0) {
-    Some(r) -> {
-      let id = int_at(r, 0)
-      let tags = tags_json(c, id)?
-      Ok(Some(obj([
-        ("id", jint(id)),
-        ("title", jstr(str_at(r, 1))),
-        ("slug", jstr(str_at(r, 2))),
-        ("summary", jopt_str(opt_str_at(r, 3))),
-        ("content", jstr(str_at(r, 9))),
-        ("published", jbool(bool_at(r, 4))),
-        ("auto_title", jbool(bool_at(r, 10))),
-        ("page_id", jopt_int(opt_int_at(r, 5))),
-        ("word_count", jint(word_count(str_at(r, 9)))),
-        ("views", jint(int_at(r, 6))),
-        ("tags", JArr(tags)),
-        ("created_at", jdatetime(str_at(r, 7))),
-        ("updated_at", jdatetime(str_at(r, 8))),
-      ])))
-    }
+    Some(r) -> Ok(Some(detail_json(c, r)?))
     None -> Ok(None)
   }
 }
