@@ -11,6 +11,13 @@ use java "java.util.concurrent.CountDownLatch"
 use java "java.io.OutputStreamWriter"
 use java "java.lang.String"
 use java "java.util.Iterator"
+# java.io.File, not java.nio.file.Files: every Files/Path entry point we need is
+# varargs (createTempFile(.., FileAttribute...), Path.of(.., String...)), and Dawn
+# cannot construct a Java array to pass none (arrays are opaque passthrough, spec
+# §9.5; the List bridge §9.6 is for collections). File's equivalents take exact
+# arg counts.
+use java "java.io.File"
+use java "java.io.FileOutputStream"
 use web/types.{Request, Response, HttpError, Handler, Middleware, RouteMeta, http_error, error_response}
 use web/router.{Route, Dispatch, Found, NoPath, WrongMethod, dispatch, route_meta}
 
@@ -100,7 +107,7 @@ fn tail(xs: List[String]) -> List[String] =
 fn rev[T](xs: List[T]) -> List[T] =
   map(range(0, len(xs)), fn(i) => xs[len(xs) - 1 - i])
 
-fn build_request(ex: HttpExchange) -> Request !io = {
+fn build_request(ex: HttpExchange, meta: Option[RouteMeta]) -> Request !io = {
   let uri = ex.getRequestURI()!
   let no_query: Map[String, String] = map_from([])
   # Query params follow form-urlencoded semantics ('+' means space), matching
@@ -112,7 +119,11 @@ fn build_request(ex: HttpExchange) -> Request !io = {
     }))
     None -> no_query
   }
-  let (body, raw) = read_body(ex)
+  # A "stream-body" route never sees the body in memory: it goes to a temp file
+  # and the handler gets the path. Everything else reads as before.
+  let streaming = meta_has_tag(meta, "stream-body")
+  let (body, raw) = if streaming { ("", utf8("")) } else { read_body(ex) }
+  let bf: Option[String] = if streaming { Some(spill_body(ex)) } else { None }
   Request {
     method: ex.getRequestMethod()!,
     path: uri.getPath()!,
@@ -121,10 +132,36 @@ fn build_request(ex: HttpExchange) -> Request !io = {
     headers: read_headers(ex),
     body: body,
     raw: raw,
-    # filled in by `handle` after dispatch; unmatched requests keep None
-    route: None,
+    body_file: bf,
+    route: meta,
   }
 }
+
+# Stream the request body to a temp file, 8KB at a time (transferTo's buffer), and
+# return its path. Constant memory whatever the file's size — the point of the
+# whole exercise. The caller deletes it once the handler is done.
+fn spill_body(ex: HttpExchange) -> String !io = {
+  let tmp = File.createTempFile("dawn-put-", ".tmp")!
+  let out = FileOutputStream.new(tmp)
+  let stream = ex.getRequestBody()!
+  let _n = stream.transferTo(out)
+  out.close()
+  String.valueOf(tmp.getPath()!)!
+}
+
+fn delete_quietly(path: String) -> Unit !io = {
+  let r: Result[Bool, String] = java_try(fn() => File.new(path).delete())
+  match r {
+    Ok(_) -> ()
+    Err(m) -> println("temp body file not deleted: $m")
+  }
+}
+
+fn meta_has_tag(meta: Option[RouteMeta], tag: String) -> Bool =
+  match meta {
+    Some(m) -> find(m.tags, fn(t) => t == tag) != None
+    None -> false
+  }
 
 # Execute an already-computed dispatch decision, itself shaped like a handler so
 # middleware can wrap it — a logging middleware sees 404s and 405s too. The
@@ -151,18 +188,30 @@ fn handle(routes: List[Route], middleware: List[Middleware], ex: HttpExchange) -
   # a handler panic is isolated to this request: catch_panic turns it into a 500
   # instead of resetting the connection or leaking the virtual thread (spec §9.8).
   let outcome = catch_panic(fn() => {
-    let req0 = build_request(ex)
-    # dispatch once: the decision's metadata rides in the Request (so middleware
-    # can read route.tags) and the very same decision is executed by run_dispatch
-    # below — no second table walk.
-    let d = dispatch(routes, req0.method, req0.path)
-    let req = Request { ..req0, route: meta_of(d) }
+    # Dispatch BEFORE touching the body: method and path come from the request
+    # line, and the matched route's tags decide how the body is read at all
+    # ("stream-body" spills it to disk instead of into memory). The same decision
+    # is executed by run_dispatch below — no second table walk.
+    let d = dispatch(routes, ex.getRequestMethod()!, ex.getRequestURI()!.getPath()!)
+    let req = build_request(ex, meta_of(d))
     # first middleware in the list is outermost: [a, b] runs a(b(core)). Middleware
     # still wraps the core, so CORS preflight and logging cover unmatched requests.
     let app = fold(rev(middleware), fn(rq: Request) => run_dispatch(d, rq), fn(h, m) => m(h))
-    match app(req) {
-      Ok(r) -> r
-      Err(e) -> error_response(e)
+    # the temp body file lives exactly as long as the handler call. Dawn has no
+    # try/finally, so catch_panic plays that role (same idiom as with_tx): it
+    # returns rather than unwinding, so the delete below always runs.
+    let served = catch_panic(fn() => app(req))
+    match req.body_file {
+      Some(p) -> delete_quietly(p)
+      None -> ()
+    }
+    match served {
+      Ok(Ok(r)) -> r
+      Ok(Err(e)) -> error_response(e)
+      Err(m) -> {
+        println("request panicked: $m")
+        error_response(http_error(500, "服务器内部错误"))
+      }
     }
   })
   let response = match outcome {

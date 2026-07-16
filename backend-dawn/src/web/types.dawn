@@ -24,9 +24,17 @@ pub type Request = {
   # request headers, keys lowercased for case-insensitive lookup (use `header`)
   headers: Map[String, String],
   body: String,
-  # the request body as raw Bytes: binary handlers (multipart upload, WebDAV PUT)
-  # parse structure and recover exact file bytes from here, no latin-1 detour.
+  # the request body as raw Bytes: binary handlers (multipart upload) parse
+  # structure and recover exact file bytes from here, no latin-1 detour.
+  # Empty on a "stream-body" route — the body went to `body_file` instead.
   raw: Bytes,
+  # Where the body landed for routes tagged "stream-body" (WebDAV PUT): the server
+  # streamed the socket to this temp file instead of reading it into memory, so a
+  # PUT costs a fixed buffer rather than a copy of the file. A path, not a stream:
+  # an opaque Java field would cost `derive Show`, and an upload needs a file on
+  # disk anyway (BodyPublishers.ofFile). The server creates and deletes it; it is
+  # alive exactly for the handler's call. None on every other route.
+  body_file: Option[String],
   # the matched route's metadata (method/pattern/tags), filled by the server
   # after dispatch so middleware can read `route.tags`; None when nothing matched.
   route: Option[RouteMeta],
@@ -142,7 +150,8 @@ test "param reads captures and flags missing ones" {
   let q: Map[String, String] = map_empty()
   let req = Request {
     method: "GET", path: "/a/42",
-    params: map_from([("id", "42")]), query: q, headers: h, body: "", raw: utf8(""), route: None,
+    params: map_from([("id", "42")]), query: q, headers: h, body: "", raw: utf8(""), body_file: None,
+    route: None,
   }
   assert param(req, "id") == Ok("42")
   assert param_int(req, "id") == Ok(42)
@@ -155,7 +164,8 @@ test "param reads captures and flags missing ones" {
 test "query_int_bounded: absent uses default, out-of-range and non-int are 422" {
   let h: Map[String, String] = map_empty()
   let mk = fn(q: Map[String, String]) => Request {
-    method: "GET", path: "/a", params: map_empty(), query: q, headers: h, body: "", raw: utf8(""), route: None,
+    method: "GET", path: "/a", params: map_empty(), query: q, headers: h, body: "", raw: utf8(""), body_file: None,
+    route: None,
   }
   # absent -> default
   assert query_int_bounded(mk(map_empty()), "page", 1, 1, -1) == Ok(1)
@@ -185,7 +195,8 @@ test "param_int rejects non-numbers as a client error" {
   let q: Map[String, String] = map_empty()
   let req = Request {
     method: "GET", path: "/a/x",
-    params: map_from([("id", "x")]), query: q, headers: h, body: "", raw: utf8(""), route: None,
+    params: map_from([("id", "x")]), query: q, headers: h, body: "", raw: utf8(""), body_file: None,
+    route: None,
   }
   match param_int(req, "id") {
     Err(e) -> { assert e.status == 400 }
@@ -197,7 +208,8 @@ test "header lookup is case-insensitive" {
   let req = Request {
     method: "GET", path: "/", params: map_empty(), query: map_empty(),
     headers: map_from([("authorization", "Bearer xyz"), ("content-type", "application/json")]),
-    body: "", raw: utf8(""), route: None,
+    body: "", raw: utf8(""), body_file: None,
+    route: None,
   }
   assert header(req, "Authorization") == Some("Bearer xyz")
   assert header(req, "CONTENT-TYPE") == Some("application/json")

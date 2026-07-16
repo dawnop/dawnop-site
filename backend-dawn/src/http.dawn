@@ -71,11 +71,18 @@ pub fn post_form(url: String, headers: List[(String, String)], body: String) -> 
 ## POST a raw Bytes body, sent verbatim via ofByteArray. For binary proxy upload:
 ## the assembled multipart body carries the file bytes exactly.
 pub fn post_bytes(url: String, headers: List[(String, String)], body: Bytes) -> Result[HttpResp, String] !io =
+  post_publisher(url, headers, BodyPublishers.ofByteArray(body)!)
+
+## POST whatever a BodyPublisher produces. The streaming door: callers can pass
+## `BodyPublishers.concat(ofByteArray(head), ofFile(path), ofByteArray(tail))` to
+## send a multipart body whose file part is read from disk in chunks, so the file
+## never sits in the heap (qiniu_rs.upload_file). ofByteArray keeps the in-memory
+## path for small bodies.
+pub fn post_publisher(url: String, headers: List[(String, String)], publisher: BodyPublisher) -> Result[HttpResp, String] !io =
   java_try(fn() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)
-    let publisher: BodyPublisher = BodyPublishers.ofByteArray(body)!
     let req = withHeaders.method("POST", publisher)!.build()!
     let resp = shared_client().send(req, BodyHandlers.ofString()!)!
     HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! }

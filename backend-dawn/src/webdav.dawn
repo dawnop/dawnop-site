@@ -5,10 +5,14 @@
 # changes path, copy really copies the qiniu object, overwrite writes a new key
 # then deletes the old (CDN caches by URL). HTTP Basic auth (bcrypt + TTL cache).
 #
-# First-version limit vs FastAPI (documented, not a bug): PUT reads the body into
-# memory (raw Bytes) rather than streaming to a temp file — fine within the dav
-# vhost's client_max_body_size. GET proxies with Range passthrough (forwards the
-# client Range to qiniu, relays 206 + Content-Range); redirect clients go direct.
+# PUT streams: the route is tagged "stream-body", so the server spills the request
+# body to a temp file (constant memory) and put() uploads straight from that path
+# via BodyPublishers.concat(head, ofFile, tail) — the file is never in the heap.
+#
+# Remaining limit vs FastAPI (documented, not a bug): GET proxies the object
+# through memory, with Range passthrough (forwards the client Range to qiniu,
+# relays 206 + Content-Range) — and clients that follow redirects skip the proxy
+# entirely (302 straight to qiniu), so only webdavfs/mini-redirector pay it.
 use java "java.sql.Connection"
 use java "java.lang.String"
 use java "java.lang.System"
@@ -27,7 +31,8 @@ use auth.{Auth, Qiniu, check_basic}
 use repo_fm.{FileRow, get_row, children, subtree_rows, ensure_dirs, insert_file, insert_folder, delete_row, reparent}
 use fm_paths.{basename, parent_rel, ext, ts}
 use qiniu_sign.{private_url}
-use qiniu_rs.{delete_obj, copy_obj, upload_bytes}
+use qiniu_rs.{delete_obj, copy_obj, upload_bytes, upload_file}
+use java "java.io.File"
 use crypto.{sha256_hex, uuid}
 use http.{fetch_bytes}
 use ttl.{cache_get, cache_put}
@@ -327,6 +332,11 @@ fn guess_mime(name: String) -> String =
 
 # ---- PUT ----
 
+# Size of the spilled body. The Content-Length header would be a client's claim;
+# the file on disk is what we actually received and are about to upload.
+fn file_size(path: String) -> Result[Int, String] !io =
+  java_try(fn() => File.new(path).length())
+
 fn put(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io =
   if rel == "" {
     Err(http_error(405, "不能写入根"))
@@ -346,10 +356,18 @@ fn put_do(a: Auth, req: Request, rel: String, existing: Option[FileRow]) -> Resu
       let mime = guess_mime(basename(rel))
       let e = ext(basename(rel))
       let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
-      let content = req.raw
-      match upload_bytes(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_secs() + a.qiniu.expires) {
-        Ok(_) -> put_commit(a, rel, key, mime, byte_len(content), existing)
-        Err(m) -> Err(http_error(502, m))
+      # the body was streamed to disk by the server (route tag "stream-body"), so
+      # upload it straight from there: constant memory, whatever the size.
+      match req.body_file {
+        None -> Err(http_error(500, "请求体未落盘"))
+        Some(path) -> match file_size(path) {
+          Err(m) -> Err(http_error(500, m))
+          Ok(size) ->
+            match upload_file(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, path, mime, now_secs() + a.qiniu.expires) {
+              Ok(_) -> put_commit(a, rel, key, mime, size, existing)
+              Err(m) -> Err(http_error(502, m))
+            }
+        }
       }
     }
   }
@@ -667,7 +685,11 @@ pub fn dav_routes(a: Auth, cell: AtomicReference) -> List[Route] = {
   let verbs = ["OPTIONS", "PROPFIND", "HEAD", "GET", "PUT", "DELETE", "MKCOL", "MOVE", "COPY", "LOCK", "UNLOCK"]
   # raw-body: WebDAV PUT carries file bytes (bounded by nginx, not the JSON limit).
   # no-cors: WebDAV is not browser traffic — skip the CORS middleware entirely.
-  map(verbs, fn(v) => tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, cell, v)), ["raw-body", "no-cors"]))
+  # stream-body: PUT only — the server spills the body to a temp file instead of
+  # reading it into memory, and put() uploads straight from that path. The other
+  # verbs carry small XML bodies (PROPFIND/LOCK) that handlers read from `body`.
+  map(verbs, fn(v) => tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, cell, v)),
+    if v == "PUT" { ["raw-body", "no-cors", "stream-body"] } else { ["raw-body", "no-cors"] }))
 }
 
 test "range_pair parses the WebDAV Range forms against a total size" {

@@ -2,7 +2,13 @@
 # manager REST endpoints, authenticated with QBox management tokens (qiniu_sign).
 # Pure Dawn over the http client — the official SDK drags okhttp+gson, so this
 # hand-rolls the three verbs fm needs.
-use http.{HttpResp, post, post_bytes, fetch}
+use java "java.net.http.HttpRequest.BodyPublisher"
+use java "java.net.http.HttpRequest.BodyPublishers"
+use java "java.io.File"
+use java "java.io.FileInputStream"
+use java "java.io.FileOutputStream"
+use java "java.nio.file.Files"
+use http.{HttpResp, post, post_bytes, post_publisher, fetch}
 use qiniu_sign.{entry_uri, entry_token, management_token, upload_token, qiniu_mac_token}
 use json/value.{Json, JObj, JArr, JNum, JInt}
 use json/parser.{parse}
@@ -62,15 +68,66 @@ pub fn upload_bytes(ak: String, sk: String, bucket: String, key: String, content
   Ok(r.status == 200)
 }
 
-fn multipart(token: String, key: String, content: Bytes, mime: String) -> Bytes = {
+fn multipart(token: String, key: String, content: Bytes, mime: String) -> Bytes =
+  utf8(mp_head(token, key, mime)) ++ content ++ utf8(mp_tail())
+
+# The multipart framing around the file part, split out so the streaming upload
+# can put a file between the two without ever concatenating it into one buffer.
+fn mp_head(token: String, key: String, mime: String) -> String = {
   let nl = from_code_points([13, 10]) # CRLF (Dawn has no \r escape)
   let d = "--$BOUNDARY$nl"
   let field = fn(name: String, value: String) => "${d}Content-Disposition: form-data; name=\"$name\"$nl$nl$value$nl"
-  let head = field("token", token) ++ field("key", key) ++
+  field("token", token) ++ field("key", key) ++
     "${d}Content-Disposition: form-data; name=\"file\"; filename=\"$key\"${nl}Content-Type: $mime$nl$nl"
-  let tail = "$nl--$BOUNDARY--$nl"
-  utf8(head) ++ content ++ utf8(tail)
 }
+
+fn mp_tail() -> String = {
+  let nl = from_code_points([13, 10])
+  "$nl--$BOUNDARY--$nl"
+}
+
+## Upload a file from DISK to a key with CONSTANT memory: the multipart body is
+## assembled on disk (head + the file, copied 8KB at a time + tail) and sent with
+## BodyPublishers.ofFile, which reads it back in chunks. The file never lands in
+## the heap — that is what lets WebDAV PUT take a big file, where upload_bytes
+## spikes to ~3x the file size (raw body + assembled body + publisher copy).
+## ofFile also reports an exact contentLength, which qiniu's form API requires.
+##
+## Why assemble on disk rather than BodyPublishers.concat(head, ofFile, tail),
+## which would skip this copy: concat is varargs, and passing variadic arguments
+## is not supported in v0.1 (spec §9.3). The extra copy is disk-only and O(1) in
+## memory, so it costs transient disk, not the property we came for.
+pub fn upload_file(ak: String, sk: String, bucket: String, key: String, path: String, mime: String, deadline: Int) -> Result[Bool, String] !io = {
+  let token = upload_token(ak, sk, bucket, key, deadline)
+  let mp = assemble_multipart(mp_head(token, key, mime), path, mp_tail())?
+  let sent = send_file(mp)
+  let _ = java_try(fn() => File.new(mp).delete())
+  let r = sent?
+  Ok(r.status == 200)
+}
+
+fn send_file(mp: String) -> Result[HttpResp, String] !io = {
+  let ct = "multipart/form-data; boundary=$BOUNDARY"
+  match java_try(fn() => BodyPublishers.ofFile(File.new(mp).toPath()!)!) {
+    Err(m) -> Err("upload_file: $m")
+    Ok(body) -> post_publisher("$UP_HOST/", [("Content-Type", ct)], body)
+  }
+}
+
+# head ++ <src file bytes> ++ tail -> a new temp file, copied in 8KB chunks
+# (transferTo's buffer), so nothing bigger than that buffer is ever in memory.
+fn assemble_multipart(head: String, src: String, tail: String) -> Result[String, String] !io =
+  java_try(fn() => {
+    let f = File.createTempFile("dawn-mp-", ".tmp")!
+    let out = FileOutputStream.new(f)
+    out.write(utf8(head))
+    let src_in = FileInputStream.new(File.new(src))
+    let _n = src_in.transferTo(out)
+    src_in.close()
+    out.write(utf8(tail))
+    out.close()
+    f.getPath()!
+  })
 
 fn hdr(ak: String, sk: String, op: String, entry: String) -> List[(String, String)] !io =
   [("Authorization", entry_token(ak, sk, op, entry))]
@@ -98,4 +155,31 @@ pub fn copy_obj(ak: String, sk: String, bucket: String, src_key: String, dst_key
   let auth = management_token(ak, sk, "$path\n")
   let r = post("$RS_HOST$path", [("Authorization", auth)], "")?
   Ok(r.status == 200)
+}
+
+# ---- tests ----
+
+test "assemble_multipart streams a file through byte-exactly, across many chunks" {
+  # 20000 bytes: comfortably more than transferTo's 8KB buffer, so the copy loop
+  # runs several times — the case a single-chunk test would not catch.
+  let payload = join(map(range(0, 2000), fn(i) => "0123456789"), "")
+  let src = File.createTempFile("dawn-test-src-", ".bin")!
+  let out = FileOutputStream.new(src)
+  out.write(utf8(payload))
+  out.close()
+  let src_path = src.getPath()!
+
+  match assemble_multipart("HEAD:", src_path, ":TAIL") {
+    Err(m) -> { assert m == "unreachable" }
+    Ok(mp) -> {
+      let got = Files.readAllBytes(File.new(mp).toPath()!)!
+      # byte-exact: the framing sits either side of the file's bytes, untouched
+      assert got == utf8("HEAD:" ++ payload ++ ":TAIL")
+      assert byte_len(got) == 5 + 20000 + 5
+      let _a = File.new(mp).delete()
+      ()
+    }
+  }
+  let _b = File.new(src_path).delete()
+  ()
 }
