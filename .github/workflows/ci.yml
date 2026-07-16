@@ -53,6 +53,21 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/.dawn-lang/bin:$PATH"
           ./backend-dawn/build.sh
 
+      # The deployable artifact. The jar is deliberately NOT in git: a build
+      # output committed by hand drifts from src/ silently, and its lib/ is
+      # gitignored anyway, so the in-repo jar could never run from a checkout.
+      # What gets deployed is now what CI built and tested, from a known commit.
+      # jar + lib/ travel together — the jar's manifest Class-Path is relative.
+      - name: upload deployable
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-dawn-${{ github.sha }}
+          path: |
+            backend-dawn/backend-dawn.jar
+            backend-dawn/lib/
+          if-no-files-found: error
+          retention-days: 30
+
   frontend:
     runs-on: ubuntu-latest
     steps:

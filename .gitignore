@@ -39,9 +39,13 @@ dist-ssr/
 docs/memory
 
 # ---- backend-dawn ----
-# Third-party jars are declared in backend-dawn/dawn.toml's [java-deps] and fetched
-# from Maven by `dawn build`, which copies them here next to the jar. Build output,
-# not source — dawn.toml is the single source of truth for their versions.
+# Build output, not source. The jar used to be committed, which meant it drifted
+# from src/ silently (it needed a manual "重建 jar" commit to catch up) and could
+# not even run from a checkout, since lib/ was ignored beside it. CI now builds
+# both and uploads them as an artifact — that is what gets deployed.
+# Third-party jars come from backend-dawn/dawn.toml's [java-deps], fetched from
+# Maven by `dawn build`; dawn.toml is the single source of truth for versions.
+backend-dawn/backend-dawn.jar
 backend-dawn/lib/
 
 # ---- Editor / OS ----
