@@ -7,12 +7,12 @@ use json/value.{Json, JArr, JInt, JNum}
 use jsonx.{obj, jstr, jint}
 use db.{Db, with_db}
 use auth.{Auth, current_user}
-use jsonread.{body_obj, has, str_or, bool_or, opt_int, str_list}
+use jsonread.{body_obj, has, str_or, opt_str, bool_or, opt_int, str_list}
 use repo_settings
 use repo_tag
 use repo_page
 use repo_viz.{NewViz, valid_slug, slug_free, viz_exists, create_viz, set_viz_str, touch_viz, delete_viz, list_all, by_id}
-use repo_pagetag.{NewPage, create_page, page_kind, delete_page, reorder_pages, set_page_str, set_page_int, touch_page, regen_page_slug, page_title, tag_exists, rename_tag, merge_tags, cleanup_tags, delete_tag, target_published_count}
+use repo_pagetag.{NewPage, create_page, page_kind, delete_page, reorder_pages, set_page_str, set_page_int, set_page_created, touch_page, regen_page_slug, page_title, tag_exists, rename_tag, merge_tags, cleanup_tags, delete_tag, target_published_count}
 
 fn param_int(req: Request, name: String) -> Option[Int] =
   match map_get(req.params, name) {
@@ -193,6 +193,10 @@ pub fn page_create(a: Auth) -> Handler =
         Ok(m) ->
           if trim(str_or(m, "title", "")) == "" {
             Err(http_error(422, "标题不能为空"))
+          } else if page_over_len(str_or(m, "title", "")) || page_over_len(str_or(m, "slug", "")) {
+            Err(http_error(422, "标题或 slug 长度超出 255"))
+          } else if bad_page_type(str_or(m, "type", "content")) {
+            Err(http_error(422, "type 只能是 content 或 article_list"))
           } else {
             let np = NewPage {
               title: trim(str_or(m, "title", "")),
@@ -200,9 +204,13 @@ pub fn page_create(a: Auth) -> Handler =
               kind: str_or(m, "type", "content"),
               description: str_or(m, "description", ""),
               content: str_or(m, "content", ""),
-              nav_visible: bool_or(m, "nav_visible", false),
+              auto_title: bool_or(m, "auto_title", false),
+              # FastAPI PageCreate.nav_visible defaults True (a page created without
+              # the field shows in the nav bar)
+              nav_visible: bool_or(m, "nav_visible", true),
               nav_order: match int_field(m, "nav_order") { Some(n) -> n
                 None -> 0 },
+              created_at: opt_str(m, "created_at"),
             }
             match with_db(a.db.path, a.db.ext, fn(c) => page_create_read(c, np)) {
               Ok(j) -> Ok(json_response(201, j))
@@ -211,6 +219,12 @@ pub fn page_create(a: Auth) -> Handler =
           }
         Err(e) -> Err(http_error(422, e))
       })
+
+# title/slug carry Field(max_length=255)
+fn page_over_len(s: String) -> Bool = str_len(s) > 255
+
+# type is Literal["content","article_list"]; anything else (incl. "builtin") is a 422
+fn bad_page_type(t: String) -> Bool = t != "content" && t != "article_list"
 
 fn page_create_read(c: Connection, np: NewPage) -> Result[Json, String] !io = {
   let id = create_page(c, np)?
@@ -228,10 +242,20 @@ pub fn page_update(a: Auth) -> Handler =
         Some(id) ->
           match body_obj(req.body) {
             Ok(m) ->
-              match with_db(a.db.path, a.db.ext, fn(c) => page_update_read(c, id, m)) {
-                Ok(Some(j)) -> Ok(json_ok(j))
-                Ok(None) -> Err(http_error(404, "页面不存在"))
-                Err(msg) -> Err(http_error(500, msg))
+              # PageUpdate validation: present title non-blank, title/slug ≤255,
+              # present type must be a valid Literal (checked before the builtin filter)
+              if has(m, "title") && trim(str_or(m, "title", "")) == "" {
+                Err(http_error(422, "标题不能为空"))
+              } else if page_over_len(str_or(m, "title", "")) || page_over_len(str_or(m, "slug", "")) {
+                Err(http_error(422, "标题或 slug 长度超出 255"))
+              } else if has(m, "type") && bad_page_type(str_or(m, "type", "content")) {
+                Err(http_error(422, "type 只能是 content 或 article_list"))
+              } else {
+                match with_db(a.db.path, a.db.ext, fn(c) => page_update_read(c, id, m)) {
+                  Ok(Some(j)) -> Ok(json_ok(j))
+                  Ok(None) -> Err(http_error(404, "页面不存在"))
+                  Err(msg) -> Err(http_error(500, msg))
+                }
               }
             Err(e) -> Err(http_error(422, e))
           }
@@ -243,12 +267,17 @@ fn page_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Opti
     None -> Ok(None)
     Some(kind) -> {
       let builtin = kind == "builtin"
-      # builtin pages accept only title/nav_visible/nav_order (slug/type/content are routing roots)
+      # builtin pages accept only title/nav_visible/nav_order (slug/type/description/
+      # content/auto_title/created_at are routing/render roots FastAPI's builtin
+      # filter strips); non-builtin pages accept the full editable set.
       let _t = if has(m, "title") { set_page_str(c, id, "title", trim(str_or(m, "title", "")))? } else { 0 }
       let _nv = if has(m, "nav_visible") { set_page_int(c, id, "nav_visible", bool_int(bool_or(m, "nav_visible", false)))? } else { 0 }
       let _no = if has(m, "nav_order") { set_page_int(c, id, "nav_order", nav_order_of(m))? } else { 0 }
+      let _ty = if builtin == false && has(m, "type") { set_page_str(c, id, "type", str_or(m, "type", "content"))? } else { 0 }
       let _de = if builtin == false && has(m, "description") { set_page_str(c, id, "description", str_or(m, "description", ""))? } else { 0 }
       let _co = if builtin == false && has(m, "content") { set_page_str(c, id, "content", str_or(m, "content", ""))? } else { 0 }
+      let _au = if builtin == false && has(m, "auto_title") { set_page_int(c, id, "auto_title", bool_int(bool_or(m, "auto_title", false)))? } else { 0 }
+      let _ca = if builtin == false { match opt_str(m, "created_at") { Some(s) -> set_page_created(c, id, s)?  None -> 0 } } else { 0 }
       let _sl = if builtin == false && has(m, "slug") { regen_page_slug(c, id, slug_base(c, id, m)?)? } else { 0 }
       let _u = touch_page(c, id)?
       repo_page.by_id_admin(c, id)
@@ -307,31 +336,44 @@ pub fn page_reorder(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
       match body_obj(req.body) {
-        Ok(m) -> {
-          let ids = int_list(m, "ids")
-          match with_db(a.db.path, a.db.ext, fn(c) => reorder_read(c, ids)) {
-            Ok(items) -> Ok(json_ok(JArr(items)))
-            Err(msg) -> Err(http_error(500, msg))
+        Ok(m) ->
+          # ReorderRequest.ids is a required list[int]: absent / non-array / any
+          # non-integer element is a 422 in FastAPI (not a silently-empty reorder).
+          match strict_int_list(m, "ids") {
+            None -> Err(http_error(422, "ids 必须是整数数组"))
+            Some(ids) ->
+              match with_db(a.db.path, a.db.ext, fn(c) => reorder_read(c, ids)) {
+                Ok(items) -> Ok(json_ok(JArr(items)))
+                Err(msg) -> Err(http_error(500, msg))
+              }
           }
-        }
         Err(e) -> Err(http_error(422, e))
       })
+
+# a present JSON array whose every element is an integer → Some(list); absent,
+# non-array, or any non-int element → None (→ 422). Empty array is valid (Some []).
+fn strict_int_list(m: Map[String, Json], key: String) -> Option[List[Int]] =
+  match map_get(m, key) {
+    Some(JArr(xs)) -> all_ints(xs, [])
+    _ -> None
+  }
+
+fn all_ints(xs: List[Json], acc: List[Int]) -> Option[List[Int]] =
+  if len(xs) == 0 {
+    Some(acc)
+  } else {
+    match xs[0] {
+      JInt(n) -> all_ints(tail_json(xs), acc ++ [n])
+      _ -> None
+    }
+  }
+
+fn tail_json(xs: List[Json]) -> List[Json] = map(range(1, len(xs)), fn(i) => xs[i])
 
 fn reorder_read(c: Connection, ids: List[Int]) -> Result[List[Json], String] !io = {
   let _r = reorder_pages(c, ids)?
   repo_page.list_admin(c)
 }
-
-fn int_list(m: Map[String, Json], key: String) -> List[Int] =
-  match map_get(m, key) {
-    Some(JArr(xs)) -> fold(xs, [], fn(acc, j) =>
-        match j {
-          JInt(n) -> acc ++ [n]
-          JNum(x) -> acc ++ [to_int(x)]
-          _ -> acc
-        })
-    _ -> []
-  }
 
 # ---- viz admin ----
 

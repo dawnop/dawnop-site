@@ -17,17 +17,22 @@ pub type NewPage = {
   kind: String,
   description: String,
   content: String,
+  auto_title: Bool,
   nav_visible: Bool,
   nav_order: Int,
+  # optional publish time; None = datetime('now'). Stored via datetime(?), see NewArticle.
+  created_at: Option[String],
 }
 
 ## Create a page, returning its new id.
 pub fn create_page(c: Connection, p: NewPage) -> Result[Int, String] !io = {
   let base = if p.slug_hint == "" { p.title } else { p.slug_hint }
   let slug = unique_slug(c, "pages", base, None)?
+  let created_expr = match p.created_at { Some(_x) -> "datetime(?)"  None -> "datetime('now')" }
+  let created_params: List[SqlV] = match p.created_at { Some(s) -> [PStr(s)]  None -> [] }
   let _i = exec(c,
-    "insert into pages (title, slug, type, description, content, nav_visible, nav_order, auto_title, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))",
-    [PStr(p.title), PStr(slug), PStr(p.kind), PStr(p.description), PStr(p.content), PInt(bool_int(p.nav_visible)), PInt(p.nav_order)])?
+    "insert into pages (title, slug, type, description, content, nav_visible, nav_order, auto_title, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, $created_expr, datetime('now'))",
+    [PStr(p.title), PStr(slug), PStr(p.kind), PStr(p.description), PStr(p.content), PInt(bool_int(p.nav_visible)), PInt(p.nav_order), PInt(bool_int(p.auto_title))] ++ created_params)?
   last_id(c)
 }
 
@@ -49,6 +54,10 @@ pub fn set_page_int(c: Connection, id: Int, col: String, v: Int) -> Result[Int, 
 pub fn touch_page(c: Connection, id: Int) -> Result[Int, String] !io =
   exec(c, "update pages set updated_at = datetime('now') where id = ?", [PInt(id)])
 
+# set created_at from a client ISO-8601 string, normalized via datetime(?)
+pub fn set_page_created(c: Connection, id: Int, iso: String) -> Result[Int, String] !io =
+  exec(c, "update pages set created_at = datetime(?) where id = ?", [PStr(iso), PInt(id)])
+
 pub fn regen_page_slug(c: Connection, id: Int, base: String) -> Result[Int, String] !io = {
   let slug = unique_slug(c, "pages", base, Some(id))?
   exec(c, "update pages set slug = ? where id = ?", [PStr(slug), PInt(id)])
@@ -68,9 +77,11 @@ pub fn delete_page(c: Connection, id: Int) -> Result[Int, String] !io = {
   exec(c, "delete from pages where id = ?", [PInt(id)])
 }
 
-## Reorder: assign nav_order by position in the id list.
+## Reorder: assign nav_order by position in the id list. Duplicate ids are
+## dropped preserving first-seen order (matches FastAPI's dedup) so a repeated id
+## doesn't shift later positions.
 pub fn reorder_pages(c: Connection, ids: List[Int]) -> Result[Int, String] !io =
-  reorder_loop(c, ids, 0)
+  reorder_loop(c, dedup_ints(ids), 0)
 
 fn reorder_loop(c: Connection, ids: List[Int], i: Int) -> Result[Int, String] !io =
   if i == len(ids) {
@@ -79,6 +90,12 @@ fn reorder_loop(c: Connection, ids: List[Int], i: Int) -> Result[Int, String] !i
     let _u = exec(c, "update pages set nav_order = ? where id = ?", [PInt(i), PInt(ids[i])])?
     reorder_loop(c, ids, i + 1)
   }
+
+fn dedup_ints(xs: List[Int]) -> List[Int] =
+  fold(xs, [], fn(acc, x) => if int_member(acc, x) { acc } else { acc ++ [x] })
+
+fn int_member(xs: List[Int], x: Int) -> Bool =
+  fold(xs, false, fn(acc, y) => acc || y == x)
 
 # ---- tags ----
 
