@@ -6,13 +6,15 @@
 # `backend-dawn-<sha>`. This script pulls that exact artifact, so what runs in
 # production is what CI tested, from a known commit.
 #
-# Run from the laptop — no need to install it on the server:
-#   ssh <user>@<server> 'bash -s' < backend-dawn/deploy/deploy.sh          # latest green main
-#   ssh <user>@<server> 'bash -s' < backend-dawn/deploy/deploy.sh <sha>    # a specific commit
+# Run as root from the laptop (same convention as rollback-to-fastapi.sh) — the
+# app dir belongs to the service user and the token is root-only:
+#   ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/deploy.sh        # latest green main
+#   ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/deploy.sh <sha>  # a specific commit
 #
-# Needs a GitHub token at /opt/dawnop-dawn/.github-token (chmod 600) — artifact
-# downloads require auth even for a public repo. A fine-grained PAT scoped to
-# this repo with Actions: read-only is enough; nothing here writes to GitHub.
+# Needs a GitHub token at /opt/dawnop-dawn/.github-token (root, chmod 600) —
+# artifact downloads require auth even for a public repo. A fine-grained PAT
+# scoped to this repo with Actions: read-only is enough; nothing here writes to
+# GitHub.
 #
 # Safe by construction: the running jar is kept and restored if the new one does
 # not come up healthy, so a bad deploy self-reverts instead of leaving the site
@@ -25,6 +27,13 @@ SERVICE="dawnop-dawn"
 TOKEN_FILE="$APP/.github-token"
 HEALTH="http://127.0.0.1:8001/api/health"
 WANT_SHA="${1:-}"
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "!!! run as root: ssh <user>@<server> 'sudo bash -s' < $0" >&2
+  exit 1
+fi
+# Installed files must stay readable by the service account, which is not root.
+OWNER=$(systemctl show "$SERVICE" -p User --value):$(systemctl show "$SERVICE" -p Group --value)
 
 STAMP=$(date +%Y%m%d-%H%M%S)
 PREV="$APP/.prev"
@@ -110,7 +119,8 @@ echo "==> 5/6 installing and restarting"
 cp -a "$JAR" "$APP/backend-dawn.jar"
 rm -rf "$APP/lib" && cp -a "$SRC/lib" "$APP/lib"
 printf '%s' "$RUN_SHA" > "$APP/.deployed-sha"
-sudo systemctl restart "$SERVICE"
+chown -R "$OWNER" "$APP/backend-dawn.jar" "$APP/lib" "$APP/.deployed-sha"
+systemctl restart "$SERVICE"
 
 echo "==> 6/6 health check"
 ok=""
@@ -124,7 +134,8 @@ if [ -z "$ok" ]; then
   cp -a "$PREV/backend-dawn.jar" "$APP/backend-dawn.jar"
   rm -rf "$APP/lib" && cp -a "$PREV/lib" "$APP/lib"
   printf '%s' "$CURRENT" > "$APP/.deployed-sha"
-  sudo systemctl restart "$SERVICE"
+  chown -R "$OWNER" "$APP/backend-dawn.jar" "$APP/lib" "$APP/.deployed-sha"
+  systemctl restart "$SERVICE"
   for _ in $(seq 1 40); do
     curl -sf -o /dev/null --max-time 3 "$HEALTH" && break
     sleep 0.5
@@ -136,4 +147,4 @@ fi
 echo
 echo "Deployed ${RUN_SHA:0:7} (run $RUN_ID) at $STAMP. Healthy on :8001."
 echo "  previous build kept at $PREV — to undo:"
-echo "    cp -a $PREV/backend-dawn.jar $APP/ && rm -rf $APP/lib && cp -a $PREV/lib $APP/ && sudo systemctl restart $SERVICE"
+echo "    cp -a $PREV/backend-dawn.jar $APP/ && rm -rf $APP/lib && cp -a $PREV/lib $APP/ && chown -R $OWNER $APP/backend-dawn.jar $APP/lib && systemctl restart $SERVICE"
