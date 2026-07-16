@@ -11,13 +11,14 @@ use java "java.net.http.HttpRequest.BodyPublishers"
 use java "java.net.http.HttpResponse.BodyHandlers"
 use java "java.time.Duration"
 use java "java.lang.String"
-use java "java.lang.Object"
 
 pub type HttpResp = { status: Int, body: String }
 
-## A binary GET: the body is an opaque byte[] (Object, spec §9.5). Ok on 2xx,
+## A binary GET: the body comes back as first-class Bytes (spec §9.5.1). Ok on 2xx,
 ## Err otherwise. For the fm content proxy (fetch bytes from qiniu, stream out).
-pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[Object, String] !io =
+## resp.body() is an erased-generic Object that is a byte[] at runtime — as_bytes
+## reclaims it.
+pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[Bytes, String] !io =
   java_try(fn() => {
     let uri = URI.create(url).expect("uri")
     let base = HttpRequest.newBuilder().expect("b").uri(uri).expect("b-uri")
@@ -25,7 +26,7 @@ pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[Objec
     let nobody: BodyPublisher = BodyPublishers.noBody().expect("nobody")
     let req = withHeaders.method("GET", nobody).expect("get").build().expect("req")
     let resp = shared_client().send(req, BodyHandlers.ofByteArray().expect("bh")).expect("resp")
-    resp.body().expect("bytes")
+    as_bytes(resp.body().expect("bytes"))
   })
 
 fn shared_client() -> HttpClient !io = {
@@ -67,15 +68,14 @@ pub fn post(url: String, headers: List[(String, String)], body: String) -> Resul
 pub fn post_form(url: String, headers: List[(String, String)], body: String) -> Result[HttpResp, String] !io =
   post(url, headers ++ [("Content-Type", "application/x-www-form-urlencoded")], body)
 
-## POST a body given as an ISO-8859-1 (latin-1) string, sent as the exact bytes
-## it maps to (latin1_bytes -> byte[] -> ofByteArray). For binary proxy upload:
-## the multipart body is assembled in latin-1 so the file bytes survive verbatim.
-pub fn post_latin1(url: String, headers: List[(String, String)], body_l1: String) -> Result[HttpResp, String] !io =
+## POST a raw Bytes body, sent verbatim via ofByteArray. For binary proxy upload:
+## the assembled multipart body carries the file bytes exactly.
+pub fn post_bytes(url: String, headers: List[(String, String)], body: Bytes) -> Result[HttpResp, String] !io =
   java_try(fn() => {
     let uri = URI.create(url).expect("uri")
     let base = HttpRequest.newBuilder().expect("b").uri(uri).expect("b-uri")
     let withHeaders = add_headers(base, headers, 0)
-    let publisher: BodyPublisher = BodyPublishers.ofByteArray(latin1_bytes(body_l1)).expect("pub")
+    let publisher: BodyPublisher = BodyPublishers.ofByteArray(body).expect("pub")
     let req = withHeaders.method("POST", publisher).expect("b-method").build().expect("req")
     let resp = shared_client().send(req, BodyHandlers.ofString().expect("bh")).expect("resp")
     HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body().expect("body")).expect("s") }

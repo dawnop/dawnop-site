@@ -688,7 +688,7 @@ pub fn fm_search(a: Auth) -> Handler =
 ## POST /api/fm/upload — multipart proxy upload (M6.5). Backup path for non-browser
 ## clients; the web app direct-uploads (upload-token + register). The file bytes
 ## ride through the backend (qiniu won't accept a client PUT), recovered byte-exact
-## from the latin-1 request body (Request.raw) via the multipart parser, then
+## from the raw request Bytes (Request.raw) via the multipart parser, then
 ## re-POSTed to qiniu. Matches FastAPI: form field `path` (target dir) + file part.
 pub fn upload(a: Auth) -> Handler =
   fn(req) =>
@@ -708,33 +708,30 @@ pub fn upload(a: Auth) -> Handler =
           }
       })
 
-# the `path` form field (target directory), recovered from latin-1 to UTF-8
+# the `path` form field (target directory), decoded from the part's Bytes as UTF-8
 fn upload_path_field(parts: List[Part]) -> String !io =
   match part_named(parts, "path") {
-    Some(pp) -> utf8_of(pp.content)
+    Some(pp) -> decode(pp.content, "UTF-8")
     None -> ""
   }
 
-# a latin-1 string re-decoded as UTF-8: recovers text fields (path, filename) that
-# arrived UTF-8-encoded but were read as latin-1 to keep binary parts byte-exact.
-fn utf8_of(latin1: String) -> String !io = String.new(latin1_bytes(latin1), "UTF-8")
-
 fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpError] !io = {
   let target = fm_split(path_field)
-  let name = sanitize_name(utf8_of(fp.filename))
+  # fp.filename comes from the (UTF-8-decoded) part headers already
+  let name = sanitize_name(fp.filename)
   let rel = fm_join(target, name)
   let mime = if fp.content_type != "" { fp.content_type } else { upload_mime(name) }
-  let size = str_len(fp.content) # fp.content is latin-1: one char per source byte
+  let size = byte_len(fp.content)
   match run_upload(a, rel, fp.content, mime, size) {
     Ok(j) -> Ok(json_ok(j))
     Err(m) -> Err(http_error(502, m))
   }
 }
 
-fn run_upload(a: Auth, rel: String, content_l1: String, mime: String, size: Int) -> Result[Json, String] !io = {
+fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int) -> Result[Json, String] !io = {
   let existing = with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel))?
   let key = upload_key(existing)
-  let _up = upload_bytes(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content_l1, mime, now_secs() + a.qiniu.expires)?
+  let _up = upload_bytes(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_secs() + a.qiniu.expires)?
   with_db(a.db.path, a.db.ext, fn(c) => upsert_upload(c, rel, key, mime, size))
 }
 

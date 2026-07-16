@@ -1,19 +1,19 @@
-# Inbound multipart/form-data parsing (M6.5 knife 1). The request body arrives as
-# a lossless ISO-8859-1 string (Request.raw); structure is parsed here in
-# string-land and each part's exact bytes are recovered downstream via
-# latin1_bytes. All work is string-level (split/join) — never code_points on the
-# content, which for a large upload would box millions of Ints. CRLF is spelled
-# from_code_points([13,10]); Dawn has no \r escape.
+# Inbound multipart/form-data parsing (M6.5 knife 1; M7 序4: over Bytes). The
+# request body arrives as first-class Bytes (Request.raw). Structure is located
+# at the byte level (byte_index_of / byte_slice), each part's content is kept as
+# raw Bytes, and only the ASCII header block is decoded to a string for field
+# extraction. CRLF is spelled from_code_points([13,10]); Dawn has no \r escape.
 
 pub type Part = {
   name: String,        # form field name (Content-Disposition name=)
   filename: String,    # "" for a plain field; the client filename for a file part
   content_type: String,# the part's declared Content-Type ("" if none)
-  content: String,     # part content as a latin-1 string (byte-lossless)
+  content: Bytes,      # the part's raw bytes
 }
 
 fn crlf() -> String = from_code_points([13, 10])
-fn crlf2() -> String = from_code_points([13, 10, 13, 10])
+fn crlf_b() -> Bytes = utf8(from_code_points([13, 10]))
+fn crlf2_b() -> Bytes = utf8(from_code_points([13, 10, 13, 10]))
 
 fn drop1(xs: List[String]) -> List[String] = drop(xs, 1)
 
@@ -49,15 +49,6 @@ fn unquote(s: String) -> String = {
   }
 }
 
-## Drop a single trailing CRLF (the one before the next boundary) without touching
-## the content's own bytes. Splitting on CRLF yields a trailing "" iff `s` ends
-## with CRLF; rejoin all-but-that and internal CRLFs are preserved verbatim.
-fn strip_trailing_crlf(s: String) -> String = {
-  let pieces = split(s, crlf())
-  let n = len(pieces)
-  if n >= 1 && pieces[n - 1] == "" { join(take(pieces, n - 1), crlf()) } else { s }
-}
-
 fn disp_name(headers: String) -> Option[String] = between(headers, "name=\"", "\"")
 
 fn disp_filename(headers: String) -> String =
@@ -67,44 +58,59 @@ fn disp_filename(headers: String) -> String =
   }
 
 ## The part's declared Content-Type ("" if the part has no Content-Type header).
-## Works whether or not it is the last header line (before() returns the whole
-## remainder when there is no trailing CRLF).
 fn part_ctype(headers: String) -> String =
   match between(headers, "Content-Type: ", crlf()) {
     Some(v) -> v
     None -> ""
   }
 
-## Parse one chunk (the text between two `--boundary` delimiters) into a Part.
-## The preamble ("") and the closing epilogue ("--" + CRLF) do not start with
-## CRLF / lack a name and return None.
-fn parse_part(chunk: String) -> Option[Part] =
-  if starts_with(chunk, crlf()) == false {
+## Split Bytes on a (non-empty) Bytes separator, like string split — the pieces
+## between separators, including the preamble and epilogue.
+fn bsplit(b: Bytes, sep: Bytes) -> List[Bytes] = bsplit_from(b, sep, 0, [])
+
+fn bsplit_from(b: Bytes, sep: Bytes, from: Int, acc: List[Bytes]) -> List[Bytes] =
+  match byte_index_of(b, sep, from) {
+    None -> acc ++ [byte_slice(b, from, byte_len(b))]
+    Some(i) -> bsplit_from(b, sep, i + byte_len(sep), acc ++ [byte_slice(b, from, i)])
+  }
+
+## Drop a single trailing CRLF (the one before the next boundary) without touching
+## the content's own bytes.
+fn strip_trailing_crlf(b: Bytes) -> Bytes = {
+  let n = byte_len(b)
+  if n >= 2 && byte_slice(b, n - 2, n) == crlf_b() { byte_slice(b, 0, n - 2) } else { b }
+}
+
+## Parse one chunk (the bytes between two `--boundary` delimiters) into a Part.
+## The preamble and the closing epilogue ("--" + CRLF) do not start with CRLF /
+## lack a name and return None. Headers are ASCII (decoded); content stays Bytes.
+fn parse_part(chunk: Bytes) -> Option[Part] =
+  if byte_len(chunk) < 2 || byte_slice(chunk, 0, 2) != crlf_b() {
     None
   } else {
-    match after(chunk, crlf()) {          # strip the leading CRLF
+    let body = byte_slice(chunk, 2, byte_len(chunk))   # strip the leading CRLF
+    match byte_index_of(body, crlf2_b(), 0) {          # headers | content on CRLFCRLF
       None -> None
-      Some(body) ->
-        match after(body, crlf2()) {      # split headers | content on CRLFCRLF
+      Some(hi) -> {
+        let headers = decode(byte_slice(body, 0, hi), "UTF-8")
+        let content = strip_trailing_crlf(byte_slice(body, hi + 4, byte_len(body)))
+        match disp_name(headers) {
           None -> None
-          Some(rest) ->
-            match disp_name(before(body, crlf2())) {
-              None -> None
-              Some(name) -> Some(Part {
-                name: name,
-                filename: disp_filename(before(body, crlf2())),
-                content_type: part_ctype(before(body, crlf2())),
-                content: strip_trailing_crlf(rest),
-              })
-            }
+          Some(name) -> Some(Part {
+            name: name,
+            filename: disp_filename(headers),
+            content_type: part_ctype(headers),
+            content: content,
+          })
         }
+      }
     }
   }
 
-## Parse a multipart body (a latin-1 string) into its parts, given the boundary.
-pub fn parse_multipart(raw: String, boundary: String) -> List[Part] = {
-  let delim = "--" ++ boundary
-  fold(split(raw, delim), [], fn(acc, ch) =>
+## Parse a multipart body (raw Bytes) into its parts, given the boundary.
+pub fn parse_multipart(body: Bytes, boundary: String) -> List[Part] = {
+  let delim = utf8("--" ++ boundary)
+  fold(bsplit(body, delim), [], fn(acc, ch) =>
     match parse_part(ch) {
       Some(p) -> acc ++ [p]
       None -> acc
@@ -128,11 +134,11 @@ test "parse a two-field multipart body (a text field and a file)" {
     "--$b$nl" ++
     "Content-Disposition: form-data; name=\"file\"; filename=\"a.txt\"${nl}Content-Type: text/plain${nl}${nl}hello$nl" ++
     "--$b--$nl"
-  let parts = parse_multipart(body, b)
+  let parts = parse_multipart(utf8(body), b)
   assert len(parts) == 2
   match part_named(parts, "path") {
     Some(p) -> {
-      assert p.content == "qiniu://pics"
+      assert decode(p.content, "UTF-8") == "qiniu://pics"
       assert p.filename == ""
     }
     None -> { assert false }
@@ -140,7 +146,7 @@ test "parse a two-field multipart body (a text field and a file)" {
   match part_named(parts, "file") {
     Some(p) -> {
       assert p.filename == "a.txt"
-      assert p.content == "hello"
+      assert decode(p.content, "UTF-8") == "hello"
     }
     None -> { assert false }
   }
@@ -160,8 +166,8 @@ test "file content with embedded CRLF is preserved, only the trailing one droppe
     "--$b$nl" ++
     "Content-Disposition: form-data; name=\"file\"; filename=\"f\"${nl}${nl}$payload$nl" ++
     "--$b--$nl"
-  match part_named(parse_multipart(body, b), "file") {
-    Some(p) -> { assert p.content == payload }
+  match part_named(parse_multipart(utf8(body), b), "file") {
+    Some(p) -> { assert decode(p.content, "UTF-8") == payload }
     None -> { assert false }
   }
 }

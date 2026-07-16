@@ -3,7 +3,6 @@
 # — the Ok branch is a rendered response, the Err branch is mapped to an HTTP
 # status by the server (JSON body {"error": message}). No exceptions anywhere:
 # panics are bugs, expected failures travel in Result.
-use java "java.lang.Object"
 use json/value.{Json, JStr, JObj}
 use json/render.{render}
 
@@ -25,25 +24,24 @@ pub type Request = {
   # request headers, keys lowercased for case-insensitive lookup (use `header`)
   headers: Map[String, String],
   body: String,
-  # the same body decoded as ISO-8859-1 (lossless byte<->char): binary handlers
-  # (multipart upload) parse structure here and recover exact bytes via latin1_bytes.
-  raw: String,
+  # the request body as raw Bytes: binary handlers (multipart upload, WebDAV PUT)
+  # parse structure and recover exact file bytes from here, no latin-1 detour.
+  raw: Bytes,
   # the matched route's metadata (method/pattern/tags), filled by the server
   # after dispatch so middleware can read `route.tags`; None when nothing matched.
   route: Option[RouteMeta],
 } derive Show
 
-# backend-dawn divergence (M6 G6): Response can carry a binary body — an opaque
-# byte[] (widened to Object, spec §9.5) for the fm proxy endpoints. `bin` = None
-# means a text body (`body`). No `derive Show` (Object is not printable).
+# Response can carry a binary body — first-class Bytes (spec §9.5.1) for the fm
+# proxy endpoints. `bin` = None means a text body (`body`).
 pub type Response = {
   status: Int,
   content_type: String,
   # extra response headers in emission order (Location, Content-Disposition, ...)
   headers: List[(String, String)],
   body: String,
-  bin: Option[Object],
-}
+  bin: Option[Bytes],
+} derive Show
 
 pub type HttpError = { status: Int, message: String } derive Show
 
@@ -70,8 +68,8 @@ pub fn json_ok(j: Json) -> Response = json_response(200, j)
 pub fn raw(status: Int, content_type: String, body: String) -> Response =
   Response { status: status, content_type: content_type, headers: [], body: body, bin: None }
 
-# A binary body: an opaque byte[] (Object) written verbatim (fm content proxy).
-pub fn binary(status: Int, content_type: String, bytes: Object) -> Response =
+# A binary body: raw Bytes written verbatim (fm content proxy).
+pub fn binary(status: Int, content_type: String, bytes: Bytes) -> Response =
   Response { status: status, content_type: content_type, headers: [], body: "", bin: Some(bytes) }
 
 # Append one response header (records are immutable — returns a new Response).
@@ -144,7 +142,7 @@ test "param reads captures and flags missing ones" {
   let q: Map[String, String] = map_empty()
   let req = Request {
     method: "GET", path: "/a/42",
-    params: map_from([("id", "42")]), query: q, headers: h, body: "", raw: "", route: None,
+    params: map_from([("id", "42")]), query: q, headers: h, body: "", raw: utf8(""), route: None,
   }
   assert param(req, "id") == Ok("42")
   assert param_int(req, "id") == Ok(42)
@@ -157,7 +155,7 @@ test "param reads captures and flags missing ones" {
 test "query_int_bounded: absent uses default, out-of-range and non-int are 422" {
   let h: Map[String, String] = map_empty()
   let mk = fn(q: Map[String, String]) => Request {
-    method: "GET", path: "/a", params: map_empty(), query: q, headers: h, body: "", raw: "", route: None,
+    method: "GET", path: "/a", params: map_empty(), query: q, headers: h, body: "", raw: utf8(""), route: None,
   }
   # absent -> default
   assert query_int_bounded(mk(map_empty()), "page", 1, 1, -1) == Ok(1)
@@ -187,7 +185,7 @@ test "param_int rejects non-numbers as a client error" {
   let q: Map[String, String] = map_empty()
   let req = Request {
     method: "GET", path: "/a/x",
-    params: map_from([("id", "x")]), query: q, headers: h, body: "", raw: "", route: None,
+    params: map_from([("id", "x")]), query: q, headers: h, body: "", raw: utf8(""), route: None,
   }
   match param_int(req, "id") {
     Err(e) -> { assert e.status == 400 }
@@ -199,7 +197,7 @@ test "header lookup is case-insensitive" {
   let req = Request {
     method: "GET", path: "/", params: map_empty(), query: map_empty(),
     headers: map_from([("authorization", "Bearer xyz"), ("content-type", "application/json")]),
-    body: "", raw: "", route: None,
+    body: "", raw: utf8(""), route: None,
   }
   assert header(req, "Authorization") == Some("Bearer xyz")
   assert header(req, "CONTENT-TYPE") == Some("application/json")

@@ -14,15 +14,14 @@ use java "java.util.Iterator"
 use web/types.{Request, Response, HttpError, Handler, Middleware, RouteMeta, http_error, error_response}
 use web/router.{Route, Dispatch, Found, NoPath, WrongMethod, dispatch, route_meta}
 
-# Read the whole request body once, decoded two ways: UTF-8 (`body`, the default
-# for JSON/text/form handlers) and ISO-8859-1 (`raw`, a lossless byte<->char map
-# so binary handlers — multipart upload, later WebDAV PUT — recover exact file
-# bytes via latin1_bytes). The byte[] is opaque (spec §9.5) so it is consumed
-# inline; both String.new calls read the same local array.
-fn read_body(ex: HttpExchange) -> (String, String) !io = {
+# Read the whole request body once as Bytes (spec §9.5.1), plus its UTF-8 decode
+# for the common text/JSON/form handlers. Binary handlers (multipart upload,
+# WebDAV PUT) take the raw Bytes and recover exact file bytes with no latin-1
+# detour — a single decode, not two.
+fn read_body(ex: HttpExchange) -> (String, Bytes) !io = {
   let stream = ex.getRequestBody().expect("request body")
   let bytes = stream.readAllBytes().expect("request bytes")
-  (String.new(bytes, "UTF-8"), String.new(bytes, "ISO-8859-1"))
+  (decode(bytes, "UTF-8"), bytes)
 }
 
 # Write a response. Length 0 selects chunked transfer encoding, so we never
@@ -35,7 +34,7 @@ fn write_response(ex: HttpExchange, r: Response) -> Unit !io = {
   let out = ex.getResponseBody().expect("response body")
   match r.bin {
     Some(bytes) -> {
-      # binary body (G6): write the opaque byte[] verbatim
+      # binary body: write the raw Bytes verbatim (Bytes -> Java byte[] param)
       out.write(bytes)
       out.flush()
     }

@@ -271,7 +271,7 @@ fn put_do(a: Auth, req: Request, rel: String, existing: Option[FileRow]) -> Resu
       let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
       let content = req.raw
       match upload_bytes(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_secs() + a.qiniu.expires) {
-        Ok(_) -> put_commit(a, rel, key, mime, str_len(content), existing)
+        Ok(_) -> put_commit(a, rel, key, mime, byte_len(content), existing)
         Err(m) -> Err(http_error(502, m))
       }
     }
@@ -530,7 +530,7 @@ fn dav_auth(a: Auth, cell: AtomicReference, req: Request) -> Option[Response] !i
 fn drop_first(xs: List[String]) -> List[String] = map(range(1, len(xs)), fn(i) => xs[i])
 
 fn b64_decode(s: String) -> String !io =
-  String.new(Base64.getDecoder().expect("dec").decode(s).expect("bytes"), "UTF-8")
+  decode(Base64.getDecoder().expect("dec").decode(s).expect("bytes"), "UTF-8")
 
 fn verify_cache(a: Auth, cell: AtomicReference, user: String, pass: String, key: String) -> Option[Response] !io =
   match with_db(a.db.path, a.db.ext, fn(c) => check_basic(c, user, pass)) {
