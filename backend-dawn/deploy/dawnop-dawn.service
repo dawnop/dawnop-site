@@ -16,16 +16,16 @@ Environment=DAWNOP_ENV=/opt/dawnop/backend/.env
 Environment=DAWN_DB_PATH=/opt/dawnop/data/dawnop.db
 Environment=DAWN_SIMPLE_EXT=/opt/dawnop/backend/extensions/libsimple
 Environment=DAWN_PORT=8001
-# JRE 21 (already installed for the playground runner). Launch with an explicit
-# -cp (Main-Class is `main`): the jar's manifest Class-Path is an absolute build
-# path, so `-jar` wouldn't find the libs here; `-cp` ignores the manifest and
-# names the jars at their deployed location.
+# JRE 21 (already installed for the playground runner). The jar's manifest
+# Class-Path names lib/ relative to the jar's own directory, so `-jar` finds the
+# libs as long as lib/ ships next to it (build.sh puts it there). Naming the jars
+# here too would just be a third copy of their versions, which dawn.toml owns.
 # -Xmx256m: WebDAV PUT no longer sizes the heap. The body streams to a temp file
 # (route tag "stream-body") and uploads from there, so a PUT costs a fixed buffer
 # rather than ~3x the file. Measured: a 100MB PUT held RSS flat at 52-61MB, and
 # the dav vhost's client_max_body_size went 64m -> 0 with it. Was 512m when the
 # whole body sat in the heap.
-ExecStart=/usr/bin/java -Xmx256m -cp /opt/dawnop-dawn/backend-dawn.jar:/opt/dawnop-dawn/lib/sqlite-jdbc-3.36.0.3.jar:/opt/dawnop-dawn/lib/jbcrypt-0.4.jar main
+ExecStart=/usr/bin/java -Xmx256m -jar /opt/dawnop-dawn/backend-dawn.jar
 Restart=on-failure
 RestartSec=3
 # hardening (mirrors the FastAPI unit). /opt/dawnop/data holds the shared DB +

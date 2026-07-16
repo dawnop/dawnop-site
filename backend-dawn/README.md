@@ -7,11 +7,13 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 ## 依赖与构建
 
-- 依赖：`lib/` 下 vendored 单 jar（`sqlite-jdbc`、`jbcrypt`——零传递依赖白名单，见 m6.md §2 G1），
-  通过 `dawn run/test/build --cp` 挂载。jar 的 manifest `Class-Path` 以相对路径引用 `lib/`，
-  部署时保持 `lib/` 与 jar 同目录。
+- 依赖：在 [`dawn.toml`](dawn.toml) 的 `[java-deps]` 里声明（`sqlite-jdbc`、`jbcrypt`——零传递依赖
+  白名单，见 m6.md §2 G1）。`dawn run/test/build` 自动从 Maven 拉取并挂上 classpath；
+  `dawn build` 另把它们复制进 jar 同级的 `lib/`，jar 的 manifest `Class-Path` 以相对路径引用它，
+  **部署时保持 `lib/` 与 jar 同目录**（形态与从前一致）。`lib/` 是构建产物，不入库。
+  国内网络可设 `DAWN_MAVEN_MIRROR=https://maven.aliyun.com/repository/public` 加速。
 - 构建：`./build.sh [输出名]`（先 `dawn test` 后 `dawn build`；需 `dawn` 在 PATH、`JAVA_HOME` 指向 GraalVM/JDK 21）。
-- 测试：`dawn test --cp "lib/sqlite-jdbc-3.36.0.3.jar:lib/jbcrypt-0.4.jar" .`（46 个单测）。
+- 测试：`dawn test .`（59 个单测）。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
   绑定 `127.0.0.1:$DAWN_PORT`，默认 8001）。
 

@@ -38,6 +38,12 @@ dist-ssr/
 # 项目记忆（显式软链到 ~/.claude/.../memory，含真实服务器 IP，绝不入库）
 docs/memory
 
+# ---- backend-dawn ----
+# Third-party jars are declared in backend-dawn/dawn.toml's [java-deps] and fetched
+# from Maven by `dawn build`, which copies them here next to the jar. Build output,
+# not source — dawn.toml is the single source of truth for their versions.
+backend-dawn/lib/
+
 # ---- Editor / OS ----
 .DS_Store
 .idea/

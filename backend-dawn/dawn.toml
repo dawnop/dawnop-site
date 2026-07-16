@@ -1,0 +1,10 @@
+schema = 1
+name = "backend_dawn"
+
+# Fetched from Maven Central and put on the class path by `dawn build|test|run`.
+# `dawn build` copies them into lib/ next to the jar, which is what the jar's
+# manifest Class-Path points at — so `jar + lib/` stays movable, as before.
+# Set $DAWN_MAVEN_MIRROR to fetch from a closer mirror.
+[java-deps]
+sqlite = "org.xerial:sqlite-jdbc:3.36.0.3"
+bcrypt = "org.mindrot:jbcrypt:0.4"
