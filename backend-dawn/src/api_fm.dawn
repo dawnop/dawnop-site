@@ -322,14 +322,20 @@ fn redirect_to_named(a: Auth, rel: String) -> Result[Response, HttpError] !io =
 fn url_q(s: String) -> String !io = URLEncoder.encode(s, "UTF-8").expect("enc")
 
 ## POST /api/fm/upload-token — mint a qiniu direct-upload token for a new key,
-## record the pending_uploads ledger row. {token, key, path, host}.
+## record the pending_uploads ledger row. {token, key, path, up_host}. The body is
+## {path: target dir, name: filename}: the returned `path` is the FULL file path
+## (dir joined with the sanitized name), which /register echoes back — so this must
+## join in `name`, not return the bare directory, and the key extension comes from
+## the filename. Mirrors app/api/fm/uploads.py.
 pub fn upload_token_ep(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
       match body_obj(req.body) {
         Ok(m) -> {
-          let rel = fm_split(str_or(m, "path", ""))
-          let e = ext(basename(rel))
+          let target = fm_split(str_or(m, "path", ""))
+          let name = sanitize_name(str_or(m, "name", ""))
+          let rel = fm_join(target, name)
+          let e = ext(name)
           let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
           let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_secs() + a.qiniu.expires)
           match with_db(a.db.path, a.db.ext, fn(c) => ledger(c, key, rel)) {
@@ -337,7 +343,7 @@ pub fn upload_token_ep(a: Auth) -> Handler =
               ("token", jstr(token)),
               ("key", jstr(key)),
               ("path", jstr(full(rel))),
-              ("host", jstr("https://upload.qiniup.com")),
+              ("up_host", jstr("https://upload.qiniup.com")),
             ])))
             Err(msg) -> Err(http_error(500, msg))
           }
@@ -817,3 +823,23 @@ pub fn routes(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReferenc
     # raw-body: multipart proxy upload carries file bytes (bounded by nginx).
     tagged(route_post("/api/fm/upload", upload(a)), ["raw-body"]),
   ]
+
+# The path returned by /upload-token (echoed to /register) must be the full FILE
+# path — target dir joined with the sanitized name — not the bare directory. The
+# regression this guards: dropping `name` returned the dir, so a root upload came
+# back as "qiniu://" → /register saw an empty rel → 400 "缺少 path / key".
+fn token_path(dir: String, name: String) -> String = full(fm_join(fm_split(dir), sanitize_name(name)))
+
+test "upload-token path joins the filename (not the bare dir)" {
+  # subdir upload: full file path, key extension from the filename
+  assert token_path("qiniu://docs", "pic.png") == "qiniu://docs/pic.png"
+  assert ext(sanitize_name("pic.png")) == "png"
+  # root upload: the file lands at root, not the empty directory
+  assert token_path("", "a.txt") == "qiniu://a.txt"
+  assert token_path("qiniu://", "a.txt") == "qiniu://a.txt"
+  # folder upload keeps internal subpath; ext still from the trailing name
+  assert token_path("qiniu://up", "sub/b.md") == "qiniu://up/sub/b.md"
+  assert ext(sanitize_name("sub/b.md")) == "md"
+  # extensionless file: no dot appended (caller uses a bare uuid key)
+  assert ext(sanitize_name("README")) == ""
+}
