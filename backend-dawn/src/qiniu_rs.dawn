@@ -7,7 +7,9 @@ use java "java.net.http.HttpRequest.BodyPublishers"
 use java "java.io.File"
 use java "java.io.FileInputStream"
 use java "java.io.FileOutputStream"
-use java "java.nio.file.Files"
+use java "java.io.ByteArrayOutputStream"
+use java "com.sun.net.httpserver.HttpServer"
+use java "java.net.InetSocketAddress"
 use http.{HttpResp, post, post_bytes, post_publisher, fetch}
 use qiniu_sign.{entry_uri, entry_token, management_token, upload_token, qiniu_mac_token}
 use json/value.{Json, JObj, JArr, JNum, JInt}
@@ -87,47 +89,30 @@ fn mp_tail() -> String = {
 }
 
 ## Upload a file from DISK to a key with CONSTANT memory: the multipart body is
-## assembled on disk (head + the file, copied 8KB at a time + tail) and sent with
-## BodyPublishers.ofFile, which reads it back in chunks. The file never lands in
-## the heap — that is what lets WebDAV PUT take a big file, where upload_bytes
-## spikes to ~3x the file size (raw body + assembled body + publisher copy).
-## ofFile also reports an exact contentLength, which qiniu's form API requires.
-##
-## Why assemble on disk rather than BodyPublishers.concat(head, ofFile, tail),
-## which would skip this copy: concat is varargs, and passing variadic arguments
-## is not supported in v0.1 (spec §9.3). The extra copy is disk-only and O(1) in
-## memory, so it costs transient disk, not the property we came for.
+## the ASCII framing with BodyPublishers.ofFile spliced between the two halves,
+## so the file is read from disk in chunks at send time and never lands in the
+## heap — that is what lets WebDAV PUT take a big file, where upload_bytes spikes
+## to ~3x the file size (raw body + assembled body + publisher copy). concat sums
+## its parts' lengths, giving the exact contentLength qiniu's form API requires.
 pub fn upload_file(ak: String, sk: String, bucket: String, key: String, path: String, mime: String, deadline: Int) -> Result[Bool, String] !io = {
   let token = upload_token(ak, sk, bucket, key, deadline)
-  let mp = assemble_multipart(mp_head(token, key, mime), path, mp_tail())?
-  let sent = send_file(mp)
-  let _ = java_try(fn() => File.new(mp).delete())
-  let r = sent?
+  let body = multipart_streaming(mp_head(token, key, mime), path, mp_tail())?
+  let ct = "multipart/form-data; boundary=$BOUNDARY"
+  let r = post_publisher("$UP_HOST/", [("Content-Type", ct)], body)?
   Ok(r.status == 200)
 }
 
-fn send_file(mp: String) -> Result[HttpResp, String] !io = {
-  let ct = "multipart/form-data; boundary=$BOUNDARY"
-  match java_try(fn() => BodyPublishers.ofFile(File.new(mp).toPath()!)!) {
+# head ++ <the file, streamed off disk> ++ tail, as one publisher
+fn multipart_streaming(head: String, src: String, tail: String) -> Result[BodyPublisher, String] !io =
+  match java_try(fn() => {
+    let h = BodyPublishers.ofByteArray(utf8(head))!
+    let f = BodyPublishers.ofFile(File.new(src).toPath()!)!
+    let t = BodyPublishers.ofByteArray(utf8(tail))!
+    BodyPublishers.concat(h, f, t)!
+  }) {
     Err(m) -> Err("upload_file: $m")
-    Ok(body) -> post_publisher("$UP_HOST/", [("Content-Type", ct)], body)
+    Ok(p) -> Ok(p)
   }
-}
-
-# head ++ <src file bytes> ++ tail -> a new temp file, copied in 8KB chunks
-# (transferTo's buffer), so nothing bigger than that buffer is ever in memory.
-fn assemble_multipart(head: String, src: String, tail: String) -> Result[String, String] !io =
-  java_try(fn() => {
-    let f = File.createTempFile("dawn-mp-", ".tmp")!
-    let out = FileOutputStream.new(f)
-    out.write(utf8(head))
-    let src_in = FileInputStream.new(File.new(src))
-    let _n = src_in.transferTo(out)
-    src_in.close()
-    out.write(utf8(tail))
-    out.close()
-    f.getPath()!
-  })
 
 fn hdr(ak: String, sk: String, op: String, entry: String) -> List[(String, String)] !io =
   [("Authorization", entry_token(ak, sk, op, entry))]
@@ -159,9 +144,9 @@ pub fn copy_obj(ak: String, sk: String, bucket: String, src_key: String, dst_key
 
 # ---- tests ----
 
-test "assemble_multipart streams a file through byte-exactly, across many chunks" {
-  # 20000 bytes: comfortably more than transferTo's 8KB buffer, so the copy loop
-  # runs several times — the case a single-chunk test would not catch.
+test "the streaming multipart body goes on the wire byte-exactly, across many chunks" {
+  # 20000 bytes: many times over the chunk size ofFile reads with, so the file
+  # part really arrives in pieces — the case a single-chunk test would not catch.
   let payload = join(map(range(0, 2000), fn(i) => "0123456789"), "")
   let src = File.createTempFile("dawn-test-src-", ".bin")!
   let out = FileOutputStream.new(src)
@@ -169,17 +154,36 @@ test "assemble_multipart streams a file through byte-exactly, across many chunks
   out.close()
   let src_path = src.getPath()!
 
-  match assemble_multipart("HEAD:", src_path, ":TAIL") {
+  # an echo server on an ephemeral port: whatever body arrives comes straight
+  # back, so the assertion compares what the publisher actually put on the wire —
+  # contentLength alone would not catch a wrong order or a mangled part
+  let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
+  server.createContext("/", fn(ex) => {
+    let buf = ByteArrayOutputStream.new()
+    let _n = ex.getRequestBody()!.transferTo(buf)
+    let got = buf.toByteArray()!
+    ex.sendResponseHeaders(200, byte_len(got))
+    let os = ex.getResponseBody()!
+    os.write(got)
+    os.close()
+  })
+  server.start()
+  let port = server.getAddress()!.getPort()
+  let no_headers: List[(String, String)] = []
+
+  match multipart_streaming("HEAD:", src_path, ":TAIL") {
     Err(m) -> { assert m == "unreachable" }
-    Ok(mp) -> {
-      let got = Files.readAllBytes(File.new(mp).toPath()!)!
-      # byte-exact: the framing sits either side of the file's bytes, untouched
-      assert got == utf8("HEAD:" ++ payload ++ ":TAIL")
-      assert byte_len(got) == 5 + 20000 + 5
-      let _a = File.new(mp).delete()
-      ()
+    Ok(body) -> match post_publisher("http://127.0.0.1:$port/", no_headers, body) {
+      Err(m) -> { assert m == "unreachable" }
+      Ok(r) -> {
+        assert r.status == 200
+        # byte-exact: the framing sits either side of the file's bytes, untouched
+        assert r.body == "HEAD:" ++ payload ++ ":TAIL"
+        assert str_len(r.body) == 5 + 20000 + 5
+      }
     }
   }
+  server.stop(0)
   let _b = File.new(src_path).delete()
   ()
 }

@@ -11,11 +11,6 @@ use java "java.util.concurrent.CountDownLatch"
 use java "java.io.OutputStreamWriter"
 use java "java.lang.String"
 use java "java.util.Iterator"
-# java.io.File, not java.nio.file.Files: every Files/Path entry point we need is
-# varargs (createTempFile(.., FileAttribute...), Path.of(.., String...)), and Dawn
-# cannot construct a Java array to pass none (arrays are opaque passthrough, spec
-# §9.5; the List bridge §9.6 is for collections). File's equivalents take exact
-# arg counts.
 use java "java.io.File"
 use java "java.io.FileOutputStream"
 use web/types.{Request, Response, HttpError, Handler, Middleware, RouteMeta, http_error, error_response}

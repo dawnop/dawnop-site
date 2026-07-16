@@ -85,10 +85,9 @@ pub fn post_bytes(url: String, headers: List[(String, String)], body: Bytes) -> 
   post_publisher(url, headers, BodyPublishers.ofByteArray(body)!)
 
 ## POST whatever a BodyPublisher produces. The streaming door: qiniu_rs.upload_file
-## assembles the multipart body on disk and passes `BodyPublishers.ofFile(path)`, so
-## the file is read in chunks and never sits in the heap. (concat(head, ofFile, tail)
-## would skip the disk copy, but it is varargs — unsupported in v0.1, see spec §9.3.)
-## ofByteArray keeps the in-memory path for small bodies.
+## passes `concat(ofByteArray(head), ofFile(path), ofByteArray(tail))`, so the file
+## part is read from disk in chunks and never sits in the heap. ofByteArray keeps
+## the in-memory path for small bodies.
 pub fn post_publisher(url: String, headers: List[(String, String)], publisher: BodyPublisher) -> Result[HttpResp, String] !io =
   java_try(fn() => {
     let uri = URI.create(url)!
