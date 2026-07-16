@@ -9,7 +9,7 @@ use json/value.{Json}
 use jsonx.{paginated, obj, jstr, jint}
 use db.{Db, with_db}
 use auth.{Auth, current_user}
-use jsonread.{body_obj, has, str_or, bool_or, opt_int, str_list}
+use jsonread.{body_obj, has, str_or, opt_str, bool_or, opt_int, str_list}
 use repo_article
 use repo_write.{NewArticle, ArticlePatch, create_article, update_article, delete_article, article_exists, unique_slug, resolve_tags, validate_page_ref}
 
@@ -17,6 +17,17 @@ fn param(req: Request, name: String) -> String =
   match map_get(req.params, name) {
     Some(v) -> v
     None -> ""
+  }
+
+# An optional integer query param: absent → None, present-and-numeric → Some,
+# present-but-non-integer → 422 (matches FastAPI's `int | None` Query coercion).
+fn opt_query_int(req: Request, name: String) -> Result[Option[Int], HttpError] =
+  match map_get(req.query, name) {
+    None -> Ok(None)
+    Some(s) -> match parse_int(s) {
+      Some(n) -> Ok(Some(n))
+      None -> Err(http_error(422, "$name must be an integer"))
+    }
   }
 
 # guard: run body only if authenticated, else 401
@@ -37,7 +48,9 @@ pub fn list_admin(a: Auth) -> Handler =
       Some("false") -> Some(false)
       _ -> None
     }
-    match with_db(a.db.path, a.db.ext, fn(c) => repo_article.list_admin(c, pub_filter, page, size)) {
+    let page_id = opt_query_int(req, "page_id")?
+    let q = map_get(req.query, "q")
+    match with_db(a.db.path, a.db.ext, fn(c) => repo_article.list_admin(c, pub_filter, page_id, q, page, size)) {
       Ok(pair) -> {
         let (total, items) = pair
         Ok(json_ok(paginated(total, page, size, items)))
@@ -77,6 +90,8 @@ pub fn create(a: Auth) -> Handler =
         Ok(m) -> {
           if has(m, "title") == false || trim(str_or(m, "title", "")) == "" {
             Err(http_error(422, "标题不能为空"))
+          } else if over_len(str_or(m, "title", "")) || over_len(str_or(m, "slug", "")) {
+            Err(http_error(422, "标题或 slug 长度超出 255"))
           } else {
             let na = NewArticle {
               title: trim(str_or(m, "title", "")),
@@ -87,6 +102,7 @@ pub fn create(a: Auth) -> Handler =
               auto_title: bool_or(m, "auto_title", false),
               page_id: opt_int(m, "page_id"),
               tags: str_list(m, "tags"),
+              created_at: opt_str(m, "created_at"),
             }
             match with_db(a.db.path, a.db.ext, fn(c) => create_then_read(c, na)) {
               Ok(j) -> Ok(json_response(201, j))
@@ -96,6 +112,9 @@ pub fn create(a: Auth) -> Handler =
         }
         Err(e) -> Err(http_error(422, e))
       })
+
+# title/slug carry Field(max_length=255); an over-length value is a 422 in FastAPI
+fn over_len(s: String) -> Bool = str_len(s) > 255
 
 fn create_then_read(c: Connection, na: NewArticle) -> Result[Json, String] !io = {
   let id = create_article(c, na)?
@@ -113,11 +132,19 @@ pub fn update(a: Auth) -> Handler =
         Some(id) ->
           match body_obj(req.body) {
             Ok(m) -> {
-              let p = patch_of(m)
-              match with_db(a.db.path, a.db.ext, fn(c) => update_then_read(c, id, p)) {
-                Ok(Some(j)) -> Ok(json_ok(j))
-                Ok(None) -> Err(http_error(404, "文章不存在"))
-                Err(m2) -> Err(classify(m2))
+              # PATCH validation mirrors ArticleUpdate: a present title must be
+              # non-blank (min_length=1 + _clean_title), title/slug ≤255.
+              if has(m, "title") && trim(str_or(m, "title", "")) == "" {
+                Err(http_error(422, "标题不能为空"))
+              } else if over_len(str_or(m, "title", "")) || over_len(str_or(m, "slug", "")) {
+                Err(http_error(422, "标题或 slug 长度超出 255"))
+              } else {
+                let p = patch_of(m)
+                match with_db(a.db.path, a.db.ext, fn(c) => update_then_read(c, id, p)) {
+                  Ok(Some(j)) -> Ok(json_ok(j))
+                  Ok(None) -> Err(http_error(404, "文章不存在"))
+                  Err(m2) -> Err(classify(m2))
+                }
               }
             }
             Err(e) -> Err(http_error(422, e))
@@ -135,6 +162,7 @@ fn patch_of(m: Map[String, Json]) -> ArticlePatch =
     has_auto_title: has(m, "auto_title"), auto_title: bool_or(m, "auto_title", false),
     has_page_id: has(m, "page_id"), page_id: opt_int(m, "page_id"),
     has_tags: has(m, "tags"), tags: str_list(m, "tags"),
+    created_at: opt_str(m, "created_at"),
   }
 
 fn update_then_read(c: Connection, id: Int, p: ArticlePatch) -> Result[Option[Json], String] !io = {

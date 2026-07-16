@@ -125,24 +125,34 @@ pub fn list_published(c: Connection, tag: Option[String], page: Int, size: Int) 
   Ok((total, items))
 }
 
-## Admin list: all articles (optionally filtered by published), newest first.
-## `pub_filter` = Some(true|false) filters, None = all. Returns (total, items).
-pub fn list_admin(c: Connection, pub_filter: Option[Bool], page: Int, size: Int) -> Result[(Int, List[Json]), String] !io = {
+## Admin list: all articles, optionally filtered by published status, owning list
+## page (`page_id`), and a title substring (`q`, case-insensitive LIKE), newest
+## first. Mirrors FastAPI's list_all. Returns (total, items).
+pub fn list_admin(c: Connection, pub_filter: Option[Bool], page_id: Option[Int], q: Option[String], page: Int, size: Int) -> Result[(Int, List[Json]), String] !io = {
   let offset = (page - 1) * size
-  let where = match pub_filter {
-    Some(true) -> "where a.published = 1"
-    Some(false) -> "where a.published = 0"
-    None -> ""
-  }
-  let cnt = query(c, "select count(*) from articles a $where", [], [ColInt])?
+  # build the WHERE conditions and their bound params in lockstep
+  let c0: List[String] = match pub_filter { Some(true) -> ["a.published = 1"]  Some(false) -> ["a.published = 0"]  None -> [] }
+  let c1 = match page_id { Some(_x) -> c0 ++ ["a.page_id = ?"]  None -> c0 }
+  let c2 = match q_filter(q) { Some(_s) -> c1 ++ ["a.title like ?"]  None -> c1 }
+  let where = if len(c2) == 0 { "" } else { "where ${join(c2, " and ")}" }
+  let p0: List[SqlV] = match page_id { Some(id) -> [PInt(id)]  None -> [] }
+  let params: List[SqlV] = match q_filter(q) { Some(s) -> p0 ++ [PStr("%$s%")]  None -> p0 }
+  let cnt = query(c, "select count(*) from articles a $where", params, [ColInt])?
   let total = match get(cnt, 0) {
     Some(r) -> int_at(r, 0)
     None -> 0
   }
-  let rows = query_rows(c, "select $LIST_COLS from articles a $where order by a.created_at desc limit ? offset ?", [PInt(size), PInt(offset)], list_col_types())?
+  let rows = query_rows(c, "select $LIST_COLS from articles a $where order by a.created_at desc limit ? offset ?", params ++ [PInt(size), PInt(offset)], list_col_types())?
   let items = shape_items(c, rows, 0, [])?
   Ok((total, items))
 }
+
+# trim `q`; an absent or blank filter means "no title filter" (matches FastAPI's `if q and q.strip()`)
+fn q_filter(q: Option[String]) -> Option[String] =
+  match q {
+    Some(s) -> if trim(s) == "" { None } else { Some(trim(s)) }
+    None -> None
+  }
 
 ## Admin stats: {total, published, drafts, total_views}.
 pub fn stats(c: Connection) -> Result[Json, String] !io = {

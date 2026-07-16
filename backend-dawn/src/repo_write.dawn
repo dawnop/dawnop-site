@@ -107,6 +107,10 @@ pub type NewArticle = {
   auto_title: Bool,
   page_id: Option[Int],
   tags: List[String],
+  # optional publish time (frontmatter/import/editor date picker); None = now.
+  # Stored via SQLite datetime(?) so an ISO-8601 (…Z) string normalizes to the
+  # same "YYYY-MM-DD HH:MM:SS" UTC text as datetime('now').
+  created_at: Option[String],
 }
 
 ## Insert an article, returning its new id. Validates page_id and tags.
@@ -118,9 +122,11 @@ pub fn create_article(c: Connection, a: NewArticle) -> Result[Int, String] !io =
     Some(id) -> PInt(id)
     None -> PNull
   }
+  let created_expr = match a.created_at { Some(_x) -> "datetime(?)"  None -> "datetime('now')" }
+  let created_params: List[SqlV] = match a.created_at { Some(s) -> [PStr(s)]  None -> [] }
   let _i = exec(c,
-    "insert into articles (title, slug, summary, content, published, auto_title, page_id, views, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))",
-    [PStr(a.title), PStr(slug), PStr(a.summary), PStr(a.content), PInt(bool_int(a.published)), PInt(bool_int(a.auto_title)), pid])?
+    "insert into articles (title, slug, summary, content, published, auto_title, page_id, views, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, 0, $created_expr, datetime('now'))",
+    [PStr(a.title), PStr(slug), PStr(a.summary), PStr(a.content), PInt(bool_int(a.published)), PInt(bool_int(a.auto_title)), pid] ++ created_params)?
   let id = last_id(c)?
   let ids = resolve_tags(c, a.tags)?
   let _t = set_article_tags(c, id, ids)?
@@ -139,6 +145,9 @@ pub type ArticlePatch = {
   has_auto_title: Bool, auto_title: Bool,
   has_page_id: Bool, page_id: Option[Int],
   has_tags: Bool, tags: List[String],
+  # present-and-non-null publish time (null is dropped upstream, like FastAPI's
+  # drop_null_created_at); Some = apply via datetime(?), None = leave unchanged
+  created_at: Option[String],
 }
 
 ## Update an article. Ok(true) on success, Ok(false) when the id is absent.
@@ -154,6 +163,7 @@ pub fn update_article(c: Connection, id: Int, p: ArticlePatch) -> Result[Bool, S
     let _pu = if p.has_published { set_int(c, id, "published", bool_int(p.published))? } else { 0 }
     let _at = if p.has_auto_title { set_int(c, id, "auto_title", bool_int(p.auto_title))? } else { 0 }
     let _pi = if p.has_page_id { set_page_id(c, id, p.page_id)? } else { 0 }
+    let _ca = match p.created_at { Some(s) -> exec(c, "update articles set created_at = datetime(?) where id = ?", [PStr(s), PInt(id)])?  None -> 0 }
     let _sl = if p.has_slug { set_slug(c, id, p)? } else { 0 }
     let _tg = if p.has_tags {
       let ids = resolve_tags(c, p.tags)?

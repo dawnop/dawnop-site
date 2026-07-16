@@ -25,6 +25,15 @@ pub fn str_or(m: Map[String, Json], key: String, fallback: String) -> String =
     _ -> fallback
   }
 
+## A present, non-null string field → Some; absent or JSON null → None. Mirrors
+## pydantic's exclude_unset + `if value is not None` PATCH semantics (an explicit
+## `null` leaves the field untouched rather than blanking it).
+pub fn opt_str(m: Map[String, Json], key: String) -> Option[String] =
+  match map_get(m, key) {
+    Some(JStr(s)) -> Some(s)
+    _ -> None
+  }
+
 pub fn bool_or(m: Map[String, Json], key: String, fallback: Bool) -> Bool =
   match map_get(m, key) {
     Some(JBool(b)) -> b

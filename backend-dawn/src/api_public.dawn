@@ -25,7 +25,11 @@ pub fn list_articles(db: Db) -> Handler =
   fn(req) => {
     let page = query_int_bounded(req, "page", 1, 1, -1)?
     let size = query_int_bounded(req, "size", 10, 1, 100)?
-    let tag = query(req, "tag")
+    # an empty ?tag= means no filter (FastAPI's `if tag:`), not "tag with empty slug"
+    let tag: Option[String] = match query(req, "tag") {
+      Some(s) -> if s == "" { None } else { Some(s) }
+      None -> None
+    }
     let outcome = with_db(db.path, db.ext, fn(c) => list_published(c, tag, page, size))
     match outcome {
       Ok(pair) -> {
