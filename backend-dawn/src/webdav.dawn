@@ -203,6 +203,14 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
   let lastmod = http_date(ts(o.updated_at))
   if head {
     Ok(with_meta(raw(200, mime, ""), o.size, etag, lastmod))
+  } else if o.size <= 0 {
+    # A 0-byte object has nothing to fetch, and qiniu does not answer a plain GET
+    # on one with 0 bytes — it answers {"error":"invalid range: failed to overlap"},
+    # which fetch_bytes (which does not inspect the status) would hand back as the
+    # file's content. Serve the empty body ourselves, ahead of the redirect branch
+    # so 302-following clients don't hit the same thing at qiniu.
+    Ok(add_headers(binary(200, mime, utf8("")),
+      [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
   } else if follows_redirect(req) {
     # redirect-following clients get 302 direct to qiniu, which serves Range itself
     Ok(redirect(302, signed_url(a.qiniu, key)))
