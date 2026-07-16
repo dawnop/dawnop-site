@@ -11,22 +11,22 @@ use java "javax.crypto.spec.SecretKeySpec"
 ## caller-assembled "TC3-HMAC-SHA256\n<ts>\n<scope>\n<hash>" blob.
 pub fn tc3_signature(secret_key: String, date: String, service: String, string_to_sign: String) -> String !io = {
   # signing_key = HMAC(HMAC(HMAC("TC3"+sk, date), service), "tc3_request")
-  let mac1 = Mac.getInstance("HmacSHA256").expect("mac1")
+  let mac1 = Mac.getInstance("HmacSHA256")!
   mac1.init(SecretKeySpec.new(utf8("TC3$secret_key"), "HmacSHA256"))
-  let k1 = mac1.doFinal(utf8(date)).expect("k1")
+  let k1 = mac1.doFinal(utf8(date))!
 
-  let mac2 = Mac.getInstance("HmacSHA256").expect("mac2")
+  let mac2 = Mac.getInstance("HmacSHA256")!
   mac2.init(SecretKeySpec.new(k1, "HmacSHA256"))
-  let k2 = mac2.doFinal(utf8(service)).expect("k2")
+  let k2 = mac2.doFinal(utf8(service))!
 
-  let mac3 = Mac.getInstance("HmacSHA256").expect("mac3")
+  let mac3 = Mac.getInstance("HmacSHA256")!
   mac3.init(SecretKeySpec.new(k2, "HmacSHA256"))
-  let signing_key = mac3.doFinal(utf8("tc3_request")).expect("sk")
+  let signing_key = mac3.doFinal(utf8("tc3_request"))!
 
-  let mac4 = Mac.getInstance("HmacSHA256").expect("mac4")
+  let mac4 = Mac.getInstance("HmacSHA256")!
   mac4.init(SecretKeySpec.new(signing_key, "HmacSHA256"))
-  let sig = mac4.doFinal(utf8(string_to_sign)).expect("sig")
-  HexFormat.of().expect("hex").formatHex(sig).expect("h")
+  let sig = mac4.doFinal(utf8(string_to_sign))!
+  HexFormat.of()!.formatHex(sig)!
 }
 
 test "tc3 signature matches the Python reference" {

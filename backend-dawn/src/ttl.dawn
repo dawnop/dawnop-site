@@ -11,7 +11,7 @@ pub fn new_cell() -> AtomicReference !io = AtomicReference.new("")
 
 ## The cached payload when the cell holds one younger than `ttl_s` seconds.
 pub fn cache_get(cell: AtomicReference, ttl_s: Int) -> Option[String] !io = {
-  let s = String.valueOf(cell.get().expect("cell")).expect("s")
+  let s = String.valueOf(cell.get()!)!
   if s == "" {
     None
   } else {

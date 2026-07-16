@@ -53,9 +53,9 @@ pub fn ext(name: String) -> String =
 ## matches Python's naive `datetime.timestamp()`.
 pub fn ts(s: String) -> Int !io = {
   let core = if str_len(s) >= 19 { substring(s, 0, 19) } else { s }
-  let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").expect("fmt")
-  let ldt = LocalDateTime.parse(core, fmt).expect("ldt")
-  ldt.atZone(ZoneId.systemDefault().expect("zone")).expect("zdt").toEpochSecond()
+  let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")!
+  let ldt = LocalDateTime.parse(core, fmt)!
+  ldt.atZone(ZoneId.systemDefault()!)!.toEpochSecond()
 }
 
 # Substring search (fm_split/parent_rel/basename/ext) now uses the builtin

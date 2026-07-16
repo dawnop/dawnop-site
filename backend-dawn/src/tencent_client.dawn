@@ -50,9 +50,9 @@ pub fn call(secret_id: String, secret_key: String, service: String, action: Stri
 }
 
 fn utc_date(ts: Int) -> String !io = {
-  let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd").expect("f")
-  let d = LocalDate.ofInstant(java_instant(ts), ZoneOffset.ofHours(0).expect("z")).expect("d")
-  d.format(fmt).expect("s")
+  let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")!
+  let d = LocalDate.ofInstant(java_instant(ts), ZoneOffset.ofHours(0)!)!
+  d.format(fmt)!
 }
 
-fn java_instant(ts: Int) -> Instant !io = Instant.ofEpochSecond(ts).expect("i")
+fn java_instant(ts: Int) -> Instant !io = Instant.ofEpochSecond(ts)!

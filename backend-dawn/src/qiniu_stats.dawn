@@ -41,11 +41,11 @@ fn mac_json(ak: String, sk: String, method: String, host: String, path_query: St
 # ---- kodo v6 series (space / count / blob_io) ----
 
 fn day_range(days: Int) -> (String, String) !io = {
-  let d = DateTimeFormatter.ofPattern("yyyyMMdd").expect("f")
-  let full = DateTimeFormatter.ofPattern("yyyyMMddHHmmss").expect("f")
-  let now = LocalDateTime.now().expect("now")
-  let begin = now.minusDays(days).expect("b").format(d).expect("s")
-  ("${begin}000000", now.format(full).expect("s"))
+  let d = DateTimeFormatter.ofPattern("yyyyMMdd")!
+  let full = DateTimeFormatter.ofPattern("yyyyMMddHHmmss")!
+  let now = LocalDateTime.now()!
+  let begin = now.minusDays(days)!.format(d)!
+  ("${begin}000000", now.format(full)!)
 }
 
 ## Storage bytes (space) or object count (count) by day. Returns (times, datas).
@@ -93,12 +93,12 @@ pub fn cdn_tune(ak: String, sk: String, kind: String, days: Int, domains: List[S
   if len(domains) == 0 {
     Ok(([], []))
   } else {
-    let d = DateTimeFormatter.ofPattern("yyyy-MM-dd").expect("f")
-    let now = LocalDateTime.now().expect("now")
+    let d = DateTimeFormatter.ofPattern("yyyy-MM-dd")!
+    let now = LocalDateTime.now()!
     let body = render(obj([
       ("domains", jstr(join(domains, ";"))),
-      ("startDate", jstr(now.minusDays(days).expect("s").format(d).expect("fs"))),
-      ("endDate", jstr(now.format(d).expect("fe"))),
+      ("startDate", jstr(now.minusDays(days)!.format(d)!)),
+      ("endDate", jstr(now.format(d)!)),
       ("granularity", jstr("day")),
     ]))
     let j = mac_json(ak, sk, "POST", FUSION_HOST, "/v2/tune/$kind", body)?
@@ -111,9 +111,9 @@ pub fn cdn_tune(ak: String, sk: String, kind: String, days: Int, domains: List[S
 
 # "yyyy-MM-dd HH:mm:ss" in the local zone → unix seconds (matches strptime().timestamp())
 fn day_epoch(s: String) -> Int !io = {
-  let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").expect("f")
-  let zone = ZoneId.systemDefault().expect("z")
-  LocalDateTime.parse(s, fmt).expect("t").atZone(zone).expect("zt").toEpochSecond()
+  let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")!
+  let zone = ZoneId.systemDefault()!
+  LocalDateTime.parse(s, fmt)!.atZone(zone)!.toEpochSecond()
 }
 
 # every per-region value array under data.{domain}.{region}

@@ -89,9 +89,9 @@ fn rows_of(rs: ResultSet, cols: List[Col]) -> List[List[Cell]] !io =
 ## Rows are fully materialized and the statement is closed before returning.
 pub fn query(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[List[Cell]], String] !io =
   java_try(fn() => {
-    let st = c.prepareStatement(q).expect("prepare")
+    let st = c.prepareStatement(q)!
     bind(st, ps)
-    let rs = st.executeQuery().expect("result set")
+    let rs = st.executeQuery()!
     let rows = rows_of(rs, cols)
     st.close()
     rows
@@ -100,9 +100,9 @@ pub fn query(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Resul
 ## Column label -> 0-based position, read from the result metadata (available
 ## before the first row is fetched). Duplicate labels resolve to the last one.
 fn names_of(rs: ResultSet) -> Map[String, Int] !io = {
-  let md = rs.getMetaData().expect("result metadata")
+  let md = rs.getMetaData()!
   let n = md.getColumnCount()
-  map_from(map(range(0, n), fn(i) => (md.getColumnLabel(i + 1).expect("column label"), i)))
+  map_from(map(range(0, n), fn(i) => (md.getColumnLabel(i + 1)!, i)))
 }
 
 ## Like `query`, but each row carries its column names for read-by-name access
@@ -110,9 +110,9 @@ fn names_of(rs: ResultSet) -> Map[String, Int] !io = {
 ## the select list's types in order; the names come from the driver's metadata.
 pub fn query_rows(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[Row], String] !io =
   java_try(fn() => {
-    let st = c.prepareStatement(q).expect("prepare")
+    let st = c.prepareStatement(q)!
     bind(st, ps)
-    let rs = st.executeQuery().expect("result set")
+    let rs = st.executeQuery()!
     let names = names_of(rs)
     let rows = map(rows_of(rs, cols), fn(cells) => Row { cells: cells, names: names })
     st.close()
@@ -122,7 +122,7 @@ pub fn query_rows(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> 
 ## Run an insert/update/delete/DDL; Ok carries the affected row count.
 pub fn exec(c: Connection, q: String, ps: List[SqlV]) -> Result[Int, String] !io =
   java_try(fn() => {
-    let st = c.prepareStatement(q).expect("prepare")
+    let st = c.prepareStatement(q)!
     bind(st, ps)
     let n = st.executeUpdate()
     st.close()

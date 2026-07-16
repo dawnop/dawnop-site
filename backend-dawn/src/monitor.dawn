@@ -26,7 +26,7 @@ use jsonx.{obj, jint, jstr, jbool}
 # ---- server: the local machine, /proc first (production is Linux), JMX fallback ----
 
 pub fn server_block() -> Json !io = {
-  let rt = Runtime.getRuntime().expect("rt")
+  let rt = Runtime.getRuntime()!
   let procs = rt.availableProcessors()
   let root = File.new("/")
   let dtotal = root.getTotalSpace()
@@ -51,8 +51,8 @@ pub fn server_block() -> Json !io = {
     Err(_m) -> {
       let total_mem = rt.maxMemory()
       let free_mem = rt.freeMemory()
-      let jvm_up = ManagementFactory.getRuntimeMXBean().expect("rmx").getUptime() / 1000
-      let load1 = ManagementFactory.getOperatingSystemMXBean().expect("os").getSystemLoadAverage()
+      let jvm_up = ManagementFactory.getRuntimeMXBean()!.getUptime() / 1000
+      let load1 = ManagementFactory.getOperatingSystemMXBean()!.getSystemLoadAverage()
       let cpu = clip100(load1 * 100.0 / to_float(procs))
       obj([
         ("cpu_percent", JNum(round1(cpu))),
@@ -271,11 +271,11 @@ fn instance_fetch(id: String, key: String, region: String, instance: String) -> 
 
 # QCE/LIGHTHOUSE CpuUsage, daily points over 30 days, via the monitor service
 fn cpu_trend_fetch(id: String, key: String, region: String, instance: String) -> Result[Json, String] !io = {
-  let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss").expect("f")
-  let zone = ZoneOffset.ofHours(0).expect("z")
-  let now = LocalDateTime.ofInstant(Instant.now().expect("i"), zone).expect("now")
-  let start = now.minusDays(30).expect("s")
-  let payload = "{\"Namespace\":\"QCE/LIGHTHOUSE\",\"MetricName\":\"CpuUsage\",\"Period\":86400,\"StartTime\":\"${start.format(fmt).expect("fs")}+00:00\",\"EndTime\":\"${now.format(fmt).expect("fe")}+00:00\",\"Instances\":[{\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"$instance\"}]}]}"
+  let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")!
+  let zone = ZoneOffset.ofHours(0)!
+  let now = LocalDateTime.ofInstant(Instant.now()!, zone)!
+  let start = now.minusDays(30)!
+  let payload = "{\"Namespace\":\"QCE/LIGHTHOUSE\",\"MetricName\":\"CpuUsage\",\"Period\":86400,\"StartTime\":\"${start.format(fmt)!}+00:00\",\"EndTime\":\"${now.format(fmt)!}+00:00\",\"Instances\":[{\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"$instance\"}]}]}"
   let j = tencent_client.call(id, key, "monitor", "GetMonitorData", "2018-07-24", region, payload)?
   let resp = tc_resp("GetMonitorData", j)?
   match arr0(field(resp, "DataPoints")) {

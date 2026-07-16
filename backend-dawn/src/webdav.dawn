@@ -66,10 +66,10 @@ fn http_date(t: Int) -> String !io = fmt_date("EEE, dd MMM yyyy HH:mm:ss 'GMT'",
 fn iso_date(t: Int) -> String !io = fmt_date("yyyy-MM-dd'T'HH:mm:ss'Z'", t)
 
 fn fmt_date(pattern: String, t: Int) -> String !io = {
-  let loc = Locale.forLanguageTag("en-US").expect("loc")
+  let loc = Locale.forLanguageTag("en-US")!
   let f = SimpleDateFormat.new(pattern, loc)
-  let _z = f.setTimeZone(TimeZone.getTimeZone("GMT").expect("tz"))
-  f.format(Date.new(t * 1000)).expect("fmt")
+  let _z = f.setTimeZone(TimeZone.getTimeZone("GMT")!)
+  f.format(Date.new(t * 1000))!
 }
 
 # ---- prefix / rel / href ----
@@ -443,7 +443,7 @@ fn mkcol(a: Auth, rel: String) -> Result[Response, HttpError] !io =
 
 # the Destination's path, undecoded (getRawPath, not getPath — getPath already
 # percent-decodes, so the old URLDecoder pass double-decoded). urlparse-equivalent.
-fn uri_path(u: String) -> String !io = URI.create(u).expect("uri").getRawPath().expect("path")
+fn uri_path(u: String) -> String !io = URI.create(u)!.getRawPath()!
 
 fn dest_rel(req: Request) -> Option[String] !io =
   match header(req, "destination") {
@@ -454,7 +454,7 @@ fn dest_rel(req: Request) -> Option[String] !io =
       let stripped = if prefix != "" && starts_with(path, prefix) { substring(path, str_len(prefix), str_len(path)) } else { path }
       # single percent-decode like Python's unquote: %XX resolves, a literal '+'
       # stays '+' (URLDecoder would turn it into a space), so protect '+' as %2B first
-      let decoded = URLDecoder.decode(join(split(stripped, "+"), "%2B"), "UTF-8").expect("dec")
+      let decoded = URLDecoder.decode(join(split(stripped, "+"), "%2B"), "UTF-8")!
       Some(strip_slashes(decoded))
     }
   }
@@ -619,7 +619,7 @@ fn dav_auth(a: Auth, cell: AtomicReference, req: Request) -> Option[Response] !i
 fn drop_first(xs: List[String]) -> List[String] = map(range(1, len(xs)), fn(i) => xs[i])
 
 fn b64_decode(s: String) -> String !io =
-  decode(Base64.getDecoder().expect("dec").decode(s).expect("bytes"), "UTF-8")
+  decode(Base64.getDecoder()!.decode(s)!, "UTF-8")
 
 # base64-decode that turns malformed input into an Err instead of a panic
 fn b64_decode_try(s: String) -> Result[String, String] !io =

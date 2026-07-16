@@ -19,19 +19,19 @@ use web/router.{Route, Dispatch, Found, NoPath, WrongMethod, dispatch, route_met
 # WebDAV PUT) take the raw Bytes and recover exact file bytes with no latin-1
 # detour — a single decode, not two.
 fn read_body(ex: HttpExchange) -> (String, Bytes) !io = {
-  let stream = ex.getRequestBody().expect("request body")
-  let bytes = stream.readAllBytes().expect("request bytes")
+  let stream = ex.getRequestBody()!
+  let bytes = stream.readAllBytes()!
   (decode(bytes, "UTF-8"), bytes)
 }
 
 # Write a response. Length 0 selects chunked transfer encoding, so we never
 # need the byte count up front; the Writer handles UTF-8.
 fn write_response(ex: HttpExchange, r: Response) -> Unit !io = {
-  let headers = ex.getResponseHeaders().expect("response headers")
+  let headers = ex.getResponseHeaders()!
   headers.set("Content-Type", r.content_type)
   set_extra_headers(headers, r.headers)
   ex.sendResponseHeaders(r.status, 0)
-  let out = ex.getResponseBody().expect("response body")
+  let out = ex.getResponseBody()!
   match r.bin {
     Some(bytes) -> {
       # binary body: write the raw Bytes verbatim (Bytes -> Java byte[] param)
@@ -60,15 +60,15 @@ fn set_extra_headers(headers: Headers, hs: List[(String, String)]) -> Unit !io =
 # multi-valued request headers are rare in this API and the first wins). The
 # key set is a Java collection, so it is walked with an iterator.
 fn read_headers(ex: HttpExchange) -> Map[String, String] !io = {
-  let headers = ex.getRequestHeaders().expect("request headers")
-  let it = headers.keySet().expect("names").iterator().expect("iter")
+  let headers = ex.getRequestHeaders()!
+  let it = headers.keySet()!.iterator()!
   collect_headers(headers, it, map_empty())
 }
 
 fn collect_headers(headers: Headers, it: Iterator, acc: Map[String, String]) -> Map[String, String] !io =
   if it.hasNext() {
-    let name = String.valueOf(it.next().expect("name")).expect("name-str")
-    let v = headers.getFirst(name).expect("value")
+    let name = String.valueOf(it.next()!)!
+    let v = headers.getFirst(name)!
     collect_headers(headers, it, map_insert(acc, to_lower(name), v))
   } else {
     acc
@@ -101,7 +101,7 @@ fn rev[T](xs: List[T]) -> List[T] =
   map(range(0, len(xs)), fn(i) => xs[len(xs) - 1 - i])
 
 fn build_request(ex: HttpExchange) -> Request !io = {
-  let uri = ex.getRequestURI().expect("uri")
+  let uri = ex.getRequestURI()!
   let no_query: Map[String, String] = map_from([])
   # Query params follow form-urlencoded semantics ('+' means space), matching
   # Starlette/FastAPI; URI.getQuery() percent-decodes %XX but leaves '+' literal.
@@ -114,8 +114,8 @@ fn build_request(ex: HttpExchange) -> Request !io = {
   }
   let (body, raw) = read_body(ex)
   Request {
-    method: ex.getRequestMethod().expect("method"),
-    path: uri.getPath().expect("path"),
+    method: ex.getRequestMethod()!,
+    path: uri.getPath()!,
     params: no_query,
     query: q,
     headers: read_headers(ex),
@@ -179,9 +179,9 @@ fn handle(routes: List[Route], middleware: List[Middleware], ex: HttpExchange) -
 # JVM exit out from under the request threads).
 pub fn serve_app(port: Int, routes: List[Route], middleware: List[Middleware]) -> Unit !io = {
   let addr = InetSocketAddress.new("127.0.0.1", port)
-  let server = HttpServer.create(addr, 0).expect("server")
+  let server = HttpServer.create(addr, 0)!
   server.createContext("/", fn(ex) => handle(routes, middleware, ex))
-  server.setExecutor(Executors.newVirtualThreadPerTaskExecutor().expect("executor"))
+  server.setExecutor(Executors.newVirtualThreadPerTaskExecutor()!)
   server.start()
   println("listening on http://127.0.0.1:$port")
   let latch = CountDownLatch.new(1)
