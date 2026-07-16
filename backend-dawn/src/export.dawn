@@ -2,15 +2,44 @@
 # file body. Symmetric with the frontend's parseFrontmatter, so export→new-post
 # round-trips (auto_title articles omit the title line — the H1 carries it).
 use java "java.sql.Connection"
-use java "java.net.URLEncoder"
 use sql.{PInt, ColInt, ColStr, query, str_at, int_at, bool_at}
 
-## Percent-encode for a Content-Disposition filename* (RFC 5987 / Python quote).
-## URLEncoder emits form encoding (space→'+'); fix '+' back to %20. Slugs have no
-## spaces, but keep the correction for safety.
-pub fn url_encode(s: String) -> String !io = {
-  let e = URLEncoder.encode(s, "UTF-8").expect("enc")
-  join(split(e, "+"), "%20")
+## Percent-encode matching Python's urllib.parse.quote (default safe): the
+## unreserved set A-Za-z0-9-._~ passes through, every other byte of the UTF-8
+## encoding becomes %XX (uppercase). Unlike java URLEncoder this keeps `~`,
+## encodes `*`→%2A, and emits %20 for space — byte-for-byte with the FastAPI
+## side (Content-Disposition filename*, fm download attname, WebDAV href).
+pub fn pct_encode(s: String) -> String = {
+  let b = utf8(s)
+  pct_loop(b, 0, byte_len(b), "")
+}
+
+fn pct_loop(b: Bytes, i: Int, n: Int, acc: String) -> String =
+  if i >= n {
+    acc
+  } else {
+    let c = byte_at(b, i)
+    let piece = if pct_unreserved(c) { from_code_points([c]) } else { "%${hex2(c)}" }
+    pct_loop(b, i + 1, n, acc ++ piece)
+  }
+
+fn pct_unreserved(c: Int) -> Bool =
+  (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) ||
+    c == 45 || c == 46 || c == 95 || c == 126  # - . _ ~
+
+fn hex2(c: Int) -> String = "${hex1(c / 16)}${hex1(c % 16)}"
+
+fn hex1(n: Int) -> String =
+  if n < 10 { from_code_points([48 + n]) } else { from_code_points([55 + n]) }  # 0-9, A-F
+
+## Backwards-compatible alias; url_encode now uses the RFC-3986 encoder above.
+pub fn url_encode(s: String) -> String = pct_encode(s)
+
+test "pct_encode matches Python urllib quote byte-for-byte" {
+  assert pct_encode("a b~c*.md") == "a%20b~c%2A.md"
+  assert pct_encode("文件 name.png") == "%E6%96%87%E4%BB%B6%20name.png"
+  assert pct_encode("A-Z_0.9") == "A-Z_0.9"
+  assert pct_encode("p@q#r") == "p%40q%23r"
 }
 
 ## Minimal YAML scalar: quote when empty, edge-space/dash, or containing any of

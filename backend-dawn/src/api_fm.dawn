@@ -3,7 +3,6 @@
 # qiniu-mutating endpoints (upload/delete/copy/save) are added separately.
 use java "java.sql.Connection"
 use java "java.lang.System"
-use java "java.net.URLEncoder"
 use java "java.lang.Object"
 use java "java.lang.String"
 use java "java.util.concurrent.atomic.AtomicReference"
@@ -19,6 +18,7 @@ use fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full}
 use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, ledger_insert, ledger_delete, search_files, subtree_rows, entry_json, delete_row, stats_db, FileRow}
 use repo_settings.{setting_int}
 use crypto.{uuid}
+use export.{pct_encode}
 use qiniu_sign.{private_url, upload_token}
 use qiniu_rs.{delete_obj, copy_obj, stat, upload_text, upload_bytes}
 use qiniu_stats.{kodo_series, last_nonzero, field, int_of}
@@ -186,7 +186,7 @@ pub fn sign(a: Auth) -> Handler =
       Ok(Some(o)) ->
         match o.key {
           Some(k) -> Ok(json_ok(obj([("url", jstr(signed(a.qiniu, k, "")))])))
-          None -> Err(http_error(400, "该项没有对应的对象"))
+          None -> Err(http_error(404, "文件不存在"))
         }
       Ok(None) -> Err(http_error(404, "文件不存在"))
       Err(m) -> Err(http_error(500, m))
@@ -274,7 +274,7 @@ pub fn content(a: Auth) -> Handler =
               Err(m) -> Err(http_error(502, m))
             }
           }
-          None -> Err(http_error(400, "该项没有对应的对象"))
+          None -> Err(http_error(404, "文件不存在"))
         }
       Ok(None) -> Err(http_error(404, "文件不存在"))
       Err(m) -> Err(http_error(500, m))
@@ -283,9 +283,78 @@ pub fn content(a: Auth) -> Handler =
 
 fn content_type_of(ct: String) -> String = if ct == "" { "application/octet-stream" } else { ct }
 
-## GET /api/fm/preview?path= — 302 to the signed URL (inline).
+## GET /api/fm/preview?path=&w=&h=&mode= — 302 to the signed URL (inline). For a
+## raster image with w/h given (and original >50KB) redirect to a seven-niu
+## imageView2 thumbnail instead of the original (省流量), mirroring serve.py.
 pub fn preview(a: Auth) -> Handler =
-  fn(req) => guarded(a, req, fn() => redirect_to(a, req, ""))
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match preview_params(req) {
+        Err(e) -> Err(e)
+        Ok(params) -> {
+          let (w, h, mode) = params
+          let rel = fm_split(qparam(req, "path"))
+          match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
+            Ok(Some(o)) ->
+              match o.key {
+                Some(k) -> {
+                  let suffix = match thumb_fop(o.content_type, o.size, w, h, mode) {
+                    Some(fop) -> "?$fop"
+                    None -> ""
+                  }
+                  Ok(redirect(302, signed(a.qiniu, k, suffix)))
+                }
+                None -> Err(http_error(404, "文件不存在"))
+              }
+            Ok(None) -> Err(http_error(404, "文件不存在"))
+            Err(m) -> Err(http_error(500, m))
+          }
+        }
+      })
+
+# w/h are Query(ge=1, le=2000); mode is Query("fit", pattern=^(fit|fill)$).
+fn preview_params(req: Request) -> Result[(Option[Int], Option[Int], String), HttpError] = {
+  let w = bounded_opt(req, "w", 1, 2000)?
+  let h = bounded_opt(req, "h", 1, 2000)?
+  let mode = match query(req, "mode") { Some(mm) -> mm  None -> "fit" }
+  if mode != "fit" && mode != "fill" {
+    Err(http_error(422, "mode 只能是 fit 或 fill"))
+  } else {
+    Ok((w, h, mode))
+  }
+}
+
+fn bounded_opt(req: Request, name: String, lo: Int, hi: Int) -> Result[Option[Int], HttpError] =
+  match query(req, name) {
+    None -> Ok(None)
+    Some(s) -> match parse_int(s) {
+      None -> Err(http_error(422, "$name must be an integer"))
+      Some(n) -> if n < lo || n > hi { Err(http_error(422, "$name 超出范围")) } else { Ok(Some(n)) }
+    }
+  }
+
+# imageView2 fop for a raster thumbnail, or None (serve the original) when no w/h,
+# a non-raster type, or the original is already ≤50KB. Mirrors serve.py _thumb_fop.
+fn thumb_fop(content_type: String, size: Int, w: Option[Int], h: Option[Int], mode: String) -> Option[String] =
+  match (w, h) {
+    (None, None) -> None
+    _ ->
+      if thumbable(content_type) == false {
+        None
+      } else if size <= 51200 {  # 50 * 1024
+        None
+      } else {
+        let code = if mode == "fill" { "1" } else { "2" }  # 1=裁剪铺满, 2=等比缩放
+        let ww = match w { Some(n) -> "/w/$n"  None -> "" }
+        let hh = match h { Some(n) -> "/h/$n"  None -> "" }
+        Some("imageView2/$code$ww$hh/format/webp/q/82")
+      }
+  }
+
+# the raster formats seven-niu imageView2 can process (svg etc. excluded)
+fn thumbable(ct: String) -> Bool =
+  ct == "image/jpeg" || ct == "image/png" || ct == "image/webp" || ct == "image/gif" ||
+    ct == "image/bmp" || ct == "image/x-ms-bmp" || ct == "image/tiff"
 
 ## GET /api/fm/download?path= — 302 to the signed URL with an attachment name.
 pub fn download(a: Auth) -> Handler =
@@ -295,31 +364,18 @@ pub fn download(a: Auth) -> Handler =
     redirect_to_named(a, rel)
   })
 
-fn redirect_to(a: Auth, req: Request, suffix: String) -> Result[Response, HttpError] !io = {
-  let rel = fm_split(qparam(req, "path"))
-  match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
-    Ok(Some(o)) ->
-      match o.key {
-        Some(k) -> Ok(redirect(302, signed(a.qiniu, k, suffix)))
-        None -> Err(http_error(400, "该项没有对应的对象"))
-      }
-    Ok(None) -> Err(http_error(404, "文件不存在"))
-    Err(m) -> Err(http_error(500, m))
-  }
-}
-
 fn redirect_to_named(a: Auth, rel: String) -> Result[Response, HttpError] !io =
   match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
     Ok(Some(o)) ->
       match o.key {
         Some(k) -> Ok(redirect(302, signed(a.qiniu, k, "?attname=${url_q(basename(rel))}")))
-        None -> Err(http_error(400, "该项没有对应的对象"))
+        None -> Err(http_error(404, "文件不存在"))
       }
     Ok(None) -> Err(http_error(404, "文件不存在"))
     Err(m) -> Err(http_error(500, m))
   }
 
-fn url_q(s: String) -> String !io = URLEncoder.encode(s, "UTF-8").expect("enc")
+fn url_q(s: String) -> String = pct_encode(s)
 
 ## POST /api/fm/upload-token — mint a qiniu direct-upload token for a new key,
 ## record the pending_uploads ledger row. {token, key, path, up_host}. The body is
@@ -535,15 +591,40 @@ fn save_key(rel: String) -> String !io = {
 }
 
 # a minimal mime guess for text files (fm text editor only saves text)
+# mirrors Python mimetypes.guess_type (the server's stdlib table) for the common
+# extensions, with mimetypes' application/octet-stream default for the unknown —
+# create-file/save previously defaulted text/plain and mis-typed js.
 fn guess_mime(rel: String) -> String =
   match ext(basename(rel)) {
     "md" -> "text/markdown"
     "txt" -> "text/plain"
     "json" -> "application/json"
     "html" -> "text/html"
+    "htm" -> "text/html"
     "css" -> "text/css"
-    "js" -> "application/javascript"
-    _ -> "text/plain"
+    "js" -> "text/javascript"
+    "mjs" -> "text/javascript"
+    "xml" -> "application/xml"
+    "csv" -> "text/csv"
+    "yaml" -> "application/yaml"
+    "yml" -> "application/yaml"
+    "pdf" -> "application/pdf"
+    "png" -> "image/png"
+    "jpg" -> "image/jpeg"
+    "jpeg" -> "image/jpeg"
+    "gif" -> "image/gif"
+    "webp" -> "image/webp"
+    "svg" -> "image/svg+xml"
+    "bmp" -> "image/bmp"
+    "tiff" -> "image/tiff"
+    "ico" -> "image/vnd.microsoft.icon"
+    "mp4" -> "video/mp4"
+    "mp3" -> "audio/mpeg"
+    "zip" -> "application/zip"
+    "tar" -> "application/x-tar"
+    "py" -> "text/x-python"
+    "sh" -> "text/x-sh"
+    _ -> "application/octet-stream"
   }
 
 ## POST /api/fm/copy — {path, destination, sources[]}. Copies each subtree;
