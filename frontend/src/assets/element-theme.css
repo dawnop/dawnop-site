@@ -1,6 +1,8 @@
 /* Element Plus 主题对齐：把默认的 #409EFF 主色钉到本站 Ant 蓝 (#1677ff)，
    并对齐圆角与语义色，使迁移后整体观感与现状基本一致。
-   本文件须在 element-plus/dist/index.css 之后引入（见 main.js）。 */
+   本文件是 :root 变量覆盖，同特异度下后者胜，故须排在 Element Plus 自身样式之后才生效。
+   按需引入后已无 dist/index.css——组件样式由 unplugin 注入、vite 排进更靠前的 chunk，
+   本文件随 main.js 进入口 chunk 排在其后，天然满足；调整 main.js 引入位置前先确认这点。 */
 :root {
   --el-color-primary: #1677ff;
   --el-color-primary-light-3: #4096ff; /* hover */
