@@ -13,7 +13,10 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   **部署时保持 `lib/` 与 jar 同目录**（形态与从前一致）。`lib/` 是构建产物，不入库。
   国内网络可设 `DAWN_MAVEN_MIRROR=https://maven.aliyun.com/repository/public` 加速。
 - 构建：`./build.sh [输出名]`（先 `dawn test` 后 `dawn build`；需 `dawn` 在 PATH、`JAVA_HOME` 指向 GraalVM/JDK 21）。
-- 测试：`dawn test .`（59 个单测）。
+  **jar 与 `lib/` 都是构建产物，不入库**——jar 曾经入库，结果是它悄悄落后于 `src/`（要靠手动
+  「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
+  现在由 CI 构建并上传 artifact，部署取的就是它。
+- 测试：`dawn test .`（60 个单测，无需 .env / 库 / libsimple / 网络，CI 每次 push 都跑）。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
   绑定 `127.0.0.1:$DAWN_PORT`，默认 8001）。
 
@@ -68,8 +71,20 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 **入口**
 - `main.dawn` — 读配置、建 `Auth`/`MonCfg`、拼装全部路由 + 中间件、绑定端口。
 
-## 部署（灰度切流）
+## 部署
+
+```bash
+ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/deploy.sh          # main 最新绿
+ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/deploy.sh <sha>    # 指定提交
+```
+
+取该提交 CI 产物（`backend-dawn-<sha>`），故**上线的就是 CI 测过的那份**。校验 jar 与
+manifest `Class-Path` 要的 `lib/` 齐全后才装，起不来自动回滚到 `.prev/`。幂等（同 sha 不重装）。
+服务器需 `/opt/dawnop-dawn/.github-token`（fine-grained PAT，Actions: read-only）——
+artifact 下载即使公开仓也要鉴权。
 
 见 `deploy/`：
-- `dawnop-dawn.service` — systemd 单元（`/opt/dawnop-dawn`，`-Xmx256m`，与 FastAPI 并存）。
-- `nginx-cutover.md` — 分阶段切流 + 全量切换 snippet（Phase 2：`/api/` catch-all → :8001，仅 `= /api/fm/upload` 留 Python）。
+- `deploy.sh` — 上面那个。
+- `dawnop-dawn.service` — systemd 单元（`/opt/dawnop-dawn`，`-Xmx256m`，`User=dawnop`）。
+- `nginx-cutover.md` — M6 分阶段切流记录 + 全量切换 snippet（已执行）。
+- `rollback-to-fastapi.sh` — 应急回退到 FastAPI（uvicorn 已 disable，脚本会拉起）。

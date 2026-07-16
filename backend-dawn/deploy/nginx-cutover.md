@@ -83,7 +83,8 @@ routing changes.
 
 Prereqs on the server:
 - `openjdk-21-jre-headless` (already present for the playground runner).
-- `lib/sqlite-jdbc-*.jar` next to `backend-dawn.jar` (rsynced with the app).
+- `lib/sqlite-jdbc-*.jar` next to `backend-dawn.jar` — `deploy.sh` puts both there
+  from the CI artifact (the jar's manifest Class-Path is relative to its own dir).
 - `DAWN_SIMPLE_EXT` pointing at the linux `libsimple.so` already deployed at
   `/opt/dawnop/backend/extensions/libsimple.so` (writes to `articles` need it —
   the FTS triggers use tokenize='simple').
