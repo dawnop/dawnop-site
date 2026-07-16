@@ -20,10 +20,12 @@ Environment=DAWN_PORT=8001
 # -cp (Main-Class is `main`): the jar's manifest Class-Path is an absolute build
 # path, so `-jar` wouldn't find the libs here; `-cp` ignores the manifest and
 # names the jars at their deployed location.
-# -Xmx512m: the WebDAV PUT path reads the whole body into memory (latin-1 string
-# + byte[] copy, ~3x transient) before streaming to qiniu; paired with the dav
-# vhost's client_max_body_size 64m this bounds a single upload well within heap.
-ExecStart=/usr/bin/java -Xmx512m -cp /opt/dawnop-dawn/backend-dawn.jar:/opt/dawnop-dawn/lib/sqlite-jdbc-3.36.0.3.jar:/opt/dawnop-dawn/lib/jbcrypt-0.4.jar main
+# -Xmx256m: WebDAV PUT no longer sizes the heap. The body streams to a temp file
+# (route tag "stream-body") and uploads from there, so a PUT costs a fixed buffer
+# rather than ~3x the file. Measured: a 100MB PUT held RSS flat at 52-61MB, and
+# the dav vhost's client_max_body_size went 64m -> 0 with it. Was 512m when the
+# whole body sat in the heap.
+ExecStart=/usr/bin/java -Xmx256m -cp /opt/dawnop-dawn/backend-dawn.jar:/opt/dawnop-dawn/lib/sqlite-jdbc-3.36.0.3.jar:/opt/dawnop-dawn/lib/jbcrypt-0.4.jar main
 Restart=on-failure
 RestartSec=3
 # hardening (mirrors the FastAPI unit). /opt/dawnop/data holds the shared DB +
