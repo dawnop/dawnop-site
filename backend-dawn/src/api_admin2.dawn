@@ -3,7 +3,7 @@
 use java "java.sql.Connection"
 use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, text}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
-use json/value.{Json, JArr, JInt, JNum}
+use json/value.{Json, JArr, JInt, JNum, JNull}
 use jsonx.{obj, jstr, jint}
 use db.{Db, with_db}
 use auth.{Auth, current_user}
@@ -96,10 +96,16 @@ pub fn tag_rename(a: Auth) -> Handler =
         Some(id) ->
           match body_obj(req.body) {
             Ok(m) ->
-              match with_db(a.db.path, a.db.ext, fn(c) => rename_then_read(c, id, str_or(m, "name", ""))) {
-                Ok(Some(j)) -> Ok(json_ok(j))
-                Ok(None) -> Err(http_error(404, "标签不存在"))
-                Err(msg) -> Err(classify_400(msg))
+              # TagUpdate.name is a required str: absent or explicit null → 422
+              # (a present blank string is the handler's own 400, below).
+              match opt_str(m, "name") {
+                None -> Err(http_error(422, "name 不能为空"))
+                Some(nm) ->
+                  match with_db(a.db.path, a.db.ext, fn(c) => rename_then_read(c, id, nm)) {
+                    Ok(Some(j)) -> Ok(json_ok(j))
+                    Ok(None) -> Err(http_error(404, "标签不存在"))
+                    Err(msg) -> Err(classify_400(msg))
+                  }
               }
             Err(e) -> Err(http_error(422, e))
           }
@@ -225,6 +231,13 @@ fn page_over_len(s: String) -> Bool = str_len(s) > 255
 
 # type is Literal["content","article_list"]; anything else (incl. "builtin") is a 422
 fn bad_page_type(t: String) -> Bool = t != "content" && t != "article_list"
+
+# a key present with an explicit JSON null — a non-optional str field rejects it (422)
+fn present_null(m: Map[String, Json], key: String) -> Bool =
+  match map_get(m, key) {
+    Some(JNull) -> true
+    _ -> false
+  }
 
 fn page_create_read(c: Connection, np: NewPage) -> Result[Json, String] !io = {
   let id = create_page(c, np)?
@@ -392,9 +405,14 @@ pub fn viz_create(a: Auth) -> Handler =
   guarded(a, req, fn() =>
       match body_obj(req.body) {
         Ok(m) -> {
-          let slug = str_or(m, "slug", "")
+          # _clean_slug lowercases+trims before the regex; slug carries max_length=255.
+          let slug = to_lower(trim(str_or(m, "slug", "")))
           let source = str_or(m, "source", "")
-          if valid_slug(slug) == false {
+          if present_null(m, "name") || present_null(m, "compiled") || present_null(m, "style") || present_null(m, "source") {
+            Err(http_error(422, "字段不能为 null"))
+          } else if str_len(str_or(m, "slug", "")) > 255 {
+            Err(http_error(422, "slug 长度超出 255"))
+          } else if valid_slug(slug) == false {
             Err(http_error(422, "slug 格式非法"))
           } else if trim(source) == "" {
             Err(http_error(422, "source 不能为空"))
@@ -446,23 +464,35 @@ fn viz_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Optio
   if ex == false {
     Ok(None)
   } else {
-    let _sl = if has(m, "slug") { update_viz_slug(c, id, str_or(m, "slug", ""))? } else { 0 }
-    let _na = if has(m, "name") { set_viz_str(c, id, "name", str_or(m, "name", ""))? } else { 0 }
-    let _so = if has(m, "source") { set_viz_str(c, id, "source", str_or(m, "source", ""))? } else { 0 }
-    let _co = if has(m, "compiled") { set_viz_str(c, id, "compiled", str_or(m, "compiled", ""))? } else { 0 }
-    let _st = if has(m, "style") { set_viz_str(c, id, "style", str_or(m, "style", ""))? } else { 0 }
+    # PATCH semantics: a present, non-null field is applied; an explicit null is
+    # skipped (FastAPI's exclude_unset + `if value is not None`), NOT written as ""
+    # — writing "" here was silent data loss.
+    let _sl = match opt_str(m, "slug") { Some(s) -> update_viz_slug(c, id, s)?  None -> 0 }
+    let _na = match opt_str(m, "name") { Some(s) -> set_viz_str(c, id, "name", s)?  None -> 0 }
+    let _so = match opt_str(m, "source") { Some(s) -> set_viz_source(c, id, s)?  None -> 0 }
+    let _co = match opt_str(m, "compiled") { Some(s) -> set_viz_str(c, id, "compiled", s)?  None -> 0 }
+    let _st = match opt_str(m, "style") { Some(s) -> set_viz_str(c, id, "style", s)?  None -> 0 }
     let _t = touch_viz(c, id)?
     by_id(c, id)
   }
 }
 
-fn update_viz_slug(c: Connection, id: Int, slug: String) -> Result[Int, String] !io =
-  if valid_slug(slug) == false {
+fn update_viz_slug(c: Connection, id: Int, raw: String) -> Result[Int, String] !io = {
+  # _clean_slug lowercases+trims before validating; VizUpdate.slug is max_length=255
+  let slug = to_lower(trim(raw))
+  if str_len(raw) > 255 {
+    Err("slug 长度超出 255")
+  } else if valid_slug(slug) == false {
     Err("slug 格式非法")
   } else {
     let free = slug_free(c, slug, Some(id))?
     if free == false { Err("标识 $slug 已存在") } else { set_viz_str(c, id, "slug", slug) }
   }
+}
+
+# _clean_source: a present source must be non-blank (422), else stored verbatim
+fn set_viz_source(c: Connection, id: Int, s: String) -> Result[Int, String] !io =
+  if trim(s) == "" { Err("组件源码不能为空") } else { set_viz_str(c, id, "source", s) }
 
 ## DELETE /api/viz/{viz_id} — 204.
 pub fn viz_delete(a: Auth) -> Handler =

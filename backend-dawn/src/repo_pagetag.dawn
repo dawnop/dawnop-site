@@ -99,6 +99,14 @@ fn int_member(xs: List[Int], x: Int) -> Bool =
 
 # ---- tags ----
 
+fn tag_name(c: Connection, id: Int) -> Result[String, String] !io = {
+  let rows = query(c, "select name from tags where id = ?", [PInt(id)], [ColStr])?
+  match get(rows, 0) {
+    Some(r) -> Ok(str_at(r, 0))
+    None -> Ok("")
+  }
+}
+
 pub fn tag_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
   let rows = query(c, "select count(*) from tags where id = ?", [PInt(id)], [ColInt])?
   match get(rows, 0) {
@@ -117,9 +125,16 @@ pub fn rename_tag(c: Connection, id: Int, raw: String) -> Result[Bool, String] !
     match get(dup, 0) {
       Some(r) -> Err("已存在同名标签「${str_at(r, 0)}」，如需归并请用合并功能")
       None -> {
-        let slug = unique_slug(c, "tags", name, Some(id))?
-        let _u = exec(c, "update tags set name = ?, slug = ? where id = ?", [PStr(name), PStr(slug), PInt(id)])?
-        Ok(true)
+        # only rewrite (and regenerate slug) when the name actually changes, like
+        # FastAPI's `if name != tag.name` — a same-name rename must not disturb slug
+        let cur = tag_name(c, id)?
+        if name == cur {
+          Ok(true)
+        } else {
+          let slug = unique_slug(c, "tags", name, Some(id))?
+          let _u = exec(c, "update tags set name = ?, slug = ? where id = ?", [PStr(name), PStr(slug), PInt(id)])?
+          Ok(true)
+        }
       }
     }
   }
