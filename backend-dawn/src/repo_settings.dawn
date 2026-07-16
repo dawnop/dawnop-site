@@ -15,13 +15,23 @@ pub fn defaults(storage_quota_gb: Int) -> List[(String, Int)] =
     ("text_preview_max_kb", 512),
   ]
 
-fn range_of(key: String) -> Option[(Int, Int)] =
+pub fn range_of(key: String) -> Option[(Int, Int)] =
   match key {
     "upload_concurrency" -> Some((1, 8))
     "download_concurrency" -> Some((1, 8))
     "storage_quota_gb" -> Some((1, 1024))
     "text_preview_max_kb" -> Some((16, 10240))
     _ -> None
+  }
+
+## Validate one setting without writing (unknown key or out-of-range → 400 msg),
+## for the "validate every key before committing any" pass that mirrors FastAPI's
+## single trailing db.commit(). The non-integer rejection lives in the handler
+## (JSON value → strict int) since only the raw JSON distinguishes 3 from 3.0.
+pub fn check_setting(key: String, value: Int) -> Result[Bool, String] =
+  match range_of(key) {
+    None -> Err("未知配置项：$key")
+    Some((lo, hi)) -> if value < lo || value > hi { Err("$key 应为 $lo~$hi 的整数") } else { Ok(true) }
   }
 
 ## Read all settings, defaults overlaid by stored rows (dirty rows fall back).

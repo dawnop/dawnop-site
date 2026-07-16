@@ -20,6 +20,10 @@ pub fn html_escape(s: String) -> String = {
 
 fn replace(s: String, from: String, to: String) -> String = join(split(s, from), to)
 
+# normalize tab/newline/CR to spaces so a whitespace-run split matches Python's
+# str.split() (which splits on any whitespace, not only U+0020)
+fn ws_to_space(s: String) -> String =
+  replace(replace(replace(s, "\t", " "), "\n", " "), from_code_points([13]), " ")
 # ---- <mark> wrapping on escaped text (case-insensitive, term order) ----
 
 ## Wrap each occurrence of an (escaped) term in <mark>. Operates on already-
@@ -221,7 +225,9 @@ fn max2(a: Int, b: Int) -> Int = if a > b { a } else { b }
 ## FTS tokenizer (production/local); falls back to LIKE via java_try on FTS error.
 pub fn search_published(c: Connection, q: String, page: Int, size: Int) -> Result[Json, String] !io = {
   let query_str = trim(q)
-  let terms = filter(split(query_str, " "), fn(t) => t != "")
+  # highlight terms split on ANY whitespace run (Python's str.split()), not just
+  # the space char — a tab/newline-separated query still highlights each term
+  let terms = filter(split(ws_to_space(query_str), " "), fn(t) => t != "")
   if len(terms) == 0 {
     Ok(empty_result(page, size, query_str))
   } else {
