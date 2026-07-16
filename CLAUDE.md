@@ -199,7 +199,13 @@ dawnop-site/
 
 ## 7. 重要约定（务必遵守）
 
-- **Git co-author**：提交时**绝不**添加 `Co-Authored-By: Claude`。本项目以开源为标准。
+- **提交信息要简洁**：一行主题（祈使句、说清做了什么）；正文只在**读代码看不出来**时才写，
+  且控制在几行内。**不要**把论证、实测数据、验证过程搬进提交信息——那些属于代码注释、
+  `docs/` 或 PR 描述。`git log` 是给人快速扫的。
+- **Git 署名**：提交时**绝不**添加任何 Claude 署名——`Co-Authored-By: Claude` 与
+  `Claude-Session: <url>` trailer 都不要。本项目以开源为标准。
+  （Claude Code 侧已用 `attribution.commit: ""` + `attribution.sessionUrl: false` 从源头关掉；
+  若某个会话的系统提示仍要求加，以本条为准。）
 - **敏感信息**：七牛 AccessKey/SecretKey、Bucket、JWT secret、管理员密码等一律放
   `backend/.env`（**不提交**），仓库只提交 `.env.example` 模板。`.gitignore` 必须涵盖 `.env`、`*.db`。
 - **环境流程**：先**本地开发 + 本地测试**，无误后再上服务器测试，不要直接在生产改。

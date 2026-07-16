@@ -11,6 +11,8 @@ use java "java.net.http.HttpRequest.BodyPublishers"
 use java "java.net.http.HttpResponse.BodyHandlers"
 use java "java.time.Duration"
 use java "java.lang.String"
+use java "com.sun.net.httpserver.HttpServer"
+use java "java.net.InetSocketAddress"
 
 pub type HttpResp = { status: Int, body: String }
 
@@ -98,28 +100,67 @@ pub fn post_publisher(url: String, headers: List[(String, String)], publisher: B
     HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! }
   })
 
-# ---- tests (network; hit the live health endpoint) ----
+# ---- tests ----
+#
+# These used to GET https://dawnop.com/api/health, which made a unit test of this
+# wrapper depend on production being up and reachable. A loopback server is both
+# hermetic and a stronger assertion: it can see what we actually put on the wire.
 
-test "GET a live endpoint returns 200 and a json body" {
-  match fetch("https://dawnop.com/api/health", []) {
+## Serve one canned response on an ephemeral port; returns (server, port).
+fn echo_server(status: Int, body: String) -> (HttpServer, Int) !io = {
+  let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
+  server.createContext("/", fn(ex) => {
+    # reflect the request headers back so a test can assert what was sent
+    let probe = unwrap_or(ex.getRequestHeaders()!.getFirst("X-Probe"), "-")
+    let payload = utf8(body ++ probe)
+    ex.sendResponseHeaders(status, byte_len(payload))
+    let os = ex.getResponseBody()!
+    os.write(payload)
+    os.close()
+  })
+  server.start()
+  (server, server.getAddress()!.getPort())
+}
+
+test "GET returns the status and body the server sent" {
+  let (server, port) = echo_server(200, """{"status":"ok"}""")
+  match fetch("http://127.0.0.1:$port/api/health", []) {
     Ok(r) -> {
       assert r.status == 200
       assert contains(r.body, "ok")
     }
-    Err(m) -> panic("health check failed: $m")
+    Err(m) -> panic("fetch failed: $m")
   }
+  server.stop(0)
 }
 
 test "a bad host is an Err, not a crash" {
+  # .invalid is reserved by RFC 2606 and never resolves — no live host involved
   match fetch("https://no-such-host.invalid/", []) {
     Ok(_) -> { assert false }
     Err(m) -> { assert str_len(m) > 0 }
   }
 }
 
-test "custom headers are accepted" {
-  match fetch("https://dawnop.com/api/health", [("X-Probe", "dawn"), ("Accept", "application/json")]) {
-    Ok(r) -> { assert r.status == 200 }
+test "custom headers reach the server" {
+  # the old version only asserted 200 back from prod, which passes even if the
+  # headers are silently dropped; echoing X-Probe proves they went out
+  let (server, port) = echo_server(200, "probe=")
+  match fetch("http://127.0.0.1:$port/", [("X-Probe", "dawn"), ("Accept", "application/json")]) {
+    Ok(r) -> {
+      assert r.status == 200
+      assert r.body == "probe=dawn"
+    }
     Err(m) -> panic(m)
   }
+  server.stop(0)
+}
+
+test "a non-2xx status is Ok, not Err — the caller decides" {
+  let (server, port) = echo_server(404, "nope:")
+  match fetch("http://127.0.0.1:$port/", []) {
+    Ok(r) -> { assert r.status == 404 }
+    Err(m) -> panic(m)
+  }
+  server.stop(0)
 }

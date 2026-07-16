@@ -1,0 +1,75 @@
+name: ci
+
+# Why this exists: this repo runs production (blog +网盘 + WebDAV) and its 60
+# backend tests had never run anywhere but one laptop. The sibling repo learned
+# this the hard way — its site generator was broken for a whole milestone because
+# nothing built it on push. Same failure mode, higher stakes here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '21'
+          distribution: 'graalvm-community'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # backend-dawn is written in Dawn, so building it needs the compiler from
+      # the sibling repo. Tracking main (rather than pinning) is deliberate: the
+      # backend has to compile with the language as it actually is today, and a
+      # cross-repo break should surface here rather than at deploy time.
+      - uses: actions/checkout@v4
+        with:
+          repository: dawnop/dawn-lang
+          path: .dawn-lang
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: build the dawn compiler
+        run: gradle -p .dawn-lang :compiler:fatJar
+
+      # dawn.toml's [java-deps] are resolved by coursier, which caches here.
+      # Keyed on dawn.toml since that is the single source of truth for versions.
+      - name: cache java-deps
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/coursier
+          key: coursier-${{ hashFiles('backend-dawn/dawn.toml') }}
+          restore-keys: coursier-
+
+      # build.sh = `dawn test .` then `dawn build .`. The tests are hermetic (no
+      # .env, no DB, no libsimple, no live host); `dawn build` fetches java-deps
+      # into backend-dawn/lib/ next to the jar, which is what the jar's relative
+      # manifest Class-Path points at.
+      - name: backend tests + jar
+        run: |
+          export PATH="$GITHUB_WORKSPACE/.dawn-lang/bin:$PATH"
+          ./backend-dawn/build.sh
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # npm ci, not install: it fails loudly when the lockfile and package.json
+      # disagree, which is the whole point of having the lockfile committed.
+      - name: install
+        run: npm ci
+        working-directory: frontend
+
+      - name: build
+        run: npm run build
+        working-directory: frontend
