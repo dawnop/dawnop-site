@@ -7,7 +7,7 @@
 #
 # PUT streams: the route is tagged "stream-body", so the server spills the request
 # body to a temp file (constant memory) and put() uploads straight from that path
-# via BodyPublishers.concat(head, ofFile, tail) — the file is never in the heap.
+# (qiniu_rs.upload_file) — the file is never in the heap.
 #
 # Remaining limit vs FastAPI (documented, not a bug): GET proxies the object
 # through memory, with Range passthrough (forwards the client Range to qiniu,
@@ -34,7 +34,7 @@ use qiniu_sign.{private_url}
 use qiniu_rs.{delete_obj, copy_obj, upload_bytes, upload_file}
 use java "java.io.File"
 use crypto.{sha256_hex, uuid}
-use http.{fetch_bytes}
+use http.{fetch_bytes, ok_status}
 use ttl.{cache_get, cache_put}
 use export.{url_encode}
 
@@ -223,18 +223,27 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
       Some(pair) -> {
         let (start, end) = pair
         match fetch_bytes(signed_url(a.qiniu, key), [("Accept-Encoding", "identity"), ("Range", "bytes=$start-$end")]) {
-          Ok(bytes) ->
-            if byte_len(bytes) == end - start + 1 {
-              Ok(add_headers(binary(206, mime, bytes), [("Accept-Ranges", "bytes"), ("Content-Range", "bytes $start-$end/${o.size}"), ("Last-Modified", lastmod), ("ETag", etag)]))
+          Ok(r) ->
+            # a ranged hit is 206, a server that ignored the Range answers 200 —
+            # anything else is an upstream error whose body is not the file
+            if ok_status(r) == false {
+              Err(http_error(502, "qiniu ${r.status}"))
+            } else if byte_len(r.bytes) == end - start + 1 {
+              Ok(add_headers(binary(206, mime, r.bytes), [("Accept-Ranges", "bytes"), ("Content-Range", "bytes $start-$end/${o.size}"), ("Last-Modified", lastmod), ("ETag", etag)]))
             } else {
-              Ok(add_headers(binary(200, mime, bytes), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
+              Ok(add_headers(binary(200, mime, r.bytes), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
             }
           Err(m) -> Err(http_error(502, m))
         }
       }
       None ->
         match fetch_bytes(signed_url(a.qiniu, key), [("Accept-Encoding", "identity")]) {
-          Ok(bytes) -> Ok(add_headers(binary(200, mime, bytes), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
+          Ok(r) ->
+            if ok_status(r) == false {
+              Err(http_error(502, "qiniu ${r.status}"))
+            } else {
+              Ok(add_headers(binary(200, mime, r.bytes), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
+            }
           Err(m) -> Err(http_error(502, m))
         }
     }

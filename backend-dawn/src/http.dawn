@@ -14,11 +14,17 @@ use java "java.lang.String"
 
 pub type HttpResp = { status: Int, body: String }
 
+# The binary counterpart of HttpResp. It carries the status for the same reason
+# HttpResp does: the caller decides what a non-2xx means. Returning bare Bytes
+# made that impossible and cost us a bug — qiniu's error JSON was served as file
+# content with a 200 (see webdav.serve_file).
+pub type BytesResp = { status: Int, bytes: Bytes }
+
 ## A binary GET: the body comes back as first-class Bytes (spec §9.5.1). Ok on 2xx,
 ## Err otherwise. For the fm content proxy (fetch bytes from qiniu, stream out).
 ## resp.body() is an erased-generic Object that is a byte[] at runtime — as_bytes
 ## reclaims it.
-pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[Bytes, String] !io =
+pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[BytesResp, String] !io =
   java_try(fn() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
@@ -26,8 +32,13 @@ pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[Bytes
     let nobody: BodyPublisher = BodyPublishers.noBody()!
     let req = withHeaders.method("GET", nobody)!.build()!
     let resp = shared_client().send(req, BodyHandlers.ofByteArray()!)!
-    as_bytes(resp.body()!)
+    BytesResp { status: resp.statusCode(), bytes: as_bytes(resp.body()!) }
   })
+
+## True for a 2xx. Callers proxying bytes must check: an upstream error body is
+## still bytes, and serving it as the file's content (what happens when the status
+## is dropped) hands the user a JSON error where a file should be.
+pub fn ok_status(r: BytesResp) -> Bool = r.status >= 200 && r.status < 300
 
 fn shared_client() -> HttpClient !io = {
   let timeout = Duration.ofSeconds(10)!

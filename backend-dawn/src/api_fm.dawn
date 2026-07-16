@@ -8,7 +8,7 @@ use java "java.lang.String"
 use java "java.util.concurrent.atomic.AtomicReference"
 use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query, redirect, binary, header}
 use multipart.{Part, boundary_of, parse_multipart, part_named}
-use http.{fetch_bytes}
+use http.{fetch_bytes, ok_status}
 use web/router.{Route, route_get, route_post, tagged}
 use jsonx.{obj, jstr, jint}
 use db.{Db, with_db}
@@ -279,7 +279,14 @@ pub fn content(a: Auth) -> Handler =
           Some(k) -> {
             let url = signed(a.qiniu, k, "")
             match fetch_bytes(url, []) {
-              Ok(bytes) -> Ok(binary(200, content_type_of(o.content_type), bytes))
+              # a non-2xx body is qiniu's error, not the file — serving it would
+              # hand the browser a JSON error under the file's content type
+              Ok(r) ->
+                if ok_status(r) == false {
+                  Err(http_error(502, "qiniu ${r.status}"))
+                } else {
+                  Ok(binary(200, content_type_of(o.content_type), r.bytes))
+                }
               Err(m) -> Err(http_error(502, m))
             }
           }
