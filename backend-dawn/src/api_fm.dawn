@@ -14,7 +14,7 @@ use web/router.{Route, route_get, route_post, tagged}
 use jsonx.{obj, jstr, jint}
 use db.{Db, with_db}
 use auth.{Auth, Qiniu, current_user}
-use jsonread.{body_obj, str_or, str_list}
+use jsonread.{body_obj, str_or, str_list, opt_int}
 use fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full}
 use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, ledger_insert, ledger_delete, search_files, subtree_rows, entry_json, delete_row, stats_db, FileRow}
 use repo_settings.{setting_int}
@@ -626,7 +626,7 @@ pub fn register(a: Auth) -> Handler =
             match stat(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key) {
               Ok(r) ->
                 if r.status == 200 {
-                  match register_row(a, rel, key, r.body) {
+                  match register_row(a, rel, key, r.body, opt_int(m, "size"), str_or(m, "content_type", "")) {
                     Ok(j) -> Ok(json_ok(j))
                     Err(msg) -> Err(http_error(500, msg))
                   }
@@ -640,18 +640,62 @@ pub fn register(a: Auth) -> Handler =
         Err(e) -> Err(http_error(422, e))
       })
 
-fn register_row(a: Auth, rel: String, key: String, stat_body: String) -> Result[Json, String] !io = {
-  let size = stat_int(stat_body, "fsize")
-  let mime = stat_str(stat_body, "mimeType")
+fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint: Option[Int], ct_hint: String) -> Result[Json, String] !io = {
+  # qiniu's stat is authoritative for size/mime; fall back to the client's
+  # reported values, then a name-based guess, exactly like FastAPI's
+  #   size = fsize or payload.size or 0
+  #   mime = mimeType or content_type or _guess_mime(basename)
+  let size = reg_size(stat_body, size_hint)
+  let mime = reg_mime(stat_body, ct_hint, rel)
+  # overwrite: if a file already sits at this path under a different key, its old
+  # qiniu object is about to be orphaned — drop it (best-effort, ignore failure).
+  let existing = with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel))?
+  let _gc = overwrite_gc(a, existing, key)
   with_db(a.db.path, a.db.ext, fn(c) => {
     let _e = ensure_dirs(c, rel)?
     let _i = insert_file(c, rel, key, mime, size)?
     let _l = ledger_delete(c, key)?
-    obj_ok(c, rel)
+    # return the single registered entry (matches FastAPI's _entry(obj)), not the
+    # parent directory listing
+    match get_row(c, rel)? {
+      Some(o) -> Ok(entry_json(o))
+      None -> Err("registered file vanished")
+    }
   })
 }
 
-fn obj_ok(c: Connection, rel: String) -> Result[Json, String] !io = fs_data(c, parent_rel(rel))
+# fsize of 0 (absent or genuinely empty) falls through to the client hint, then 0
+fn reg_size(stat_body: String, hint: Option[Int]) -> Int !io = {
+  let fs = stat_int(stat_body, "fsize")
+  if fs != 0 { fs } else {
+    match hint { Some(n) -> n  None -> 0 }
+  }
+}
+
+fn reg_mime(stat_body: String, ct_hint: String, rel: String) -> String !io = {
+  let mt = stat_str(stat_body, "mimeType")
+  if mt != "" { mt } else if ct_hint != "" { ct_hint } else { guess_mime(rel) }
+}
+
+# best-effort delete of a superseded qiniu object when overwriting a file in place;
+# a directory or a same-key/absent-key row leaves the object alone. Errors ignored.
+fn overwrite_gc(a: Auth, existing: Option[FileRow], new_key: String) -> Bool !io =
+  match existing {
+    Some(o) ->
+      if o.is_dir == false {
+        match o.key {
+          Some(old) ->
+            if old != new_key {
+              match delete_obj(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, old) {
+                Ok(_x) -> true
+                Err(_e) -> true
+              }
+            } else { true }
+          None -> true
+        }
+      } else { true }
+    None -> true
+  }
 
 # read a numeric/string field out of qiniu's stat JSON
 fn stat_int(body: String, key: String) -> Int !io =
@@ -842,4 +886,16 @@ test "upload-token path joins the filename (not the bare dir)" {
   assert ext(sanitize_name("sub/b.md")) == "md"
   # extensionless file: no dot appended (caller uses a bare uuid key)
   assert ext(sanitize_name("README")) == ""
+}
+
+test "register size/mime fall back like FastAPI (stat -> client hint -> guess)" {
+  # qiniu stat is authoritative when present
+  assert reg_size("{\"fsize\":123}", Some(9)) == 123
+  assert reg_mime("{\"mimeType\":\"image/png\"}", "text/plain", "a/b.md") == "image/png"
+  # missing/zero fsize -> client hint -> 0
+  assert reg_size("{}", Some(9)) == 9
+  assert reg_size("{}", None) == 0
+  # missing mimeType -> client content_type -> name-based guess
+  assert reg_mime("{}", "text/plain", "a/b.md") == "text/plain"
+  assert reg_mime("{}", "", "a/b.md") == "text/markdown"
 }
