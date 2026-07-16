@@ -41,7 +41,8 @@ pub fn list_articles(db: Db) -> Handler =
   }
 
 ## GET /api/articles/{slug} — one article. Drafts are visible only to a logged-in
-## admin (via Bearer or ?token=); anonymous requests 404 them. Views bump only
+## admin (via the Bearer header only, matching get_current_user_optional); anonymous
+## requests 404 them. Views bump only
 ## for an anonymous visitor on a published article. updated_at is intentionally
 ## left unchanged on a view (a documented refinement of the FastAPI behavior).
 pub fn get_article(db: Db, a: Auth) -> Handler =

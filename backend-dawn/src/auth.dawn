@@ -81,6 +81,11 @@ fn user_json(c: Connection, username: String) -> Result[Option[Json], String] !i
 pub fn login(a: Auth) -> Handler =
   fn(req) => {
     let form = parse_form(req.body)
+    # OAuth2PasswordRequestForm requires both fields: an absent username/password
+    # is a 422 (a present-but-empty value proceeds to the 401 auth check).
+    if has_field(form, "username") == false || has_field(form, "password") == false {
+      Err(http_error(422, "username 和 password 必填"))
+    } else {
     let username = get_or_blank(form, "username")
     let password = get_or_blank(form, "password")
     match with_db(a.db.path, a.db.ext, fn(c) => hash_of(c, username)) {
@@ -96,7 +101,11 @@ pub fn login(a: Auth) -> Handler =
       Ok(None) -> Err(http_error(401, "用户名或密码错误"))
       Err(m) -> Err(http_error(500, m))
     }
+    }
   }
+
+fn has_field(m: Map[String, String], k: String) -> Bool =
+  match map_get(m, k) { Some(_v) -> true  None -> false }
 
 ## GET /api/auth/me — the current user (Bearer token).
 pub fn me(a: Auth) -> Handler =
@@ -111,28 +120,38 @@ pub fn me(a: Auth) -> Handler =
     Err(e) -> Err(e)
   }
 
-## The authenticated subject, or a 401 HttpError. Reads a Bearer token from the
-## Authorization header, falling back to a `?token=` query param (used by
-## browser-initiated GETs that cannot set a header — matches FastAPI's flexible
-## auth). Protected handlers call this first.
-pub fn current_user(a: Auth, req: Request) -> Result[String, HttpError] !io = {
-  let tok = match header(req, "authorization") {
+## The authenticated subject, or a 401 HttpError, from the Authorization header
+## ONLY (matches FastAPI's get_current_user). The `?token=` query fallback is NOT
+## accepted here — that would let a URL token authenticate every protected route,
+## whereas FastAPI restricts it to the two browser-GET endpoints below. Protected
+## handlers call this first.
+pub fn current_user(a: Auth, req: Request) -> Result[String, HttpError] !io =
+  auth_with(a, header_token(req))
+
+## Header token, falling back to a `?token=` query param — for the two endpoints
+## whose bytes are fetched by a browser <img>/download link that cannot set an
+## Authorization header (fm preview & download), matching get_current_user_flexible.
+pub fn current_user_flexible(a: Auth, req: Request) -> Result[String, HttpError] !io =
+  auth_with(a, match header_token(req) {
+    "" -> match query_token(req) { Some(t) -> t  None -> "" }
+    t -> t
+  })
+
+fn header_token(req: Request) -> String =
+  match header(req, "authorization") {
     Some(h) -> if starts_with(h, "Bearer ") { substring(h, 7, str_len(h)) } else { h }
-    None ->
-      match query_token(req) {
-        Some(t) -> t
-        None -> ""
-      }
+    None -> ""
   }
+
+fn auth_with(a: Auth, tok: String) -> Result[String, HttpError] !io =
   if tok == "" {
     Err(http_error(401, "无效或过期的凭证"))
   } else {
     match verify(a.secret, tok) {
       Ok(sub) -> Ok(sub)
-      Err(_) -> Err(http_error(401, "无效或过期的凭证"))
+      Err(_e) -> Err(http_error(401, "无效或过期的凭证"))
     }
   }
-}
 
 fn query_token(req: Request) -> Option[String] = map_get(req.query, "token")
 

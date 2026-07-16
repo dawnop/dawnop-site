@@ -131,8 +131,8 @@ fn build_request(ex: HttpExchange) -> Request !io = {
 # matched route's captures are injected as a fresh Request (records are immutable).
 fn run_dispatch(d: Dispatch, req: Request) -> Result[Response, HttpError] !io =
   match d {
-    NoPath -> Err(http_error(404, "not found"))
-    WrongMethod -> Err(http_error(405, "method not allowed"))
+    NoPath -> Err(http_error(404, "Not Found"))
+    WrongMethod -> Err(http_error(405, "Method Not Allowed"))
     Found(route, params) -> {
       route.handler(Request { ..req, params: params })
     }
@@ -169,7 +169,7 @@ fn handle(routes: List[Route], middleware: List[Middleware], ex: HttpExchange) -
     Ok(r) -> r
     Err(m) -> {
       println("request panicked: $m")
-      error_response(http_error(500, "internal server error"))
+      error_response(http_error(500, "服务器内部错误"))
     }
   }
   write_response(ex, response)

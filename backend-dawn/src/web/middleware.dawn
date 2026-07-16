@@ -3,7 +3,7 @@
 # composed by serve_app with the first element outermost. No registry, no
 # annotations — wrapping a function is the whole mechanism.
 use java "java.lang.System"
-use web/types.{Request, Response, HttpError, Handler, with_header, text}
+use web/types.{Request, Response, HttpError, Handler, with_header, text, header}
 
 # One access-log line per request: method, path, status, wall time.
 pub fn with_logging(next: Handler) -> Handler =
@@ -41,26 +41,45 @@ pub fn with_body_limit(limit: Int, next: Handler) -> Handler =
   }
 
 # CORS: answer preflight OPTIONS directly, and stamp Access-Control-* on every
-# response. `origin` is the single allowed origin (browsers require an exact
-# echo, not "*", when credentials are involved). Routes tagged "no-cors" (WebDAV)
-# are not browser traffic: their own OPTIONS (DAV headers) passes through and no
-# Access-Control-* is stamped.
-pub fn with_cors(origin: String, next: Handler) -> Handler =
-  fn(req) =>
-  if route_has_tag(req, "no-cors") {
-    next(req)
-  } else if req.method == "OPTIONS" {
-    Ok(cors_headers(origin, text(204, "")))
-  } else {
-    match next(req) {
-      Ok(r) -> Ok(cors_headers(origin, r))
-      Err(e) -> Err(e)
+# response. `origins` is a comma-separated allow-list; the request's Origin is
+# echoed when it is in the list (browsers require an exact echo, not "*", with
+# credentials), matching FastAPI's CORSMiddleware — so both http://localhost:5173
+# and http://127.0.0.1:5173 work in dev. Allow-Credentials is sent (FastAPI has
+# allow_credentials=True). Routes tagged "no-cors" (WebDAV) are not browser
+# traffic: their own OPTIONS (DAV headers) passes through and nothing is stamped.
+pub fn with_cors(origins: String, next: Handler) -> Handler =
+  fn(req) => {
+    let origin = pick_origin(req, cors_list(origins))
+    if route_has_tag(req, "no-cors") {
+      next(req)
+    } else if req.method == "OPTIONS" {
+      Ok(cors_headers(origin, text(204, "")))
+    } else {
+      match next(req) {
+        Ok(r) -> Ok(cors_headers(origin, r))
+        Err(e) -> Err(e)
+      }
     }
   }
+
+fn cors_list(csv: String) -> List[String] = filter(map(split(csv, ","), trim), fn(s) => s != "")
+
+# echo the request Origin when allow-listed, else fall back to the first configured
+# origin (a non-matching Allow-Origin is blocked by the browser, same as FastAPI
+# omitting the header for a disallowed origin)
+fn pick_origin(req: Request, allowed: List[String]) -> String = {
+  let first = if len(allowed) == 0 { "" } else { allowed[0] }
+  match header(req, "origin") {
+    Some(o) -> if find(allowed, fn(x) => x == o) != None { o } else { first }
+    None -> first
+  }
+}
 
 fn cors_headers(origin: String, r: Response) -> Response =
   with_header(
     with_header(
-      with_header(r, "Access-Control-Allow-Origin", origin),
+      with_header(
+        with_header(r, "Access-Control-Allow-Origin", origin),
+        "Access-Control-Allow-Credentials", "true"),
       "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"),
     "Access-Control-Allow-Headers", "Authorization, Content-Type")

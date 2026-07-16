@@ -12,7 +12,7 @@ use http.{fetch_bytes}
 use web/router.{Route, route_get, route_post, tagged}
 use jsonx.{obj, jstr, jint}
 use db.{Db, with_db}
-use auth.{Auth, Qiniu, current_user}
+use auth.{Auth, Qiniu, current_user, current_user_flexible}
 use jsonread.{body_obj, str_or, str_list, opt_int}
 use fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full}
 use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, ledger_insert, ledger_delete, search_files, subtree_rows, entry_json, delete_row, stats_db, FileRow}
@@ -30,6 +30,15 @@ use json/parser.{parse}
 
 fn guarded(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io =
   match current_user(a, req) {
+    Ok(_u) -> body()
+    Err(e) -> Err(e)
+  }
+
+# preview/download bytes are fetched by a browser <img>/download link that cannot
+# set an Authorization header, so these two accept a `?token=` fallback (only
+# these — matches FastAPI's get_current_user_flexible).
+fn guarded_flexible(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io =
+  match current_user_flexible(a, req) {
     Ok(_u) -> body()
     Err(e) -> Err(e)
   }
@@ -288,7 +297,7 @@ fn content_type_of(ct: String) -> String = if ct == "" { "application/octet-stre
 ## imageView2 thumbnail instead of the original (省流量), mirroring serve.py.
 pub fn preview(a: Auth) -> Handler =
   fn(req) =>
-  guarded(a, req, fn() =>
+  guarded_flexible(a, req, fn() =>
       match preview_params(req) {
         Err(e) -> Err(e)
         Ok(params) -> {
@@ -359,7 +368,7 @@ fn thumbable(ct: String) -> Bool =
 ## GET /api/fm/download?path= — 302 to the signed URL with an attachment name.
 pub fn download(a: Auth) -> Handler =
   fn(req) =>
-  guarded(a, req, fn() => {
+  guarded_flexible(a, req, fn() => {
     let rel = fm_split(qparam(req, "path"))
     redirect_to_named(a, rel)
   })
