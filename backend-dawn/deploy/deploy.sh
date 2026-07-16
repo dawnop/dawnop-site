@@ -6,8 +6,8 @@
 # `backend-dawn-<sha>`. This script pulls that exact artifact, so what runs in
 # production is what CI tested, from a known commit.
 #
-# Run as root from the laptop (same convention as rollback-to-fastapi.sh) — the
-# app dir belongs to the service user and the token is root-only:
+# Run as root from the laptop (same convention as rollback-to-fastapi.sh) — it
+# installs code the service must not be able to rewrite, and restarts the unit:
 #   ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/deploy.sh        # latest green main
 #   ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/deploy.sh <sha>  # a specific commit
 #
@@ -32,8 +32,13 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "!!! run as root: ssh <user>@<server> 'sudo bash -s' < $0" >&2
   exit 1
 fi
-# Installed files must stay readable by the service account, which is not root.
-OWNER=$(systemctl show "$SERVICE" -p User --value):$(systemctl show "$SERVICE" -p Group --value)
+# Deployed code is root-owned and world-readable: the service account only ever
+# needs to *read* its jar. Giving it ownership would make "compromise the
+# service" and "rewrite the code it runs next boot" the same step. The unit's
+# ProtectSystem=strict blocks that today, but ownership should not be the only
+# thing standing between an RCE and persistence — /usr/bin is not owned by the
+# daemons that run from it either.
+OWNER="root:root"
 
 STAMP=$(date +%Y%m%d-%H%M%S)
 PREV="$APP/.prev"
@@ -120,6 +125,12 @@ cp -a "$JAR" "$APP/backend-dawn.jar"
 rm -rf "$APP/lib" && cp -a "$SRC/lib" "$APP/lib"
 printf '%s' "$RUN_SHA" > "$APP/.deployed-sha"
 chown -R "$OWNER" "$APP/backend-dawn.jar" "$APP/lib" "$APP/.deployed-sha"
+chmod 644 "$APP/backend-dawn.jar" "$APP/.deployed-sha"
+chmod 755 "$APP/lib" && chmod 644 "$APP/lib"/*.jar
+# The directory too, not just its contents: write permission on the dir lets you
+# unlink a file you cannot write and drop a replacement in its place, which is
+# the same attack one step removed.
+chown "$OWNER" "$APP" && chmod 755 "$APP"
 systemctl restart "$SERVICE"
 
 echo "==> 6/6 health check"
@@ -135,6 +146,8 @@ if [ -z "$ok" ]; then
   rm -rf "$APP/lib" && cp -a "$PREV/lib" "$APP/lib"
   printf '%s' "$CURRENT" > "$APP/.deployed-sha"
   chown -R "$OWNER" "$APP/backend-dawn.jar" "$APP/lib" "$APP/.deployed-sha"
+  chmod 644 "$APP/backend-dawn.jar" "$APP/.deployed-sha"
+  chmod 755 "$APP/lib" && chmod 644 "$APP/lib"/*.jar
   systemctl restart "$SERVICE"
   for _ in $(seq 1 40); do
     curl -sf -o /dev/null --max-time 3 "$HEALTH" && break
@@ -147,4 +160,4 @@ fi
 echo
 echo "Deployed ${RUN_SHA:0:7} (run $RUN_ID) at $STAMP. Healthy on :8001."
 echo "  previous build kept at $PREV — to undo:"
-echo "    cp -a $PREV/backend-dawn.jar $APP/ && rm -rf $APP/lib && cp -a $PREV/lib $APP/ && chown -R $OWNER $APP/backend-dawn.jar $APP/lib && systemctl restart $SERVICE"
+echo "    cp -a $PREV/backend-dawn.jar $APP/ && rm -rf $APP/lib && cp -a $PREV/lib $APP/ && chown -R root:root $APP/backend-dawn.jar $APP/lib && systemctl restart $SERVICE"
