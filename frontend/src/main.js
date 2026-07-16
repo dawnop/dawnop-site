@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 // Element Plus 改为按需引入（见 vite.config.js）：组件样式由 unplugin 注入，
-// 这里只保留主题变量覆盖。命令式组件（ElMessage/ElMessageBox）由 AutoImport 处理。
+// 这里只保留主题变量覆盖。命令式组件（ElMessage/ElMessageBox）裸用走 AutoImport、
+// 显式 import 走 unplugin-element-plus，两条路都会带上各自样式。
 import './assets/element-theme.css'
 import './style.css'
 import './assets/admin.css'

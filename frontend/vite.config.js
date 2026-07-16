@@ -5,6 +5,7 @@ import vue from '@vitejs/plugin-vue'
 import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
+import ElementPlus from 'unplugin-element-plus/vite'
 import viteCompression from 'vite-plugin-compression'
 
 // Element Plus 按需引入每个组件的样式（importStyle: 'css'，生产只打包用到的样式，首屏精简）。
@@ -37,6 +38,12 @@ export default defineConfig(({ command, mode }) => {
     vue(),
     AutoImport({ resolvers: [ElementPlusResolver()] }),
     Components({ resolvers: [ElementPlusResolver()] }),
+    // 上面两个 unplugin 只覆盖「自动引入」的用法：AutoImport 管裸用的 ElMessage/ElMessageBox，
+    // Components 管模板里的 <el-*>，两者在注入符号时顺带注入其样式。但凡代码里写了显式
+    // import { ElMessageBox } from 'element-plus'，AutoImport 就不再接管该符号，样式也就没人注入
+    // ——弹窗会退化成无样式裸框（曾导致文件管理器/编辑页的确认框跑到左上角、背景透明）。
+    // 本插件把显式 import 也改写成带样式 side-effect 的深引入，堵住这个口子。
+    ElementPlus({ useSource: false }),
     // 构建期生成 .gz（gzip -9）。服务器 nginx 开 gzip_static 直接发预压缩文件。
     viteCompression({ algorithm: 'gzip', ext: '.gz', threshold: 1024, deleteOriginFile: false }),
   ],
