@@ -5,10 +5,10 @@
 # changes path, copy really copies the qiniu object, overwrite writes a new key
 # then deletes the old (CDN caches by URL). HTTP Basic auth (bcrypt + TTL cache).
 #
-# First-version limits vs FastAPI (documented, not bugs): PUT reads the body into
-# memory (latin-1 raw) rather than streaming to a temp file — fine within the dav
-# vhost's client_max_body_size; and GET proxies the whole object without Range
-# (302-redirect clients still go direct to qiniu). Both are follow-up optimizations.
+# First-version limit vs FastAPI (documented, not a bug): PUT reads the body into
+# memory (raw Bytes) rather than streaming to a temp file — fine within the dav
+# vhost's client_max_body_size. GET proxies with Range passthrough (forwards the
+# client Range to qiniu, relays 206 + Content-Range); redirect clients go direct.
 use java "java.sql.Connection"
 use java "java.lang.String"
 use java "java.lang.System"
@@ -199,14 +199,74 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
   if head {
     Ok(with_meta(raw(200, mime, ""), o.size, etag, lastmod))
   } else if follows_redirect(req) {
+    # redirect-following clients get 302 direct to qiniu, which serves Range itself
     Ok(redirect(302, signed_url(a.qiniu, key)))
   } else {
-    match fetch_bytes(signed_url(a.qiniu, key), [("Accept-Encoding", "identity")]) {
-      Ok(bytes) -> Ok(add_headers(binary(200, mime, bytes), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
-      Err(m) -> Err(http_error(502, m))
+    # proxy clients (macOS webdavfs / Windows redirector) can't be 302'd reliably:
+    # forward a Range so QuickLook/streaming/resume get 206 + Content-Range, matching
+    # FastAPI. qiniu honors Range on GET; if it returns the wrong length (ignored the
+    # Range) fall back to a plain 200 with whatever came back.
+    match range_of(req, o.size) {
+      Some(pair) -> {
+        let (start, end) = pair
+        match fetch_bytes(signed_url(a.qiniu, key), [("Accept-Encoding", "identity"), ("Range", "bytes=$start-$end")]) {
+          Ok(bytes) ->
+            if byte_len(bytes) == end - start + 1 {
+              Ok(add_headers(binary(206, mime, bytes), [("Accept-Ranges", "bytes"), ("Content-Range", "bytes $start-$end/${o.size}"), ("Last-Modified", lastmod), ("ETag", etag)]))
+            } else {
+              Ok(add_headers(binary(200, mime, bytes), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
+            }
+          Err(m) -> Err(http_error(502, m))
+        }
+      }
+      None ->
+        match fetch_bytes(signed_url(a.qiniu, key), [("Accept-Encoding", "identity")]) {
+          Ok(bytes) -> Ok(add_headers(binary(200, mime, bytes), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
+          Err(m) -> Err(http_error(502, m))
+        }
     }
   }
 }
+
+# parse a single-range request header against the total size → Some((start,end))
+# inclusive, or None (absent / multi-range / unsatisfiable → serve the whole file).
+# Forms: bytes=start-end, bytes=start-, bytes=-suffix.
+fn range_of(req: Request, total: Int) -> Option[(Int, Int)] =
+  match header(req, "range") {
+    None -> None
+    Some(rng) ->
+      if starts_with(rng, "bytes=") == false || total <= 0 {
+        None
+      } else {
+        let spec = substring(rng, 6, str_len(rng))
+        if contains(spec, ",") {
+          None
+        } else {
+          let parts = split(spec, "-")
+          if len(parts) != 2 { None } else { range_pair(parts[0], parts[1], total) }
+        }
+      }
+  }
+
+fn range_pair(a: String, b: String, total: Int) -> Option[(Int, Int)] =
+  if a == "" {
+    # suffix: the last b bytes
+    match parse_int(b) {
+      Some(n) -> if n <= 0 { None } else { Some((if total - n < 0 { 0 } else { total - n }, total - 1)) }
+      None -> None
+    }
+  } else {
+    match parse_int(a) {
+      None -> None
+      Some(s) ->
+        if s >= total || s < 0 {
+          None
+        } else {
+          let e = if b == "" { total - 1 } else { match parse_int(b) { Some(x) -> if x > total - 1 { total - 1 } else { x }  None -> total - 1 } }
+          if e < s { None } else { Some((s, e)) }
+        }
+    }
+  }
 
 fn with_meta(r: Response, size: Int, etag: String, lastmod: String) -> Response =
   add_headers(r, [("Content-Length", to_string(size)), ("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)])
@@ -230,6 +290,8 @@ fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {
 }
 
 # a minimal mime guess for PUT (mirrors mimetypes' common cases, octet-stream default)
+# mirrors Python mimetypes.guess_type (PUT stores this as content_type, surfaced
+# in PROPFIND getcontenttype and GET Content-Type)
 fn guess_mime(name: String) -> String =
   match ext(name) {
     "png" -> "image/png"
@@ -238,13 +300,28 @@ fn guess_mime(name: String) -> String =
     "gif" -> "image/gif"
     "webp" -> "image/webp"
     "svg" -> "image/svg+xml"
+    "bmp" -> "image/bmp"
+    "tiff" -> "image/tiff"
+    "ico" -> "image/vnd.microsoft.icon"
     "pdf" -> "application/pdf"
     "txt" -> "text/plain"
     "md" -> "text/markdown"
     "json" -> "application/json"
     "html" -> "text/html"
+    "htm" -> "text/html"
     "css" -> "text/css"
     "js" -> "text/javascript"
+    "mjs" -> "text/javascript"
+    "xml" -> "application/xml"
+    "csv" -> "text/csv"
+    "yaml" -> "application/yaml"
+    "yml" -> "application/yaml"
+    "mp4" -> "video/mp4"
+    "mp3" -> "audio/mpeg"
+    "zip" -> "application/zip"
+    "tar" -> "application/x-tar"
+    "py" -> "text/x-python"
+    "sh" -> "text/x-sh"
     _ -> "application/octet-stream"
   }
 
@@ -364,7 +441,9 @@ fn mkcol(a: Auth, rel: String) -> Result[Response, HttpError] !io =
 
 # ---- MOVE / COPY ----
 
-fn uri_path(u: String) -> String !io = URI.create(u).expect("uri").getPath().expect("path")
+# the Destination's path, undecoded (getRawPath, not getPath — getPath already
+# percent-decodes, so the old URLDecoder pass double-decoded). urlparse-equivalent.
+fn uri_path(u: String) -> String !io = URI.create(u).expect("uri").getRawPath().expect("path")
 
 fn dest_rel(req: Request) -> Option[String] !io =
   match header(req, "destination") {
@@ -373,33 +452,35 @@ fn dest_rel(req: Request) -> Option[String] !io =
       let path = uri_path(d)
       let prefix = dav_prefix(req)
       let stripped = if prefix != "" && starts_with(path, prefix) { substring(path, str_len(prefix), str_len(path)) } else { path }
-      let decoded = URLDecoder.decode(stripped, "UTF-8").expect("dec")
+      # single percent-decode like Python's unquote: %XX resolves, a literal '+'
+      # stays '+' (URLDecoder would turn it into a space), so protect '+' as %2B first
+      let decoded = URLDecoder.decode(join(split(stripped, "+"), "%2B"), "UTF-8").expect("dec")
       Some(strip_slashes(decoded))
     }
   }
 
+# FastAPI checks the source exists (404) BEFORE parsing Destination (400) or the
+# self/subdir guard (409); reproduce that ordering here.
 fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Response, HttpError] !io =
   if rel == "" {
     Err(http_error(405, "不能操作根"))
   } else {
-    match dest_rel(req) {
-      None -> Err(http_error(400, "缺少 Destination"))
-      Some(dst) ->
-        if dst == "" {
-          Err(http_error(400, "非法目标"))
-        } else if dst == rel || starts_with(dst, rel ++ "/") {
-          Err(http_error(409, "不能移动/复制到自身或子目录"))
-        } else {
-          mc_check_src(a, req, rel, dst, is_move)
+    match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
+      Ok(None) -> Err(http_error(404, "源不存在"))
+      Err(m) -> Err(http_error(500, m))
+      Ok(Some(_)) ->
+        match dest_rel(req) {
+          None -> Err(http_error(400, "缺少 Destination"))
+          Some(dst) ->
+            if dst == "" {
+              Err(http_error(400, "非法目标"))
+            } else if dst == rel || starts_with(dst, rel ++ "/") {
+              Err(http_error(409, "不能移动/复制到自身或子目录"))
+            } else {
+              mc_check_dst(a, req, rel, dst, is_move)
+            }
         }
     }
-  }
-
-fn mc_check_src(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) -> Result[Response, HttpError] !io =
-  match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
-    Ok(None) -> Err(http_error(404, "源不存在"))
-    Ok(Some(_)) -> mc_check_dst(a, req, rel, dst, is_move)
-    Err(m) -> Err(http_error(500, m))
   }
 
 fn mc_check_dst(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) -> Result[Response, HttpError] !io =
@@ -499,8 +580,11 @@ fn options_response() -> Response =
 
 # ---- auth ----
 
+# 401 body matches FastAPI's HTTPException(401,"需要认证") → {"detail":...} JSON
 fn unauthorized() -> Response =
-  with_header(text(401, "需要认证"), "WWW-Authenticate", "Basic realm=\"dawnop-webdav\"")
+  with_header(
+    raw(401, "application/json; charset=utf-8", "{\"detail\":\"需要认证\"}"),
+    "WWW-Authenticate", "Basic realm=\"dawnop-webdav\"")
 
 # None = authorized; Some(resp) = the 401 to return. A single-admin TTL cache
 # (keyed by sha256("user:pass")) skips bcrypt on the mount's high-frequency calls.
@@ -511,17 +595,22 @@ fn dav_auth(a: Auth, cell: AtomicReference, req: Request) -> Option[Response] !i
       if starts_with(h, "Basic ") == false {
         Some(unauthorized())
       } else {
-        let raw_cred = b64_decode(substring(h, 6, str_len(h)))
-        let parts = split(raw_cred, ":")
-        if len(parts) < 2 {
-          Some(unauthorized())
-        } else {
-          let user = parts[0]
-          let pass = join(drop_first(parts), ":")
-          let key = sha256_hex(raw_cred)
-          match cache_get(cell, AUTH_TTL) {
-            Some(cached) -> if cached == key { None } else { verify_cache(a, cell, user, pass, key) }
-            None -> verify_cache(a, cell, user, pass, key)
+        # malformed base64 is a 401, not a 500 (FastAPI wraps b64decode in try/except)
+        match b64_decode_try(substring(h, 6, str_len(h))) {
+          Err(_e) -> Some(unauthorized())
+          Ok(raw_cred) -> {
+            let parts = split(raw_cred, ":")
+            if len(parts) < 2 {
+              Some(unauthorized())
+            } else {
+              let user = parts[0]
+              let pass = join(drop_first(parts), ":")
+              let key = sha256_hex(raw_cred)
+              match cache_get(cell, AUTH_TTL) {
+                Some(cached) -> if cached == key { None } else { verify_cache(a, cell, user, pass, key) }
+                None -> verify_cache(a, cell, user, pass, key)
+              }
+            }
           }
         }
       }
@@ -531,6 +620,10 @@ fn drop_first(xs: List[String]) -> List[String] = map(range(1, len(xs)), fn(i) =
 
 fn b64_decode(s: String) -> String !io =
   decode(Base64.getDecoder().expect("dec").decode(s).expect("bytes"), "UTF-8")
+
+# base64-decode that turns malformed input into an Err instead of a panic
+fn b64_decode_try(s: String) -> Result[String, String] !io =
+  java_try(fn() => b64_decode(s))
 
 fn verify_cache(a: Auth, cell: AtomicReference, user: String, pass: String, key: String) -> Option[Response] !io =
   match with_db(a.db.path, a.db.ext, fn(c) => check_basic(c, user, pass)) {
@@ -575,4 +668,19 @@ pub fn dav_routes(a: Auth, cell: AtomicReference) -> List[Route] = {
   # raw-body: WebDAV PUT carries file bytes (bounded by nginx, not the JSON limit).
   # no-cors: WebDAV is not browser traffic — skip the CORS middleware entirely.
   map(verbs, fn(v) => tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, cell, v)), ["raw-body", "no-cors"]))
+}
+
+test "range_pair parses the WebDAV Range forms against a total size" {
+  # explicit start-end (inclusive), clamped to total-1
+  assert range_pair("0", "1023", 5000) == Some((0, 1023))
+  assert range_pair("100", "999999", 5000) == Some((100, 4999))
+  # open-ended start-
+  assert range_pair("500", "", 5000) == Some((500, 4999))
+  # suffix -N = last N bytes
+  assert range_pair("", "500", 5000) == Some((4500, 4999))
+  assert range_pair("", "999999", 5000) == Some((0, 4999))
+  # unsatisfiable / malformed
+  assert range_pair("5000", "", 5000) == None
+  assert range_pair("", "0", 5000) == None
+  assert range_pair("x", "", 5000) == None
 }
