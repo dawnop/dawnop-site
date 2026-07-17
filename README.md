@@ -52,3 +52,7 @@ npm run build # 产出 dist/
 见 `deploy/`：Nginx 监听 80 端口托管 `frontend/dist`，并将 `/api` 反代到本地 uvicorn；uvicorn 由 systemd 守护。
 
 详细开发计划见 [CLAUDE.md](./CLAUDE.md)；全站搜索的选型与设计见 [docs/search.md](./docs/search.md)。
+
+## 许可证
+
+[MIT](./LICENSE)。
