@@ -47,51 +47,60 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > 上线前请在 3.10 下跑一遍 `pytest`。服务器另需安装 nginx；前端只需把本地 `npm run build` 的 `dist/` 传上去，
 > 服务器不必装 node。
 
-## 3. 规划目录结构
+## 3. 目录结构
+
+> 权威的目录/模块地图在 [`README.md`](README.md#目录结构) 与
+> [`backend-dawn/README.md`](backend-dawn/README.md)（§模块地图）——就在代码旁边，改结构时先改那儿。
+> 这里给的是够用的骨架。
 
 ```
 dawnop-site/
-├── backend/
-│   ├── app/
-│   │   ├── main.py              # FastAPI 入口、路由挂载、CORS
-│   │   ├── config.py            # 读取 .env（七牛密钥、JWT secret 等）
-│   │   ├── database.py          # SQLAlchemy engine / session
-│   │   ├── models/              # ORM 模型：User, Article, FileObject
-│   │   ├── schemas/             # Pydantic 请求/响应模型
-│   │   ├── api/
-│   │   │   ├── auth.py          # 登录、获取 token
-│   │   │   ├── articles.py      # 文章 CRUD + md 上传/下载
-│   │   │   └── files.py         # 七牛上传/下载/列表/预览
-│   │   ├── core/
-│   │   │   ├── security.py      # 密码哈希、JWT 签发/校验
-│   │   │   └── qiniu_client.py  # 七牛 SDK 封装（签 token、上传、下载 url）
-│   │   └── deps.py              # 依赖项（当前用户、DB session）
-│   ├── tests/                   # pytest
-│   ├── requirements.txt
-│   ├── .env.example             # 模板，提交；真实 .env 不提交
-│   └── scripts/seed_admin.py    # 初始化管理员账号
-├── frontend/
+├── backend-dawn/               # 生产后端（Dawn → JVM 字节码）。src/ 内联 test 块
 │   ├── src/
-│   │   ├── views/               # Home, Article, Page(内容/列表); admin/{Login,Articles,ArticleEdit,Pages,FilesLab,Settings}
-│   │   ├── components/          # PublicLayout, AdminLayout, SiteHeader, MarkdownView(md+katex)
-│   │   ├── api/                 # axios 封装(统一带 token) + fmApi.js(文件管理对接层)
-│   │   ├── router/              # 公开路由 + 后台受保护路由
-│   │   └── store/               # 登录态
-│   ├── package.json
-│   └── vite.config.js
-├── deploy/
-│   # nginx 配置不在本仓库，在 ~/workspace/dawnop-ops/（私有，不推送）
-│   ├── fail2ban/                # dav 鉴权爆破 jail（**已上线** 2026-07-18，enabled=true）
-│   ├── dawnop-backend.service   # systemd 单元（FastAPI，已 disable，回滚目标）
-│   └── README.md                # 部署权威文档（现状 = Dawn）
-├── backend-dawn/deploy/
-│   ├── dawnop-dawn.service      # systemd 单元（生产）
-│   ├── deploy.sh                # 从 CI artifact 部署 + 健康检查 + 自动回滚
-│   └── rollback-to-fastapi.sh   # 应急回滚
-├── .gitignore                   # 必含 .env、*.db、node_modules、__pycache__、dist
-├── CLAUDE.md
-├── README.md
-└── program.md
+│   │   ├── main.dawn           # 入口：读 config、装路由/中间件、绑 127.0.0.1:8001
+│   │   ├── config.dawn db.dawn crypto.dawn jwt.dawn auth.dawn slugify.dawn ttl.dawn
+│   │   ├── api_*.dawn          # 路由层：public / admin / admin2 / fm / monitor
+│   │   ├── repo_*.dawn sql.dawn  # 数据层：article/page/tag/pagetag/viz/settings/fm/write
+│   │   ├── webdav.dawn export.dawn multipart.dawn search.dawn monitor.dawn fm_paths.dawn
+│   │   ├── http.dawn           # 出站 HTTP 客户端（七牛/腾讯管理 API、register stat、探针）
+│   │   ├── qiniu_*.dawn tencent_*.dawn  # 对象存储：签名 / rs 操作 / 用量统计
+│   │   ├── jsonx.dawn jsonread.dawn      # 应用层 JSON：构造 wire 形状 / 读请求体字段
+│   │   ├── json/               # vendored JSON 库：value / lexer / parser / render（整数保真 JInt）
+│   │   └── web/                # vendored web 框架：types / router / server / middleware
+│   ├── dawn.toml               # [java-deps]（sqlite-jdbc / jbcrypt，coursier 解析）
+│   ├── build.sh                # 按 .dawn-version 取编译器 → dawn test → dawn build（生成 lib/）
+│   ├── scripts/contract_*.py   # 与 FastAPI 的只读/边界/WebDAV 对拍
+│   └── deploy/
+│       ├── dawnop-dawn.service     # systemd 单元（生产）
+│       ├── deploy.sh               # 从 CI artifact 部署 + 健康检查 + 自动回滚
+│       └── rollback-to-fastapi.sh  # 应急回滚
+│   # backend-dawn.jar 与 lib/ 是构建产物，不入库（CI 出 artifact，deploy.sh 拉取）
+├── backend/                    # FastAPI（已 disable，回滚目标 + 契约参照）。逐文件树见 backend/
+│   ├── app/{main,config,database,deps}.py  api/  core/  models/  schemas/
+│   ├── tests/                  # pytest（CI 钉 Python 3.10）
+│   ├── extensions/             # libsimple.so（不入库，写文章的中文分词器要它）
+│   ├── requirements.txt requirements-dev.txt  .env.example  scripts/seed_admin.py
+├── frontend/                   # Vue 3 + Vite
+│   ├── src/
+│   │   ├── views/              # Home, Article, Page(内容/列表); admin/{Login,Dashboard,Articles,Pages,Tags,Viz,FilesLab,Settings,Monitor}
+│   │   ├── components/         # PublicLayout, AdminLayout, SiteHeader, MarkdownView(md+katex), SearchModal; monitor/
+│   │   ├── composables/        # useFileManager / useUnsavedGuard / useIsMobile
+│   │   ├── viz/                # 文章内嵌 Vue 可视化组件的 SFC 编译 + island 运行时
+│   │   ├── utils/              # frontmatter / markdownTitle / format / colWidths
+│   │   ├── api/                # axios 封装(统一带 token) + fmApi.js(文件管理对接层)
+│   │   ├── router/ store/      # 公开+受保护路由 / 登录态
+│   │   └── hljs.js setupMdEditor.js  # 按需高亮语言 / 编辑器初始化
+│   ├── package.json vite.config.js
+├── deploy/                     # nginx 配置不在本仓库，在 ~/workspace/dawnop-ops/（私有，不推送）
+│   ├── fail2ban/               # dav 鉴权爆破 jail（**已上线** 2026-07-18，enabled=true）
+│   ├── vaultwarden/            # vault.dawnop.com 相关件
+│   ├── dawnop-backend.service  # systemd 单元（FastAPI，已 disable，回滚目标）
+│   └── README.md               # 部署权威文档（现状 = Dawn）
+├── docs/                       # 设计文档 + articles/ + viz/ 组件源
+├── scripts/                    # check-no-server-identity.py（守卫）/ fetch-dawn.sh
+├── .dawn-version               # 钉住 Dawn 编译器版本
+├── .gitignore                  # 必含 .env、*.db、node_modules、__pycache__、dist、*.jar
+├── CLAUDE.md  CONTRIBUTING.md  README.md  program.md
 ```
 
 ## 4. 数据模型
