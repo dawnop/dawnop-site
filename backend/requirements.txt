@@ -1,11 +1,20 @@
-fastapi
-uvicorn[standard]
-sqlalchemy>=2.0
-pydantic>=2.0
-pydantic-settings
-PyJWT
-bcrypt
-python-multipart
-qiniu
-requests
-psutil
+# Production dependencies for the FastAPI backend (the rollback target — see
+# backend-dawn/deploy/rollback-to-fastapi.sh). Dev/test tools live in
+# requirements-dev.txt and are never installed on the server.
+#
+# Pinned exactly: unpinned, a reinstall silently resolves to whatever is newest
+# that day, so the thing you roll back *to* is not the thing CI tested. These are
+# the versions CI installs on Python 3.10 and runs the suite against.
+#
+# Bumping is a commit: edit, let CI resolve it on 3.10, look at the run.
+fastapi==0.139.2
+uvicorn[standard]==0.51.0
+sqlalchemy==2.0.51
+pydantic==2.13.4
+pydantic-settings==2.14.2
+PyJWT==2.13.0
+bcrypt==5.0.0
+python-multipart==0.0.32
+qiniu==7.18.0
+requests==2.34.2
+psutil==7.2.2

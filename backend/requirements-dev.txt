@@ -3,6 +3,7 @@
 
 httpx
 pytest
+pytest-cov
 
 # Pinned exactly, unlike everything else here: a linter is the one dependency
 # whose *new releases* turn CI red on a commit that changed nothing — a new

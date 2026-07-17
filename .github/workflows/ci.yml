@@ -112,8 +112,13 @@ jobs:
         working-directory: backend
 
       # -rs so a skip is visible in the log rather than a silent dot.
+      #
+      # Coverage reports, deliberately without a threshold. A number to defend
+      # invites tests written to move the number; what is wanted here is only
+      # visibility into which modules nothing touches. Not in pytest.ini either,
+      # so a local `pytest` stays fast.
       - name: tests
-        run: pytest -rs
+        run: pytest -rs --cov=app --cov-report=term-missing:skip-covered
         working-directory: backend
 
   frontend:
