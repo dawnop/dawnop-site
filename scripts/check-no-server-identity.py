@@ -80,8 +80,13 @@ TEXT_SUFFIXES = (
 SELF = "check-no-server-identity"
 
 
-def own_ips() -> set[str]:
-    """解析本站域名。解析不了就报错退出——静默跳过等于把这条检查悄悄关掉。"""
+def own_ips(*, require_network: bool) -> set[str]:
+    """解析本站域名，返回其 IP 集合。
+
+    解析不了时：严格档（CI / pre-push，本来就在线）报错退出——静默跳过等于把这条
+    检查悄悄关掉；宽松档（pre-commit，可能离线）打印警告、跳过 IP 这条，仍返回空集
+    让用户名 + 旁路词照跑。IP 反正 DNS 可查、且 push 那道会兜住，离线漏一次无妨。"""
+    socket.setdefaulttimeout(3)  # commit-time hook，别让抖动的网络把 commit 卡住
     found: set[str] = set()
     errors: list[str] = []
     for d in OWN_DOMAINS:
@@ -93,12 +98,11 @@ def own_ips() -> set[str]:
         except OSError as e:
             errors.append(f"{d}: {e}")
     if not found:
-        print(
-            "错误：本站域名一个都没解析出来，IP 检查无法进行：\n  "
-            + "\n  ".join(errors),
-            file=sys.stderr,
-        )
-        sys.exit(2)
+        msg = "本站域名一个都没解析出来，IP 检查无法进行：\n  " + "\n  ".join(errors)
+        if require_network:
+            print("错误：" + msg, file=sys.stderr)
+            sys.exit(2)
+        print("警告：" + msg + "\n  —— 离线档，跳过 IP 检查，仍跑用户名 + 旁路词。", file=sys.stderr)
     return found
 
 
@@ -110,7 +114,10 @@ def tracked_text_files() -> list[str]:
 
 
 def main() -> int:
-    ips = own_ips()
+    # pre-commit 传 --allow-offline：离线时跳过 IP 那条而不是堵死 commit。
+    # 默认严格（CI / pre-push / 手动跑）：解析不了就退出。
+    require_network = "--allow-offline" not in sys.argv
+    ips = own_ips(require_network=require_network)
     hits: list[str] = []
 
     for path in tracked_text_files():

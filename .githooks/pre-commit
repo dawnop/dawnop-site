@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# 提交前跑服务器身份守卫——比 pre-push 更早：泄漏连本地历史都不进。
+# 主要防的是 AI agent 写代码时手滑把 ssh 用户名 / 真实 IP / 旁路服务身份写进公开仓。
+# 用 --allow-offline：离线 commit 时跳过 IP 那条（需联网），照跑用户名 + 旁路词；
+# 真漏了 IP 也会被 pre-push（严格档，push 时在线）和 CI 兜住。
+#
+# 安装（每台开发机一次，pre-commit 和 pre-push 共用）：  git config core.hooksPath .githooks
+# 临时跳过（清楚自己在做什么再用）：  git commit --no-verify
+set -euo pipefail
+root=$(git rev-parse --show-toplevel)
+if ! python3 "$root/scripts/check-no-server-identity.py" --allow-offline; then
+  echo "" >&2
+  echo "pre-commit 被拦：服务器身份信息进了公开仓库（见上）。修好再提交。" >&2
+  exit 1
+fi
