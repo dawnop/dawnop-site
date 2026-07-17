@@ -14,7 +14,7 @@
 
 | 参与方 | 承担的域名 | HTTPS 在哪里终结 | 职责 |
 |--------|-----------|-----------------|------|
-| **我们的源站**（Nginx + uvicorn） | `dawnop.com` / `www.dawnop.com` | 源站 Nginx | 托管前端 SPA（`dist/`）、反代 `/api` 到后端；持有站点私钥 |
+| **我们的源站**（Nginx + Dawn 后端） | `dawnop.com` / `www.dawnop.com` | 源站 Nginx | 托管前端 SPA（`dist/`）、反代 `/api` 到后端；持有站点私钥 |
 | **七牛**（Kodo 私有空间 + 融合 CDN） | `storage.dawnop.com` | 七牛 CDN 边缘节点 | 存储文件本体（图片/文本），对外以签名 URL 直连下发；CDN 边缘做 TLS 终结 |
 | **腾讯云**（DNSPod + 云主机 + 曾经的 SSL） | `dawnop.com` 整个 DNS 区 | —— | ① DNSPod 是权威 DNS（所有解析记录 + DNS-01 挑战自动化）；② 云主机（安全组/443）；③ **曾经**签发过 TrustAsia DV 证书，现已停用 |
 
@@ -29,7 +29,7 @@
  ┌── 页面加载 ───────────────────────────────────────────────┐
  │  浏览器 ──https──▶ dawnop.com (Nginx, LE 证书)             │
  │                     ├─ 静态 SPA (dist/)                    │
- │                     └─ /api ─反代─▶ 127.0.0.1:8000 (uvicorn)│
+ │                     └─ /api ─反代─▶ 127.0.0.1:8001 (Dawn)   │
  └───────────────────────────────────────────────────────────┘
 
  ┌── 文件预览 / 下载 ────────────────────────────────────────┐
@@ -121,7 +121,8 @@ Nginx 相关片段见 [`nginx.conf`](./nginx.conf)：`ssl_certificate` 指向 `d
    - **缓存配置**：`缓存参数 = 保留所有参数` + `缓存时间 = 短/遵循源站`。原因见 §6.3。
 4. **加 CNAME 解析** → DNSPod `storage` CNAME → 七牛给的目标。
 5. **配 CORS**（见 §5）。
-6. **切换后端** → 生产 `backend/.env` 的 `QINIU_DOMAIN=https://storage.dawnop.com`，重启 `dawnop-backend`。
+6. **切换后端** → 生产 `/opt/dawnop/backend/.env` 的 `QINIU_DOMAIN=https://storage.dawnop.com`，
+   重启 `dawnop-dawn`（M6 后生产是 Dawn；它经 `DAWNOP_ENV` 读的就是这个 .env）。
 
 验证：`curl https://storage.dawnop.com/` 返回 **HTTP 403**（未签名访问私有空间的正常响应）+ TLS 校验通过，即整条打通。
 

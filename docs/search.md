@@ -125,6 +125,8 @@ simple 扩展可用 ?  → 用 simple
   3. 验证：`.venv/bin/python -c` 里 `load_extension` 后 `SELECT simple_query('内存')` 应得 `"内" AND "存"`。
 - **rsync 后端务必 `--exclude='extensions/libsimple.*'`**（本地是 mac dylib，不能覆盖服务器的 linux so），
   同时排除 `.env` / `.env.*` / `*.db`。
-- 重启 `dawnop-backend` 后，lifespan 会自动把 `article_fts` 以 simple 重建。前端只需 rsync `dist`。
+- 重启后端后会自动把 `article_fts` 以 simple 重建（FastAPI 走 lifespan；Dawn 后端同理）。
+  M6 之后生产是 `dawnop-dawn`（`systemctl restart dawnop-dawn`），它经 `DAWN_SIMPLE_EXT`
+  指向同一个 `/opt/dawnop/backend/extensions/libsimple.so`。前端只需 rsync `dist`。
 - 换机 / 重装：重复上面「手动下载 + scp」即可。生产 Python（Ubuntu 22.04 标准 python3.10）已确认允许
   `load_extension`；个别禁用该功能的构建会自动退回 trigram（不报错，但 2 字中文 / 拼音失效）。
