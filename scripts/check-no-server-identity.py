@@ -102,7 +102,10 @@ def own_ips(*, require_network: bool) -> set[str]:
         if require_network:
             print("错误：" + msg, file=sys.stderr)
             sys.exit(2)
-        print("警告：" + msg + "\n  —— 离线档，跳过 IP 检查，仍跑用户名 + 旁路词。", file=sys.stderr)
+        print(
+            "警告：" + msg + "\n  —— 离线档，跳过 IP 检查，仍跑用户名 + 旁路词。",
+            file=sys.stderr,
+        )
     return found
 
 
