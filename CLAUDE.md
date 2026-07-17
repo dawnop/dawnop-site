@@ -242,8 +242,8 @@ dawnop-site/
 - 形态：Nginx 托管 `frontend/dist` 静态文件，并将 `/api` 反向代理到
   **Dawn 后端 `127.0.0.1:8001`**（systemd `dawnop-dawn`）。uvicorn（`:8000`，
   `deploy/dawnop-backend.service`）已 disable，是回滚目标。
-- **nginx 的服务器配置不在本仓库**，在 `~/workspace/dawnop-ops/`（私有，不推送）：站点 vhost、
-  443 接入、proxy 头、真实 IP 恢复手册都在那儿。**改 nginx 看那份笔记。** CI 守卫 + pre-push hook
+- **nginx 的服务器配置不在本仓库**，在 `~/workspace/dawnop-ops/`（私有）：站点 vhost、
+  443 接入、proxy 头、真实 IP 恢复手册都在那儿。**改 nginx 看那份笔记。** CI 守卫 + pre-commit/pre-push hook
   （`scripts/check-no-server-identity.py`）挡住服务器身份信息进公开仓库。
   `deploy/README.md` 只讲后端/前端/DB/systemd 那部分。
 

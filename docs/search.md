@@ -119,7 +119,7 @@ simple 扩展可用 ?  → 用 simple
 
 - simple 共享库是**平台相关二进制，不入库**（`.gitignore` 排除 `backend/extensions/libsimple.*`）。
 - 获取：`python backend/scripts/fetch_simple_ext.py`（按平台下载 v0.7.1 预编译库，**只取共享库不取词典**）。
-- ⚠️ **生产（118 服务器）直连 GitHub Releases 会卡死，脚本在服务器上跑不通**。正确做法：
+- ⚠️ **生产服务器直连 GitHub Releases 会卡死，脚本在服务器上跑不通**。正确做法：
   1. 在能访问 GitHub 的机器下载 `libsimple-linux-ubuntu-22.04.zip`，取出里面的 `libsimple.so`；
   2. `scp` 到服务器 `/opt/dawnop/backend/extensions/libsimple.so`；
   3. 验证：`.venv/bin/python -c` 里 `load_extension` 后 `SELECT simple_query('内存')` 应得 `"内" AND "存"`。

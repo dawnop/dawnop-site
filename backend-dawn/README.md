@@ -1,9 +1,10 @@
 # backend-dawn
 
 dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 仓库 `docs/m6.md`）。
-与 `backend/`（FastAPI，迁移期参照实现）**共用同一 SQLite 库与七牛空间**，nginx 按路由灰度切流。
-`/api` 全部端点已迁移并与 FastAPI 逐字段对拍一致，唯一例外是 `POST /api/fm/upload`
-（后端代理上传，multipart 二进制请求体）随 WebDAV 一并留待 M6.5。
+与 `backend/`（FastAPI，现为冻结的回滚目标 + 契约参照）**共用同一 SQLite 库与七牛空间**；
+迁移期 nginx 按路由灰度切流，**2026-07 已全量切到 Dawn**（uvicorn 退役、只回滚时拉起）。
+`/api` 全部端点已迁移并与 FastAPI 逐字段对拍一致；曾留待 M6.5 的 **WebDAV**（`src/webdav.dawn`）
+与 `POST /api/fm/upload`（multipart 代理上传，`src/multipart.dawn`）**也已落地**，`contract_webdav.py` 全周期对拍通过。
 
 ## 依赖与构建
 

@@ -20,7 +20,7 @@
 
 ### 1.1 为什么要三方协作
 
-- **文件不走源站**：文件管理（VueFinder）的上传是「前端直传七牛」，预览/下载是「后端 302 跳到七牛签名 URL、浏览器直连七牛取字节」。好处是**省源站带宽**——大文件流量全部由七牛承担，源站只做鉴权和签名。
+- **文件不走源站**：文件管理（自建 `FilesLabView` + `api/fmApi.js`）的上传是「前端直传七牛」，预览/下载是「后端 302 跳到七牛签名 URL、浏览器直连七牛取字节」。好处是**省源站带宽**——大文件流量全部由七牛承担，源站只做鉴权和签名。
 - **代价**：文件字节由 `storage.dawnop.com`（七牛）提供，页面由 `dawnop.com`（源站）提供，于是**两个 origin 都必须是 HTTPS**，且需要 CORS 打通（见 §5）。
 
 ### 1.2 HTTPS 数据流
@@ -107,7 +107,7 @@ sudo chown -R <user>:<user> /etc/ssl/dawnop
   --reloadcmd      "chmod 600 /etc/ssl/dawnop/dawnop.com.key && sudo systemctl reload nginx && python3 ~/qiniu-cert-deploy.py >> ~/qiniu-cert-deploy.log 2>&1"
 ```
 
-Nginx 相关片段见 [`nginx.conf`](./nginx.conf)：`ssl_certificate` 指向 `dawnop.com_bundle.crt`（fullchain），`ssl_certificate_key` 指向 `dawnop.com.key`，`ssl_protocols TLSv1.2 TLSv1.3`。`www` 靠证书 SAN `*.dawnop.com` 一并覆盖。
+Nginx 相关片段在私有运维笔记 `~/workspace/dawnop-ops/nginx.conf`（nginx 全配 2026-07-18 移出公开仓）：`ssl_certificate` 指向 `dawnop.com_bundle.crt`（fullchain），`ssl_certificate_key` 指向 `dawnop.com.key`，`ssl_protocols TLSv1.2 TLSv1.3`。`www` 靠证书 SAN `*.dawnop.com` 一并覆盖。
 
 > **前置基建**：腾讯云安全组需放行 **TCP 443**（一次性；初次配 HTTPS 时曾因未放行导致连接超时）。
 
@@ -131,7 +131,7 @@ Nginx 相关片段见 [`nginx.conf`](./nginx.conf)：`ssl_certificate` 指向 `d
 ## 5. CORS：为什么、配什么
 
 - **图片预览、文件下载**：走 302 重定向，浏览器跟随即可，**不需要 CORS**。
-- **文本/代码在线预览**：**不能**走 302——跨域重定向会把请求 `Origin` 变成 `null`，命不中七牛 CORS。故前端 `QiniuDriver` 覆写 `getContent`：先 `GET /api/fm/sign` 拿签名 URL，再用 `fetch` **直连七牛**（Origin 正常），此时**必须** CORS 放行。
+- **文本/代码在线预览**：**不能**走 302——跨域重定向会把请求 `Origin` 变成 `null`，命不中七牛 CORS。故前端 `api/fmApi.js` 的取内容逻辑：先 `GET /api/fm/sign` 拿签名 URL，再用 `fetch` **直连七牛**（Origin 正常），此时**必须** CORS 放行；直连被拦时回退 `GET /api/fm/content` 后端代理。
 
 七牛 bucket CORS（`POST https://uc.qiniuapi.com/corsRules/set/<bucket>`，QBox 鉴权）：
 
