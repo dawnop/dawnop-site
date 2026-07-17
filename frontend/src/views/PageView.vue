@@ -66,7 +66,11 @@ function go(p) {
   loadArticles(route.params.slug)
 }
 
-watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true })
+watch(
+  () => route.params.slug,
+  (slug) => slug && load(slug),
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -96,7 +100,9 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
         <h1 class="list-title">{{ page.title }}</h1>
         <p v-if="page.description" class="list-subtitle">{{ page.description }}</p>
         <p v-if="total" class="list-meta">
-          共 {{ total }} 篇<template v-if="latestDate"> · 最近更新 {{ fmtDate(latestDate) }}</template>
+          共 {{ total }} 篇<template v-if="latestDate">
+            · 最近更新 {{ fmtDate(latestDate) }}</template
+          >
         </p>
       </header>
       <el-empty v-if="items.length === 0" description="该栏目下还没有文章" />

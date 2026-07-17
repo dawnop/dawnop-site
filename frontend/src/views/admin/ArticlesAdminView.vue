@@ -149,7 +149,6 @@ async function exportMd(a) {
   URL.revokeObjectURL(url)
 }
 
-
 function goPage(p) {
   page.value = p
   load()
@@ -195,8 +194,20 @@ onMounted(load)
     </el-card>
 
     <el-card v-if="!isMobile" shadow="never">
-      <el-table v-loading="loading" :data="items" border empty-text="还没有文章" @header-dragend="onHeaderDrag">
-        <el-table-column prop="title" label="标题" :width="colW.title" min-width="150" show-overflow-tooltip />
+      <el-table
+        v-loading="loading"
+        :data="items"
+        border
+        empty-text="还没有文章"
+        @header-dragend="onHeaderDrag"
+      >
+        <el-table-column
+          prop="title"
+          label="标题"
+          :width="colW.title"
+          min-width="150"
+          show-overflow-tooltip
+        />
         <el-table-column label="链接" :width="colW['链接']" min-width="110" show-overflow-tooltip>
           <template #default="{ row }">
             <a
@@ -205,12 +216,15 @@ onMounted(load)
               rel="noopener"
               class="slug-link"
               :title="row.published ? '' : '草稿：仅登录后凭直链可预览，前台列表不可见'"
-            >/article/{{ row.slug }}</a>
+              >/article/{{ row.slug }}</a
+            >
             <span v-if="!row.published" class="draft-tag">草稿预览</span>
           </template>
         </el-table-column>
         <el-table-column label="所属页面" :width="colW['所属页面']" min-width="90">
-          <template #default="{ row }"><span class="muted">{{ pageName(row.page_id) }}</span></template>
+          <template #default="{ row }"
+            ><span class="muted">{{ pageName(row.page_id) }}</span></template
+          >
         </el-table-column>
         <el-table-column label="标签" :width="colW['标签']" min-width="150">
           <template #default="{ row }">
@@ -240,10 +254,14 @@ onMounted(load)
           </template>
         </el-table-column>
         <el-table-column prop="views" label="浏览量" :width="colW.views || 84" sortable>
-          <template #default="{ row }"><span class="muted">{{ row.views ?? 0 }}</span></template>
+          <template #default="{ row }"
+            ><span class="muted">{{ row.views ?? 0 }}</span></template
+          >
         </el-table-column>
         <el-table-column label="更新时间" :width="colW['更新时间'] || 100">
-          <template #default="{ row }"><span class="muted">{{ fmtDate(row.updated_at) }}</span></template>
+          <template #default="{ row }"
+            ><span class="muted">{{ fmtDate(row.updated_at) }}</span></template
+          >
         </el-table-column>
         <el-table-column label="操作" :width="colW['操作'] || 210" fixed="right">
           <template #default="{ row }">
@@ -276,7 +294,9 @@ onMounted(load)
       <el-empty v-if="!items.length && !loading" description="还没有文章" :image-size="80" />
       <el-card v-for="row in items" :key="row.id" shadow="never" class="m-card">
         <div class="m-card-head">
-          <a :href="articleUrl(row.slug)" target="_blank" rel="noopener" class="m-title">{{ row.title }}</a>
+          <a :href="articleUrl(row.slug)" target="_blank" rel="noopener" class="m-title">{{
+            row.title
+          }}</a>
           <el-tag :type="row.published ? 'success' : 'info'" size="small" effect="light">
             {{ row.published ? '已发布' : '草稿' }}
           </el-tag>
@@ -304,12 +324,16 @@ onMounted(load)
           <el-option v-for="t in allTags" :key="t" :label="t" :value="t" />
         </el-select>
         <div class="m-actions">
-          <el-button size="small" @click="router.push(`/admin/articles/${row.id}/edit`)">编辑</el-button>
+          <el-button size="small" @click="router.push(`/admin/articles/${row.id}/edit`)"
+            >编辑</el-button
+          >
           <el-dropdown trigger="click" @command="(c) => rowCmd(c, row)">
             <el-button size="small" :icon="MoreFilled" />
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="publish">{{ row.published ? '转草稿' : '发布' }}</el-dropdown-item>
+                <el-dropdown-item command="publish">{{
+                  row.published ? '转草稿' : '发布'
+                }}</el-dropdown-item>
                 <el-dropdown-item command="export">导出 .md</el-dropdown-item>
                 <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
               </el-dropdown-menu>

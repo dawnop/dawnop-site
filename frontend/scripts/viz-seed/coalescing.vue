@@ -104,8 +104,8 @@ const threadCX = (i) => padX + (i + 0.5) * ((MEM * cellW) / W)
     </svg>
 
     <p class="cap">
-      同一 warp 的线程访问显存：<b>合并</b> = 落在 1 个事务里、字节 100% 有用；<b>跨步</b> =
-      散落到 4 个事务、只有 25% 有用（其余带宽浪费）。点上面两个按钮看切换。
+      同一 warp 的线程访问显存：<b>合并</b> = 落在 1 个事务里、字节 100% 有用；<b>跨步</b> = 散落到
+      4 个事务、只有 25% 有用（其余带宽浪费）。点上面两个按钮看切换。
     </p>
   </div>
 </template>
@@ -186,7 +186,9 @@ const threadCX = (i) => padX + (i + 0.5) * ((MEM * cellW) / W)
   stroke: #cbd2dc;
   stroke-dasharray: 4 4;
   opacity: 0.7;
-  transition: opacity 0.45s, stroke 0.45s;
+  transition:
+    opacity 0.45s,
+    stroke 0.45s;
 }
 .seg-box.active {
   stroke: #1677ff;

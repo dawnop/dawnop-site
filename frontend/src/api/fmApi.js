@@ -8,7 +8,10 @@ import { auth } from '../store/auth'
 const STORAGE = 'qiniu'
 
 export const toFull = (rel) => `${STORAGE}://${String(rel || '').replace(/^\/+/, '')}`
-export const relOf = (full) => String(full || '').replace(/^\w+:\/\//, '').replace(/^\/+/, '')
+export const relOf = (full) =>
+  String(full || '')
+    .replace(/^\w+:\/\//, '')
+    .replace(/^\/+/, '')
 
 // 后端 DirEntry → 组件内部行模型（贴近 FileObject）
 function mapEntry(e) {
@@ -27,7 +30,7 @@ export async function listDir(rel) {
   const { data } = await client.get('/fm', { params: { path: toFull(rel) } })
   return (data.files || [])
     .map(mapEntry)
-    .sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name, 'zh'))
+    .sort((a, b) => b.is_dir - a.is_dir || a.name.localeCompare(b.name, 'zh'))
 }
 
 // 浏览器直接发起的 GET（<img>/下载），带不上 Authorization，把 token 放查询串
@@ -67,8 +70,7 @@ export async function textContent(rel) {
 }
 
 // 保存文本（在线编辑）：后端代理写回七牛并更新元数据
-export const saveText = (rel, content) =>
-  client.post('/fm/save', { path: toFull(rel), content })
+export const saveText = (rel, content) => client.post('/fm/save', { path: toFull(rel), content })
 
 // 带进度下载：首选签名 URL 直连七牛流式读字节（不占后端流量）；
 // 直连被 CORS 拦（本地开发测试域名）时改走后端代理，进度不丢。
@@ -113,11 +115,22 @@ export const createFolder = (rel, name) =>
 export const rename = (rel, itemRel, name) =>
   client.post('/fm/rename', { path: toFull(rel), item: toFull(itemRel), name })
 export const remove = (rel, itemRels) =>
-  client.post('/fm/delete', { path: toFull(rel), items: itemRels.map((r) => ({ path: toFull(r) })) })
+  client.post('/fm/delete', {
+    path: toFull(rel),
+    items: itemRels.map((r) => ({ path: toFull(r) })),
+  })
 export const move = (rel, destRel, srcRels) =>
-  client.post('/fm/move', { path: toFull(rel), destination: toFull(destRel), sources: srcRels.map(toFull) })
+  client.post('/fm/move', {
+    path: toFull(rel),
+    destination: toFull(destRel),
+    sources: srcRels.map(toFull),
+  })
 export const copy = (rel, destRel, srcRels) =>
-  client.post('/fm/copy', { path: toFull(rel), destination: toFull(destRel), sources: srcRels.map(toFull) })
+  client.post('/fm/copy', {
+    path: toFull(rel),
+    destination: toFull(destRel),
+    sources: srcRels.map(toFull),
+  })
 
 // 上传 = 前端直传七牛：要凭证 → qiniu-js 直传 → 登记。
 // qiniu-js 自动按文件大小选通道：≤4MB 表单直传，>4MB 分片上传（v2，4MB/片、
@@ -129,7 +142,9 @@ export async function uploadFile(rel, file, onProgress, nameOverride) {
   const { data: tk } = await client.post('/fm/upload-token', { path: toFull(rel), name })
   await new Promise((resolve, reject) => {
     const observable = qiniuJs.upload(
-      file, tk.key, tk.token,
+      file,
+      tk.key,
+      tk.token,
       { fname: name.split('/').pop() },
       { useCdnDomain: true },
     )

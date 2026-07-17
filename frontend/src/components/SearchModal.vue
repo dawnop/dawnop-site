@@ -166,7 +166,7 @@ watch(
     } else {
       unlockScroll()
     }
-  }
+  },
 )
 
 onBeforeUnmount(() => {
@@ -206,12 +206,7 @@ onBeforeUnmount(() => {
                   <span>最近搜索</span>
                   <button class="s-clear" @click="clearRecent">清除</button>
                 </div>
-                <button
-                  v-for="q in recent"
-                  :key="q"
-                  class="s-recent"
-                  @click="useRecent(q)"
-                >
+                <button v-for="q in recent" :key="q" class="s-recent" @click="useRecent(q)">
                   <el-icon><Clock /></el-icon>
                   <span>{{ q }}</span>
                 </button>
@@ -265,11 +260,7 @@ onBeforeUnmount(() => {
               <span><kbd>↵</kbd> 打开</span>
               <span><kbd>esc</kbd> 关闭</span>
             </div>
-            <button
-              v-if="items.length && total > items.length"
-              class="s-viewall"
-              @click="viewAll"
-            >
+            <button v-if="items.length && total > items.length" class="s-viewall" @click="viewAll">
               查看全部 {{ total }} 条 →
             </button>
           </div>
@@ -299,7 +290,9 @@ onBeforeUnmount(() => {
   flex-direction: column;
   background: #fff;
   border-radius: 14px;
-  box-shadow: 0 16px 48px rgba(15, 18, 25, 0.22), 0 2px 8px rgba(15, 18, 25, 0.08);
+  box-shadow:
+    0 16px 48px rgba(15, 18, 25, 0.22),
+    0 2px 8px rgba(15, 18, 25, 0.08);
   overflow: hidden;
 }
 
@@ -536,7 +529,9 @@ onBeforeUnmount(() => {
 }
 .s-fade-enter-active .s-panel,
 .s-fade-leave-active .s-panel {
-  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.18s ease;
+  transition:
+    transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 0.18s ease;
 }
 .s-fade-enter-from,
 .s-fade-leave-to {

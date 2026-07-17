@@ -1,7 +1,19 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { RouterView, useRouter, useRoute } from 'vue-router'
-import { Fold, Expand, House, Document, Collection, FolderOpened, MagicStick, PriceTag, Setting, Odometer, MoreFilled } from '@element-plus/icons-vue'
+import {
+  Fold,
+  Expand,
+  House,
+  Document,
+  Collection,
+  FolderOpened,
+  MagicStick,
+  PriceTag,
+  Setting,
+  Odometer,
+  MoreFilled,
+} from '@element-plus/icons-vue'
 import { auth } from '../store/auth'
 import { useIsMobile } from '../composables/useIsMobile'
 
@@ -24,7 +36,12 @@ function toggle() {
 }
 
 // 路由切换后自动收起移动抽屉（覆盖菜单点击、面包屑跳转等一切导航）
-watch(() => route.path, () => { drawerOpen.value = false })
+watch(
+  () => route.path,
+  () => {
+    drawerOpen.value = false
+  },
+)
 
 // 顶栏右上下拉（移动端把「查看站点 / 退出」收起）
 function onTopCmd(cmd) {
@@ -58,7 +75,15 @@ const groups = [
 ]
 
 // 当前高亮项：首页精确匹配，其余匹配前缀（子路由如 /admin/articles/new 仍高亮文章管理）
-const navTos = ['/admin/articles', '/admin/tags', '/admin/pages', '/admin/viz', '/admin/files', '/admin/monitor', '/admin/settings']
+const navTos = [
+  '/admin/articles',
+  '/admin/tags',
+  '/admin/pages',
+  '/admin/viz',
+  '/admin/files',
+  '/admin/monitor',
+  '/admin/settings',
+]
 const activeMenu = computed(() => {
   if (route.path === '/admin') return '/admin'
   return navTos.find((t) => route.path === t || route.path.startsWith(t + '/')) || route.path
@@ -71,7 +96,11 @@ const crumbs = computed(() => {
     'admin-home': [{ label: '首页' }],
     'admin-articles': [home, { label: '文章管理' }],
     'admin-article-new': [home, { label: '文章管理', to: '/admin/articles' }, { label: '写文章' }],
-    'admin-article-edit': [home, { label: '文章管理', to: '/admin/articles' }, { label: '编辑文章' }],
+    'admin-article-edit': [
+      home,
+      { label: '文章管理', to: '/admin/articles' },
+      { label: '编辑文章' },
+    ],
     'admin-tags': [home, { label: '标签管理' }],
     'admin-pages': [home, { label: '页面管理' }],
     'admin-page-new': [home, { label: '页面管理', to: '/admin/pages' }, { label: '新建页面' }],
@@ -100,11 +129,19 @@ function logout() {
     <!-- 顶栏 -->
     <el-header class="topbar">
       <div class="left">
-        <el-icon class="toggle" :title="isMobile ? '菜单' : (collapsed ? '展开' : '收起')" @click="toggle">
+        <el-icon
+          class="toggle"
+          :title="isMobile ? '菜单' : collapsed ? '展开' : '收起'"
+          @click="toggle"
+        >
           <Expand v-if="isMobile || collapsed" />
           <Fold v-else />
         </el-icon>
-        <span class="brand"><img src="/logo.svg" alt="" class="brand-logo" /><span class="brand-text">dawnop 控制台</span></span>
+        <span class="brand"
+          ><img src="/logo.svg" alt="" class="brand-logo" /><span class="brand-text"
+            >dawnop 控制台</span
+          ></span
+        >
         <el-breadcrumb v-if="crumbs.length" class="topbar-crumb" separator="/">
           <el-breadcrumb-item v-for="(c, i) in crumbs" :key="i" :to="c.to">
             {{ c.label }}
@@ -132,7 +169,12 @@ function logout() {
     <el-container class="body">
       <!-- 桌面侧栏 -->
       <el-aside v-if="!isMobile" :width="collapsed ? '64px' : '208px'" class="sidebar">
-        <el-menu :collapse="collapsed" :default-active="activeMenu" router :collapse-transition="false">
+        <el-menu
+          :collapse="collapsed"
+          :default-active="activeMenu"
+          router
+          :collapse-transition="false"
+        >
           <el-menu-item-group v-for="g in groups" :key="g.label">
             <template #title>{{ g.label }}</template>
             <el-menu-item v-for="it in g.items" :key="it.to" :index="it.to">
@@ -152,7 +194,13 @@ function logout() {
     </el-container>
 
     <!-- 移动端抽屉侧栏（路由切换后自动收起） -->
-    <el-drawer v-model="drawerOpen" direction="ltr" :size="232" :with-header="false" class="nav-drawer">
+    <el-drawer
+      v-model="drawerOpen"
+      direction="ltr"
+      :size="232"
+      :with-header="false"
+      class="nav-drawer"
+    >
       <el-menu :default-active="activeMenu" router :collapse-transition="false">
         <el-menu-item-group v-for="g in groups" :key="g.label">
           <template #title>{{ g.label }}</template>

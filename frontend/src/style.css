@@ -5,8 +5,9 @@
   --accent: #1677ff;
   --accent-hover: #4096ff;
   --bg: #ffffff;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif;
   color: var(--fg);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -38,7 +39,9 @@ a {
   height: 2px;
 }
 #nprogress .peg {
-  box-shadow: 0 0 10px var(--accent), 0 0 5px var(--accent);
+  box-shadow:
+    0 0 10px var(--accent),
+    0 0 5px var(--accent);
 }
 
 /* 原生控件（button/input/select/textarea/label）样式已交由 Element Plus 接管，

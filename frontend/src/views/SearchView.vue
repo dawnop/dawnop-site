@@ -62,7 +62,7 @@ watch(
     page.value = 1
     load()
   },
-  { immediate: true }
+  { immediate: true },
 )
 </script>
 
@@ -85,14 +85,8 @@ watch(
 
     <el-skeleton v-if="loading" :rows="4" animated />
 
-    <el-empty
-      v-else-if="!searched"
-      description="输入关键词开始搜索"
-    />
-    <el-empty
-      v-else-if="items.length === 0"
-      description="没有找到匹配的文章，换个关键词试试"
-    />
+    <el-empty v-else-if="!searched" description="输入关键词开始搜索" />
+    <el-empty v-else-if="items.length === 0" description="没有找到匹配的文章，换个关键词试试" />
 
     <ul v-else class="result-list">
       <li v-for="a in items" :key="a.id" class="result">
@@ -106,12 +100,9 @@ watch(
           <span>约 {{ readMinutes(a.word_count) }} 分钟</span>
           <template v-if="a.tags && a.tags.length">
             <span class="dot">·</span>
-            <RouterLink
-              v-for="t in a.tags"
-              :key="t.slug"
-              :to="`/tag/${t.slug}`"
-              class="r-tag"
-            >#{{ t.name }}</RouterLink>
+            <RouterLink v-for="t in a.tags" :key="t.slug" :to="`/tag/${t.slug}`" class="r-tag"
+              >#{{ t.name }}</RouterLink
+            >
           </template>
         </div>
       </li>

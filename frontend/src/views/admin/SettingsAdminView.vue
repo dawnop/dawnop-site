@@ -69,7 +69,10 @@ onMounted(load)
         </el-form-item>
         <el-form-item label="存储配额 (GB)">
           <el-input-number v-model="form.storage_quota_gb" :min="1" :max="1024" />
-          <span class="tip">用量条分母；填七牛「存储资源包」容量，免费额度 10GB。CDN 流量条走流量包 API，无需配置</span>
+          <span class="tip"
+            >用量条分母；填七牛「存储资源包」容量，免费额度 10GB。CDN 流量条走流量包
+            API，无需配置</span
+          >
         </el-form-item>
         <el-form-item label="文本预览上限 (KB)">
           <el-input-number v-model="form.text_preview_max_kb" :min="16" :max="10240" :step="64" />

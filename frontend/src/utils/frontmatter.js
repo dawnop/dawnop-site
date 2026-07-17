@@ -29,7 +29,10 @@ export function parseFrontmatter(md) {
   if (lines[0].trim() !== '---') return { meta: {}, body: md }
   let end = -1
   for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === '---') { end = i; break }
+    if (lines[i].trim() === '---') {
+      end = i
+      break
+    }
   }
   if (end === -1) return { meta: {}, body: md } // 未闭合 → 当作正文，不误剥
   const meta = {}
@@ -39,6 +42,9 @@ export function parseFrontmatter(md) {
     const m = line.match(/^([A-Za-z_][\w-]*)\s*:\s*(.*)$/)
     if (m) meta[m[1]] = parseValue(m[2])
   }
-  const body = lines.slice(end + 1).join('\n').replace(/^\n+/, '')
+  const body = lines
+    .slice(end + 1)
+    .join('\n')
+    .replace(/^\n+/, '')
   return { meta, body }
 }

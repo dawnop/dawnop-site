@@ -5,43 +5,128 @@
 // 领域逻辑全部在 composables/useFileManager.js；本 SFC 只做「解构状态/方法 + 渲染」。
 // 下方从 @element-plus/icons-vue 导入的图标仅供模板直接使用（<Upload/> 等）。
 import {
-  Folder, FolderOpened, FolderAdd, Files, Upload,
-  Search, MoreFilled, Download, EditPen, Delete,
-  View, Close, Loading, Right, CopyDocument,
-  ArrowDown, ArrowUp, Plus, Select,
+  Folder,
+  FolderOpened,
+  FolderAdd,
+  Files,
+  Upload,
+  Search,
+  MoreFilled,
+  Download,
+  EditPen,
+  Delete,
+  View,
+  Close,
+  Loading,
+  Right,
+  CopyDocument,
+  ArrowDown,
+  ArrowUp,
+  Plus,
+  Select,
 } from '@element-plus/icons-vue'
 import { useFileManager } from '../../composables/useFileManager'
 
 const {
   fm,
-  cwd, loading, q, viewMode, showInfo, selectedPath, selPaths, previewText, previewErr,
-  isMobile, selectMode, searchOpen, searchInputRef, sheet,
-  effectiveView, drive, drivePct,
-  tasks, tasksCollapsed, activeCount,
-  treeRef, treeKey, tableRef, fileInput, dirInput,
-  sideW, infoW, viewOptions, treeProps,
-  filtered, selected, selRows, selFiles,
-  contentEl, dnd, marquee, marqueeStyle, crumbs, rowClass,
-  imgViewer, modal, destDlg, dragging, ctx, ctxItems,
-  openSearch, closeSearch,
-  goto, loadTreeNode, onTreeClick,
-  onSelChange, clearSel,
-  onRowClick, onRowDblclick, onBlankClick,
-  openImgViewer, startEdit, saveEdit, beforeCloseModal,
-  onCellTap, toggleSelectMode, openSheet, sheetDo,
-  doDownload, doDownloadMany, newFolder, doRename, doDeleteMany, onRowCommand,
-  startMoveCopy, confirmDest,
-  onDragStartRow, onDragEndRow,
-  onDestDragOver, onDestDragLeave, onDestDrop, onRowDragOver, onRowDragLeave, onRowDrop,
+  cwd,
+  loading,
+  q,
+  viewMode,
+  showInfo,
+  selectedPath,
+  selPaths,
+  previewText,
+  previewErr,
+  isMobile,
+  selectMode,
+  searchOpen,
+  searchInputRef,
+  sheet,
+  effectiveView,
+  drive,
+  drivePct,
+  tasks,
+  tasksCollapsed,
+  activeCount,
+  treeRef,
+  treeKey,
+  tableRef,
+  fileInput,
+  dirInput,
+  sideW,
+  infoW,
+  viewOptions,
+  treeProps,
+  filtered,
+  selected,
+  selRows,
+  selFiles,
+  contentEl,
+  dnd,
+  marquee,
+  marqueeStyle,
+  crumbs,
+  rowClass,
+  imgViewer,
+  modal,
+  destDlg,
+  dragging,
+  ctx,
+  ctxItems,
+  openSearch,
+  closeSearch,
+  goto,
+  loadTreeNode,
+  onTreeClick,
+  onSelChange,
+  clearSel,
+  onRowClick,
+  onRowDblclick,
+  onBlankClick,
+  openImgViewer,
+  startEdit,
+  saveEdit,
+  beforeCloseModal,
+  onCellTap,
+  toggleSelectMode,
+  openSheet,
+  sheetDo,
+  doDownload,
+  doDownloadMany,
+  newFolder,
+  doRename,
+  doDeleteMany,
+  onRowCommand,
+  startMoveCopy,
+  confirmDest,
+  onDragStartRow,
+  onDragEndRow,
+  onDestDragOver,
+  onDestDragLeave,
+  onDestDrop,
+  onRowDragOver,
+  onRowDragLeave,
+  onRowDrop,
   onContentMousedown,
-  openCtxRow, openCtxBlank, onTableRowCtx, runCtx,
-  pickFiles, pickFolder, onFilesPicked,
-  onDragEnter, onDragLeave, onDrop,
+  openCtxRow,
+  openCtxBlank,
+  onTableRowCtx,
+  runCtx,
+  pickFiles,
+  pickFolder,
+  onFilesPicked,
+  onDragEnter,
+  onDragLeave,
+  onDrop,
   startResize,
-  isImage, isText, iconOf, tintOf,
-  fmtSize, fmtDate,
+  isImage,
+  isText,
+  iconOf,
+  tintOf,
+  fmtSize,
+  fmtDate,
 } = useFileManager()
-
 </script>
 
 <template>
@@ -94,8 +179,8 @@ const {
           <el-progress :percentage="drivePct" :stroke-width="6" :show-text="false" />
           <div class="fm-drive-t">
             <template v-if="drive">
-              已用 {{ drive.used ? fmtSize(drive.used) : '0 B' }} / {{ fmtSize(drive.quota) }}
-              · {{ drive.files }} 个文件
+              已用 {{ drive.used ? fmtSize(drive.used) : '0 B' }} / {{ fmtSize(drive.quota) }} ·
+              {{ drive.files }} 个文件
             </template>
             <template v-else>用量统计加载中…</template>
           </div>
@@ -117,10 +202,20 @@ const {
           <div class="fm-tb-left">
             <template v-if="selPaths.length">
               <span class="fm-selinfo">已选 {{ selPaths.length }} 项</span>
-              <el-button text :icon="Download" :disabled="!selFiles.length" @click="doDownloadMany(selRows)">下载</el-button>
+              <el-button
+                text
+                :icon="Download"
+                :disabled="!selFiles.length"
+                @click="doDownloadMany(selRows)"
+                >下载</el-button
+              >
               <el-button text :icon="Right" @click="startMoveCopy('move', selRows)">移动</el-button>
-              <el-button text :icon="CopyDocument" @click="startMoveCopy('copy', selRows)">复制</el-button>
-              <el-button text type="danger" :icon="Delete" @click="doDeleteMany(selRows)">删除</el-button>
+              <el-button text :icon="CopyDocument" @click="startMoveCopy('copy', selRows)"
+                >复制</el-button
+              >
+              <el-button text type="danger" :icon="Delete" @click="doDeleteMany(selRows)"
+                >删除</el-button
+              >
               <el-button text :icon="Close" @click="clearSel">取消选择</el-button>
             </template>
             <template v-else>
@@ -128,17 +223,34 @@ const {
             </template>
           </div>
           <div class="fm-tb-right">
-            <el-input v-model="q" :prefix-icon="Search" placeholder="搜索当前目录" clearable class="fm-search" />
+            <el-input
+              v-model="q"
+              :prefix-icon="Search"
+              placeholder="搜索当前目录"
+              clearable
+              class="fm-search"
+            />
             <el-segmented v-model="viewMode" :options="viewOptions" class="fm-seg">
-              <template #default="{ item }"><el-icon><component :is="item.icon" /></el-icon></template>
+              <template #default="{ item }"
+                ><el-icon><component :is="item.icon" /></el-icon
+              ></template>
             </el-segmented>
-            <el-button :icon="View" circle :type="showInfo ? 'primary' : ''" :plain="showInfo" title="预览面板" @click="showInfo = !showInfo" />
+            <el-button
+              :icon="View"
+              circle
+              :type="showInfo ? 'primary' : ''"
+              :plain="showInfo"
+              title="预览面板"
+              @click="showInfo = !showInfo"
+            />
           </div>
         </div>
 
         <!-- 移动端多选态顶栏：已选计数 + 取消 -->
         <div v-if="isMobile && selectMode" class="fm-selhead">
-          <span class="fm-selhead-count">{{ selPaths.length ? `已选 ${selPaths.length} 项` : '选择文件' }}</span>
+          <span class="fm-selhead-count">{{
+            selPaths.length ? `已选 ${selPaths.length} 项` : '选择文件'
+          }}</span>
           <el-button text @click="toggleSelectMode">取消</el-button>
         </div>
 
@@ -196,16 +308,22 @@ const {
                   @dragleave="onRowDragLeave(row)"
                   @drop="onRowDrop($event, row)"
                 >
-                  <el-icon class="nc-ico" :style="{ color: tintOf(row) }"><component :is="iconOf(row)" /></el-icon>
+                  <el-icon class="nc-ico" :style="{ color: tintOf(row) }"
+                    ><component :is="iconOf(row)"
+                  /></el-icon>
                   <span class="nc-name">{{ row.name }}</span>
                 </span>
               </template>
             </el-table-column>
             <el-table-column label="大小" width="120" align="right">
-              <template #default="{ row }"><span class="muted">{{ row.is_dir ? '—' : fmtSize(row.size) }}</span></template>
+              <template #default="{ row }"
+                ><span class="muted">{{ row.is_dir ? '—' : fmtSize(row.size) }}</span></template
+              >
             </el-table-column>
             <el-table-column label="修改时间" width="130">
-              <template #default="{ row }"><span class="muted">{{ fmtDate(row.updated_at) }}</span></template>
+              <template #default="{ row }"
+                ><span class="muted">{{ fmtDate(row.updated_at) }}</span></template
+              >
             </el-table-column>
             <el-table-column width="56" align="center">
               <template #default="{ row }">
@@ -213,15 +331,21 @@ const {
                   <el-icon class="rowmore" @click.stop><MoreFilled /></el-icon>
                   <template #dropdown>
                     <el-dropdown-menu>
-                      <el-dropdown-item :icon="Download" command="下载" :disabled="row.is_dir">下载</el-dropdown-item>
+                      <el-dropdown-item :icon="Download" command="下载" :disabled="row.is_dir"
+                        >下载</el-dropdown-item
+                      >
                       <el-dropdown-item :icon="EditPen" command="重命名">重命名</el-dropdown-item>
-                      <el-dropdown-item :icon="Delete" command="删除" divided>删除</el-dropdown-item>
+                      <el-dropdown-item :icon="Delete" command="删除" divided
+                        >删除</el-dropdown-item
+                      >
                     </el-dropdown-menu>
                   </template>
                 </el-dropdown>
               </template>
             </el-table-column>
-            <template #empty><el-empty description="空目录，可直接拖文件进来" :image-size="80" /></template>
+            <template #empty
+              ><el-empty description="空目录，可直接拖文件进来" :image-size="80"
+            /></template>
           </el-table>
 
           <!-- 网格 -->
@@ -252,14 +376,28 @@ const {
                 v-if="isMobile && selectMode"
                 class="cell-check"
                 :class="{ on: selPaths.includes(row.path) }"
-              ><Select /></el-icon>
+                ><Select
+              /></el-icon>
               <div class="cell-thumb">
-                <img v-if="isImage(row)" :src="fm.previewUrl(row.path, { w: 320, h: 200, mode: 'fill' })" class="cell-img" loading="lazy" alt="" />
-                <el-icon v-else class="cell-ico" :style="{ color: tintOf(row) }"><component :is="iconOf(row)" /></el-icon>
+                <img
+                  v-if="isImage(row)"
+                  :src="fm.previewUrl(row.path, { w: 320, h: 200, mode: 'fill' })"
+                  class="cell-img"
+                  loading="lazy"
+                  alt=""
+                />
+                <el-icon v-else class="cell-ico" :style="{ color: tintOf(row) }"
+                  ><component :is="iconOf(row)"
+                /></el-icon>
               </div>
               <div class="cell-name">{{ row.name }}</div>
             </div>
-            <el-empty v-if="!filtered.length && !loading" description="空目录，可直接拖文件进来" :image-size="80" class="grid-empty" />
+            <el-empty
+              v-if="!filtered.length && !loading"
+              description="空目录，可直接拖文件进来"
+              :image-size="80"
+              class="grid-empty"
+            />
           </div>
         </div>
 
@@ -276,22 +414,41 @@ const {
         <aside class="fm-info" :style="{ width: infoW + 'px' }">
           <div class="fm-info-head">
             <span class="fm-info-title">{{ selected ? selected.name : '预览' }}</span>
-            <el-icon class="fm-info-close" title="收起" @click="showInfo = false"><Close /></el-icon>
+            <el-icon class="fm-info-close" title="收起" @click="showInfo = false"
+              ><Close
+            /></el-icon>
           </div>
           <template v-if="selected && !selected.is_dir">
             <div class="fm-preview">
-              <div v-if="isImage(selected)" class="pv-img-wrap" title="点击放大" @click="openImgViewer(selected)">
-                <img :src="fm.previewUrl(selected.path, { w: 900, mode: 'fit' })" class="pv-img" alt="" />
+              <div
+                v-if="isImage(selected)"
+                class="pv-img-wrap"
+                title="点击放大"
+                @click="openImgViewer(selected)"
+              >
+                <img
+                  :src="fm.previewUrl(selected.path, { w: 900, mode: 'fit' })"
+                  class="pv-img"
+                  alt=""
+                />
               </div>
-              <pre v-else-if="isText(selected)" class="pv-text">{{ previewErr || previewText || '加载中…' }}</pre>
+              <pre v-else-if="isText(selected)" class="pv-text">{{
+                previewErr || previewText || '加载中…'
+              }}</pre>
               <div v-else class="pv-file">
-                <el-icon :size="56" :style="{ color: tintOf(selected) }"><component :is="iconOf(selected)" /></el-icon>
+                <el-icon :size="56" :style="{ color: tintOf(selected) }"
+                  ><component :is="iconOf(selected)"
+                /></el-icon>
               </div>
             </div>
             <el-descriptions :column="1" size="small" border class="fm-desc">
-              <el-descriptions-item label="类型">{{ selected.content_type || '文件' }}</el-descriptions-item>
+              <el-descriptions-item label="类型">{{
+                selected.content_type || '文件'
+              }}</el-descriptions-item>
               <el-descriptions-item label="大小">{{ fmtSize(selected.size) }}</el-descriptions-item>
-              <el-descriptions-item label="修改时间">{{ fmtDate(selected.updated_at) }}</el-descriptions-item>
+              <el-descriptions-item label="修改时间">{{
+                fmtDate(selected.updated_at)
+              }}</el-descriptions-item>
             </el-descriptions>
             <div class="fm-info-actions">
               <el-button :icon="Download" @click="doDownload(selected)">下载</el-button>
@@ -325,7 +482,9 @@ const {
           <pre v-else class="fm-modal-text">{{ modal.err || modal.text || '加载中…' }}</pre>
         </template>
         <div v-else class="fm-modal-file">
-          <el-icon :size="72" :style="{ color: tintOf(modal.row) }"><component :is="iconOf(modal.row)" /></el-icon>
+          <el-icon :size="72" :style="{ color: tintOf(modal.row) }"
+            ><component :is="iconOf(modal.row)"
+          /></el-icon>
           <span class="fm-modal-hint">该类型暂不支持在线预览</span>
           <el-button type="primary" :icon="Download" @click="doDownload(modal.row)">下载</el-button>
         </div>
@@ -337,7 +496,9 @@ const {
         </template>
         <template v-else>
           <el-button :icon="Download" @click="doDownload(modal.row)">下载</el-button>
-          <el-button type="primary" :icon="EditPen" :disabled="!modal.loaded" @click="startEdit">编辑</el-button>
+          <el-button type="primary" :icon="EditPen" :disabled="!modal.loaded" @click="startEdit"
+            >编辑</el-button
+          >
         </template>
       </template>
     </el-dialog>
@@ -359,7 +520,9 @@ const {
           传输列表{{ activeCount ? `（${activeCount} 进行中）` : '' }}
         </span>
         <span class="fm-tasks-ops">
-          <el-icon v-if="!activeCount" title="清除记录" @click.stop="tasks = []"><Delete /></el-icon>
+          <el-icon v-if="!activeCount" title="清除记录" @click.stop="tasks = []"
+            ><Delete
+          /></el-icon>
           <el-icon><ArrowDown v-if="!tasksCollapsed" /><ArrowUp v-else /></el-icon>
         </span>
       </div>
@@ -372,7 +535,9 @@ const {
               :percentage="t.pct"
               :stroke-width="4"
               :show-text="false"
-              :status="t.status === 'error' ? 'exception' : t.status === 'done' ? 'success' : undefined"
+              :status="
+                t.status === 'error' ? 'exception' : t.status === 'done' ? 'success' : undefined
+              "
             />
             <div v-if="t.err" class="ft-err">{{ t.err }}</div>
           </div>
@@ -385,7 +550,13 @@ const {
 
     <!-- 右键菜单（teleport 到 body，不用 CSS 变量以免脱离 .fm 作用域后失效） -->
     <Teleport to="body">
-      <div v-if="ctx.show" class="fm-ctx" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @contextmenu.prevent @click.stop>
+      <div
+        v-if="ctx.show"
+        class="fm-ctx"
+        :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }"
+        @contextmenu.prevent
+        @click.stop
+      >
         <template v-for="(item, i) in ctxItems" :key="i">
           <div v-if="item.divided" class="fm-ctx-divider"></div>
           <div class="fm-ctx-item" :class="{ danger: item.danger }" @click="runCtx(item)">
@@ -425,7 +596,12 @@ const {
       </div>
       <template #footer>
         <el-button @click="destDlg.show = false">取消</el-button>
-        <el-button type="primary" :disabled="destDlg.path === null" :loading="destDlg.busy" @click="confirmDest">
+        <el-button
+          type="primary"
+          :disabled="destDlg.path === null"
+          :loading="destDlg.busy"
+          @click="confirmDest"
+        >
           {{ destDlg.mode === 'move' ? '移动到此' : '复制到此' }}
         </el-button>
       </template>
@@ -436,8 +612,20 @@ const {
 
     <!-- 移动端右下角悬浮按钮组（自下而上：+ / 搜索 / 多选）；多选态与搜索窗内全部隐藏 -->
     <template v-if="isMobile && !selectMode && !searchOpen">
-      <el-button circle :icon="Select" class="fm-fab-mini fm-fab-select" title="多选" @click="toggleSelectMode" />
-      <el-button circle :icon="Search" class="fm-fab-mini fm-fab-search" title="搜索" @click="openSearch" />
+      <el-button
+        circle
+        :icon="Select"
+        class="fm-fab-mini fm-fab-select"
+        title="多选"
+        @click="toggleSelectMode"
+      />
+      <el-button
+        circle
+        :icon="Search"
+        class="fm-fab-mini fm-fab-search"
+        title="搜索"
+        @click="openSearch"
+      />
     </template>
     <el-dropdown
       v-if="isMobile && !selectMode && !searchOpen"
@@ -451,11 +639,12 @@ const {
         <el-dropdown-menu>
           <el-dropdown-item command="file" :icon="Files">上传文件</el-dropdown-item>
           <el-dropdown-item command="folder" :icon="FolderOpened">上传文件夹</el-dropdown-item>
-          <el-dropdown-item command="newfolder" :icon="FolderAdd" divided>新建文件夹</el-dropdown-item>
+          <el-dropdown-item command="newfolder" :icon="FolderAdd" divided
+            >新建文件夹</el-dropdown-item
+          >
         </el-dropdown-menu>
       </template>
     </el-dropdown>
-
 
     <!-- 移动端：多选态底部批量操作条 -->
     <div v-if="isMobile && selectMode && selPaths.length" class="fm-selbar">
@@ -474,7 +663,13 @@ const {
     </div>
 
     <!-- 移动端：底部操作弹层 -->
-    <el-drawer v-model="sheet.show" direction="btt" size="auto" :with-header="false" class="fm-sheet">
+    <el-drawer
+      v-model="sheet.show"
+      direction="btt"
+      size="auto"
+      :with-header="false"
+      class="fm-sheet"
+    >
       <div v-if="sheet.row" class="fm-sheet-inner">
         <div class="fm-sheet-head">
           <el-icon class="fm-sheet-ico" :style="{ color: tintOf(sheet.row) }">
@@ -543,14 +738,39 @@ const {
   padding: 14px 12px;
   gap: 12px;
 }
-.fm-upload { width: 100%; }
-.fm-tree { flex: 1; min-height: 0; overflow: auto; }
-.fm-tree :deep(.el-tree) { background: transparent; }
-.fm-tree :deep(.el-tree-node__content) { height: 34px; border-radius: 8px; }
-.tnode { display: inline-flex; align-items: center; gap: 8px; font-size: 0.9rem; }
-.ti { color: #e8a13a; }
-.fm-drive { border-top: 1px solid var(--w-border); padding-top: 12px; }
-.fm-drive-t { font-size: 12px; color: var(--w-muted); margin-top: 7px; }
+.fm-upload {
+  width: 100%;
+}
+.fm-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.fm-tree :deep(.el-tree) {
+  background: transparent;
+}
+.fm-tree :deep(.el-tree-node__content) {
+  height: 34px;
+  border-radius: 8px;
+}
+.tnode {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+.ti {
+  color: #e8a13a;
+}
+.fm-drive {
+  border-top: 1px solid var(--w-border);
+  padding-top: 12px;
+}
+.fm-drive-t {
+  font-size: 12px;
+  color: var(--w-muted);
+  margin-top: 7px;
+}
 
 /* ---------- 拖拽分隔条 ---------- */
 .fm-rs {
@@ -562,10 +782,18 @@ const {
   transition: background 0.15s;
 }
 .fm-rs:hover,
-.fm-rs:active { background: var(--el-color-primary-light-7); }
+.fm-rs:active {
+  background: var(--el-color-primary-light-7);
+}
 
 /* ---------- 中间 ---------- */
-.fm-main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+.fm-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
 .fm-toolbar {
   height: 56px;
   flex-shrink: 0;
@@ -576,16 +804,52 @@ const {
   padding: 0 14px;
   gap: 12px;
 }
-.fm-tb-left { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.fm-selinfo { font-size: 0.88rem; color: var(--el-text-color-primary); font-weight: 600; margin-right: 6px; white-space: nowrap; }
-.spin { animation: fm-spin 1s linear infinite; }
-@keyframes fm-spin { to { transform: rotate(360deg); } }
-.fm-tb-right { display: flex; align-items: center; gap: 10px; }
-.fm-search { width: 220px; }
-.fm-crumb { padding: 11px 16px; border-bottom: 1px solid var(--w-border-soft); }
-.crumb { cursor: pointer; color: var(--el-text-color-regular); }
-.crumb:hover { color: var(--el-color-primary); }
-.fm-content { flex: 1; min-height: 0; overflow: auto; padding: 6px 10px 10px; }
+.fm-tb-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.fm-selinfo {
+  font-size: 0.88rem;
+  color: var(--el-text-color-primary);
+  font-weight: 600;
+  margin-right: 6px;
+  white-space: nowrap;
+}
+.spin {
+  animation: fm-spin 1s linear infinite;
+}
+@keyframes fm-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.fm-tb-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.fm-search {
+  width: 220px;
+}
+.fm-crumb {
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--w-border-soft);
+}
+.crumb {
+  cursor: pointer;
+  color: var(--el-text-color-regular);
+}
+.crumb:hover {
+  color: var(--el-color-primary);
+}
+.fm-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 10px 10px;
+}
 
 /* 拖入蒙层（pointer-events:none，drop 落在下层元素上冒泡到 fm-main） */
 .fm-drop {
@@ -619,7 +883,9 @@ const {
   box-shadow: 0 0 0 2px var(--el-color-primary) inset;
   background: var(--el-color-primary-light-9);
 }
-.tnode { border-radius: 6px; }
+.tnode {
+  border-radius: 6px;
+}
 
 /* 框选选择框 */
 .fm-marquee {
@@ -632,15 +898,41 @@ const {
 }
 
 /* 列表 */
-.namecell { display: inline-flex; align-items: center; gap: 10px; cursor: grab; }
-.nc-ico { font-size: 18px; }
-.nc-name { color: var(--el-text-color-primary); }
-.muted { color: var(--w-muted); font-size: 0.86rem; }
-.rowmore { cursor: pointer; color: var(--w-muted); padding: 4px; border-radius: 6px; }
-.rowmore:hover { background: #f0f2f5; color: var(--el-text-color-primary); }
-.fm-content :deep(.el-table__row) { cursor: pointer; }
-.fm-content :deep(.el-table__row.is-sel > td) { background: var(--w-sel); }
-.fm-content :deep(.el-table__row.is-sel:hover > td) { background: var(--w-sel); }
+.namecell {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: grab;
+}
+.nc-ico {
+  font-size: 18px;
+}
+.nc-name {
+  color: var(--el-text-color-primary);
+}
+.muted {
+  color: var(--w-muted);
+  font-size: 0.86rem;
+}
+.rowmore {
+  cursor: pointer;
+  color: var(--w-muted);
+  padding: 4px;
+  border-radius: 6px;
+}
+.rowmore:hover {
+  background: #f0f2f5;
+  color: var(--el-text-color-primary);
+}
+.fm-content :deep(.el-table__row) {
+  cursor: pointer;
+}
+.fm-content :deep(.el-table__row.is-sel > td) {
+  background: var(--w-sel);
+}
+.fm-content :deep(.el-table__row.is-sel:hover > td) {
+  background: var(--w-sel);
+}
 
 /* 网格 */
 .fm-grid {
@@ -655,7 +947,9 @@ const {
   border-radius: 10px;
   padding: 12px;
   cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 /* 移动端网格卡片右上角 ⋮ 操作入口 */
 .cell-more {
@@ -688,9 +982,17 @@ const {
 .cell-check.on {
   color: var(--el-color-primary);
 }
-.cell:hover { box-shadow: var(--w-shadow); }
-.cell.is-sel { background: var(--w-sel); border-color: #d5d9e6; }
-.cell.is-checked { border-color: var(--el-color-primary); box-shadow: 0 0 0 1px var(--el-color-primary) inset; }
+.cell:hover {
+  box-shadow: var(--w-shadow);
+}
+.cell.is-sel {
+  background: var(--w-sel);
+  border-color: #d5d9e6;
+}
+.cell.is-checked {
+  border-color: var(--el-color-primary);
+  box-shadow: 0 0 0 1px var(--el-color-primary) inset;
+}
 .cell-thumb {
   height: 78px;
   border-radius: 8px;
@@ -701,8 +1003,14 @@ const {
   margin-bottom: 10px;
   overflow: hidden;
 }
-.cell-img { width: 100%; height: 100%; object-fit: cover; }
-.cell-ico { font-size: 34px; }
+.cell-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.cell-ico {
+  font-size: 34px;
+}
 .cell-name {
   font-size: 0.85rem;
   text-align: center;
@@ -711,7 +1019,9 @@ const {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.grid-empty { grid-column: 1 / -1; }
+.grid-empty {
+  grid-column: 1 / -1;
+}
 
 /* ---------- 右侧 ---------- */
 .fm-info {
@@ -724,7 +1034,12 @@ const {
   flex-direction: column;
   gap: 14px;
 }
-.fm-info-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fm-info-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .fm-info-title {
   font-weight: 600;
   font-size: 0.92rem;
@@ -733,10 +1048,25 @@ const {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.fm-info-close { cursor: pointer; color: var(--w-muted); padding: 4px; border-radius: 6px; flex-shrink: 0; }
-.fm-info-close:hover { background: #f0f2f5; color: var(--el-text-color-primary); }
+.fm-info-close {
+  cursor: pointer;
+  color: var(--w-muted);
+  padding: 4px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.fm-info-close:hover {
+  background: #f0f2f5;
+  color: var(--el-text-color-primary);
+}
 /* 预览占大头：撑满面板剩余高度，信息/操作固定在底部 */
-.fm-preview { flex: 1; min-height: 200px; display: flex; border-radius: 10px; overflow: hidden; }
+.fm-preview {
+  flex: 1;
+  min-height: 200px;
+  display: flex;
+  border-radius: 10px;
+  overflow: hidden;
+}
 .pv-img-wrap {
   flex: 1;
   min-height: 0;
@@ -749,7 +1079,11 @@ const {
   overflow: hidden;
   cursor: zoom-in;
 }
-.pv-img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.pv-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
 .pv-text {
   margin: 0;
   flex: 1;
@@ -776,14 +1110,32 @@ const {
   align-items: center;
   justify-content: center;
 }
-.fm-desc { flex-shrink: 0; }
-.fm-desc :deep(.el-descriptions__label) { color: var(--w-muted); width: 72px; }
-.fm-info-actions { display: flex; gap: 8px; flex-shrink: 0; }
-.fm-info-actions .el-button { flex: 1; }
+.fm-desc {
+  flex-shrink: 0;
+}
+.fm-desc :deep(.el-descriptions__label) {
+  color: var(--w-muted);
+  width: 72px;
+}
+.fm-info-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.fm-info-actions .el-button {
+  flex: 1;
+}
 
 /* ---------- 双击预览弹窗 ---------- */
-.fm-modal-body { display: flex; align-items: center; justify-content: center; min-height: 200px; }
-.fm-modal-edit { width: 100%; }
+.fm-modal-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+}
+.fm-modal-edit {
+  width: 100%;
+}
 .fm-modal-edit :deep(.el-textarea__inner) {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 13px;
@@ -813,7 +1165,10 @@ const {
   gap: 14px;
   padding: 28px 0;
 }
-.fm-modal-hint { color: #9fa1ae; font-size: 0.9rem; }
+.fm-modal-hint {
+  color: #9fa1ae;
+  font-size: 0.9rem;
+}
 
 /* ---------- 传输列表（右下角浮层） ---------- */
 .fm-tasks {
@@ -840,19 +1195,45 @@ const {
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
-.fm-tasks-title { display: inline-flex; align-items: center; gap: 7px; }
-.fm-tasks-ops { display: inline-flex; align-items: center; gap: 8px; color: var(--w-muted); }
-.fm-tasks-ops .el-icon { cursor: pointer; padding: 3px; border-radius: 5px; }
-.fm-tasks-ops .el-icon:hover { background: #f0f2f5; color: var(--el-text-color-primary); }
-.fm-tasks-body { max-height: 260px; overflow: auto; padding: 6px 0; }
+.fm-tasks-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.fm-tasks-ops {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--w-muted);
+}
+.fm-tasks-ops .el-icon {
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 5px;
+}
+.fm-tasks-ops .el-icon:hover {
+  background: #f0f2f5;
+  color: var(--el-text-color-primary);
+}
+.fm-tasks-body {
+  max-height: 260px;
+  overflow: auto;
+  padding: 6px 0;
+}
 .fm-task {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 7px 14px;
 }
-.ft-kind { color: var(--w-muted); flex-shrink: 0; }
-.ft-main { flex: 1; min-width: 0; }
+.ft-kind {
+  color: var(--w-muted);
+  flex-shrink: 0;
+}
+.ft-main {
+  flex: 1;
+  min-width: 0;
+}
 .ft-name {
   font-size: 0.82rem;
   color: var(--el-text-color-primary);
@@ -861,10 +1242,24 @@ const {
   white-space: nowrap;
   margin-bottom: 4px;
 }
-.ft-err { font-size: 0.76rem; color: var(--el-color-danger); margin-top: 3px; }
-.ft-pct { font-size: 0.78rem; color: var(--w-muted); flex-shrink: 0; width: 38px; text-align: right; }
-.ft-pct.done { color: var(--el-color-success); }
-.ft-pct.error { color: var(--el-color-danger); }
+.ft-err {
+  font-size: 0.76rem;
+  color: var(--el-color-danger);
+  margin-top: 3px;
+}
+.ft-pct {
+  font-size: 0.78rem;
+  color: var(--w-muted);
+  flex-shrink: 0;
+  width: 38px;
+  text-align: right;
+}
+.ft-pct.done {
+  color: var(--el-color-success);
+}
+.ft-pct.error {
+  color: var(--el-color-danger);
+}
 
 /* ---------- 右键菜单（teleport 到 body，颜色写死不依赖 .fm 的变量） ---------- */
 .fm-ctx {
@@ -874,7 +1269,9 @@ const {
   background: #fff;
   border: 1px solid #ededf1;
   border-radius: 10px;
-  box-shadow: 0 1px 2px rgba(44, 47, 60, 0.06), 0 3px 10px rgba(44, 47, 60, 0.12);
+  box-shadow:
+    0 1px 2px rgba(44, 47, 60, 0.06),
+    0 3px 10px rgba(44, 47, 60, 0.12);
   padding: 6px;
 }
 .fm-ctx-item {
@@ -888,11 +1285,23 @@ const {
   color: var(--el-text-color-primary);
   white-space: nowrap;
 }
-.fm-ctx-item:hover { background: #f0f2f5; }
-.fm-ctx-item.danger { color: var(--el-color-danger); }
-.fm-ctx-item .el-icon { color: #9fa1ae; }
-.fm-ctx-item.danger .el-icon { color: var(--el-color-danger); }
-.fm-ctx-divider { height: 1px; background: #ededf1; margin: 5px 4px; }
+.fm-ctx-item:hover {
+  background: #f0f2f5;
+}
+.fm-ctx-item.danger {
+  color: var(--el-color-danger);
+}
+.fm-ctx-item .el-icon {
+  color: #9fa1ae;
+}
+.fm-ctx-item.danger .el-icon {
+  color: var(--el-color-danger);
+}
+.fm-ctx-divider {
+  height: 1px;
+  background: #ededf1;
+  margin: 5px 4px;
+}
 
 /* ---------- 目标目录弹窗 ---------- */
 .dest-tree {
@@ -902,13 +1311,20 @@ const {
   border-radius: 10px;
   padding: 8px;
 }
-.dest-tree :deep(.el-tree-node__content) { height: 32px; border-radius: 6px; }
+.dest-tree :deep(.el-tree-node__content) {
+  height: 32px;
+  border-radius: 6px;
+}
 
 /* 窄屏：收起右侧预览面板 */
 @media (max-width: 900px) {
-  .fm-side { width: 180px !important; }
+  .fm-side {
+    width: 180px !important;
+  }
   .fm-info,
-  .fm-rs { display: none; }
+  .fm-rs {
+    display: none;
+  }
 }
 
 /* ---------- 移动端悬浮 + 按钮 ---------- */
@@ -935,8 +1351,12 @@ const {
   background: #fff;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
 }
-.fm-fab-search { bottom: 84px; }
-.fm-fab-select { bottom: 140px; }
+.fm-fab-search {
+  bottom: 84px;
+}
+.fm-fab-select {
+  bottom: 140px;
+}
 
 /* ---------- 移动端多选顶栏 ---------- */
 .fm-selhead {
@@ -954,7 +1374,9 @@ const {
   color: var(--el-text-color-primary);
 }
 /* 搜索态复用顶栏，输入框铺满 */
-.fm-searchbar-input { flex: 1; }
+.fm-searchbar-input {
+  flex: 1;
+}
 
 /* ---------- 移动端多选底部批量操作条 ---------- */
 .fm-selbar {
@@ -982,13 +1404,23 @@ const {
   font-size: 0.74rem;
   cursor: pointer;
 }
-.fm-selbar-btn .el-icon { font-size: 20px; }
-.fm-selbar-btn.danger { color: var(--el-color-danger); }
-.fm-selbar-btn:disabled { opacity: 0.38; }
+.fm-selbar-btn .el-icon {
+  font-size: 20px;
+}
+.fm-selbar-btn.danger {
+  color: var(--el-color-danger);
+}
+.fm-selbar-btn:disabled {
+  opacity: 0.38;
+}
 
 /* ---------- 移动端底部操作弹层 ---------- */
-.fm-sheet :deep(.el-drawer__body) { padding: 0; }
-.fm-sheet-inner { padding: 8px 12px 20px; }
+.fm-sheet :deep(.el-drawer__body) {
+  padding: 0;
+}
+.fm-sheet-inner {
+  padding: 8px 12px 20px;
+}
 .fm-sheet-head {
   display: flex;
   align-items: center;
@@ -996,7 +1428,10 @@ const {
   padding: 10px 6px 14px;
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
-.fm-sheet-ico { font-size: 26px; flex-shrink: 0; }
+.fm-sheet-ico {
+  font-size: 26px;
+  flex-shrink: 0;
+}
 .fm-sheet-name {
   font-weight: 600;
   font-size: 0.95rem;
@@ -1021,19 +1456,27 @@ const {
   font-size: 0.8rem;
   cursor: pointer;
 }
-.fm-sheet-btn .el-icon { font-size: 21px; }
-.fm-sheet-btn.danger { color: var(--el-color-danger); }
+.fm-sheet-btn .el-icon {
+  font-size: 21px;
+}
+.fm-sheet-btn.danger {
+  color: var(--el-color-danger);
+}
 
 /* ---------- 移动端整体布局（≤768） ---------- */
 @media (max-width: 768px) {
   /* 顶部工具栏移动端不渲染（改用悬浮按钮 + 搜索窗 + 多选顶栏） */
-  .fm-content { padding: 6px; }
+  .fm-content {
+    padding: 6px;
+  }
   .fm-grid {
     grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
     gap: 10px;
     padding: 10px 4px 80px; /* 底部留白避开 FAB / 操作条 */
   }
-  .cell-thumb { height: 68px; }
+  .cell-thumb {
+    height: 68px;
+  }
   /* 传输列表：右下角浮窗 → 贴底通栏 */
   .fm-tasks {
     left: 8px;

@@ -74,7 +74,7 @@ const html = computed(() => result.value.html)
 watch(
   () => result.value.headings,
   (h) => emit('headings', h),
-  { immediate: true }
+  { immediate: true },
 )
 
 // 渲染后增强 DOM：标题悬停锚点 + 代码块复制按钮
@@ -107,7 +107,7 @@ function copyText(text) {
   if (navigator.clipboard?.writeText) {
     return navigator.clipboard.writeText(text).then(
       () => true,
-      () => false
+      () => false,
     )
   }
   try {
@@ -132,8 +132,7 @@ function onClick(e) {
     e.preventDefault()
     const id = decodeURIComponent(anchor.getAttribute('href').slice(1))
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
-    const url =
-      location.origin + location.pathname + location.search + '#' + encodeURIComponent(id)
+    const url = location.origin + location.pathname + location.search + '#' + encodeURIComponent(id)
     copyText(url).then((ok) => {
       if (!ok) return
       anchor.textContent = '✓'
@@ -158,7 +157,7 @@ onMounted(() =>
   nextTick(() => {
     enhance()
     islands.mount(root.value)
-  })
+  }),
 )
 // 内容变化：v-html 会替换旧 DOM，先卸载旧岛屿再挂新的，避免内存泄漏
 watch(html, () => {

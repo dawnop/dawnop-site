@@ -63,7 +63,11 @@ const lastBuilt = ref(null) // { compiled, style }，最近一次成功编译的
 const rules = {
   slug: [
     { required: true, message: '请输入标识', trigger: 'blur' },
-    { pattern: /^[a-z0-9]+(?:-[a-z0-9]+)*$/, message: '只能用小写字母、数字、连字符', trigger: 'blur' },
+    {
+      pattern: /^[a-z0-9]+(?:-[a-z0-9]+)*$/,
+      message: '只能用小写字母、数字、连字符',
+      trigger: 'blur',
+    },
   ],
 }
 const formRef = ref(null)
@@ -118,7 +122,7 @@ watch(
   () => {
     clearTimeout(compileTimer)
     compileTimer = setTimeout(recompile, 400)
-  }
+  },
 )
 
 // ---- 未保存离开拦截（守卫逻辑见 useUnsavedGuard）----
@@ -204,7 +208,17 @@ async function save() {
           标识
           <HelpTip>
             <div>文章里用如下围栏引用（标识单独成行）：</div>
-            <pre style="margin: 6px 0 0; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre;">```viz
+            <pre
+              style="
+                margin: 6px 0 0;
+                font:
+                  12px/1.5 ui-monospace,
+                  Menlo,
+                  monospace;
+                white-space: pre;
+              "
+            >
+```viz
 {{ form.slug || 'my-viz' }}
 ```</pre>
           </HelpTip>
@@ -219,12 +233,7 @@ async function save() {
     <div class="split">
       <div class="pane">
         <div class="pane-title">源码（Vue SFC，只能 <code>import 'vue'</code>）</div>
-        <textarea
-          v-model="form.source"
-          class="code"
-          spellcheck="false"
-          wrap="off"
-        ></textarea>
+        <textarea v-model="form.source" class="code" spellcheck="false" wrap="off"></textarea>
       </div>
       <div class="pane">
         <div class="pane-title">实时预览</div>

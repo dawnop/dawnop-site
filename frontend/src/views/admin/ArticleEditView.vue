@@ -44,12 +44,9 @@ const form = ref({
 const allTags = ref([]) // 已有标签名，供输入补全
 
 // 开启「用正文 H1 作标题」时，标题跟随正文第一个一级标题
-watch(
-  [() => form.value.auto_title, () => form.value.content],
-  ([auto, content]) => {
-    if (auto) form.value.title = firstH1(content)
-  }
-)
+watch([() => form.value.auto_title, () => form.value.content], ([auto, content]) => {
+  if (auto) form.value.title = firstH1(content)
+})
 
 // 在光标处插入 ```viz <slug>``` 围栏
 function insertViz(slug) {
@@ -208,7 +205,9 @@ async function save() {
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item v-if="!vizOptions.length" disabled>暂无可视化</el-dropdown-item>
-              <el-dropdown-item v-for="s in vizOptions" :key="s" :command="s">{{ s }}</el-dropdown-item>
+              <el-dropdown-item v-for="s in vizOptions" :key="s" :command="s">{{
+                s
+              }}</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -256,7 +255,9 @@ async function save() {
         <el-form-item>
           <template #label>
             Slug
-            <HelpTip>访问地址 <code>{{ slugPreview }}</code></HelpTip>
+            <HelpTip
+              >访问地址 <code>{{ slugPreview }}</code></HelpTip
+            >
           </template>
           <el-input v-model="form.slug" placeholder="url-friendly-slug" />
         </el-form-item>
@@ -266,7 +267,12 @@ async function save() {
           </el-select>
         </el-form-item>
         <el-form-item label="摘要">
-          <el-input v-model="form.summary" type="textarea" :rows="2" placeholder="一句话摘要（可选）" />
+          <el-input
+            v-model="form.summary"
+            type="textarea"
+            :rows="2"
+            placeholder="一句话摘要（可选）"
+          />
         </el-form-item>
         <el-form-item label="标签">
           <el-select

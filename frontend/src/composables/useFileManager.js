@@ -3,9 +3,21 @@
 // 视图侧只做「解构本 composable 的返回值 + 渲染」。
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import {
-  Folder, FolderOpened, FolderAdd, Document, Picture, Files,
-  Grid, List, Download, EditPen, Delete, View, RefreshRight,
-  Right, CopyDocument,
+  Folder,
+  FolderOpened,
+  FolderAdd,
+  Document,
+  Picture,
+  Files,
+  Grid,
+  List,
+  Download,
+  EditPen,
+  Delete,
+  View,
+  RefreshRight,
+  Right,
+  CopyDocument,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fmApi as fm, settingsApi } from '../api'
@@ -45,15 +57,29 @@ export function useFileManager() {
 
   // 存储用量（侧栏用量条）与全局配置（并发数、文本预览上限）
   const drive = ref(null)
-  const conf = reactive({ upload_concurrency: 3, download_concurrency: 3, text_preview_max_kb: 512 })
+  const conf = reactive({
+    upload_concurrency: 3,
+    download_concurrency: 3,
+    text_preview_max_kb: 512,
+  })
   const drivePct = computed(() =>
-    drive.value?.quota ? Math.min(100, Math.round((drive.value.used / drive.value.quota) * 100)) : 0,
+    drive.value?.quota
+      ? Math.min(100, Math.round((drive.value.used / drive.value.quota) * 100))
+      : 0,
   )
   async function loadStats() {
-    try { drive.value = await fm.stats() } catch { /* 用量条展示失败不打扰 */ }
+    try {
+      drive.value = await fm.stats()
+    } catch {
+      /* 用量条展示失败不打扰 */
+    }
   }
   async function loadConf() {
-    try { Object.assign(conf, (await settingsApi.get()).data) } catch { /* 用默认值 */ }
+    try {
+      Object.assign(conf, (await settingsApi.get()).data)
+    } catch {
+      /* 用默认值 */
+    }
   }
 
   // 传输列表：上传/下载每个文件一条任务，带各自进度
@@ -110,7 +136,10 @@ export function useFileManager() {
     const segs = cwd.value.split('/').filter(Boolean)
     const acc = [{ name: '我的文件', path: '' }]
     let p = ''
-    for (const s of segs) { p = p ? `${p}/${s}` : s; acc.push({ name: s, path: p }) }
+    for (const s of segs) {
+      p = p ? `${p}/${s}` : s
+      acc.push({ name: s, path: p })
+    }
     return acc
   })
   const rowClass = ({ row }) => (row.path === selectedPath.value ? 'is-sel' : '')
@@ -145,11 +174,17 @@ export function useFileManager() {
       resolve([])
     }
   }
-  function onTreeClick(data) { goto(data.path) }
-  function reloadTree() { treeKey.value++ } // 文件夹增删改后重建树
+  function onTreeClick(data) {
+    goto(data.path)
+  }
+  function reloadTree() {
+    treeKey.value++
+  } // 文件夹增删改后重建树
 
   // ---------- 选择 ----------
-  function onSelChange(rows) { selPaths.value = rows.map((r) => r.path) }
+  function onSelChange(rows) {
+    selPaths.value = rows.map((r) => r.path)
+  }
   function clearSel() {
     selPaths.value = []
     tableRef.value?.clearSelection?.()
@@ -157,7 +192,9 @@ export function useFileManager() {
   watch(viewMode, clearSel) // 列表/网格的选中态不互通，切换时清空
 
   // ---------- 行为 ----------
-  function textTooLarge(row) { return row.size > conf.text_preview_max_kb * 1024 }
+  function textTooLarge(row) {
+    return row.size > conf.text_preview_max_kb * 1024
+  }
   async function selectFile(row) {
     selectedPath.value = row.path
     if (row.is_dir) return
@@ -169,8 +206,11 @@ export function useFileManager() {
         previewErr.value = `文件超过 ${conf.text_preview_max_kb} KB，请下载查看`
         return
       }
-      try { previewText.value = await fm.textContent(row.path) }
-      catch (e) { previewErr.value = e.message || '预览失败' }
+      try {
+        previewText.value = await fm.textContent(row.path)
+      } catch (e) {
+        previewErr.value = e.message || '预览失败'
+      }
     }
   }
   // 单击延迟执行、双击时取消：否则双击的第一下就弹出右侧预览面板，
@@ -188,7 +228,10 @@ export function useFileManager() {
   let marqueeSuppressBlank = false
   function onBlankClick(ev) {
     // 框选拖拽结束会补发一次 click，别把刚框中的选择清掉
-    if (marqueeSuppressBlank) { marqueeSuppressBlank = false; return }
+    if (marqueeSuppressBlank) {
+      marqueeSuppressBlank = false
+      return
+    }
     if (ev.target.closest('.el-table__row, .cell, .rowmore, .el-dropdown, .el-checkbox')) return
     clearSel()
     selectedPath.value = ''
@@ -202,8 +245,14 @@ export function useFileManager() {
     imgViewer.show = true
   }
   const modal = reactive({
-    show: false, row: null, text: '', err: '', loaded: false,
-    editing: false, draft: '', saving: false,
+    show: false,
+    row: null,
+    text: '',
+    err: '',
+    loaded: false,
+    editing: false,
+    draft: '',
+    saving: false,
   })
   async function openModal(row) {
     selectedPath.value = row.path
@@ -222,7 +271,9 @@ export function useFileManager() {
       try {
         modal.text = await fm.textContent(row.path)
         modal.loaded = true
-      } catch (e) { modal.err = e.message || '预览失败' }
+      } catch (e) {
+        modal.err = e.message || '预览失败'
+      }
     }
   }
   function startEdit() {
@@ -248,8 +299,12 @@ export function useFileManager() {
   function beforeCloseModal(done) {
     if (modal.editing && modal.draft !== modal.text) {
       ElMessageBox.confirm('有未保存的修改，确定关闭？', '关闭预览', {
-        type: 'warning', confirmButtonText: '关闭', cancelButtonText: '继续编辑',
-      }).then(done).catch(() => {})
+        type: 'warning',
+        confirmButtonText: '关闭',
+        cancelButtonText: '继续编辑',
+      })
+        .then(done)
+        .catch(() => {})
     } else {
       done()
     }
@@ -283,13 +338,18 @@ export function useFileManager() {
     if (!selectMode.value) clearSel()
   }
   // 底部操作弹层
-  function openSheet(row) { sheet.row = row; sheet.show = true }
+  function openSheet(row) {
+    sheet.row = row
+    sheet.show = true
+  }
   function sheetDo(action) {
     const row = sheet.row
     sheet.show = false
     if (!row) return
-    if (action === 'preview') { if (isImage(row)) openImgViewer(row); else openModal(row) }
-    else if (action === 'download') doDownload(row)
+    if (action === 'preview') {
+      if (isImage(row)) openImgViewer(row)
+      else openModal(row)
+    } else if (action === 'download') doDownload(row)
     else if (action === 'rename') doRename(row)
     else if (action === 'move') startMoveCopy('move', [row])
     else if (action === 'copy') startMoveCopy('copy', [row])
@@ -334,62 +394,102 @@ export function useFileManager() {
         await doDownload(files[i])
       }
     }
-    await Promise.all(Array.from({ length: Math.min(conf.download_concurrency, files.length) }, worker))
+    await Promise.all(
+      Array.from({ length: Math.min(conf.download_concurrency, files.length) }, worker),
+    )
   }
 
   async function newFolder() {
     try {
       const { value } = await ElMessageBox.prompt('文件夹名称', '新建文件夹', {
-        confirmButtonText: '创建', cancelButtonText: '取消',
-        inputPattern: /.+/, inputErrorMessage: '名称不能为空',
+        confirmButtonText: '创建',
+        cancelButtonText: '取消',
+        inputPattern: /.+/,
+        inputErrorMessage: '名称不能为空',
       })
       await fm.createFolder(cwd.value, value.trim())
       ElMessage.success('已创建')
-      await loadCwd(); reloadTree()
-    } catch { /* 取消或失败：失败已由 axios 拦截器统一提示 */ }
+      await loadCwd()
+      reloadTree()
+    } catch {
+      /* 取消或失败：失败已由 axios 拦截器统一提示 */
+    }
   }
 
   async function doRename(row) {
     try {
       const { value } = await ElMessageBox.prompt('新名称', '重命名', {
-        confirmButtonText: '确定', cancelButtonText: '取消', inputValue: row.name,
-        inputPattern: /.+/, inputErrorMessage: '名称不能为空',
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        inputValue: row.name,
+        inputPattern: /.+/,
+        inputErrorMessage: '名称不能为空',
       })
       const name = value.trim()
       if (name === row.name) return
       await fm.rename(cwd.value, row.path, name)
       ElMessage.success('已重命名')
-      await loadCwd(); if (row.is_dir) reloadTree()
-    } catch { /* 取消或失败：失败已由 axios 拦截器统一提示 */ }
+      await loadCwd()
+      if (row.is_dir) reloadTree()
+    } catch {
+      /* 取消或失败：失败已由 axios 拦截器统一提示 */
+    }
   }
 
   async function doDelete(row) {
     try {
-      await ElMessageBox.confirm(`确定删除「${row.name}」？${row.is_dir ? '（含其中全部内容）' : ''}`, '删除', {
-        type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
-        confirmButtonClass: 'el-button--danger',
-      })
+      await ElMessageBox.confirm(
+        `确定删除「${row.name}」？${row.is_dir ? '（含其中全部内容）' : ''}`,
+        '删除',
+        {
+          type: 'warning',
+          confirmButtonText: '删除',
+          cancelButtonText: '取消',
+          confirmButtonClass: 'el-button--danger',
+        },
+      )
       await fm.remove(cwd.value, [row.path])
       ElMessage.success('已删除')
-      if (selectedPath.value === row.path) { showInfo.value = false; selectedPath.value = '' }
+      if (selectedPath.value === row.path) {
+        showInfo.value = false
+        selectedPath.value = ''
+      }
       clearSel()
-      await loadCwd(); if (row.is_dir) reloadTree()
-    } catch { /* 取消或失败：失败已由 axios 拦截器统一提示 */ }
+      await loadCwd()
+      if (row.is_dir) reloadTree()
+    } catch {
+      /* 取消或失败：失败已由 axios 拦截器统一提示 */
+    }
   }
 
   async function doDeleteMany(rows) {
     try {
-      await ElMessageBox.confirm(`确定删除选中的 ${rows.length} 项？（文件夹含其中全部内容）`, '批量删除', {
-        type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
-        confirmButtonClass: 'el-button--danger',
-      })
-      await fm.remove(cwd.value, rows.map((r) => r.path))
+      await ElMessageBox.confirm(
+        `确定删除选中的 ${rows.length} 项？（文件夹含其中全部内容）`,
+        '批量删除',
+        {
+          type: 'warning',
+          confirmButtonText: '删除',
+          cancelButtonText: '取消',
+          confirmButtonClass: 'el-button--danger',
+        },
+      )
+      await fm.remove(
+        cwd.value,
+        rows.map((r) => r.path),
+      )
       ElMessage.success(`已删除 ${rows.length} 项`)
-      if (rows.some((r) => r.path === selectedPath.value)) { showInfo.value = false; selectedPath.value = '' }
+      if (rows.some((r) => r.path === selectedPath.value)) {
+        showInfo.value = false
+        selectedPath.value = ''
+      }
       const hadDir = rows.some((r) => r.is_dir)
       clearSel()
-      await loadCwd(); if (hadDir) reloadTree()
-    } catch { /* 取消或失败：失败已由 axios 拦截器统一提示 */ }
+      await loadCwd()
+      if (hadDir) reloadTree()
+    } catch {
+      /* 取消或失败：失败已由 axios 拦截器统一提示 */
+    }
   }
 
   function onRowCommand(cmd, row) {
@@ -418,12 +518,20 @@ export function useFileManager() {
     if (destDlg.mode === 'move' && dest === cwd.value) return ElMessage.warning('已在当前目录')
     destDlg.busy = true
     try {
-      await fm[destDlg.mode](cwd.value, dest, rows.map((r) => r.path))
+      await fm[destDlg.mode](
+        cwd.value,
+        dest,
+        rows.map((r) => r.path),
+      )
       ElMessage.success(`已${verb} ${rows.length} 项`)
       destDlg.show = false
-      if (rows.some((r) => r.path === selectedPath.value)) { showInfo.value = false; selectedPath.value = '' }
+      if (rows.some((r) => r.path === selectedPath.value)) {
+        showInfo.value = false
+        selectedPath.value = ''
+      }
       clearSel()
-      await loadCwd(); if (rows.some((r) => r.is_dir)) reloadTree()
+      await loadCwd()
+      if (rows.some((r) => r.is_dir)) reloadTree()
     } catch {
       // 失败已由 axios 拦截器统一提示
     } finally {
@@ -432,7 +540,9 @@ export function useFileManager() {
   }
 
   // ---------- 拖动移动（把文件/文件夹拖到目标文件夹或左侧目录树）----------
-  function parentOf(p) { return p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '' }
+  function parentOf(p) {
+    return p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''
+  }
   // 拖的是已选中集合里的项 → 拖整个选中集；否则只拖这一行
   function dragSetFor(row) {
     return selPaths.value.length > 1 && selPaths.value.includes(row.path) ? selRows.value : [row]
@@ -441,7 +551,8 @@ export function useFileManager() {
   function canDropDest(dest) {
     if (!dnd.dragging || dest === null) return false
     return !dnd.rows.some(
-      (r) => r.path === dest || parentOf(r.path) === dest || (r.is_dir && dest.startsWith(r.path + '/')),
+      (r) =>
+        r.path === dest || parentOf(r.path) === dest || (r.is_dir && dest.startsWith(r.path + '/')),
     )
   }
   function onDragStartRow(ev, row) {
@@ -461,7 +572,11 @@ export function useFileManager() {
       setTimeout(() => chip.remove(), 0)
     }
   }
-  function onDragEndRow() { dnd.dragging = false; dnd.rows = []; dnd.overPath = null }
+  function onDragEndRow() {
+    dnd.dragging = false
+    dnd.rows = []
+    dnd.overPath = null
+  }
   function onDestDragOver(ev, dest) {
     if (!canDropDest(dest)) return
     ev.preventDefault()
@@ -469,7 +584,9 @@ export function useFileManager() {
     ev.dataTransfer.dropEffect = 'move'
     dnd.overPath = dest
   }
-  function onDestDragLeave(dest) { if (dnd.overPath === dest) dnd.overPath = null }
+  function onDestDragLeave(dest) {
+    if (dnd.overPath === dest) dnd.overPath = null
+  }
   async function onDestDrop(ev, dest) {
     if (!canDropDest(dest)) return
     ev.preventDefault()
@@ -479,20 +596,37 @@ export function useFileManager() {
     await moveInto(dest, rows)
   }
   // 行/卡片作落点时，仅文件夹可接收
-  function onRowDragOver(ev, row) { if (row.is_dir) onDestDragOver(ev, row.path) }
-  function onRowDragLeave(row) { if (row.is_dir) onDestDragLeave(row.path) }
-  function onRowDrop(ev, row) { if (row.is_dir) onDestDrop(ev, row.path) }
+  function onRowDragOver(ev, row) {
+    if (row.is_dir) onDestDragOver(ev, row.path)
+  }
+  function onRowDragLeave(row) {
+    if (row.is_dir) onDestDragLeave(row.path)
+  }
+  function onRowDrop(ev, row) {
+    if (row.is_dir) onDestDrop(ev, row.path)
+  }
   async function moveInto(dest, rows) {
     const movable = rows.filter(
-      (r) => parentOf(r.path) !== dest && r.path !== dest && !(r.is_dir && dest.startsWith(r.path + '/')),
+      (r) =>
+        parentOf(r.path) !== dest &&
+        r.path !== dest &&
+        !(r.is_dir && dest.startsWith(r.path + '/')),
     )
     if (!movable.length) return
     try {
-      await fm.move(cwd.value, dest, movable.map((r) => r.path))
+      await fm.move(
+        cwd.value,
+        dest,
+        movable.map((r) => r.path),
+      )
       ElMessage.success(`已移动 ${movable.length} 项`)
-      if (movable.some((r) => r.path === selectedPath.value)) { showInfo.value = false; selectedPath.value = '' }
+      if (movable.some((r) => r.path === selectedPath.value)) {
+        showInfo.value = false
+        selectedPath.value = ''
+      }
       clearSel()
-      await loadCwd(); if (movable.some((r) => r.is_dir)) reloadTree()
+      await loadCwd()
+      if (movable.some((r) => r.is_dir)) reloadTree()
     } catch {
       // 失败已由 axios 拦截器统一提示
     }
@@ -503,9 +637,12 @@ export function useFileManager() {
     if (ev.button !== 0) return
     if (isMobile.value) return // 移动端不启动框选，改用「选择」模式
     // 落在行/卡片/表头/控件上时不启动框选，交给点击或拖拽
-    if (ev.target.closest(
-      '.el-table__row, .cell, .el-table__header, .rowmore, .el-checkbox, .el-dropdown, a, button, input',
-    )) return
+    if (
+      ev.target.closest(
+        '.el-table__row, .cell, .el-table__header, .rowmore, .el-checkbox, .el-dropdown, a, button, input',
+      )
+    )
+      return
     const sx = ev.clientX
     const sy = ev.clientY
     let moved = false
@@ -516,14 +653,20 @@ export function useFileManager() {
         marquee.show = true
         document.body.style.userSelect = 'none'
       }
-      marquee.x0 = sx; marquee.y0 = sy; marquee.x1 = e.clientX; marquee.y1 = e.clientY
+      marquee.x0 = sx
+      marquee.y0 = sy
+      marquee.x1 = e.clientX
+      marquee.y1 = e.clientY
       applyMarquee()
     }
     const onUp = () => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
       document.body.style.userSelect = ''
-      if (moved) { marquee.show = false; marqueeSuppressBlank = true }
+      if (moved) {
+        marquee.show = false
+        marqueeSuppressBlank = true
+      }
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
@@ -542,7 +685,8 @@ export function useFileManager() {
     const hit = new Set()
     nodes.forEach((el, i) => {
       const b = el.getBoundingClientRect()
-      if (b.right >= L && b.left <= R && b.bottom >= T && b.top <= B && rows[i]) hit.add(rows[i].path)
+      if (b.right >= L && b.left <= R && b.bottom >= T && b.top <= B && rows[i])
+        hit.add(rows[i].path)
     })
     if (viewMode.value === 'list' && tableRef.value) {
       // 交给 el-table 勾选，selPaths 由 selection-change 同步
@@ -572,11 +716,22 @@ export function useFileManager() {
       openCtx(ev, [row])
     }
   }
-  function openCtxBlank(ev) { openCtx(ev, []) }
-  function onTableRowCtx(row, _col, ev) { openCtxRow(ev, row) }
-  function closeCtx() { ctx.show = false }
-  function runCtx(item) { closeCtx(); item.run() }
-  function onGlobalKey(e) { if (e.key === 'Escape') closeCtx() }
+  function openCtxBlank(ev) {
+    openCtx(ev, [])
+  }
+  function onTableRowCtx(row, _col, ev) {
+    openCtxRow(ev, row)
+  }
+  function closeCtx() {
+    ctx.show = false
+  }
+  function runCtx(item) {
+    closeCtx()
+    item.run()
+  }
+  function onGlobalKey(e) {
+    if (e.key === 'Escape') closeCtx()
+  }
 
   const ctxItems = computed(() => {
     const rows = ctx.rows
@@ -599,23 +754,49 @@ export function useFileManager() {
       items.push({ label: '重命名', icon: EditPen, run: () => doRename(r) })
       items.push({ label: '移动到…', icon: Right, run: () => startMoveCopy('move', [r]) })
       items.push({ label: '复制到…', icon: CopyDocument, run: () => startMoveCopy('copy', [r]) })
-      items.push({ label: '删除', icon: Delete, danger: true, divided: true, run: () => doDelete(r) })
+      items.push({
+        label: '删除',
+        icon: Delete,
+        danger: true,
+        divided: true,
+        run: () => doDelete(r),
+      })
       return items
     }
     const files = rows.filter((r) => !r.is_dir)
     return [
       ...(files.length
-        ? [{ label: `下载 ${files.length} 个文件`, icon: Download, run: () => doDownloadMany(rows) }]
+        ? [
+            {
+              label: `下载 ${files.length} 个文件`,
+              icon: Download,
+              run: () => doDownloadMany(rows),
+            },
+          ]
         : []),
       { label: `移动 ${rows.length} 项到…`, icon: Right, run: () => startMoveCopy('move', rows) },
-      { label: `复制 ${rows.length} 项到…`, icon: CopyDocument, run: () => startMoveCopy('copy', rows) },
-      { label: `删除 ${rows.length} 项`, icon: Delete, danger: true, divided: true, run: () => doDeleteMany(rows) },
+      {
+        label: `复制 ${rows.length} 项到…`,
+        icon: CopyDocument,
+        run: () => startMoveCopy('copy', rows),
+      },
+      {
+        label: `删除 ${rows.length} 项`,
+        icon: Delete,
+        danger: true,
+        divided: true,
+        run: () => doDeleteMany(rows),
+      },
     ]
   })
 
   // ---------- 上传（直传七牛，支持文件夹；并行 3 路） ----------
-  function pickFiles() { fileInput.value?.click() }
-  function pickFolder() { dirInput.value?.click() }
+  function pickFiles() {
+    fileInput.value?.click()
+  }
+  function pickFolder() {
+    dirInput.value?.click()
+  }
   async function onFilesPicked(ev) {
     const files = [...(ev.target.files || [])]
     ev.target.value = ''
@@ -646,20 +827,30 @@ export function useFileManager() {
         }
       }
     }
-    await Promise.all(Array.from({ length: Math.min(conf.upload_concurrency, items.length) }, worker))
+    await Promise.all(
+      Array.from({ length: Math.min(conf.upload_concurrency, items.length) }, worker),
+    )
     if (failed) ElMessage.warning(`上传完成，${failed} 个失败（详见传输列表）`)
     else ElMessage.success(`上传完成（${items.length} 个）`)
     const hadFolder = list.some((x) => (x.name || '').includes('/'))
-    if (cwd.value === dir) { await loadCwd(); if (hadFolder) reloadTree() }
-    else if (hadFolder) reloadTree()
+    if (cwd.value === dir) {
+      await loadCwd()
+      if (hadFolder) reloadTree()
+    } else if (hadFolder) reloadTree()
   }
 
   // ---------- 拖拽上传（保留文件夹结构） ----------
   const dragDepth = ref(0)
   const dragging = computed(() => dragDepth.value > 0)
-  function hasFiles(ev) { return [...(ev.dataTransfer?.types || [])].includes('Files') }
-  function onDragEnter(ev) { if (hasFiles(ev)) dragDepth.value++ }
-  function onDragLeave(ev) { if (hasFiles(ev) && dragDepth.value > 0) dragDepth.value-- }
+  function hasFiles(ev) {
+    return [...(ev.dataTransfer?.types || [])].includes('Files')
+  }
+  function onDragEnter(ev) {
+    if (hasFiles(ev)) dragDepth.value++
+  }
+  function onDragLeave(ev) {
+    if (hasFiles(ev) && dragDepth.value > 0) dragDepth.value--
+  }
   async function onDrop(ev) {
     dragDepth.value = 0
     // DataTransferItemList 在首个 await 后就失效，必须先同步取完 entry
@@ -716,9 +907,14 @@ export function useFileManager() {
   }
 
   // ---------- 展示辅助 ----------
-  function isImage(r) { return r.content_type?.startsWith('image/') }
+  function isImage(r) {
+    return r.content_type?.startsWith('image/')
+  }
   function isText(r) {
-    return /^text\//.test(r.content_type || '') || /\.(md|txt|yml|yaml|json|log|csv|xml|ini|conf)$/i.test(r.name)
+    return (
+      /^text\//.test(r.content_type || '') ||
+      /\.(md|txt|yml|yaml|json|log|csv|xml|ini|conf)$/i.test(r.name)
+    )
   }
   function iconOf(r) {
     if (r.is_dir) return Folder
@@ -748,33 +944,129 @@ export function useFileManager() {
     // 直传模块（模板里 fm.previewUrl 等）
     fm,
     // 状态
-    cwd, entries, loading, q, viewMode, showInfo, selectedPath, selPaths, previewText, previewErr,
-    isMobile, selectMode, searchOpen, searchInputRef, sheet,
-    effectiveView, drive, conf, drivePct,
-    tasks, tasksCollapsed, activeCount,
-    treeRef, treeKey, tableRef, fileInput, dirInput,
-    sideW, infoW, viewOptions, treeProps,
-    filtered, selected, selRows, selFiles,
-    contentEl, dnd, marquee, marqueeStyle, crumbs, rowClass,
-    imgViewer, modal, destDlg, dragDepth, dragging, ctx, ctxItems,
+    cwd,
+    entries,
+    loading,
+    q,
+    viewMode,
+    showInfo,
+    selectedPath,
+    selPaths,
+    previewText,
+    previewErr,
+    isMobile,
+    selectMode,
+    searchOpen,
+    searchInputRef,
+    sheet,
+    effectiveView,
+    drive,
+    conf,
+    drivePct,
+    tasks,
+    tasksCollapsed,
+    activeCount,
+    treeRef,
+    treeKey,
+    tableRef,
+    fileInput,
+    dirInput,
+    sideW,
+    infoW,
+    viewOptions,
+    treeProps,
+    filtered,
+    selected,
+    selRows,
+    selFiles,
+    contentEl,
+    dnd,
+    marquee,
+    marqueeStyle,
+    crumbs,
+    rowClass,
+    imgViewer,
+    modal,
+    destDlg,
+    dragDepth,
+    dragging,
+    ctx,
+    ctxItems,
     // 方法
-    openSearch, closeSearch, loadStats, loadConf, addTask,
-    loadCwd, goto, loadTreeNode, onTreeClick, reloadTree,
-    onSelChange, clearSel,
-    textTooLarge, selectFile, onRowClick, onRowDblclick, onBlankClick,
-    openImgViewer, openModal, startEdit, saveEdit, beforeCloseModal,
-    onCellClick, onCellTap, toggleCheck, toggleSelectMode, openSheet, sheetDo,
-    doDownload, doDownloadMany, newFolder, doRename, doDelete, doDeleteMany, onRowCommand,
-    startMoveCopy, confirmDest,
-    parentOf, dragSetFor, canDropDest, onDragStartRow, onDragEndRow,
-    onDestDragOver, onDestDragLeave, onDestDrop, onRowDragOver, onRowDragLeave, onRowDrop, moveInto,
-    onContentMousedown, applyMarquee,
-    openCtx, openCtxRow, openCtxBlank, onTableRowCtx, closeCtx, runCtx, onGlobalKey,
-    pickFiles, pickFolder, onFilesPicked, uploadMany,
-    hasFiles, onDragEnter, onDragLeave, onDrop, walkEntry,
+    openSearch,
+    closeSearch,
+    loadStats,
+    loadConf,
+    addTask,
+    loadCwd,
+    goto,
+    loadTreeNode,
+    onTreeClick,
+    reloadTree,
+    onSelChange,
+    clearSel,
+    textTooLarge,
+    selectFile,
+    onRowClick,
+    onRowDblclick,
+    onBlankClick,
+    openImgViewer,
+    openModal,
+    startEdit,
+    saveEdit,
+    beforeCloseModal,
+    onCellClick,
+    onCellTap,
+    toggleCheck,
+    toggleSelectMode,
+    openSheet,
+    sheetDo,
+    doDownload,
+    doDownloadMany,
+    newFolder,
+    doRename,
+    doDelete,
+    doDeleteMany,
+    onRowCommand,
+    startMoveCopy,
+    confirmDest,
+    parentOf,
+    dragSetFor,
+    canDropDest,
+    onDragStartRow,
+    onDragEndRow,
+    onDestDragOver,
+    onDestDragLeave,
+    onDestDrop,
+    onRowDragOver,
+    onRowDragLeave,
+    onRowDrop,
+    moveInto,
+    onContentMousedown,
+    applyMarquee,
+    openCtx,
+    openCtxRow,
+    openCtxBlank,
+    onTableRowCtx,
+    closeCtx,
+    runCtx,
+    onGlobalKey,
+    pickFiles,
+    pickFolder,
+    onFilesPicked,
+    uploadMany,
+    hasFiles,
+    onDragEnter,
+    onDragLeave,
+    onDrop,
+    walkEntry,
     startResize,
-    isImage, isText, iconOf, tintOf,
+    isImage,
+    isText,
+    iconOf,
+    tintOf,
     // 格式化（模板沿用旧名 fmtSize / fmtDate）
-    fmtSize: fmtBytes, fmtDate: fmtMonthDay,
+    fmtSize: fmtBytes,
+    fmtDate: fmtMonthDay,
   }
 }

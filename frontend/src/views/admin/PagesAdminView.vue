@@ -95,11 +95,12 @@ async function toggleNav(p) {
 
 async function remove(p) {
   try {
-    await ElMessageBox.confirm(
-      `确定删除页面「${p.title}」？其下文章会解除归属。`,
-      '删除页面',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' },
-    )
+    await ElMessageBox.confirm(`确定删除页面「${p.title}」？其下文章会解除归属。`, '删除页面', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      confirmButtonClass: 'el-button--danger',
+    })
   } catch (e) {
     return
   }
@@ -107,7 +108,6 @@ async function remove(p) {
   ElMessage.success('已删除')
   load()
 }
-
 
 // 行拖拽排序：sortablejs 绑定到 el-table 内部 tbody，拖完同步数据并提交顺序
 function initSortable() {
@@ -145,7 +145,9 @@ onMounted(async () => {
   <div>
     <div class="page-head">
       <p class="hint">
-        {{ isMobile ? '用卡片上的 ↑↓ 调整导航顺序' : '拖动行首图标调整导航顺序' }}；「首页」「标签」为内置页，可改名、隐藏，不可删除。
+        {{
+          isMobile ? '用卡片上的 ↑↓ 调整导航顺序' : '拖动行首图标调整导航顺序'
+        }}；「首页」「标签」为内置页，可改名、隐藏，不可删除。
       </p>
       <div class="actions">
         <el-button :icon="Document" @click="newPage('content')">新建内容页</el-button>
@@ -156,24 +158,41 @@ onMounted(async () => {
     </div>
 
     <el-card v-if="!isMobile" shadow="never">
-      <el-table ref="tableRef" v-loading="loading" :data="pages" row-key="id" border empty-text="还没有页面" @header-dragend="onHeaderDrag">
+      <el-table
+        ref="tableRef"
+        v-loading="loading"
+        :data="pages"
+        row-key="id"
+        border
+        empty-text="还没有页面"
+        @header-dragend="onHeaderDrag"
+      >
         <el-table-column width="48">
           <template #default>
             <el-icon class="drag-handle" title="拖动排序"><Rank /></el-icon>
           </template>
         </el-table-column>
-        <el-table-column prop="title" label="标题" :width="colW.title || 240" show-overflow-tooltip />
+        <el-table-column
+          prop="title"
+          label="标题"
+          :width="colW.title || 240"
+          show-overflow-tooltip
+        />
         <el-table-column label="类型" :width="colW['类型'] || 96">
           <template #default="{ row }">
             <span class="muted">{{ TYPE_LABELS[row.type] || row.type }}</span>
           </template>
         </el-table-column>
         <el-table-column label="路径" :width="colW['路径'] || 180" show-overflow-tooltip>
-          <template #default="{ row }"><span class="muted">{{ row.path }}</span></template>
+          <template #default="{ row }"
+            ><span class="muted">{{ row.path }}</span></template
+          >
         </el-table-column>
         <el-table-column label="文章数" :width="colW['文章数'] || 90">
           <template #default="{ row }">
-            <span class="muted">{{ row.type === 'article_list' ? (counts[row.id] ?? '…') : '—' }}</span>
+            <span class="muted">{{
+              row.type === 'article_list' ? (counts[row.id] ?? '…') : '—'
+            }}</span>
           </template>
         </el-table-column>
         <el-table-column label="导航" :width="colW['导航'] || 90">
@@ -184,7 +203,9 @@ onMounted(async () => {
           </template>
         </el-table-column>
         <el-table-column label="更新于" :width="colW['更新于'] || 110">
-          <template #default="{ row }"><span class="muted">{{ fmtDate(row.updated_at) }}</span></template>
+          <template #default="{ row }"
+            ><span class="muted">{{ fmtDate(row.updated_at) }}</span></template
+          >
         </el-table-column>
         <el-table-column />
         <el-table-column label="操作" :width="colW['操作'] || 150" fixed="right">
@@ -225,15 +246,24 @@ onMounted(async () => {
         <div class="m-actions">
           <el-button-group>
             <el-button size="small" :icon="Top" :disabled="i === 0" @click="movePage(i, -1)" />
-            <el-button size="small" :icon="Bottom" :disabled="i === pages.length - 1" @click="movePage(i, 1)" />
+            <el-button
+              size="small"
+              :icon="Bottom"
+              :disabled="i === pages.length - 1"
+              @click="movePage(i, 1)"
+            />
           </el-button-group>
           <span class="m-spacer" />
           <template v-if="row.type === 'builtin'">
             <el-button size="small" @click="renameBuiltin(row)">重命名</el-button>
-            <el-button size="small" @click="toggleNav(row)">{{ row.nav_visible ? '隐藏' : '显示' }}</el-button>
+            <el-button size="small" @click="toggleNav(row)">{{
+              row.nav_visible ? '隐藏' : '显示'
+            }}</el-button>
           </template>
           <template v-else>
-            <el-button size="small" @click="router.push(`/admin/pages/${row.id}/edit`)">编辑</el-button>
+            <el-button size="small" @click="router.push(`/admin/pages/${row.id}/edit`)"
+              >编辑</el-button
+            >
             <el-button size="small" type="danger" plain @click="remove(row)">删除</el-button>
           </template>
         </div>

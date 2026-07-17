@@ -14,7 +14,7 @@ const loadCompiler = () => import('@vue/compiler-sfc/dist/compiler-sfc.esm-brows
 
 export async function compileSfc(source, slug) {
   const { parse, compileScript, compileStyle } = await loadCompiler()
-  const id = (slug && /^[a-z0-9-]+$/.test(slug) ? slug : 'preview')
+  const id = slug && /^[a-z0-9-]+$/.test(slug) ? slug : 'preview'
   const scopeId = `data-v-${id}`
   const filename = `${id}.vue`
 
@@ -30,7 +30,8 @@ export async function compileSfc(source, slug) {
   let style = ''
   for (const s of descriptor.styles) {
     const res = compileStyle({ source: s.content, id, scoped: s.scoped, filename })
-    if (res.errors && res.errors.length) throw new Error(res.errors[0].message || String(res.errors[0]))
+    if (res.errors && res.errors.length)
+      throw new Error(res.errors[0].message || String(res.errors[0]))
     style += res.code + '\n'
   }
 

@@ -58,7 +58,9 @@ onMounted(async () => {
   color: var(--fg);
   font-size: 0.95rem;
   text-decoration: none;
-  transition: border-color 0.15s, color 0.15s;
+  transition:
+    border-color 0.15s,
+    color 0.15s;
 }
 .tag-item:hover {
   border-color: var(--accent);

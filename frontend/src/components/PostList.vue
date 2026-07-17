@@ -8,7 +8,6 @@ defineProps({
   items: { type: Array, required: true },
 })
 
-
 function readMinutes(wc) {
   return Math.max(1, Math.round((wc || 0) / 300))
 }
@@ -25,12 +24,9 @@ function readMinutes(wc) {
         <span>约 {{ readMinutes(a.word_count) }} 分钟</span>
         <template v-if="a.tags && a.tags.length">
           <span class="dot">·</span>
-          <RouterLink
-            v-for="t in a.tags"
-            :key="t.slug"
-            :to="`/tag/${t.slug}`"
-            class="post-tag"
-          >#{{ t.name }}</RouterLink>
+          <RouterLink v-for="t in a.tags" :key="t.slug" :to="`/tag/${t.slug}`" class="post-tag"
+            >#{{ t.name }}</RouterLink
+          >
         </template>
       </div>
     </li>

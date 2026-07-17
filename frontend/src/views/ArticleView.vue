@@ -33,17 +33,14 @@ async function load(slug) {
   }
 }
 
-
 const readMinutes = computed(() =>
-  article.value ? Math.max(1, Math.round((article.value.word_count || 0) / 300)) : 0
+  article.value ? Math.max(1, Math.round((article.value.word_count || 0) / 300)) : 0,
 )
 
 // 标题取自正文 H1 时，渲染前剥离那行，避免与上方标题重复（存储仍是完整原文）
 const displayContent = computed(() => {
   if (!article.value) return ''
-  return article.value.auto_title
-    ? stripFirstH1(article.value.content)
-    : article.value.content
+  return article.value.auto_title ? stripFirstH1(article.value.content) : article.value.content
 })
 
 // 目录：取 h1~h3
@@ -91,7 +88,11 @@ function goTo(id) {
 onMounted(() => window.addEventListener('scroll', onScroll, { passive: true }))
 onBeforeUnmount(() => window.removeEventListener('scroll', onScroll))
 
-watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true })
+watch(
+  () => route.params.slug,
+  (slug) => slug && load(slug),
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -107,12 +108,9 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
           <span>约 {{ readMinutes }} 分钟</span>
         </div>
         <div v-if="article.tags && article.tags.length" class="tags">
-          <RouterLink
-            v-for="t in article.tags"
-            :key="t.slug"
-            :to="`/tag/${t.slug}`"
-            class="tag"
-          >#{{ t.name }}</RouterLink>
+          <RouterLink v-for="t in article.tags" :key="t.slug" :to="`/tag/${t.slug}`" class="tag"
+            >#{{ t.name }}</RouterLink
+          >
         </div>
       </header>
       <MarkdownView :source="displayContent" @headings="onHeadings" />
@@ -121,11 +119,7 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
     <aside v-if="article && toc.length > 1" class="toc">
       <div class="toc-title">目录</div>
       <ul>
-        <li
-          v-for="h in toc"
-          :key="h.id"
-          :class="['lv' + h.level, { active: activeId === h.id }]"
-        >
+        <li v-for="h in toc" :key="h.id" :class="['lv' + h.level, { active: activeId === h.id }]">
           <a :href="'#' + h.id" @click.prevent="goTo(h.id)">{{ h.text }}</a>
         </li>
       </ul>
@@ -187,7 +181,9 @@ watch(() => route.params.slug, (slug) => slug && load(slug), { immediate: true }
   border-radius: 6px;
   padding: 2px 10px;
   text-decoration: none;
-  transition: color 0.15s, background 0.15s;
+  transition:
+    color 0.15s,
+    background 0.15s;
 }
 .tag:hover {
   color: var(--accent);

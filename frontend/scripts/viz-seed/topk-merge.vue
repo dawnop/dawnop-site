@@ -41,7 +41,7 @@ const winners = computed(() =>
     const a = data.value.running[i]
     const b = data.value.cand[i]
     return a.v >= b.v ? a : b
-  })
+  }),
 )
 const winnerIds = computed(() => new Set(winners.value.map((w) => w.id)))
 
@@ -121,9 +121,16 @@ const label = computed(() => {
   }
 })
 
-const next = () => { if (step.value < maxStep) step.value++ }
-const reset = () => { step.value = 0 }
-const shuffle = () => { data.value = mkData(); step.value = 0 }
+const next = () => {
+  if (step.value < maxStep) step.value++
+}
+const reset = () => {
+  step.value = 0
+}
+const shuffle = () => {
+  data.value = mkData()
+  step.value = 0
+}
 
 const width = padX * 2 + K * cellW
 const height = 232
@@ -146,12 +153,24 @@ const height = 232
         <text :x="width - padX" :y="yTop - barMaxH - 6" text-anchor="end">top-k · 降序</text>
         <text :x="padX" :y="yBot + 16">candidates · 升序</text>
       </g>
-      <text v-else-if="done" :x="width - padX" :y="yMid - barMaxH - 8" text-anchor="end" class="rowlbl ok">新 top-k · 降序</text>
+      <text
+        v-else-if="done"
+        :x="width - padX"
+        :y="yMid - barMaxH - 8"
+        text-anchor="end"
+        class="rowlbl ok"
+      >
+        新 top-k · 降序
+      </text>
 
       <!-- 逐位取大的配对竖线 -->
       <line
-        v-for="i in fmaxLinks" :key="'f' + i"
-        :x1="xAt(i)" :x2="xAt(i)" :y1="yTop + 4" :y2="yBot - barMaxH - 4"
+        v-for="i in fmaxLinks"
+        :key="'f' + i"
+        :x1="xAt(i)"
+        :x2="xAt(i)"
+        :y1="yTop + 4"
+        :y2="yBot - barMaxH - 4"
         class="fmax"
       />
 
@@ -160,13 +179,22 @@ const height = 232
 
       <!-- 柱子：高度=数值，位置随 step 平滑移动 -->
       <g
-        v-for="b in allBars" :key="b.id"
+        v-for="b in allBars"
+        :key="b.id"
         class="cell"
-        :style="{ transform: `translate(${layout[b.id].x}px, ${layout[b.id].y}px)`, opacity: layout[b.id].op }"
+        :style="{
+          transform: `translate(${layout[b.id].x}px, ${layout[b.id].y}px)`,
+          opacity: layout[b.id].op,
+        }"
       >
         <rect
-          :x="-barW / 2" :y="-barH(b.v)" :width="barW" :height="barH(b.v)" rx="4"
-          :fill="`hsl(${hue(b.v)},50%,92%)`" :stroke="`hsl(${hue(b.v)},38%,64%)`"
+          :x="-barW / 2"
+          :y="-barH(b.v)"
+          :width="barW"
+          :height="barH(b.v)"
+          rx="4"
+          :fill="`hsl(${hue(b.v)},50%,92%)`"
+          :stroke="`hsl(${hue(b.v)},38%,64%)`"
         />
         <text :y="-barH(b.v) - 5" class="num" :fill="`hsl(${hue(b.v)},34%,42%)`">{{ b.v }}</text>
       </g>
@@ -174,8 +202,9 @@ const height = 232
 
     <p class="cap">
       维护容量 k 的有序 top-k：把当前 <b>top-k(降序)</b> 与 k 个 <b>新候选(升序)</b> 逐位取较大者，
-      得到的「较大半」恰是一个 <b>bitonic 序列</b>；对它做一遍 bitonic merge（步距 j 折半），即排回降序——
-      就是新的 top-k。全程比较位置只与下标有关、与数据无关，可在 warp 内用 <b>__shfl_xor_sync</b> 无 branch 完成。
+      得到的「较大半」恰是一个 <b>bitonic 序列</b>；对它做一遍 bitonic merge（步距 j
+      折半），即排回降序—— 就是新的 top-k。全程比较位置只与下标有关、与数据无关，可在 warp 内用
+      <b>__shfl_xor_sync</b> 无 branch 完成。
     </p>
   </div>
 </template>
@@ -206,27 +235,64 @@ const height = 232
   font-size: 0.85rem;
   margin-right: 6px;
 }
-.btns button:hover:not(:disabled) { border-color: #1677ff; color: #1677ff; }
-.btns button:disabled { opacity: 0.45; cursor: not-allowed; }
-.status { font-size: 0.82rem; color: #8a909c; font-variant-numeric: tabular-nums; }
-.status.ok { color: #2f8f6b; }
+.btns button:hover:not(:disabled) {
+  border-color: #1677ff;
+  color: #1677ff;
+}
+.btns button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.status {
+  font-size: 0.82rem;
+  color: #8a909c;
+  font-variant-numeric: tabular-nums;
+}
+.status.ok {
+  color: #2f8f6b;
+}
 .stage {
   width: 100%;
   background: #f7f9fc;
   border: 1px solid #e7ecf3;
   border-radius: 10px;
 }
-.rowlbl text, .rowlbl { font-size: 11px; fill: #8a909c; }
-.rowlbl.ok { fill: #2f8f6b; }
-.fmax { stroke: #cdd5e0; stroke-width: 1.5; stroke-dasharray: 3 3; }
-.arc { fill: none; stroke: #1677ff; stroke-width: 2; opacity: 0.85; }
-.cell { transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s; }
-.num { text-anchor: middle; font-size: 11px; font-weight: 600; }
+.rowlbl text,
+.rowlbl {
+  font-size: 11px;
+  fill: #8a909c;
+}
+.rowlbl.ok {
+  fill: #2f8f6b;
+}
+.fmax {
+  stroke: #cdd5e0;
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+}
+.arc {
+  fill: none;
+  stroke: #1677ff;
+  stroke-width: 2;
+  opacity: 0.85;
+}
+.cell {
+  transition:
+    transform 0.5s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.4s;
+}
+.num {
+  text-anchor: middle;
+  font-size: 11px;
+  font-weight: 600;
+}
 .cap {
   font-size: 0.85rem;
   line-height: 1.7;
   color: #5c6370;
   margin-top: 10px;
 }
-.cap b { color: #1677ff; }
+.cap b {
+  color: #1677ff;
+}
 </style>

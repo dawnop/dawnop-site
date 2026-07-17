@@ -7,7 +7,9 @@ import { ref } from 'vue'
 function createMedia(query) {
   const mql = window.matchMedia(query)
   const state = ref(mql.matches)
-  const handler = (e) => { state.value = e.matches }
+  const handler = (e) => {
+    state.value = e.matches
+  }
   if (mql.addEventListener) mql.addEventListener('change', handler)
   else mql.addListener(handler) // 旧 Safari 兜底
   return state

@@ -22,8 +22,23 @@ import xml from 'highlight.js/lib/languages/xml' // 含 HTML/Vue 模板
 import yaml from 'highlight.js/lib/languages/yaml'
 
 const langs = {
-  bash, c, cpp, csharp, css, go, java, javascript, json,
-  llvm, markdown, python, rust, sql, typescript, xml, yaml,
+  bash,
+  c,
+  cpp,
+  csharp,
+  css,
+  go,
+  java,
+  javascript,
+  json,
+  llvm,
+  markdown,
+  python,
+  rust,
+  sql,
+  typescript,
+  xml,
+  yaml,
 }
 for (const [name, def] of Object.entries(langs)) {
   hljs.registerLanguage(name, def)

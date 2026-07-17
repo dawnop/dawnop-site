@@ -50,7 +50,9 @@ onMounted(async () => {
         <el-button :icon="Edit" @click="router.push('/admin/articles/new')">写文章</el-button>
         <el-button :icon="Collection" @click="router.push('/admin/pages')">页面管理</el-button>
         <el-button :icon="FolderOpened" @click="router.push('/admin/files')">文件管理</el-button>
-        <el-button :icon="TopRight" tag="a" href="/" target="_blank" rel="noopener">查看站点</el-button>
+        <el-button :icon="TopRight" tag="a" href="/" target="_blank" rel="noopener"
+          >查看站点</el-button
+        >
       </div>
     </el-card>
   </div>

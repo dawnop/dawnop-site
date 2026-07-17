@@ -32,7 +32,12 @@ async function remove(v) {
     await ElMessageBox.confirm(
       `确定删除可视化「${v.name || v.slug}」？引用它的文章将显示加载失败。`,
       '删除可视化',
-      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' }
+      {
+        type: 'warning',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger',
+      },
     )
   } catch (e) {
     return
@@ -41,7 +46,6 @@ async function remove(v) {
   ElMessage.success('已删除')
   load()
 }
-
 
 onMounted(load)
 </script>
@@ -53,7 +57,17 @@ onMounted(load)
         在后台直接写 Vue 组件、实时预览、保存即生效。引用格式
         <HelpTip>
           <div>文章里用如下围栏引用（标识单独成行）：</div>
-          <pre style="margin: 6px 0 0; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre;">```viz
+          <pre
+            style="
+              margin: 6px 0 0;
+              font:
+                12px/1.5 ui-monospace,
+                Menlo,
+                monospace;
+              white-space: pre;
+            "
+          >
+```viz
 标识
 ```</pre>
         </HelpTip>
@@ -64,9 +78,18 @@ onMounted(load)
     </div>
 
     <el-card v-if="!isMobile" shadow="never">
-      <el-table v-loading="loading" :data="items" row-key="id" border empty-text="还没有可视化组件" @header-dragend="onHeaderDrag">
+      <el-table
+        v-loading="loading"
+        :data="items"
+        row-key="id"
+        border
+        empty-text="还没有可视化组件"
+        @header-dragend="onHeaderDrag"
+      >
         <el-table-column prop="slug" label="标识" :width="colW.slug || 240" show-overflow-tooltip>
-          <template #default="{ row }"><code class="slug">{{ row.slug }}</code></template>
+          <template #default="{ row }"
+            ><code class="slug">{{ row.slug }}</code></template
+          >
         </el-table-column>
         <el-table-column prop="name" label="名称" :width="colW.name || 240" show-overflow-tooltip>
           <template #default="{ row }">
@@ -74,7 +97,9 @@ onMounted(load)
           </template>
         </el-table-column>
         <el-table-column label="更新于" :width="colW['更新于'] || 130">
-          <template #default="{ row }"><span class="muted">{{ fmtDate(row.updated_at) }}</span></template>
+          <template #default="{ row }"
+            ><span class="muted">{{ fmtDate(row.updated_at) }}</span></template
+          >
         </el-table-column>
         <el-table-column />
         <el-table-column label="操作" :width="colW['操作'] || 130" fixed="right">

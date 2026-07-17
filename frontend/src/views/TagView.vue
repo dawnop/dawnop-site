@@ -39,7 +39,14 @@ function go(p) {
   load()
 }
 
-watch(() => route.params.slug, () => { page.value = 1; load() }, { immediate: true })
+watch(
+  () => route.params.slug,
+  () => {
+    page.value = 1
+    load()
+  },
+  { immediate: true },
+)
 </script>
 
 <template>

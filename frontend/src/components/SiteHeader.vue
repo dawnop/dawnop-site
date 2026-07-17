@@ -131,7 +131,9 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   color: #9aa0a6;
   cursor: pointer;
   font-size: 0.88rem;
-  transition: border-color 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
 }
 .search-trigger:hover {
   border-color: #d3d6da;

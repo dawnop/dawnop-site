@@ -31,13 +31,14 @@ const stages = buildStages(N)
 const L = stages.length
 
 let uid = 0
-const randItems = () => Array.from({ length: N }, () => ({ id: uid++, v: 10 + Math.floor(Math.random() * 89) }))
-const items = ref(randItems())          // 稳定的 {id, v}
+const randItems = () =>
+  Array.from({ length: N }, () => ({ id: uid++, v: 10 + Math.floor(Math.random() * 89) }))
+const items = ref(randItems()) // 稳定的 {id, v}
 const order = ref(items.value.map((it) => it.id)) // order[行] = id（当前列各行是谁）
-const pos = reactive({})                 // id -> {x, y} 渲染坐标（rAF 更新）
+const pos = reactive({}) // id -> {x, y} 渲染坐标（rAF 更新）
 const valById = computed(() => Object.fromEntries(items.value.map((it) => [it.id, it.v])))
 
-const step = ref(0)        // 当前所在列（0..L）
+const step = ref(0) // 当前所在列（0..L）
 const animating = ref(false)
 const done = computed(() => step.value >= L)
 
@@ -53,7 +54,9 @@ const maxV = computed(() => Math.max(...items.value.map((i) => i.v)))
 const hue = (v) => Math.round((v / maxV.value) * 215)
 
 function placeAll() {
-  order.value.forEach((id, r) => { pos[id] = { x: colX(step.value), y: rowY(r) } })
+  order.value.forEach((id, r) => {
+    pos[id] = { x: colX(step.value), y: rowY(r) }
+  })
 }
 placeAll()
 
@@ -66,19 +69,25 @@ function next() {
   const newOrder = oldOrder.slice()
   const swapped = new Set()
   for (const c of stages[s]) {
-    const idA = oldOrder[c.a], idB = oldOrder[c.b]
+    const idA = oldOrder[c.a],
+      idB = oldOrder[c.b]
     const hi = valById.value[idA] > valById.value[idB]
     // asc 段：大的去高索引（下方）；desc 段：大的去低索引（上方）
     if ((c.asc && hi) || (!c.asc && !hi)) {
-      newOrder[c.a] = idB; newOrder[c.b] = idA
-      swapped.add(idA); swapped.add(idB)
+      newOrder[c.a] = idB
+      newOrder[c.b] = idA
+      swapped.add(idA)
+      swapped.add(idB)
     }
   }
-  const oldRow = {}; oldOrder.forEach((id, r) => (oldRow[id] = r))
-  const newRow = {}; newOrder.forEach((id, r) => (newRow[id] = r))
+  const oldRow = {}
+  oldOrder.forEach((id, r) => (oldRow[id] = r))
+  const newRow = {}
+  newOrder.forEach((id, r) => (newRow[id] = r))
   // 每个值：列 s→s+1，旧行→新行；交换对加相反方向的水平 bow，斜向交叉而不重合
   const anims = oldOrder.map((id) => {
-    const r0 = oldRow[id], r1 = newRow[id]
+    const r0 = oldRow[id],
+      r1 = newRow[id]
     const bow = swapped.has(id) ? (r1 > r0 ? HBOW : -HBOW) : 0
     return { id, x0: colX(s), y0: rowY(r0), x1: colX(s + 1), y1: rowY(r1), bow }
   })
@@ -86,29 +95,40 @@ function next() {
   order.value = newOrder
   step.value = s + 1
   animating.value = true
-  const dur = 520, start = performance.now()
+  const dur = 520,
+    start = performance.now()
   const tick = (now) => {
     const t = Math.min(1, (now - start) / dur)
-    const e = t * t * (3 - 2 * t)            // smoothstep
+    const e = t * t * (3 - 2 * t) // smoothstep
     const sinp = Math.sin(Math.PI * t)
     for (const a of anims)
       pos[a.id] = { x: a.x0 + (a.x1 - a.x0) * e + a.bow * sinp, y: a.y0 + (a.y1 - a.y0) * e }
     if (t < 1) raf = requestAnimationFrame(tick)
-    else { for (const a of anims) pos[a.id] = { x: a.x1, y: a.y1 }; animating.value = false }
+    else {
+      for (const a of anims) pos[a.id] = { x: a.x1, y: a.y1 }
+      animating.value = false
+    }
   }
   raf = requestAnimationFrame(tick)
 }
 function reset() {
   if (raf) cancelAnimationFrame(raf)
   animating.value = false
-  order.value = items.value.map((it) => it.id); step.value = 0; placeAll()
+  order.value = items.value.map((it) => it.id)
+  step.value = 0
+  placeAll()
 }
 function shuffle() {
   if (raf) cancelAnimationFrame(raf)
   animating.value = false
-  items.value = randItems(); order.value = items.value.map((it) => it.id); step.value = 0; placeAll()
+  items.value = randItems()
+  order.value = items.value.map((it) => it.id)
+  step.value = 0
+  placeAll()
 }
-onBeforeUnmount(() => { if (raf) cancelAnimationFrame(raf) })
+onBeforeUnmount(() => {
+  if (raf) cancelAnimationFrame(raf)
+})
 
 const width = padX + L * gap + 30
 const height = rowY0 + N * rowH + 6
@@ -133,14 +153,21 @@ const height = rowY0 + N * rowH + 6
     <svg :viewBox="`0 0 ${width} ${height}`" class="stage">
       <!-- top-k 区域底色（末 K 条线） -->
       <rect
-        :x="0" :y="rowY(N - K) - rowH / 2" :width="width" :height="K * rowH"
+        :x="0"
+        :y="rowY(N - K) - rowH / 2"
+        :width="width"
+        :height="K * rowH"
         :class="{ tkband: true, lit: done }"
       />
 
       <!-- 导线 -->
       <line
-        v-for="i in N" :key="'w' + i"
-        :x1="colX(0)" :x2="colX(L)" :y1="rowY(i - 1)" :y2="rowY(i - 1)"
+        v-for="i in N"
+        :key="'w' + i"
+        :x1="colX(0)"
+        :x2="colX(L)"
+        :y1="rowY(i - 1)"
+        :y2="rowY(i - 1)"
         class="wire"
       />
 
@@ -148,39 +175,64 @@ const height = rowY0 + N * rowH + 6
       <g v-for="(comp, s) in stages" :key="'s' + s">
         <g v-for="(c, ci) in comp" :key="'c' + s + '-' + ci">
           <line
-            :x1="compX(c, s)" :x2="compX(c, s)"
-            :y1="rowY(c.a)" :y2="rowY(c.b)"
-            class="cmp" :class="{ active: s === litStage }"
+            :x1="compX(c, s)"
+            :x2="compX(c, s)"
+            :y1="rowY(c.a)"
+            :y2="rowY(c.b)"
+            class="cmp"
+            :class="{ active: s === litStage }"
           />
-          <circle :cx="compX(c, s)" :cy="rowY(c.a)" r="2.4" class="dot" :class="{ active: s === litStage }" />
-          <circle :cx="compX(c, s)" :cy="rowY(c.b)" r="2.4" class="dot" :class="{ active: s === litStage }" />
+          <circle
+            :cx="compX(c, s)"
+            :cy="rowY(c.a)"
+            r="2.4"
+            class="dot"
+            :class="{ active: s === litStage }"
+          />
+          <circle
+            :cx="compX(c, s)"
+            :cy="rowY(c.b)"
+            r="2.4"
+            class="dot"
+            :class="{ active: s === litStage }"
+          />
           <polygon
-            :points="c.asc
-              ? `${compX(c, s) - 4},${rowY(c.b) - 8} ${compX(c, s) + 4},${rowY(c.b) - 8} ${compX(c, s)},${rowY(c.b) - 1}`
-              : `${compX(c, s) - 4},${rowY(c.a) + 8} ${compX(c, s) + 4},${rowY(c.a) + 8} ${compX(c, s)},${rowY(c.a) + 1}`"
-            class="arrow" :class="{ active: s === litStage }"
+            :points="
+              c.asc
+                ? `${compX(c, s) - 4},${rowY(c.b) - 8} ${compX(c, s) + 4},${rowY(c.b) - 8} ${compX(c, s)},${rowY(c.b) - 1}`
+                : `${compX(c, s) - 4},${rowY(c.a) + 8} ${compX(c, s) + 4},${rowY(c.a) + 8} ${compX(c, s)},${rowY(c.a) + 1}`
+            "
+            class="arrow"
+            :class="{ active: s === litStage }"
           />
         </g>
       </g>
 
       <!-- 值：沿导线流动，交换的一对斜向交叉 -->
       <g
-        v-for="it in items" :key="it.id"
+        v-for="it in items"
+        :key="it.id"
         class="cell"
         :style="{ transform: `translate(${pos[it.id].x}px, ${pos[it.id].y}px)` }"
       >
-        <rect x="-15" y="-12" width="30" height="24" rx="5"
+        <rect
+          x="-15"
+          y="-12"
+          width="30"
+          height="24"
+          rx="5"
           :fill="`hsl(${hue(valById[it.id])},50%,92%)`"
-          :stroke="`hsl(${hue(valById[it.id])},38%,64%)`" />
+          :stroke="`hsl(${hue(valById[it.id])},38%,64%)`"
+        />
         <text class="num" :fill="`hsl(${hue(valById[it.id])},34%,42%)`">{{ valById[it.id] }}</text>
       </g>
     </svg>
 
     <p class="cap">
       8 条导线、固定的比较器网络：每一<b>列</b>是一组同时进行的「比较-交换」，箭头指向较大值的去向；
-      值沿导线向右流动，被比较器交换的一对<b>斜向交叉</b>、换到对方导线上。
-      关键在于 <b>比较器的位置和数据完全无关</b>——无论输入是什么都走同样的步骤，没有数据相关分支，
-      天生契合 GPU 的 SIMT。代价是比较器数量 O(k·log²k)，所以只适合小 k。
+      值沿导线向右流动，被比较器交换的一对<b>斜向交叉</b>、换到对方导线上。 关键在于
+      <b>比较器的位置和数据完全无关</b>——无论输入是什么都走同样的步骤，没有数据相关分支， 天生契合
+      GPU 的 SIMT。代价是比较器数量 O(k·log²k)，所以只适合小 k。
     </p>
   </div>
 </template>
@@ -211,33 +263,82 @@ const height = rowY0 + N * rowH + 6
   font-size: 0.85rem;
   margin-right: 6px;
 }
-.btns button:hover:not(:disabled) { border-color: #1677ff; color: #1677ff; }
-.btns button:disabled { opacity: 0.45; cursor: not-allowed; color: #1f2329; border-color: #d9dee5; }
-.status { font-size: 0.85rem; color: #8a909c; }
-.status b { color: #1677ff; }
-.status .ok { color: #2f8f6b; }
-.status .sep { margin: 0 8px; }
+.btns button:hover:not(:disabled) {
+  border-color: #1677ff;
+  color: #1677ff;
+}
+.btns button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  color: #1f2329;
+  border-color: #d9dee5;
+}
+.status {
+  font-size: 0.85rem;
+  color: #8a909c;
+}
+.status b {
+  color: #1677ff;
+}
+.status .ok {
+  color: #2f8f6b;
+}
+.status .sep {
+  margin: 0 8px;
+}
 .stage {
   width: 100%;
   background: #f7f9fc;
   border: 1px solid #e7ecf3;
   border-radius: 10px;
 }
-.tkband { fill: transparent; transition: fill 0.4s; }
-.tkband.lit { fill: rgba(124, 193, 163, 0.15); }
-.wire { stroke: #cbd2dc; stroke-width: 1.5; }
-.cmp { stroke: #dde3ec; stroke-width: 2; transition: stroke 0.3s; }
-.cmp.active { stroke: #1677ff; stroke-width: 3; }
-.arrow { fill: #dde3ec; transition: fill 0.3s; }
-.arrow.active { fill: #1677ff; }
-.dot { fill: #d3dae4; transition: fill 0.3s; }
-.dot.active { fill: #1677ff; }
-.num { text-anchor: middle; dominant-baseline: central; font-size: 12px; font-weight: 600; }
+.tkband {
+  fill: transparent;
+  transition: fill 0.4s;
+}
+.tkband.lit {
+  fill: rgba(124, 193, 163, 0.15);
+}
+.wire {
+  stroke: #cbd2dc;
+  stroke-width: 1.5;
+}
+.cmp {
+  stroke: #dde3ec;
+  stroke-width: 2;
+  transition: stroke 0.3s;
+}
+.cmp.active {
+  stroke: #1677ff;
+  stroke-width: 3;
+}
+.arrow {
+  fill: #dde3ec;
+  transition: fill 0.3s;
+}
+.arrow.active {
+  fill: #1677ff;
+}
+.dot {
+  fill: #d3dae4;
+  transition: fill 0.3s;
+}
+.dot.active {
+  fill: #1677ff;
+}
+.num {
+  text-anchor: middle;
+  dominant-baseline: central;
+  font-size: 12px;
+  font-weight: 600;
+}
 .cap {
   font-size: 0.85rem;
   line-height: 1.7;
   color: #5c6370;
   margin-top: 10px;
 }
-.cap b { color: #1677ff; }
+.cap b {
+  color: #1677ff;
+}
 </style>

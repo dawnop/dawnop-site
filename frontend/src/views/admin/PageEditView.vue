@@ -34,12 +34,9 @@ const form = ref({
 })
 
 // 内容页开启「用正文 H1 作标题」时，标题跟随正文第一个一级标题
-watch(
-  [() => form.value.auto_title, () => form.value.content],
-  ([auto, content]) => {
-    if (auto && form.value.type === 'content') form.value.title = firstH1(content)
-  }
-)
+watch([() => form.value.auto_title, () => form.value.content], ([auto, content]) => {
+  if (auto && form.value.type === 'content') form.value.title = firstH1(content)
+})
 const publishAt = ref(null) // Date | null，对应 created_at
 const showSettings = ref(false)
 const saving = ref(false)
@@ -184,7 +181,11 @@ async function save() {
         </span>
         <RouterLink to="/admin/articles" class="manage-link">去文章管理 →</RouterLink>
       </div>
-      <el-empty v-if="!isEdit" description="保存后即可在此查看分配到本栏目的文章" :image-size="80" />
+      <el-empty
+        v-if="!isEdit"
+        description="保存后即可在此查看分配到本栏目的文章"
+        :image-size="80"
+      />
       <el-empty
         v-else-if="catLoaded && catArticles.length === 0"
         description="还没有文章归属到本栏目。在文章设置里把「所属列表页」设为本页即可"
@@ -224,12 +225,19 @@ async function save() {
         <el-form-item>
           <template #label>
             路径 slug
-            <HelpTip>访问地址 <code>{{ slugPreview }}</code></HelpTip>
+            <HelpTip
+              >访问地址 <code>{{ slugPreview }}</code></HelpTip
+            >
           </template>
           <el-input v-model="form.slug" placeholder="url-friendly-slug" />
         </el-form-item>
         <el-form-item label="页面描述（SEO / 列表说明，可选）">
-          <el-input v-model="form.description" type="textarea" :rows="2" placeholder="一句话描述这个页面" />
+          <el-input
+            v-model="form.description"
+            type="textarea"
+            :rows="2"
+            placeholder="一句话描述这个页面"
+          />
         </el-form-item>
         <el-form-item label="发布时间">
           <el-date-picker

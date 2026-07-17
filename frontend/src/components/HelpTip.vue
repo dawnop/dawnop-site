@@ -7,7 +7,9 @@ import { QuestionFilled } from '@element-plus/icons-vue'
 <template>
   <el-tooltip placement="top" :show-after="60">
     <el-icon class="help-tip"><QuestionFilled /></el-icon>
-    <template #content><span class="help-tip-content"><slot /></span></template>
+    <template #content
+      ><span class="help-tip-content"><slot /></span
+    ></template>
   </el-tooltip>
 </template>
 

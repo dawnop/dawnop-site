@@ -30,7 +30,8 @@ function buildStages(n) {
 const stages = buildStages(N)
 
 let uid = 0
-const mkItems = () => Array.from({ length: N }, () => ({ id: uid++, v: 10 + Math.floor(Math.random() * 89) }))
+const mkItems = () =>
+  Array.from({ length: N }, () => ({ id: uid++, v: 10 + Math.floor(Math.random() * 89) }))
 const items = ref(mkItems()) // 稳定的 {id, v}：值绑定到 id，排序是“位置”重排
 const order = ref(items.value.map((it) => it.id)) // 当前位置 → id
 const pos = reactive({}) // id → {x, y} 渲染坐标（动画期间被 rAF 更新）
@@ -39,7 +40,9 @@ const maxV = computed(() => Math.max(...items.value.map((i) => i.v)))
 const hue = (v) => Math.round((v / maxV.value) * 215)
 const barH = (v) => 8 + (v / maxV.value) * (barMaxH - 8)
 function placeAll() {
-  order.value.forEach((id, i) => { pos[id] = { x: cx(i), y: barBase } })
+  order.value.forEach((id, i) => {
+    pos[id] = { x: cx(i), y: barBase }
+  })
 }
 placeAll()
 
@@ -64,11 +67,13 @@ function next() {
   const newOrder = order.value.slice()
   const anims = []
   for (const c of stage) {
-    const idA = order.value[c.a], idB = order.value[c.b]
+    const idA = order.value[c.a],
+      idB = order.value[c.b]
     const hi = valById.value[idA] > valById.value[idB]
     // asc：大的去高 index；desc：大的去低 index。需要交换则两根柱子水平滑到对方位置
     if ((c.asc && hi) || (!c.asc && !hi)) {
-      newOrder[c.a] = idB; newOrder[c.b] = idA
+      newOrder[c.a] = idB
+      newOrder[c.b] = idA
       anims.push({ id: idA, x0: cx(c.a), x1: cx(c.b) }) // a→b
       anims.push({ id: idB, x0: cx(c.b), x1: cx(c.a) }) // b→a
     }
@@ -77,27 +82,38 @@ function next() {
   step.value++
   if (!anims.length) return
   animating.value = true
-  const dur = 420, start = performance.now()
+  const dur = 420,
+    start = performance.now()
   const ease = (t) => t * t * (3 - 2 * t) // smoothstep
   const tick = (now) => {
     const t = ease(Math.min(1, (now - start) / dur))
     for (const a of anims) pos[a.id] = { x: a.x0 + (a.x1 - a.x0) * t, y: barBase }
     if (t < 1) raf = requestAnimationFrame(tick)
-    else { for (const a of anims) pos[a.id] = { x: a.x1, y: barBase }; animating.value = false }
+    else {
+      for (const a of anims) pos[a.id] = { x: a.x1, y: barBase }
+      animating.value = false
+    }
   }
   raf = requestAnimationFrame(tick)
 }
 function reset() {
   if (raf) cancelAnimationFrame(raf)
   animating.value = false
-  order.value = items.value.map((it) => it.id); step.value = 0; placeAll()
+  order.value = items.value.map((it) => it.id)
+  step.value = 0
+  placeAll()
 }
 function shuffle() {
   if (raf) cancelAnimationFrame(raf)
   animating.value = false
-  items.value = mkItems(); order.value = items.value.map((it) => it.id); step.value = 0; placeAll()
+  items.value = mkItems()
+  order.value = items.value.map((it) => it.id)
+  step.value = 0
+  placeAll()
 }
-onBeforeUnmount(() => { if (raf) cancelAnimationFrame(raf) })
+onBeforeUnmount(() => {
+  if (raf) cancelAnimationFrame(raf)
+})
 
 const stageLabel = computed(() => {
   if (done.value) return '已排序'
@@ -126,27 +142,42 @@ const stageLabel = computed(() => {
 
       <!-- 比较器连线（下方）：箭头朝向较大值的去向 -->
       <path
-        v-for="(c, ci) in active" :key="'c' + ci"
-        :d="connPath(c)" class="conn" marker-end="url(#brow-arrow)"
+        v-for="(c, ci) in active"
+        :key="'c' + ci"
+        :d="connPath(c)"
+        class="conn"
+        marker-end="url(#brow-arrow)"
       />
 
       <!-- 一行柱子：柱高=数值，绑定到 id；位置由 pos 决定，交换时水平滑到对方位置 -->
       <g
-        v-for="it in items" :key="it.id"
+        v-for="it in items"
+        :key="it.id"
         :transform="pos[it.id] ? `translate(${pos[it.id].x},${pos[it.id].y})` : ''"
       >
-        <rect :x="-barW / 2" :y="-barH(it.v)" :width="barW" :height="barH(it.v)" rx="4"
-          :fill="`hsl(${hue(it.v)},50%,92%)`" :stroke="`hsl(${hue(it.v)},38%,64%)`" />
-        <text x="0" :y="-barH(it.v) - 5" class="num" :fill="`hsl(${hue(it.v)},34%,40%)`">{{ it.v }}</text>
+        <rect
+          :x="-barW / 2"
+          :y="-barH(it.v)"
+          :width="barW"
+          :height="barH(it.v)"
+          rx="4"
+          :fill="`hsl(${hue(it.v)},50%,92%)`"
+          :stroke="`hsl(${hue(it.v)},38%,64%)`"
+        />
+        <text x="0" :y="-barH(it.v) - 5" class="num" :fill="`hsl(${hue(it.v)},34%,40%)`">
+          {{ it.v }}
+        </text>
       </g>
 
       <text :x="padX" y="170" class="lbl">index 0 → {{ N - 1 }}（升序排好后末尾即最大）</text>
     </svg>
 
     <p class="cap">
-      一行柱子逐<b>阶段</b>做 compare-exchange：下方连线是本阶段比较的下标对，箭头指向较大值应去的位置；
-      需要交换的两根柱子<b>水平滑动</b>到对方位置。比较的下标对由 <b>i XOR j</b> 固定决定、与数据无关——
-      这正是它能在 warp 内用 <b>__shfl_xor_sync</b> 无 branch 实现的原因。
+      一行柱子逐<b>阶段</b>做
+      compare-exchange：下方连线是本阶段比较的下标对，箭头指向较大值应去的位置；
+      需要交换的两根柱子<b>水平滑动</b>到对方位置。比较的下标对由
+      <b>i XOR j</b> 固定决定、与数据无关—— 这正是它能在 warp 内用 <b>__shfl_xor_sync</b> 无 branch
+      实现的原因。
     </p>
   </div>
 </template>
@@ -177,20 +208,53 @@ const stageLabel = computed(() => {
   font-size: 0.85rem;
   margin-right: 6px;
 }
-.btns button:hover:not(:disabled) { border-color: #1677ff; color: #1677ff; }
-.btns button:disabled { opacity: 0.45; cursor: not-allowed; }
-.status { font-size: 0.82rem; color: #8a909c; font-variant-numeric: tabular-nums; }
-.status.ok { color: #2f8f6b; }
+.btns button:hover:not(:disabled) {
+  border-color: #1677ff;
+  color: #1677ff;
+}
+.btns button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.status {
+  font-size: 0.82rem;
+  color: #8a909c;
+  font-variant-numeric: tabular-nums;
+}
+.status.ok {
+  color: #2f8f6b;
+}
 .stage {
   width: 100%;
   background: #f7f9fc;
   border: 1px solid #e7ecf3;
   border-radius: 10px;
 }
-.conn { fill: none; stroke: #1677ff; stroke-width: 2; opacity: 0.9; }
-.mk { fill: #1677ff; }
-.num { text-anchor: middle; font-size: 12px; font-weight: 600; }
-.lbl { font-size: 11px; fill: #8a909c; }
-.cap { font-size: 0.85rem; line-height: 1.7; color: #5c6370; margin-top: 10px; }
-.cap b { color: #1677ff; }
+.conn {
+  fill: none;
+  stroke: #1677ff;
+  stroke-width: 2;
+  opacity: 0.9;
+}
+.mk {
+  fill: #1677ff;
+}
+.num {
+  text-anchor: middle;
+  font-size: 12px;
+  font-weight: 600;
+}
+.lbl {
+  font-size: 11px;
+  fill: #8a909c;
+}
+.cap {
+  font-size: 0.85rem;
+  line-height: 1.7;
+  color: #5c6370;
+  margin-top: 10px;
+}
+.cap b {
+  color: #1677ff;
+}
 </style>

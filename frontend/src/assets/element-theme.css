@@ -20,8 +20,9 @@
   --el-border-radius-base: 8px;
   --el-border-radius-small: 6px;
 
-  --el-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif;
+  --el-font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif;
 
   --el-text-color-primary: #1f2329;
   --el-text-color-regular: #4e5969;

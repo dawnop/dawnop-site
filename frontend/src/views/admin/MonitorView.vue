@@ -62,9 +62,17 @@ const vault = computed(() => data.value?.vault || null)
   gap: 16px;
   margin-bottom: 16px;
 }
-.page-head .el-button { flex-shrink: 0; }
-.hint { margin: 0; color: var(--muted); font-size: 0.85rem; }
-.muted { color: var(--muted); }
+.page-head .el-button {
+  flex-shrink: 0;
+}
+.hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.muted {
+  color: var(--muted);
+}
 
 /* 瀑布流：CSS 多列布局，卡片按列紧凑堆叠、不留行对齐的空隙 */
 .cards {
@@ -73,8 +81,15 @@ const vault = computed(() => data.value?.vault || null)
 }
 
 @media (max-width: 768px) {
-  .cards { column-count: 1; }
-  .page-head { flex-wrap: wrap; gap: 10px; }
-  .page-head .el-button { width: 100%; }
+  .cards {
+    column-count: 1;
+  }
+  .page-head {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .page-head .el-button {
+    width: 100%;
+  }
 }
 </style>

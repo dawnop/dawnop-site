@@ -31,15 +31,17 @@ const coords = computed(() => {
 })
 
 const linePath = computed(() =>
-  coords.value.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`).join(' ')
+  coords.value.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`).join(' '),
 )
 const areaPath = computed(() => {
   if (!coords.value.length) return ''
   const first = coords.value[0]
   const last = coords.value[coords.value.length - 1]
-  return `M${first[0].toFixed(1)} ${props.height} ` +
+  return (
+    `M${first[0].toFixed(1)} ${props.height} ` +
     coords.value.map(([x, y]) => `L${x.toFixed(1)} ${y.toFixed(1)}`).join(' ') +
     ` L${last[0].toFixed(1)} ${props.height} Z`
+  )
 })
 
 const hover = ref(-1)
@@ -73,14 +75,28 @@ const hoverX = computed(() => (hover.value >= 0 ? coords.value[hover.value][0] :
         </linearGradient>
       </defs>
       <path :d="areaPath" :fill="`url(#g-${color.slice(1)})`" />
-      <path :d="linePath" :stroke="color" stroke-width="1.5" fill="none"
-        vector-effect="non-scaling-stroke" />
-      <line v-if="hover >= 0" :x1="hoverX" :x2="hoverX" y1="0" :y2="height"
-        stroke="#c0c4cc" stroke-width="1" vector-effect="non-scaling-stroke" />
+      <path
+        :d="linePath"
+        :stroke="color"
+        stroke-width="1.5"
+        fill="none"
+        vector-effect="non-scaling-stroke"
+      />
+      <line
+        v-if="hover >= 0"
+        :x1="hoverX"
+        :x2="hoverX"
+        y1="0"
+        :y2="height"
+        stroke="#c0c4cc"
+        stroke-width="1"
+        vector-effect="non-scaling-stroke"
+      />
     </svg>
     <div v-else class="mini-empty">暂无数据</div>
     <div v-if="hoverPoint" class="mini-tip">
-      <b>{{ format(hoverPoint.value) }}</b><span>{{ hoverPoint.label }}</span>
+      <b>{{ format(hoverPoint.value) }}</b
+      ><span>{{ hoverPoint.label }}</span>
     </div>
   </div>
 </template>
