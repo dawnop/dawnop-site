@@ -3,14 +3,15 @@
 给 `dav.dawnop.com` 加的一个 jail：**连续 5 次「带凭证却被拒」就封 IP 1 小时**。
 服务器上已有的 **sshd jail 不受影响**（各走各的文件，本目录不碰它）。
 
-> ## 状态：可以装了（`enabled` 仍是 false，装的时候翻）
+> ## 状态：已上线（2026-07-18 装到生产，`enabled = true`）
 >
-> 这个 jail 已写好并用真日志 + `fail2ban-regex` 验证过。它此前被 gate 的原因——`$remote_addr`
-> 恒为 `127.0.0.1`（jail 会封到 SNI 分流层自己）——**已于 2026-07-17 用 proxy_protocol 解除**
-> （见 [`../real-ip-proxy-protocol.md`](../real-ip-proxy-protocol.md)）：dav 日志现在记的是真实客户端 IP。
+> 已按下面步骤装到生产并 `fail2ban-client reload`：`fail2ban-client status` 里有 `dawnop-dav-auth`，
+> 其 `File list` 已确认是 `/var/log/nginx/dav.access.log`（不是 journald），`fail2ban-regex` 拿真日志
+> 跑出 1 matched（一条 `auth=auth` 的鉴权失败）、`auth=noauth` 的正常挑战落在 missed。
 >
-> 但**服务器上还没装 fail2ban 的这个 jail**（目前只有 sshd jail 在跑）。`jail.d/dawnop-dav.conf`
-> 仍保持 `enabled = false`，等按下面的步骤装到服务器时把它翻成 `true`。filter 与参数都不用动。
+> 它此前被 gate 的原因——`$remote_addr` 恒为 `127.0.0.1`（jail 会封到 SNI 分流层自己）——
+> **已于 2026-07-17 用 proxy_protocol 解除**（见 [`../real-ip-proxy-protocol.md`](../real-ip-proxy-protocol.md)）：
+> dav 日志现在记的是真实客户端 IP。下面的「装」一节保留为**重装 / 换机时的步骤**。
 
 ## 为什么要有它
 

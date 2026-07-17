@@ -83,7 +83,7 @@ dawnop-site/
 │   ├── nginx.conf               # 站点（sites-enabled/dawnop）：前端 + /api→8001 + dav/cdn/vault/p5play/dawn-lang
 │   ├── nginx-main.conf          # /etc/nginx/nginx.conf 里属本项目的段：stream SNI 分流 + playground zone
 │   ├── nginx-snippets/          # /etc/nginx/snippets/：/api 的公共 proxy 头
-│   ├── fail2ban/                # dav 鉴权爆破 jail（**enabled=false**，等真实 IP 恢复）
+│   ├── fail2ban/                # dav 鉴权爆破 jail（**已上线** 2026-07-18，enabled=true）
 │   ├── dawnop-backend.service   # systemd 单元（FastAPI，已 disable，回滚目标）
 │   └── README.md                # 部署权威文档（现状 = Dawn）
 ├── backend-dawn/deploy/
