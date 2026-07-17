@@ -10,6 +10,20 @@ on:
   pull_request:
 
 jobs:
+  # This repo is public, and the convention is that the server's real IP and ssh
+  # username live only in a private local note — the tree writes <user>@<server>.
+  # That convention was enforced by hand exactly once (a 2026-06-23 scrub commit);
+  # eleven days later a deploy doc put `ssh <user>@<ip>` straight back, and it sat on
+  # public main unnoticed. A convention nothing checks is a convention that decays,
+  # so it is a check now. See scripts/check-no-server-identity.py for why it
+  # resolves the site's own DNS instead of hardcoding what it is looking for.
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: no server identity in the tree
+        run: python3 scripts/check-no-server-identity.py
+
   backend:
     runs-on: ubuntu-latest
     steps:
