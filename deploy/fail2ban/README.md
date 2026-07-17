@@ -3,23 +3,14 @@
 给 `dav.dawnop.com` 加的一个 jail：**连续 5 次「带凭证却被拒」就封 IP 1 小时**。
 服务器上已有的 **sshd jail 不受影响**（各走各的文件，本目录不碰它）。
 
-> ## ⚠️ 现在别装 —— `enabled = false`
+> ## 状态：可以装了（`enabled` 仍是 false，装的时候翻）
 >
-> 这个 jail 已写好并用真日志 + `fail2ban-regex` 验证过，但**在生产上装了不起作用，还会误导**。
+> 这个 jail 已写好并用真日志 + `fail2ban-regex` 验证过。它此前被 gate 的原因——`$remote_addr`
+> 恒为 `127.0.0.1`（jail 会封到 SNI 分流层自己）——**已于 2026-07-17 用 proxy_protocol 解除**
+> （见 [`../real-ip-proxy-protocol.md`](../real-ip-proxy-protocol.md)）：dav 日志现在记的是真实客户端 IP。
 >
-> 原因不在这里，在 nginx：443 由 `stream` 层做 SNI 分流后从本机新建连接到 8443，没开
-> `proxy_protocol`，所以 http 层的 `$remote_addr` **恒为 `127.0.0.1`**（实测最近 200 条访问日志
-> 无一例外，见 [`../nginx-main.conf`](../nginx-main.conf)）。jail 从日志读到的 `<HOST>` 因此永远是
-> `127.0.0.1`：**封的是分流层自己，真攻击者毫发无伤**，而你自己输错密码倒会触发它。
-> 装上它最大的害处不是没用，是让人以为这个面已经堵上了。
->
-> **解封条件**：stream 开 `proxy_protocol on` + http 侧 `listen ... proxy_protocol` +
-> `real_ip_header proxy_protocol`，让 `$remote_addr` 变回真实客户端。那之后把
-> `jail.d/dawnop-dav.conf` 的 `enabled` 改成 `true` 即可，filter 和参数都不用动。
-> 注意 stream 的 `proxy_protocol` 是 server 级的，**会同时发给 REDACTED**（Claude 代理隧道），
-> 动之前得先确认 REDACTED 收 PROXY 头。
->
-> 下面的装法/验证/解封步骤都是对的，等前提满足了照做即可。
+> 但**服务器上还没装 fail2ban 的这个 jail**（目前只有 sshd jail 在跑）。`jail.d/dawnop-dav.conf`
+> 仍保持 `enabled = false`，等按下面的步骤装到服务器时把它翻成 `true`。filter 与参数都不用动。
 
 ## 为什么要有它
 

@@ -237,8 +237,10 @@ dawnop-site/
   （`bypass.invalid`→REDACTED:REDACTED，其余→`127.0.0.1:8443`），站点 server 块全在 8443。
   改回 `listen 443 ssl` 的失败是**延时**的：`nginx -t` 说通过、reload 看起来也成功、站点照常，
   只在 error_log 默默记 bind 失败且**整次 reload 被放弃**（其余改动也没生效），
-  到**下次重启**才起不来。**代价：`$remote_addr` 恒为 127.0.0.1**，
-  按 IP 的限流/封禁/日志全部失效（含 playground 已有的 `limit_req`，2026-07-14 起静默失效）。
+  到**下次重启**才起不来。**真实客户端 IP** 曾因这套架构恒为 127.0.0.1（按 IP 的限流/封禁/日志
+  全失效，2026-07-14 起），**已于 2026-07-17 用 proxy_protocol 恢复**（stream 发头 + 8443 listen 收头
+  + real_ip；REDACTED 开 `proxyProtocol:1` 自动探测接住同链路的头；见 `deploy/real-ip-proxy-protocol.md`）。
+  加/删 8443 vhost 时其 listen 必须带 `proxy_protocol`，80 端口的绝不能带。
   改 nginx 前必读 [`deploy/README.md`](./deploy/README.md) 开头的警告。
   仓库里 `deploy/nginx.conf`（站点）+ `nginx-main.conf`（nginx.conf 里的 stream 与 zone）+
   `nginx-snippets/` 于 2026-07-17 以生产实配重建——在那之前它们**双向漂移**过：仓库单方面更新

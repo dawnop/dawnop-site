@@ -20,13 +20,14 @@ FastAPI/uvicorn（`:8000`，systemd `dawnop-backend`）**已 `systemctl disable`
 > 端口就放弃整次 reload——**你这次改动的其余部分也没生效**。炸弹在**下一次重启**才响，nginx
 > 起不来、站点下线，可能是几周后由内核更新或机房重启触发。即时下线反而是好事，这个不是。
 >
-> **真实客户端 IP 已丢失。** stream 终止 TCP 后从本机新建连接到 8443，且没开 `proxy_protocol`，
-> 故 http 层 `$remote_addr` **恒为 `127.0.0.1`**（实测最近 200 条访问日志无一例外）。
-> 于是：日志里没有来源 IP；任何按 `$binary_remote_addr` 的 `limit_req` 都是**全站共用一个桶**
-> （playground 的 `playrun`/`playcheck` 就这么静默失效了，2026-07-14 起）；按 IP 封禁只会封到
-> 分流层自己。**修好之前别往 nginx 加任何按 IP 的防护**，那只会制造「以为堵上了」的错觉。
-> 怎么修（PROXY protocol，分步、含回滚，已调研待执行）见
-> [`real-ip-proxy-protocol.md`](./real-ip-proxy-protocol.md)。
+> **真实客户端 IP：曾丢失，2026-07-17 已用 proxy_protocol 恢复。** stream 从本机新建连接到 8443，
+> 若不带 PROXY 头，`$remote_addr` 会恒为 `127.0.0.1`——日志无来源 IP、按 IP 的 `limit_req`/封禁全失效
+> （2026-07-14 上 SNI 那套时静默引入，playground 的 `playrun`/`playcheck` 因此退化成全站一个桶）。
+> 已修：stream 开 `proxy_protocol on`、8443 每个 listen 加 `proxy_protocol`、nginx.conf 的 http 段配
+> `real_ip_header proxy_protocol`；REDACTED 侧开 `proxyProtocol: 1`（自动探测）接住同一条链路的头。
+> 做法、验证与回滚见 [`real-ip-proxy-protocol.md`](./real-ip-proxy-protocol.md)。
+> **加/删 8443 vhost 时**：新 vhost 的 8443 listen 必须带 `proxy_protocol`（漏了那个 vhost 握手就失败），
+> 80 端口的 listen 则绝不能带。
 >
 > 这两件事在 2026-07-17 之前**都不在版本控制里**，本文件当时还写着「Nginx 监听 80/443」。
 > 仓库与生产曾双向漂移：仓库单方面更新注释、生产单方面改结构，而本文件把仓库那份称作「权威」。
