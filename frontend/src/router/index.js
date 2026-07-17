@@ -5,7 +5,7 @@ import PublicLayout from '../components/PublicLayout.vue'
 import AdminLayout from '../components/AdminLayout.vue'
 
 // history 路由：URL 干净（/article/x，利于 SEO 与分享）。
-// 代价：刷新/直达子路径需 nginx 把任意路径回退到 index.html（见 deploy/nginx.conf 的 try_files）。
+// 代价：刷新/直达子路径需 nginx 把任意路径回退到 index.html（try_files 兜底）。
 const routes = [
   {
     path: '/',

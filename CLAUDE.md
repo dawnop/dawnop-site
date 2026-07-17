@@ -38,7 +38,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | LaTeX | **KaTeX**（编辑器内置 + 文章页 `@mdit/plugin-katex`） | 编辑器与文章页同款渲染；本地实例(不依赖 CDN) |
 | 代码高亮 | `highlight.js` | 文章代码块 |
 | 文件管理 UI | **自建**（Element Plus + `qiniu-js`） | SVAR 观感：目录树/面包屑/右键菜单/框选多选/拖拽上传/拖动移动/预览编辑/传输列表 |
-| 部署 | **Nginx**（443 走 stream 层 SNI 分流 → 站点在 `127.0.0.1:8443`）+ systemd 托管 Dawn 后端（`dawnop-dawn`，:8001） | 4 核 4G 足够。发版 = CI 出 artifact + `deploy.sh` 拉取，见 `deploy/README.md`（**先读开头的 443 / 真实 IP 警告**） |
+| 部署 | **Nginx**（托管前端静态 + `/api` 反代 Dawn 后端 `dawnop-dawn`，:8001）+ systemd | 4 核 4G 足够。发版 = CI 出 artifact + `deploy.sh` 拉取，见 `deploy/README.md`。**nginx 配置在 `~/workspace/dawnop-ops/`（私有，不推送）** |
 
 > 这些是推荐默认值。若你（用户）更倾向 Flask / React 等，请在动工前提出，我会相应调整计划。
 
@@ -80,9 +80,7 @@ dawnop-site/
 │   ├── package.json
 │   └── vite.config.js
 ├── deploy/
-│   ├── nginx.conf               # 站点（sites-enabled/dawnop）：前端 + /api→8001 + dav/cdn/vault/p5play/dawn-lang
-│   ├── nginx-main.conf          # /etc/nginx/nginx.conf 里属本项目的段：stream SNI 分流 + playground zone
-│   ├── nginx-snippets/          # /etc/nginx/snippets/：/api 的公共 proxy 头
+│   # nginx 配置不在本仓库，在 ~/workspace/dawnop-ops/（私有，不推送）
 │   ├── fail2ban/                # dav 鉴权爆破 jail（**已上线** 2026-07-18，enabled=true）
 │   ├── dawnop-backend.service   # systemd 单元（FastAPI，已 disable，回滚目标）
 │   └── README.md                # 部署权威文档（现状 = Dawn）
@@ -175,7 +173,7 @@ dawnop-site/
   iOS/内核挂载器）。**后端路由内部仍是 `/dav`**（FastAPI `prefix="/dav"`），子域名 vhost 把 `/` 反代到后端
   `/dav/`；主域 `dawnop.com/dav` 已下线（落 SPA）。href 前缀**跟随请求**（`_dav_prefix` 读 `X-Dav-Prefix`，
   默认 `/dav`；子域名 vhost 由 nginx 传 `X-Dav-Prefix: /` 归一化为空串，让 href 出 `/foo.txt` 而非 `/dav/foo.txt`，
-  避免子域名下 `/dav/dav/...` 双前缀 404）。生产 nginx `server dav.dawnop.com`（见 `deploy/nginx.conf`）：
+  避免子域名下 `/dav/dav/...` 双前缀 404）。生产 nginx 的 `server dav.dawnop.com` 块在私有运维笔记里：
   DNS A 记录（备案随主域继承）、复用通配符证书 `*.dawnop.com`（acme.sh 自动续、续期钩子 reload nginx）、必须 HTTPS。
 
 - 全局设置：`GET/PUT /api/settings`（需鉴权）→ key-value 存 `settings` 表与 DEFAULTS 合并；
@@ -233,19 +231,10 @@ dawnop-site/
 - 形态：Nginx 托管 `frontend/dist` 静态文件，并将 `/api` 反向代理到
   **Dawn 后端 `127.0.0.1:8001`**（systemd `dawnop-dawn`）。uvicorn（`:8000`，
   `deploy/dawnop-backend.service`）已 disable，是回滚目标。
-- **443 不是站点在听**：nginx 的 `stream` 块（TCP 层，与 `http{}` 平级）占 443 做 SNI 分流
-  （`bypass.invalid`→REDACTED:REDACTED，其余→`127.0.0.1:8443`），站点 server 块全在 8443。
-  改回 `listen 443 ssl` 的失败是**延时**的：`nginx -t` 说通过、reload 看起来也成功、站点照常，
-  只在 error_log 默默记 bind 失败且**整次 reload 被放弃**（其余改动也没生效），
-  到**下次重启**才起不来。**真实客户端 IP** 曾因这套架构恒为 127.0.0.1（按 IP 的限流/封禁/日志
-  全失效，2026-07-14 起），**已于 2026-07-17 用 proxy_protocol 恢复**（stream 发头 + 8443 listen 收头
-  + real_ip；REDACTED 开 `proxyProtocol:1` 自动探测接住同链路的头；见 `deploy/real-ip-proxy-protocol.md`）。
-  加/删 8443 vhost 时其 listen 必须带 `proxy_protocol`，80 端口的绝不能带。
-  改 nginx 前必读 [`deploy/README.md`](./deploy/README.md) 开头的警告。
-  仓库里 `deploy/nginx.conf`（站点）+ `nginx-main.conf`（nginx.conf 里的 stream 与 zone）+
-  `nginx-snippets/` 于 2026-07-17 以生产实配重建——在那之前它们**双向漂移**过：仓库单方面更新
-  注释、生产单方面改结构，而文档把仓库那份称作「权威」，照着部署会打挂站点。
-  **部署的权威文档是 [`deploy/README.md`](./deploy/README.md)**（本节只是环境事实）。
+- **nginx 的服务器配置不在本仓库**，在 `~/workspace/dawnop-ops/`（私有，不推送）：站点 vhost、
+  443 接入、proxy 头、真实 IP 恢复手册都在那儿。**改 nginx 看那份笔记。** CI 守卫 + pre-push hook
+  （`scripts/check-no-server-identity.py`）挡住服务器身份信息进公开仓库。
+  `deploy/README.md` 只讲后端/前端/DB/systemd 那部分。
 
 ## 9. 常用命令
 
@@ -292,6 +281,10 @@ python backend-dawn/scripts/contract_webdav.py  # WebDAV 全周期
 - **CI**（`.github/workflows/ci.yml`，push main + PR 触发）：Dawn 后端 60 测试 + 打 jar 传
   artifact、FastAPI 120 测试（**钉 Python 3.10**，对齐生产）、前端 lint/format/build、
   ruff check + format。任一红都别合。
+- **服务器身份守卫**（`scripts/check-no-server-identity.py`，CI 的 `secrets` job + 本地 pre-push hook）：
+  拦住 ssh 用户名、本站真实 IP、旁路服务身份（proxy 隧道 / SNI 分流的主机名/端口/组件名）进公开仓库。
+  **新开发机装一次 hook**：`git config core.hooksPath .githooks`（hook 在 `.githooks/pre-push`，已入库）。
+  临时跳过 `git push --no-verify`。nginx 服务器配置整体在 `~/workspace/dawnop-ops/`（私有，不推送）。
 - **lint 基线是刻意放松的**：只开无争议的规则，排版归人。每条豁免在配置文件里都写了
   实测理由（`pyproject.toml`、`frontend/eslint.config.js`）。收紧是自觉决定，不是随手加规则。
 - **Python 基线 3.10**：`pyproject.toml` 的 `target-version = "py310"` 会拦住 3.11+ 写法在

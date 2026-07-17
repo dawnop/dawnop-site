@@ -62,20 +62,10 @@ curl -sf http://127.0.0.1:8222/alive && echo OK   # 健康检查
 
 ## 5. 配 nginx
 
-`deploy/nginx.conf` 已含 `server vault.dawnop.com` 块和 `map $http_upgrade $vault_connection_upgrade`。
-把更新后的 nginx.conf 覆盖到服务器（**先备份**）。
-
-⚠️ 改 nginx 前先读 [`../README.md`](../README.md) 开头的警告（443 归 stream 层、真实 IP 已丢失）。
-下面用 `readlink -f` 解析出 nginx **真正读的**那个文件：`sites-available/dawnop` 是没人读的陈旧副本，
-写它等于什么都没做，备份它也备了个寂寞。
-
-```bash
-CONF=$(readlink -f /etc/nginx/sites-enabled/dawnop)
-sudo cp "$CONF" /tmp/dawnop.nginx.bak.$(date +%s)
-# 传新的 nginx.conf 后：
-sudo cp /tmp/nginx.conf "$CONF"
-sudo nginx -t && sudo systemctl reload nginx
-```
+nginx 站点配置在 `~/workspace/dawnop-ops/`（不在本仓库），它的 `nginx.conf` 已含
+`server vault.dawnop.com` 块和 `map $http_upgrade $vault_connection_upgrade`。按那份笔记的
+「部署 / 改动」一节把它部署到 nginx 真读的站点文件、`nginx -t` 过了再 `reload`（**先备份**，
+且备份别放 `sites-enabled/` 下）。改 nginx 前先读那份笔记开头的警告。
 
 ## 6. 首次注册 → 关闭注册
 

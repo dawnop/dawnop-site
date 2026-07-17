@@ -9,9 +9,9 @@
 > 其 `File list` 已确认是 `/var/log/nginx/dav.access.log`（不是 journald），`fail2ban-regex` 拿真日志
 > 跑出 1 matched（一条 `auth=auth` 的鉴权失败）、`auth=noauth` 的正常挑战落在 missed。
 >
-> 它此前被 gate 的原因——`$remote_addr` 恒为 `127.0.0.1`（jail 会封到 SNI 分流层自己）——
-> **已于 2026-07-17 用 proxy_protocol 解除**（见 [`../real-ip-proxy-protocol.md`](../real-ip-proxy-protocol.md)）：
-> dav 日志现在记的是真实客户端 IP。下面的「装」一节保留为**重装 / 换机时的步骤**。
+> 它此前被 gate 的原因——`$remote_addr` 恒为 `127.0.0.1`（会封错对象）——**已于 2026-07-17 解除**
+> （真实客户端 IP 恢复，做法见 `~/workspace/dawnop-ops/`）：dav 日志现在记的是真实客户端 IP。
+> 下面的「装」一节保留为**重装 / 换机时的步骤**。
 
 ## 为什么要有它
 
@@ -30,19 +30,18 @@
 **401 且带了 Authorization**（凭证给了且被拒），nginx 侧靠 `auth=auth|noauth` 标记区分。
 
 > **日志里只有「带没带凭证」这个存在性标记，绝不含凭证的值**（那是 base64 的管理员口令）。
-> 改 `deploy/nginx.conf` 的 `dawnop_dav` 格式时守住这条。
+> 改 nginx 站点配置（在 `~/workspace/dawnop-ops/`）的 `dawnop_dav` 格式时守住这条。
 
 ## 装
 
 两个文件 + 一处 nginx 改动，**三者配套，缺一不可**：
 
 ```bash
-# 1) nginx：dav vhost 的 access_log 换成带 auth= 标记的 dawnop_dav 格式
-#    写 nginx 真正读的那个文件——nginx 只 include sites-enabled/*，而 sites-available/dawnop
-#    是没人读的陈旧副本。写错了 = 日志里没有 auth= 字段 = filter 一条都匹配不到，
-#    而 jail 状态永远 0 failed 且不报错，看起来就像「没人攻击」。
-sudo cp deploy/nginx.conf "$(readlink -f /etc/nginx/sites-enabled/dawnop)"
-sudo nginx -t && sudo systemctl reload nginx
+# 1) nginx：dav vhost 的 access_log 换成带 auth= 标记的 dawnop_dav 格式。
+#    nginx 站点配置在 ~/workspace/dawnop-ops/（不在本仓库），按那份笔记部署到 nginx 真读的站点文件。
+#    写错文件 = 日志里没有 auth= 字段 = filter 一条都匹配不到，而 jail 状态永远 0 failed 且不报错，
+#    看起来就像「没人攻击」。
+#    （dawnop_dav 格式当前已在生产，重装本 jail 时通常不必再动 nginx。）
 
 # 2) 过滤器 + jail
 sudo cp deploy/fail2ban/filter.d/dawnop-dav-auth.conf /etc/fail2ban/filter.d/

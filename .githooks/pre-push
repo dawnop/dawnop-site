@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# 推送前跑服务器身份守卫：旁路服务身份、ssh 用户名、本站真实 IP
+# 都不得进这个公开仓库。CI 的 secrets job 跑的是同一个脚本——这个 hook 只是把红灯
+# 提前到 push 之前，省一次 push→CI 红→改→再 push 的往返。
+#
+# 安装（每台开发机一次）：  git config core.hooksPath .githooks
+# 临时跳过（清楚自己在做什么再用）：  git push --no-verify
+set -euo pipefail
+root=$(git rev-parse --show-toplevel)
+if ! python3 "$root/scripts/check-no-server-identity.py"; then
+  echo "" >&2
+  echo "pre-push 被拦：服务器身份信息进了公开仓库（见上）。修好再推。" >&2
+  exit 1
+fi
