@@ -33,7 +33,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: build the dawn compiler
-        run: gradle -p .dawn-lang :compiler:fatJar
+        run: ./gradlew :compiler:fatJar
+        working-directory: .dawn-lang
 
       # dawn.toml's [java-deps] are resolved by coursier, which caches here.
       # Keyed on dawn.toml since that is the single source of truth for versions.
