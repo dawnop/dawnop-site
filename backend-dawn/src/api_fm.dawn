@@ -415,6 +415,12 @@ pub fn upload_token_ep(a: Auth) -> Handler =
               ("token", jstr(token)),
               ("key", jstr(key)),
               ("path", jstr(full(rel))),
+              # known divergence, not an oversight: FastAPI resolves the bucket's
+              # regional host via api.qiniu.com/v4/query and falls back to this
+              # default. Harmless while no client reads up_host (qiniu-js resolves
+              # the region itself) and production works on the default region. It
+              # becomes a real bug if the bucket moves off the default region, or
+              # if some future client honours this field.
               ("up_host", jstr("https://upload.qiniup.com")),
             ])))
             Err(msg) -> Err(http_error(500, msg))

@@ -90,6 +90,18 @@ def is_detail_only(obj):
     return isinstance(obj, dict) and set(obj.keys()) == {"detail"}
 
 
+def rationalized_reason(name, ds, fs):
+    """The recorded reason if (name, ds, fs) is a known-accepted status pair, else None.
+
+    Matching is on the exact pair, so a case only stays accepted while it keeps
+    diverging in precisely the way that was reviewed.
+    """
+    known = RATIONALIZED_STATUS.get(name)
+    if known and (ds, fs) == (known[0], known[1]):
+        return known[2]
+    return None
+
+
 def form_login(base, user, pw):
     data = urllib.parse.urlencode({"username": user, "password": pw}).encode()
     r = urllib.request.Request(base + "/api/auth/login", data=data, method="POST")
@@ -103,6 +115,34 @@ def form_login(base, user, pw):
 # non-mutating: reads, 401s (rejected before logic), validation-rejects (422/400
 # before insert), and PUT/DELETE to a guaranteed-absent id (touches 0 rows).
 MUTATING = {"art.create.badSlug", "art.create.upperSlug", "art.create.dashSlug"}
+
+# Status differences that have been looked at and consciously accepted, keyed by
+# case name -> (dawn_status, fast_status, why). Same class of decision as the
+# error-*message* rationalization below (both sides refuse, the frontend keys on
+# status, neither reaches a user), except the divergence is in the status itself,
+# so the body/message rules can't express it.
+#
+# The pair is pinned, not muted: the registry records one specific known state,
+# and any drift away from it — Dawn tightened to 422, or it starts 500ing —
+# fails the case as a normal STATUS_MISMATCH again. Muting by name would have
+# bought a green run at the price of the next real regression on that route
+# going unnoticed, which is the failure mode this whole script exists to catch.
+RATIONALIZED_STATUS = {
+    name: (
+        404,
+        422,
+        "FastAPI declares path as a required Query -> 422 before the handler; "
+        'Dawn\'s qparam() defaults a missing param to "" and falls through to '
+        "the normal not-found path. Both refuse, no mutation, frontend keys on "
+        "status. Not worth touching production Dawn for.",
+    )
+    for name in (
+        "fm.sign.noPath",
+        "fm.content.noPath",
+        "fm.preview.noPath",
+        "fm.download.noPath",
+    )
+}
 
 
 def build_cases(token, content_page_id):
@@ -338,6 +378,12 @@ def build_cases(token, content_page_id):
         None,
         "full",
     )
+    # path omitted entirely: the two backends disagree on the status here (see
+    # RATIONALIZED_STATUS). Reads, so safe against the live store.
+    add("fm.sign.noPath", "GET", "/api/fm/sign", AUTH, None, "full")
+    add("fm.content.noPath", "GET", "/api/fm/content", AUTH, None, "full")
+    add("fm.preview.noPath", "GET", "/api/fm/preview", AUTH, None, "full")
+    add("fm.download.noPath", "GET", "/api/fm/download", AUTH, None, "full")
     add(
         "fm.stats.ok", "GET", "/api/fm/stats", AUTH, None, "status"
     )  # live qiniu usage -> status-only
@@ -403,6 +449,7 @@ def main():
         "EXACT": 0,
         "SCRUBBED": 0,
         "ACCEPTED": 0,
+        "RATIONALIZED": 0,
         "STATUS_MISMATCH": 0,
         "BODY_MISMATCH": 0,
         "UNEXPECTED_WRITE": 0,
@@ -442,6 +489,12 @@ def main():
             if mode == "write" and 200 <= (fs if fs > 0 else 0) < 300:
                 verdict = "UNEXPECTED_WRITE"
 
+        reason = None
+        if verdict == "STATUS_MISMATCH":
+            reason = rationalized_reason(name, ds, fs)
+            if reason:
+                verdict = "RATIONALIZED"
+
         tallies[verdict] += 1
         flag = verdict in (
             "STATUS_MISMATCH",
@@ -449,12 +502,20 @@ def main():
             "UNEXPECTED_WRITE",
             "ERROR",
         )
-        mark = {"EXACT": "OK ", "SCRUBBED": "OK~", "ACCEPTED": "OK≈"}.get(
-            verdict, "XX "
-        )
+        mark = {
+            "EXACT": "OK ",
+            "SCRUBBED": "OK~",
+            "ACCEPTED": "OK≈",
+            "RATIONALIZED": "OK≈",
+        }.get(verdict, "XX ")
         line = f"{mark} {verdict:16s} {name:24s} {method:6s} {path[:48]:48s} dawn={ds} fast={fs}"
-        if flag or args.verbose:
+        # rationalized cases print unconditionally, with the recorded reason: an
+        # accepted divergence a reader never sees is indistinguishable from one
+        # nobody decided on.
+        if flag or reason or args.verbose:
             print(line)
+        if reason:
+            print(f"      why: {reason}")
         if flag:
             problems.append((name, method, path, ds, dt, fs, ft, verdict))
 
