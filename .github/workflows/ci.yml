@@ -96,11 +96,14 @@ jobs:
       # was chosen at all) skips everywhere else: the .so is deliberately not in
       # git, and neither the dev laptop nor the server can reach GitHub releases.
       # A runner can, so this is the one place that assertion ever runs.
-      # Not fatal if it flakes: the test skips itself when the .so is absent.
+      #
+      # Deliberately NOT continue-on-error: the test skips itself when the .so is
+      # absent, so tolerating a failed fetch would silently restore the very state
+      # this job exists to end — green CI that never ran the assertion. Failing
+      # here is also real news: this same script is how the server gets the .so.
       - name: fetch the simple fts extension
         run: python scripts/fetch_simple_ext.py
         working-directory: backend
-        continue-on-error: true
 
       # -rs so a skip is visible in the log rather than a silent dot.
       - name: tests
