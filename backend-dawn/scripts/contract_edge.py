@@ -324,7 +324,8 @@ def build_cases(token, content_page_id):
     add(
         "fm.search.ok",
         "GET",
-        "/api/fm/search?" + urllib.parse.urlencode({"q": "x"}),
+        # filter，不是 q——发 q 会被忽略成「列全部」，测不到过滤路径。
+        "/api/fm/search?" + urllib.parse.urlencode({"filter": "x"}),
         AUTH,
         None,
         "full",

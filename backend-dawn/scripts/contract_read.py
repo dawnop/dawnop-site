@@ -196,11 +196,23 @@ def main():
         diff("settings", D, F, "/api/settings", tok)
         diff("fm.root", D, F, "/api/fm?path=" + urllib.parse.quote("qiniu://"), tok)
         diff("fm.stats", D, F, "/api/fm/stats", tok)
+        # 参数名是 filter，不是 q（两侧一致：serve.py 的 filter=Query("")、
+        # api_fm.dawn 的 qparam(req, "filter")）。这里原本发的是 q=a，被两侧一并忽略，
+        # filter 取默认空串 → 两边都回未过滤的整个列表 → 对拍恒等，搜索过滤从未被测到。
         diff(
             "fm.search",
             D,
             F,
-            "/api/fm/search?path=" + urllib.parse.quote("qiniu://") + "&q=a",
+            "/api/fm/search?path=" + urllib.parse.quote("qiniu://") + "&filter=a",
+            tok,
+        )
+        diff(
+            "fm.search.deep",
+            D,
+            F,
+            "/api/fm/search?path="
+            + urllib.parse.quote("qiniu://")
+            + "&filter=a&deep=1",
             tok,
         )
 
