@@ -1,4 +1,5 @@
 """搜索相关的响应模型。"""
+
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict

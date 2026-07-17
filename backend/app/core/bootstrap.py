@@ -1,4 +1,5 @@
 """启动时的幂等数据引导。"""
+
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal

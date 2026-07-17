@@ -1,4 +1,5 @@
 """User 模型（单管理员，由 seed_admin.py 注入）。"""
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, String, func

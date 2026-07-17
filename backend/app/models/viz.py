@@ -4,6 +4,7 @@
 读者端只取 compiled/style 直接 eval 挂载，不加载编译器（见前端 viz/runtime.js）。
 slug 即文章里 ```viz <slug>``` 围栏写的标识。
 """
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, String, Text, func

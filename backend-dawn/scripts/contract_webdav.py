@@ -19,6 +19,7 @@ Usage (on the server, both ports localhost):
     DAV_USER=... DAV_PASS=... python3 contract_webdav.py \
         --dawn http://127.0.0.1:8001 --fast http://127.0.0.1:8000
 """
+
 import argparse
 import base64
 import hashlib
@@ -46,7 +47,11 @@ def dav(base, method, path, auth, headers=None, body=None, timeout=30):
     r = urllib.request.Request(url, data=data, method=method, headers=hdrs)
     try:
         with urllib.request.urlopen(r, timeout=timeout) as resp:
-            return resp.status, {k.lower(): v for k, v in resp.headers.items()}, resp.read()
+            return (
+                resp.status,
+                {k.lower(): v for k, v in resp.headers.items()},
+                resp.read(),
+            )
     except urllib.error.HTTPError as e:
         return e.code, {k.lower(): v for k, v in (e.headers or {}).items()}, e.read()
 
@@ -62,13 +67,19 @@ def check(label, cond, detail=""):
 
 def hrefs(xml):
     """Extract <d:href> texts (namespace-agnostic), normalized."""
-    return sorted(re.findall(r"<(?:\w+:)?href>\s*(.*?)\s*</(?:\w+:)?href>", xml,
-                             re.I | re.S))
+    return sorted(
+        re.findall(r"<(?:\w+:)?href>\s*(.*?)\s*</(?:\w+:)?href>", xml, re.I | re.S)
+    )
 
 
 def displaynames(xml):
-    return sorted(re.findall(r"<(?:\w+:)?displayname>\s*(.*?)\s*</(?:\w+:)?displayname>",
-                             xml, re.I | re.S))
+    return sorted(
+        re.findall(
+            r"<(?:\w+:)?displayname>\s*(.*?)\s*</(?:\w+:)?displayname>",
+            xml,
+            re.I | re.S,
+        )
+    )
 
 
 def cleanup(base, auth):
@@ -99,14 +110,21 @@ def main():
     stD, hD, _ = dav(D, "OPTIONS", "/dav/", auth)
     stF, hF, _ = dav(F, "OPTIONS", "/dav/", auth)
     check("OPTIONS status 200 both", stD == 200 and stF == 200, f"{stD}/{stF}")
-    check("DAV header advertises class 1,2 (dawn)", "1" in hD.get("dav", "") and "2" in hD.get("dav", ""), hD.get("dav"))
-    check("DAV header advertises class 1,2 (fast)", "1" in hF.get("dav", "") and "2" in hF.get("dav", ""), hF.get("dav"))
+    check(
+        "DAV header advertises class 1,2 (dawn)",
+        "1" in hD.get("dav", "") and "2" in hD.get("dav", ""),
+        hD.get("dav"),
+    )
+    check(
+        "DAV header advertises class 1,2 (fast)",
+        "1" in hF.get("dav", "") and "2" in hF.get("dav", ""),
+        hF.get("dav"),
+    )
 
     print(f"\n{INFO} 2. Auth: no creds -> 401 (both)")
     for name, base in (("dawn", D), ("fast", F)):
         url = base + "/dav/"
-        r = urllib.request.Request(url, method="PROPFIND",
-                                   headers={"Depth": "0"})
+        r = urllib.request.Request(url, method="PROPFIND", headers={"Depth": "0"})
         try:
             with urllib.request.urlopen(r, timeout=10) as resp:
                 st = resp.status
@@ -132,14 +150,23 @@ def main():
     # all-byte-values payload to stress the latin-1 round trip
     payload = bytes(range(256)) * 8  # 2048 bytes, every byte value
     sha = hashlib.sha256(payload).hexdigest()
-    st, _, _ = dav(D, "PUT", f"/dav/{PREFIX}/blob.bin", auth,
-                   {"Content-Type": "application/octet-stream"}, payload)
+    st, _, _ = dav(
+        D,
+        "PUT",
+        f"/dav/{PREFIX}/blob.bin",
+        auth,
+        {"Content-Type": "application/octet-stream"},
+        payload,
+    )
     check("PUT blob 201/204 (dawn)", st in (201, 204), str(st))
     for name, base in (("dawn", D), ("fast", F)):
         st, h, got = dav(base, "GET", f"/dav/{PREFIX}/blob.bin", auth)
         ok = st == 200 and hashlib.sha256(got).hexdigest() == sha
-        check(f"GET blob byte-exact ({name})", ok,
-              f"st={st} len={len(got)} sha={hashlib.sha256(got).hexdigest()[:12]} want={sha[:12]}")
+        check(
+            f"GET blob byte-exact ({name})",
+            ok,
+            f"st={st} len={len(got)} sha={hashlib.sha256(got).hexdigest()[:12]} want={sha[:12]}",
+        )
 
     print(f"\n{INFO} 5. PROPFIND file props parity (dawn vs fast, same path)")
     stD, _, bD = dav(D, "PROPFIND", f"/dav/{PREFIX}/blob.bin", auth, {"Depth": "0"})
@@ -150,49 +177,94 @@ def main():
     # getcontentlength should both report 2048
     lenD = re.search(r"getcontentlength>\s*(\d+)", xD)
     lenF = re.search(r"getcontentlength>\s*(\d+)", xF)
-    check("getcontentlength both 2048",
-          bool(lenD) and bool(lenF) and lenD.group(1) == "2048" == lenF.group(1),
-          f"{lenD and lenD.group(1)} vs {lenF and lenF.group(1)}")
+    check(
+        "getcontentlength both 2048",
+        bool(lenD) and bool(lenF) and lenD.group(1) == "2048" == lenF.group(1),
+        f"{lenD and lenD.group(1)} vs {lenF and lenF.group(1)}",
+    )
 
     print(f"\n{INFO} 6. MOVE (rename) on Dawn -> fast sees new, not old")
-    st, _, _ = dav(D, "MOVE", f"/dav/{PREFIX}/blob.bin", auth,
-                   {"Destination": f"/dav/{PREFIX}/moved.bin"})
+    st, _, _ = dav(
+        D,
+        "MOVE",
+        f"/dav/{PREFIX}/blob.bin",
+        auth,
+        {"Destination": f"/dav/{PREFIX}/moved.bin"},
+    )
     check("MOVE 201/204 (dawn)", st in (201, 204), str(st))
     st, _, got = dav(F, "GET", f"/dav/{PREFIX}/moved.bin", auth)
-    check("fast GET moved.bin 200 + byte-exact", st == 200 and hashlib.sha256(got).hexdigest() == sha, str(st))
+    check(
+        "fast GET moved.bin 200 + byte-exact",
+        st == 200 and hashlib.sha256(got).hexdigest() == sha,
+        str(st),
+    )
     st, _, _ = dav(F, "GET", f"/dav/{PREFIX}/blob.bin", auth)
     check("fast GET old blob.bin 404", st == 404, str(st))
 
     print(f"\n{INFO} 7. COPY on Dawn -> both see two copies, same bytes")
-    st, _, _ = dav(D, "COPY", f"/dav/{PREFIX}/moved.bin", auth,
-                   {"Destination": f"/dav/{PREFIX}/copy.bin"})
+    st, _, _ = dav(
+        D,
+        "COPY",
+        f"/dav/{PREFIX}/moved.bin",
+        auth,
+        {"Destination": f"/dav/{PREFIX}/copy.bin"},
+    )
     check("COPY 201/204 (dawn)", st in (201, 204), str(st))
     for name, base in (("dawn", D), ("fast", F)):
         s1, _, g1 = dav(base, "GET", f"/dav/{PREFIX}/moved.bin", auth)
         s2, _, g2 = dav(base, "GET", f"/dav/{PREFIX}/copy.bin", auth)
-        ok = s1 == 200 and s2 == 200 and hashlib.sha256(g1).hexdigest() == sha and hashlib.sha256(g2).hexdigest() == sha
+        ok = (
+            s1 == 200
+            and s2 == 200
+            and hashlib.sha256(g1).hexdigest() == sha
+            and hashlib.sha256(g2).hexdigest() == sha
+        )
         check(f"both copies present + byte-exact ({name})", ok, f"{s1}/{s2}")
 
     print(f"\n{INFO} 8. LOCK/UNLOCK (fake lock) grant on Dawn")
-    lockbody = ('<?xml version="1.0"?><d:lockinfo xmlns:d="DAV:">'
-                '<d:lockscope><d:exclusive/></d:lockscope>'
-                '<d:locktype><d:write/></d:locktype></d:lockinfo>')
-    st, h, body = dav(D, "LOCK", f"/dav/{PREFIX}/moved.bin", auth,
-                      {"Content-Type": "application/xml"}, lockbody)
+    lockbody = (
+        '<?xml version="1.0"?><d:lockinfo xmlns:d="DAV:">'
+        "<d:lockscope><d:exclusive/></d:lockscope>"
+        "<d:locktype><d:write/></d:locktype></d:lockinfo>"
+    )
+    st, h, body = dav(
+        D,
+        "LOCK",
+        f"/dav/{PREFIX}/moved.bin",
+        auth,
+        {"Content-Type": "application/xml"},
+        lockbody,
+    )
     tok = h.get("lock-token", "")
     check("LOCK 200 (dawn)", st == 200, str(st))
-    check("Lock-Token issued", "opaquelocktoken" in (tok + body.decode("utf-8", "replace")), tok)
+    check(
+        "Lock-Token issued",
+        "opaquelocktoken" in (tok + body.decode("utf-8", "replace")),
+        tok,
+    )
     if tok:
-        st, _, _ = dav(D, "UNLOCK", f"/dav/{PREFIX}/moved.bin", auth, {"Lock-Token": tok})
+        st, _, _ = dav(
+            D, "UNLOCK", f"/dav/{PREFIX}/moved.bin", auth, {"Lock-Token": tok}
+        )
         check("UNLOCK 204 (dawn)", st == 204, str(st))
 
     print(f"\n{INFO} 9. Cross-direction: PUT on FAST -> GET on Dawn")
     txt = "跨方向验证 cross-check ✓\n".encode("utf-8")
-    st, _, _ = dav(F, "PUT", f"/dav/{PREFIX}/fromfast.txt", auth,
-                   {"Content-Type": "text/plain; charset=utf-8"}, txt)
+    st, _, _ = dav(
+        F,
+        "PUT",
+        f"/dav/{PREFIX}/fromfast.txt",
+        auth,
+        {"Content-Type": "text/plain; charset=utf-8"},
+        txt,
+    )
     check("PUT fromfast (fast) 201/204", st in (201, 204), str(st))
     st, _, got = dav(D, "GET", f"/dav/{PREFIX}/fromfast.txt", auth)
-    check("dawn GET fromfast byte-exact", st == 200 and got == txt, f"st={st} {got[:20]!r}")
+    check(
+        "dawn GET fromfast byte-exact",
+        st == 200 and got == txt,
+        f"st={st} {got[:20]!r}",
+    )
 
     print(f"\n{INFO} 10. DELETE recursive on Dawn -> both see gone")
     st, _, _ = dav(D, "DELETE", f"/dav/{PREFIX}", auth)

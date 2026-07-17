@@ -4,6 +4,7 @@
     python scripts/wipe_qiniu.py            # 列出数量并要求确认
     python scripts/wipe_qiniu.py --yes      # 跳过确认，直接删除
 """
+
 import sys
 from pathlib import Path
 

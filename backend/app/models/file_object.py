@@ -4,6 +4,7 @@
 列表/重命名/移动都只是改 path（七牛 key 保持不变，是不透明 uuid）。
 `path` 为不含 storage 前缀的相对路径，如 `docs/img/cover.png` 或文件夹 `docs/img`。
 """
+
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Integer, String, func

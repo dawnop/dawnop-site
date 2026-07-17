@@ -56,8 +56,11 @@ ca = open(CA_PATH).read()
 pri = open(KEY_PATH).read()
 name = "dawnop-wildcard-" + datetime.date.today().strftime("%Y%m%d")
 
-st, rp = req("POST", "https://api.qiniu.com/sslcert",
-             {"name": name, "common_name": "*.dawnop.com", "pri": pri, "ca": ca})
+st, rp = req(
+    "POST",
+    "https://api.qiniu.com/sslcert",
+    {"name": name, "common_name": "*.dawnop.com", "pri": pri, "ca": ca},
+)
 print("[sslcert]", st, rp)
 if st != 200:
     sys.exit("cert upload failed")
@@ -65,8 +68,11 @@ cert_id = json.loads(rp)["certID"]
 
 fail = False
 for domain, force in DOMAINS.items():
-    st2, rp2 = req("PUT", "https://api.qiniu.com/domain/%s/httpsconf" % domain,
-                   {"certId": cert_id, "forceHttps": force, "http2Enable": True})
+    st2, rp2 = req(
+        "PUT",
+        "https://api.qiniu.com/domain/%s/httpsconf" % domain,
+        {"certId": cert_id, "forceHttps": force, "http2Enable": True},
+    )
     print("[httpsconf]", domain, st2, rp2)
     if st2 != 200:
         fail = True

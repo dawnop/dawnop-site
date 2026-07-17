@@ -1,4 +1,5 @@
 """FastAPI 依赖项：数据库会话、当前登录用户。"""
+
 from collections.abc import Generator
 
 import jwt

@@ -1,4 +1,5 @@
 """FastAPI 入口：应用创建、CORS、路由挂载、健康检查。"""
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI

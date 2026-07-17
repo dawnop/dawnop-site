@@ -3,6 +3,7 @@
 路由顺序：列表 GET "" 与公开 GET /{slug} 不冲突（空路径 vs 占位）；
 写操作用整型 id，与字符串 slug 路由不同方法/不同模板，互不遮挡。
 """
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
@@ -32,7 +33,9 @@ def list_all(db: Session = Depends(get_db), _: User = Depends(get_current_user))
     return db.query(VizComponent).order_by(VizComponent.updated_at.desc()).all()
 
 
-@router.post("", response_model=VizOut, status_code=status.HTTP_201_CREATED, summary="创建组件")
+@router.post(
+    "", response_model=VizOut, status_code=status.HTTP_201_CREATED, summary="创建组件"
+)
 def create_viz(
     payload: VizCreate,
     db: Session = Depends(get_db),
@@ -86,7 +89,9 @@ def delete_viz(
 # ---------- 公开：按 slug 取（放最后）----------
 
 
-@router.get("/{slug}", response_model=VizPublic, summary="按 slug 取组件（公开，供读者挂载）")
+@router.get(
+    "/{slug}", response_model=VizPublic, summary="按 slug 取组件（公开，供读者挂载）"
+)
 def get_viz(slug: str, db: Session = Depends(get_db)):
     viz = db.query(VizComponent).filter(VizComponent.slug == slug).first()
     if viz is None:

@@ -14,6 +14,7 @@
 因此 rename/move 只改 path（不动七牛对象），copy 才真正复制七牛对象。
 私有空间：preview/download 直接 302 到签名 URL，文本预览走 sign/content。
 """
+
 from fastapi import APIRouter
 
 from . import crud, serve, uploads

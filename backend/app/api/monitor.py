@@ -9,6 +9,7 @@
 三方结果（lighthouse/qiniu）带 TTL 缓存，避免频繁打第三方 API；server/vault 每次实时。
 `?refresh=1` 跳过缓存强制刷新。
 """
+
 from __future__ import annotations
 
 import os
@@ -49,7 +50,11 @@ def _server() -> dict:
         "cpu_percent": psutil.cpu_percent(interval=0.3),
         "cpu_count": psutil.cpu_count(),
         "load": [load1, load5, load15],
-        "mem": {"total": vm.total, "used": vm.total - vm.available, "percent": vm.percent},
+        "mem": {
+            "total": vm.total,
+            "used": vm.total - vm.available,
+            "percent": vm.percent,
+        },
         "disk": {"total": du.total, "used": du.used, "percent": du.percent},
         "net": {"sent": net.bytes_sent, "recv": net.bytes_recv},  # 自开机累计
         "boot_time": int(psutil.boot_time()),
@@ -74,7 +79,9 @@ def _lighthouse() -> dict:
         out["instance_error"] = str(e)
     try:
         s = tencent_client.monitor_series("CpuUsage", days=30)
-        out["cpu_trend"] = [{"t": t, "v": v} for t, v in zip(s["timestamps"], s["values"])]
+        out["cpu_trend"] = [
+            {"t": t, "v": v} for t, v in zip(s["timestamps"], s["values"])
+        ]
     except Exception as e:  # noqa: BLE001
         out["cpu_trend_error"] = str(e)
     return out
@@ -96,7 +103,9 @@ def _qiniu() -> dict:
         out["count"] = qiniu_client._last_nonzero(count["datas"]) or 0
         out["flow_30d"] = sum(x["value"] for x in flow)
         out["hits_30d"] = sum(x["value"] for x in hits)
-        out["space_trend"] = [{"t": t, "v": v} for t, v in zip(space["times"], space["datas"])]
+        out["space_trend"] = [
+            {"t": t, "v": v} for t, v in zip(space["times"], space["datas"])
+        ]
         out["flow_trend"] = [{"t": x["time"], "v": x["value"]} for x in flow]
     except Exception as e:  # noqa: BLE001
         out["error"] = str(e)
@@ -107,7 +116,9 @@ def _qiniu() -> dict:
         out["cdn_flow_30d"] = sum(cdn["values"])
         out["cdn_peak_bps"] = qiniu_client.cdn_bandwidth_peak(days=30)
         out["cdn_domains"] = cdn["domains"]
-        out["cdn_trend"] = [{"t": t, "v": v} for t, v in zip(cdn["times"], cdn["values"])]
+        out["cdn_trend"] = [
+            {"t": t, "v": v} for t, v in zip(cdn["times"], cdn["values"])
+        ]
     except Exception as e:  # noqa: BLE001
         out["cdn_error"] = str(e)
     try:

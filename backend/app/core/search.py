@@ -12,6 +12,7 @@
 - 高亮在后端生成「安全 HTML」：先 HTML 转义正文，再把关键词包成 <mark>，前端可直接
   v-html（正文本就是管理员本人撰写，双保险）。拼音查询不高亮中文（已知的小取舍）。
 """
+
 import html
 import re
 
@@ -79,7 +80,9 @@ def ensure_article_fts(engine) -> None:
             )
             for ddl in _CREATE_TRIGGERS:
                 conn.exec_driver_sql(ddl)
-            conn.exec_driver_sql("INSERT INTO article_fts(article_fts) VALUES('rebuild')")
+            conn.exec_driver_sql(
+                "INSERT INTO article_fts(article_fts) VALUES('rebuild')"
+            )
     except Exception:
         pass
 
@@ -128,7 +131,9 @@ def _title_html(title: str, terms: list[str]) -> str:
     return _mark(html.escape(title), terms)
 
 
-def _excerpt_html(content: str, summary: str, terms: list[str], width: int = 150) -> str:
+def _excerpt_html(
+    content: str, summary: str, terms: list[str], width: int = 150
+) -> str:
     """取一段含关键词的正文窗口作为摘要，命中处高亮；找不到关键词则取开头。"""
     base = _strip_md(content or "") or (summary or "")
     if not base:
@@ -179,7 +184,9 @@ def _simple_query(db: Session, q: str, offset: int, size: int) -> tuple[list[int
     return [r[0] for r in rows], total
 
 
-def _trigram_query(db: Session, match: str, offset: int, size: int) -> tuple[list[int], int]:
+def _trigram_query(
+    db: Session, match: str, offset: int, size: int
+) -> tuple[list[int], int]:
     total = (
         db.execute(
             text(
@@ -209,7 +216,9 @@ def _like_escape(t: str) -> str:
     return f"%{t}%"
 
 
-def _like_query(db: Session, terms: list[str], offset: int, size: int) -> tuple[list[int], int]:
+def _like_query(
+    db: Session, terms: list[str], offset: int, size: int
+) -> tuple[list[int], int]:
     clauses, params = [], {}
     for i, t in enumerate(terms):
         params[f"t{i}"] = _like_escape(t)

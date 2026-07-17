@@ -1,4 +1,5 @@
 """SQLAlchemy engine / session / Base 定义。"""
+
 from pathlib import Path
 
 from sqlalchemy import create_engine, event
@@ -8,9 +9,7 @@ from app.config import settings
 
 # SQLite 在多线程（uvicorn）下需要关闭同线程检查
 connect_args = (
-    {"check_same_thread": False}
-    if settings.database_url.startswith("sqlite")
-    else {}
+    {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
 )
 
 engine = create_engine(settings.database_url, connect_args=connect_args)

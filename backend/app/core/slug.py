@@ -1,4 +1,5 @@
 """slug 生成与去重。保留字母数字与 CJK，其余转连字符。"""
+
 import re
 
 from sqlalchemy.orm import Session

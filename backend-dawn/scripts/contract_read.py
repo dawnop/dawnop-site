@@ -12,6 +12,7 @@ Usage (on the server, both ports localhost):
     TOKEN=$(...form login on :8001...) python3 contract_read.py \
         --dawn http://127.0.0.1:8001 --fast http://127.0.0.1:8000
 """
+
 import argparse
 import json
 import os
@@ -23,10 +24,33 @@ import urllib.request
 # Fields that legitimately differ between two independently-serving backends
 # (view counters bumped per-hit, SQLAlchemy onupdate wall-clock, live metrics).
 VOLATILE = {
-    "views", "view_count", "updated_at", "cached_at", "generated_at", "now",
-    "timestamp", "latency_ms", "cpu_percent", "cpu", "load", "uptime", "mem",
-    "memory", "disk", "net", "used", "used_bytes", "remote_space", "space_used",
-    "free", "available", "rss", "traffic", "cpu_trend", "points", "series",
+    "views",
+    "view_count",
+    "updated_at",
+    "cached_at",
+    "generated_at",
+    "now",
+    "timestamp",
+    "latency_ms",
+    "cpu_percent",
+    "cpu",
+    "load",
+    "uptime",
+    "mem",
+    "memory",
+    "disk",
+    "net",
+    "used",
+    "used_bytes",
+    "remote_space",
+    "space_used",
+    "free",
+    "available",
+    "rss",
+    "traffic",
+    "cpu_trend",
+    "points",
+    "series",
     "last_modified",  # fm entries: mtime from wall-clock-ish source
 }
 
@@ -83,9 +107,15 @@ def diff(label, base_d, base_f, path, token=None):
     else:
         tally["diff"] += 1
         print(f"  [{DIFF}] {label}  {path}  dawn={sd} fast={sf}")
-        diffs.append((label, path, f"{sd}/{sf}",
-                      json.dumps(nd, ensure_ascii=False)[:400],
-                      json.dumps(nf, ensure_ascii=False)[:400]))
+        diffs.append(
+            (
+                label,
+                path,
+                f"{sd}/{sf}",
+                json.dumps(nd, ensure_ascii=False)[:400],
+                json.dumps(nf, ensure_ascii=False)[:400],
+            )
+        )
     return nd, nf
 
 
@@ -96,7 +126,7 @@ def slugs_from(listing, key="items", field="slug", limit=8):
         return []
     items = data.get(key, data) if isinstance(data, dict) else data
     out = []
-    for it in (items or []):
+    for it in items or []:
         if isinstance(it, dict) and it.get(field):
             out.append(it[field])
         if len(out) >= limit:
@@ -122,7 +152,9 @@ def main():
 
     print("\n== search (multiple queries) ==")
     for q in ("dawn", "后端", "latex", "zzz-no-such-term", "a"):
-        diff(f"search[{q}]", D, F, "/api/search?q=" + urllib.parse.quote(q) + "&size=10")
+        diff(
+            f"search[{q}]", D, F, "/api/search?q=" + urllib.parse.quote(q) + "&size=10"
+        )
 
     print("\n== article details (live slugs) ==")
     _, list_txt = req(D, "/api/articles?page=1&size=50"), None
@@ -139,12 +171,19 @@ def main():
         pslugs = []
     for slug in pslugs[:10]:
         diff("page", D, F, "/api/pages/" + urllib.parse.quote(slug))
-        diff("page.articles", D, F, "/api/pages/" + urllib.parse.quote(slug) + "/articles?page=1&size=10")
+        diff(
+            "page.articles",
+            D,
+            F,
+            "/api/pages/" + urllib.parse.quote(slug) + "/articles?page=1&size=10",
+        )
 
     print("\n== tag details (live slugs) ==")
     s, tags_txt = req(D, "/api/tags")
-    for slug in slugs_from(tags_txt, "items" if '"items"' in tags_txt else None) or \
-            [t.get("slug") for t in (json.loads(tags_txt) if tags_txt.startswith("[") else [])]:
+    for slug in slugs_from(tags_txt, "items" if '"items"' in tags_txt else None) or [
+        t.get("slug")
+        for t in (json.loads(tags_txt) if tags_txt.startswith("[") else [])
+    ]:
         if slug:
             diff("tag", D, F, "/api/tags/" + urllib.parse.quote(slug))
 
@@ -157,7 +196,13 @@ def main():
         diff("settings", D, F, "/api/settings", tok)
         diff("fm.root", D, F, "/api/fm?path=" + urllib.parse.quote("qiniu://"), tok)
         diff("fm.stats", D, F, "/api/fm/stats", tok)
-        diff("fm.search", D, F, "/api/fm/search?path=" + urllib.parse.quote("qiniu://") + "&q=a", tok)
+        diff(
+            "fm.search",
+            D,
+            F,
+            "/api/fm/search?path=" + urllib.parse.quote("qiniu://") + "&q=a",
+            tok,
+        )
 
         print("\n== viz details (live slugs) ==")
         s, viz_txt = req(D, "/api/viz", tok)

@@ -1,4 +1,5 @@
 """文件树增删改端点：列目录、用量统计、删除、重命名、移动、复制、建目录/文件、文本保存。"""
+
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -189,7 +190,7 @@ def copy(
         _conflict_if_exists(db, new_rel)
         _ensure_dirs(db, new_rel)
         for o in _subtree(db, src_rel):
-            dst_path = new_rel + o.path[len(src_rel):]
+            dst_path = new_rel + o.path[len(src_rel) :]
             if o.is_dir:
                 db.add(FileObject(path=dst_path, is_dir=True, key=None, size=0))
             else:
@@ -198,10 +199,15 @@ def copy(
                     qiniu_client.copy(o.key, new_key)
                 except RuntimeError as e:
                     raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
-                db.add(FileObject(
-                    path=dst_path, is_dir=False, key=new_key,
-                    content_type=o.content_type, size=o.size,
-                ))
+                db.add(
+                    FileObject(
+                        path=dst_path,
+                        is_dir=False,
+                        key=new_key,
+                        content_type=o.content_type,
+                        size=o.size,
+                    )
+                )
     db.commit()
     return _fs_data(db, cur)
 

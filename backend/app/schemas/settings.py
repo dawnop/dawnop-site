@@ -4,6 +4,7 @@
 （请求仍用裸 dict：PUT 支持部分更新，且需保留「未知键 / 非法值 → 400」的自定义错误，
 详见 settings.update_settings 的 VALIDATORS，故不套请求模型。）
 """
+
 from pydantic import BaseModel
 
 

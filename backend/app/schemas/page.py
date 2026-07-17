@@ -1,4 +1,5 @@
 """页面相关的请求/响应模型。"""
+
 from datetime import datetime
 from typing import Literal
 

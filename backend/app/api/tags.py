@@ -3,6 +3,7 @@
 
 路由声明顺序：静态路径（/admin、/merge、/cleanup）须先于 GET /{slug} 声明。
 """
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy import func
@@ -54,7 +55,11 @@ def _published_count(db: Session, tag_id: int) -> int:
     )
 
 
-@router.get("", response_model=list[TagWithCount], summary="公开标签列表（仅含已发布文章的标签，按文章数降序）")
+@router.get(
+    "",
+    response_model=list[TagWithCount],
+    summary="公开标签列表（仅含已发布文章的标签，按文章数降序）",
+)
 def list_tags(db: Session = Depends(get_db)):
     rows = (
         db.query(Tag, func.count(Article.id).label("cnt"))
@@ -67,13 +72,19 @@ def list_tags(db: Session = Depends(get_db)):
         .order_by(func.count(Article.id).desc(), Tag.name)
         .all()
     )
-    return [TagWithCount(id=t.id, name=t.name, slug=t.slug, count=cnt) for t, cnt in rows]
+    return [
+        TagWithCount(id=t.id, name=t.name, slug=t.slug, count=cnt) for t, cnt in rows
+    ]
 
 
 # ---------- 受保护：后台管理 ----------
 
 
-@router.get("/admin", response_model=list[TagWithCount], summary="后台全量标签（含文章数，草稿也计入）")
+@router.get(
+    "/admin",
+    response_model=list[TagWithCount],
+    summary="后台全量标签（含文章数，草稿也计入）",
+)
 def list_all_tags(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
@@ -85,7 +96,9 @@ def list_all_tags(
         .order_by(Tag.name)
         .all()
     )
-    return [TagWithCount(id=t.id, name=t.name, slug=t.slug, count=cnt) for t, cnt in rows]
+    return [
+        TagWithCount(id=t.id, name=t.name, slug=t.slug, count=cnt) for t, cnt in rows
+    ]
 
 
 @router.put("/{tag_id}", response_model=TagOut, summary="重命名标签（slug 联动重生成）")
@@ -106,7 +119,8 @@ def rename_tag(
     )
     if dup:
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, f"已存在同名标签「{dup.name}」，如需归并请用合并功能"
+            status.HTTP_400_BAD_REQUEST,
+            f"已存在同名标签「{dup.name}」，如需归并请用合并功能",
         )
     if name != tag.name:
         tag.name = name
@@ -116,7 +130,11 @@ def rename_tag(
     return tag
 
 
-@router.post("/merge", response_model=TagWithCount, summary="合并标签：source 的文章并入 target，删除 source")
+@router.post(
+    "/merge",
+    response_model=TagWithCount,
+    summary="合并标签：source 的文章并入 target，删除 source",
+)
 def merge_tags(
     payload: TagMerge,
     db: Session = Depends(get_db),
@@ -169,7 +187,11 @@ def cleanup_tags(
     return {"deleted": len(orphans)}
 
 
-@router.delete("/{tag_id}", status_code=status.HTTP_204_NO_CONTENT, summary="删除标签（解除所有文章关联）")
+@router.delete(
+    "/{tag_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="删除标签（解除所有文章关联）",
+)
 def delete_tag(
     tag_id: int,
     db: Session = Depends(get_db),
@@ -186,7 +208,11 @@ def delete_tag(
 # ---------- 公开：按 slug 取单个（须放在最后，避免吞掉 /admin 等静态路径）----------
 
 
-@router.get("/{slug}", response_model=TagWithCount, summary="按 slug 取单个标签（公开，count 为已发布文章数）")
+@router.get(
+    "/{slug}",
+    response_model=TagWithCount,
+    summary="按 slug 取单个标签（公开，count 为已发布文章数）",
+)
 def get_tag(slug: str, db: Session = Depends(get_db)):
     tag = db.query(Tag).filter(Tag.slug == slug).first()
     if tag is None:

@@ -1,4 +1,5 @@
 """全站搜索接口（公开，仅已发布文章）。"""
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 

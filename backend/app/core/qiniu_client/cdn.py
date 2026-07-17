@@ -5,6 +5,7 @@ CDN 流量与 Kodo 源站流出（blob_io）是两个产品：源站只有回源
 CDN/财务接口用 QiniuMacAuth 签名（含 body）：域名列表在 api.qiniu.com，流量/带宽在 fusion.qiniuapi.com，
 资源包在 api.qiniu.com/billing-api（无公开文档，实测可用）。
 """
+
 import json
 from datetime import datetime, timedelta
 
@@ -23,11 +24,16 @@ def _mac_request(host: str, path: str, method: str = "GET", body: dict | None = 
     data = json.dumps(body) if body is not None else None
     mac = QiniuMacAuth(settings.qiniu_access_key, settings.qiniu_secret_key)
     token = mac.token_of_request(
-        method=method, host=host, url=url, qheaders="",
-        content_type="application/json", body=data,
+        method=method,
+        host=host,
+        url=url,
+        qheaders="",
+        content_type="application/json",
+        body=data,
     )
     r = _plain_http.request(
-        method, url,
+        method,
+        url,
         data=data.encode() if data else None,
         headers={"Authorization": f"Qiniu {token}", "Content-Type": "application/json"},
         timeout=12,
@@ -70,7 +76,9 @@ def _cdn_tune(kind: str, days: int, domains: list[str]) -> dict:
             for i, v in enumerate(arr or []):
                 if v and i < len(totals):
                     totals[i] += int(v)
-    times = [int(datetime.strptime(t, "%Y-%m-%d %H:%M:%S").timestamp()) for t in time_strs]
+    times = [
+        int(datetime.strptime(t, "%Y-%m-%d %H:%M:%S").timestamp()) for t in time_strs
+    ]
     return {"times": times, "values": totals}
 
 
@@ -109,8 +117,14 @@ def _respack_fetch() -> dict:
     识别：status==2（生效中）；名字含「流量」= CDN、含「存储」= 存储。单位 GB→字节。
     """
     out: dict = {"cdn": None, "storage": None}
-    active = [d for d in (_mac_request("api.qiniu.com", "/billing-api/v1/respack/list").get("data") or [])
-              if d.get("status") == 2]
+    active = [
+        d
+        for d in (
+            _mac_request("api.qiniu.com", "/billing-api/v1/respack/list").get("data")
+            or []
+        )
+        if d.get("status") == 2
+    ]
 
     cdn_items = [d for d in active if "流量" in (d.get("respack_name") or "")]
     if cdn_items:
@@ -118,19 +132,27 @@ def _respack_fetch() -> dict:
         total = sum(float(d.get("total_amount") or 0) for d in cdn_items) * _GB
         ends = [d["effective_end"] for d in cdn_items if d.get("effective_end")]
         out["cdn"] = {
-            "used": int(used), "total": int(total), "remain": int(max(0, total - used)),
+            "used": int(used),
+            "total": int(total),
+            "remain": int(max(0, total - used)),
             "expire": min(ends) if ends else None,
             "names": [d.get("respack_name") for d in cdn_items],
         }
 
     store_items = [d for d in active if "存储" in (d.get("respack_name") or "")]
-    overview = _mac_request("api.qiniu.com", "/billing-api/v1/respack/month-overview").get("data") or []
+    overview = (
+        _mac_request("api.qiniu.com", "/billing-api/v1/respack/month-overview").get(
+            "data"
+        )
+        or []
+    )
     store_ov = [o for o in overview if "存储" in (o.get("item_name") or "")]
     if store_ov:
         capacity = sum(float(o.get("total_surplus") or 0) for o in store_ov) * _GB
         ends = [d["effective_end"] for d in store_items if d.get("effective_end")]
         out["storage"] = {
-            "capacity": int(capacity), "expire": min(ends) if ends else None,
+            "capacity": int(capacity),
+            "expire": min(ends) if ends else None,
             "names": [o.get("item_name") for o in store_ov],
         }
     return out

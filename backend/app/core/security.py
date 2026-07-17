@@ -1,4 +1,5 @@
 """密码哈希（bcrypt）与 JWT 签发/校验（PyJWT）。"""
+
 from datetime import datetime, timedelta, timezone
 
 import bcrypt

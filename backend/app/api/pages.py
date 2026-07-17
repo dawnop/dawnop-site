@@ -2,6 +2,7 @@
 
 路由顺序：静态路径（/nav、/admin、/reorder）须先于 GET /{slug} 声明。
 """
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
@@ -51,7 +52,9 @@ def list_all(db: Session = Depends(get_db), _: User = Depends(get_current_user))
     return db.query(Page).order_by(Page.nav_order, Page.id).all()
 
 
-@router.post("", response_model=PageOut, status_code=status.HTTP_201_CREATED, summary="创建页面")
+@router.post(
+    "", response_model=PageOut, status_code=status.HTTP_201_CREATED, summary="创建页面"
+)
 def create_page(
     payload: PageCreate,
     db: Session = Depends(get_db),
@@ -107,7 +110,9 @@ def update_page(
     data = drop_null_created_at(payload.model_dump(exclude_unset=True))
     if page.type == "builtin":
         # 内置页只放开导航相关字段；slug/type/content 是路由与渲染的根基，不可改
-        data = {k: v for k, v in data.items() if k in {"title", "nav_visible", "nav_order"}}
+        data = {
+            k: v for k, v in data.items() if k in {"title", "nav_visible", "nav_order"}
+        }
     if "slug" in data:
         base = data["slug"] or data.get("title") or page.title
         page.slug = unique_slug(db, base, exclude_id=page.id, _model=Page)
@@ -127,11 +132,11 @@ def delete_page(
 ):
     page = _get_or_404(db, page_id)
     if page.type == "builtin":
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "内置页面不可删除，可在导航中隐藏")
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "内置页面不可删除，可在导航中隐藏"
+        )
     # 解除文章对本页的归属
-    db.query(Article).filter(Article.page_id == page.id).update(
-        {Article.page_id: None}
-    )
+    db.query(Article).filter(Article.page_id == page.id).update({Article.page_id: None})
     db.delete(page)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -149,7 +154,11 @@ def get_page(slug: str, db: Session = Depends(get_db)):
     return page
 
 
-@router.get("/{slug}/articles", response_model=ArticleListResponse, summary="列表页下的已发布文章")
+@router.get(
+    "/{slug}/articles",
+    response_model=ArticleListResponse,
+    summary="列表页下的已发布文章",
+)
 def list_page_articles(
     slug: str,
     page: int = Query(1, ge=1),

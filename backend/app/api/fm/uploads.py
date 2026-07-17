@@ -1,4 +1,5 @@
 """上传端点：前端直传七牛（签凭证 + 登记）省后端流量，另有代理上传备用。"""
+
 import uuid
 
 from fastapi import (
@@ -103,9 +104,7 @@ def register(
         existing.key, existing.content_type, existing.size = key, mime, size
         obj = existing
     else:
-        obj = FileObject(
-            path=rel, is_dir=False, key=key, content_type=mime, size=size
-        )
+        obj = FileObject(path=rel, is_dir=False, key=key, content_type=mime, size=size)
         db.add(obj)
     # 登记成功，从待登记账本移除该 key
     db.query(PendingUpload).filter(PendingUpload.key == key).delete()
@@ -131,7 +130,11 @@ async def upload(
     mime = file.content_type or _guess_mime(name)
 
     existing = _get(db, rel)
-    key = existing.key if (existing and not existing.is_dir and existing.key) else uuid.uuid4().hex
+    key = (
+        existing.key
+        if (existing and not existing.is_dir and existing.key)
+        else uuid.uuid4().hex
+    )
     try:
         qiniu_client.proxy_upload(key, data, mime)
     except RuntimeError as e:

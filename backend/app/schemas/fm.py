@@ -5,6 +5,7 @@
 处理函数内的手动校验给出 400），`extra="ignore"` 容忍历史客户端多带的字段。
 处理函数内部仍以 dict 形态消费（`model.model_dump()`），逻辑保持不变。
 """
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -14,6 +15,7 @@ class _FmBody(BaseModel):
 
 class PathNameIn(_FmBody):
     """create-folder / create-file / upload-token：目标目录 + 名称。"""
+
     path: str | None = None
     name: str | None = None
 

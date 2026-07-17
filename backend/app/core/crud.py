@@ -1,4 +1,5 @@
 """轻量 CRUD 辅助：消除各路由里重复的「取不到就 404」与无意义更新过滤。"""
+
 from typing import TypeVar
 
 from fastapi import HTTPException, status

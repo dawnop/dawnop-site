@@ -3,6 +3,7 @@
 默认值定义在 api/settings.py 的 DEFAULTS；库里只存被改过的项，
 读取时与默认值合并，因此新增配置项不需要数据迁移。
 """
+
 from sqlalchemy import String
 from sqlalchemy.orm import Mapped, mapped_column
 

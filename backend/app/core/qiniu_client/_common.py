@@ -1,4 +1,5 @@
 """七牛统计/CDN 接口共用：直连 HTTP 会话 + 密钥校验。"""
+
 import requests
 
 from app.config import settings

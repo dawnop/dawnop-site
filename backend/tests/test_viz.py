@@ -62,7 +62,9 @@ def test_update_and_delete(client, auth_headers):
     assert upd.status_code == 200
     assert upd.json()["name"] == "改名"
 
-    assert client.delete(f"/api/viz/{viz['id']}", headers=auth_headers).status_code == 204
+    assert (
+        client.delete(f"/api/viz/{viz['id']}", headers=auth_headers).status_code == 204
+    )
     assert client.get("/api/viz/demo-viz").status_code == 404
 
 

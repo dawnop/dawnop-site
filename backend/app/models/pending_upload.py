@@ -7,6 +7,7 @@
 **本环境亲自签发过、却始终没登记成功**的 key——与七牛空间里其它对象（可能是共用
 空间的另一环境登记的）无关，因此清理时不会误伤，共用空间也安全。
 """
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, String, func

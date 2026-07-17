@@ -1,4 +1,5 @@
 """文章相关的请求/响应模型。"""
+
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator

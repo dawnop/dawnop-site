@@ -21,8 +21,8 @@ def test_public_tags_list_counts_only_published(client, auth_headers):
     _post(client, auth_headers, title="P", tags=["x"], published=True)
     _post(client, auth_headers, title="D", tags=["x", "y"], published=False)
     tags = {t["slug"]: t["count"] for t in client.get("/api/tags").json()}
-    assert tags.get("x") == 1     # x 有 1 篇已发布
-    assert "y" not in tags        # y 仅被草稿使用 → 不出现在公开标签列表
+    assert tags.get("x") == 1  # x 有 1 篇已发布
+    assert "y" not in tags  # y 仅被草稿使用 → 不出现在公开标签列表
 
 
 def test_filter_articles_by_tag(client, auth_headers):
@@ -49,7 +49,10 @@ def test_tags_admin_requires_auth(client):
 def test_admin_list_counts_include_drafts(client, auth_headers):
     _post(client, auth_headers, title="P", tags=["x"], published=True)
     _post(client, auth_headers, title="D", tags=["x"], published=False)
-    tags = {t["slug"]: t["count"] for t in client.get("/api/tags/admin", headers=auth_headers).json()}
+    tags = {
+        t["slug"]: t["count"]
+        for t in client.get("/api/tags/admin", headers=auth_headers).json()
+    }
     assert tags["x"] == 2  # 草稿也计入后台文章数
 
 
@@ -65,12 +68,17 @@ def test_get_tag_by_slug_public(client, auth_headers):
 def test_rename_tag(client, auth_headers):
     art = _post(client, auth_headers, title="A", tags=["oldname"]).json()
     tag_id = art["tags"][0]["id"]
-    resp = client.put(f"/api/tags/{tag_id}", json={"name": "NewName"}, headers=auth_headers)
+    resp = client.put(
+        f"/api/tags/{tag_id}", json={"name": "NewName"}, headers=auth_headers
+    )
     assert resp.status_code == 200
     assert resp.json()["name"] == "NewName"
     assert resp.json()["slug"] == "newname"  # slug 联动重生成
     # 文章侧同步可见新名
-    assert client.get(f"/api/articles/{art['slug']}").json()["tags"][0]["name"] == "NewName"
+    assert (
+        client.get(f"/api/articles/{art['slug']}").json()["tags"][0]["name"]
+        == "NewName"
+    )
 
 
 def test_rename_tag_duplicate_rejected(client, auth_headers):
@@ -84,7 +92,9 @@ def test_delete_tag_detaches_articles(client, auth_headers):
     art = _post(client, auth_headers, title="A", tags=["gone", "keep"]).json()
     tag_id = next(t["id"] for t in art["tags"] if t["name"] == "gone")
     assert client.delete(f"/api/tags/{tag_id}", headers=auth_headers).status_code == 204
-    names = [t["name"] for t in client.get(f"/api/articles/{art['slug']}").json()["tags"]]
+    names = [
+        t["name"] for t in client.get(f"/api/articles/{art['slug']}").json()["tags"]
+    ]
     assert names == ["keep"]
 
 
@@ -94,21 +104,29 @@ def test_merge_tags(client, auth_headers):
     src_id = a["tags"][0]["id"]
     dst_id = next(t["id"] for t in b["tags"] if t["name"] == "dst")
     resp = client.post(
-        "/api/tags/merge", json={"source_id": src_id, "target_id": dst_id}, headers=auth_headers
+        "/api/tags/merge",
+        json={"source_id": src_id, "target_id": dst_id},
+        headers=auth_headers,
     )
     assert resp.status_code == 200
     assert resp.json()["count"] == 2  # A、B 都归到 dst（B 原本已有，不重复）
     # src 已删除
-    slugs = [t["slug"] for t in client.get("/api/tags/admin", headers=auth_headers).json()]
+    slugs = [
+        t["slug"] for t in client.get("/api/tags/admin", headers=auth_headers).json()
+    ]
     assert "src" not in slugs
-    assert [t["name"] for t in client.get(f"/api/articles/{a['slug']}").json()["tags"]] == ["dst"]
+    assert [
+        t["name"] for t in client.get(f"/api/articles/{a['slug']}").json()["tags"]
+    ] == ["dst"]
 
 
 def test_merge_with_self_rejected(client, auth_headers):
     art = _post(client, auth_headers, title="A", tags=["x"]).json()
     tag_id = art["tags"][0]["id"]
     resp = client.post(
-        "/api/tags/merge", json={"source_id": tag_id, "target_id": tag_id}, headers=auth_headers
+        "/api/tags/merge",
+        json={"source_id": tag_id, "target_id": tag_id},
+        headers=auth_headers,
     )
     assert resp.status_code == 400
 
@@ -116,10 +134,14 @@ def test_merge_with_self_rejected(client, auth_headers):
 def test_cleanup_removes_unused_tags(client, auth_headers):
     art = _post(client, auth_headers, title="A", tags=["used", "orphan"]).json()
     # 把文章标签改成只剩 used，orphan 成为零文章标签
-    client.put(f"/api/articles/{art['id']}", json={"tags": ["used"]}, headers=auth_headers)
+    client.put(
+        f"/api/articles/{art['id']}", json={"tags": ["used"]}, headers=auth_headers
+    )
     resp = client.post("/api/tags/cleanup", headers=auth_headers)
     assert resp.json()["deleted"] == 1
-    slugs = [t["slug"] for t in client.get("/api/tags/admin", headers=auth_headers).json()]
+    slugs = [
+        t["slug"] for t in client.get("/api/tags/admin", headers=auth_headers).json()
+    ]
     assert slugs == ["used"]
 
 

@@ -20,6 +20,7 @@ LOCK 是**假锁**（单管理员场景无并发写冲突）：总是授予、�
 鉴权走 HTTP Basic（客户端普遍支持），校验管理员账号；bcrypt 较慢，用带 TTL 的
 内存缓存挡住挂载时的高频请求。生产务必 HTTPS（Basic 明文）。
 """
+
 import base64
 import hashlib
 import os
@@ -214,8 +215,14 @@ def _response_xml(
 def _entry_xml_from_obj(prefix: str, o) -> str:
     name = o.path.rsplit("/", 1)[-1] if o.path else ""
     return _response_xml(
-        prefix, o.path, name, o.is_dir, o.size or 0, o.content_type or "",
-        _ts(o.updated_at), _ts(o.created_at),
+        prefix,
+        o.path,
+        name,
+        o.is_dir,
+        o.size or 0,
+        o.content_type or "",
+        _ts(o.updated_at),
+        _ts(o.created_at),
         etag=None if o.is_dir else _etag(o.key),
     )
 
@@ -284,7 +291,11 @@ def _get_or_head(request: Request, db: Session, rel: str, head: bool) -> Respons
     if head:
         return Response(
             status_code=200,
-            headers={"Content-Length": str(o.size or 0), "Content-Type": mime, **base_headers},
+            headers={
+                "Content-Length": str(o.size or 0),
+                "Content-Type": mime,
+                **base_headers,
+            },
         )
 
     try:
@@ -303,7 +314,9 @@ def _get_or_head(request: Request, db: Session, rel: str, head: bool) -> Respons
         up_headers["Range"] = rng
     r = _plain_http.get(url, stream=True, timeout=30, headers=up_headers)
     if r.status_code not in (200, 206):
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"七牛取回失败：{r.status_code}")
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"七牛取回失败：{r.status_code}"
+        )
     resp_headers = dict(base_headers)
     for h in ("Content-Length", "Content-Range"):
         if r.headers.get(h):
@@ -330,7 +343,7 @@ def _dest_rel(request: Request) -> str:
     path = urlparse(dest).path
     prefix = _dav_prefix(request)
     if prefix and path.startswith(prefix):
-        path = path[len(prefix):]
+        path = path[len(prefix) :]
     return unquote(path).strip("/")
 
 
@@ -400,9 +413,9 @@ async def _put(request: Request, db: Session, rel: str) -> Response:
     if existing:
         existing.key, existing.size, existing.content_type = key, size, mime
     else:
-        db.add(FileObject(
-            path=rel, is_dir=False, key=key, content_type=mime, size=size
-        ))
+        db.add(
+            FileObject(path=rel, is_dir=False, key=key, content_type=mime, size=size)
+        )
     db.commit()
     if old_key and old_key != key:
         try:
@@ -457,7 +470,7 @@ def _move_or_copy(request: Request, db: Session, rel: str, is_move: bool) -> Res
         _reparent(db, rel, dst_rel)
     else:
         for o in _subtree(db, rel):
-            dst_path = dst_rel + o.path[len(rel):]
+            dst_path = dst_rel + o.path[len(rel) :]
             if o.is_dir:
                 db.add(FileObject(path=dst_path, is_dir=True, key=None, size=0))
             else:
@@ -466,10 +479,15 @@ def _move_or_copy(request: Request, db: Session, rel: str, is_move: bool) -> Res
                     qiniu_client.copy(o.key, new_key)
                 except RuntimeError as e:
                     raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
-                db.add(FileObject(
-                    path=dst_path, is_dir=False, key=new_key,
-                    content_type=o.content_type, size=o.size,
-                ))
+                db.add(
+                    FileObject(
+                        path=dst_path,
+                        is_dir=False,
+                        key=new_key,
+                        content_type=o.content_type,
+                        size=o.size,
+                    )
+                )
     db.commit()
     return Response(status_code=204 if existing is not None else 201)
 

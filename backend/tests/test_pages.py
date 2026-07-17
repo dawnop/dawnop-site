@@ -32,7 +32,9 @@ def test_nav_visible_and_order(client, auth_headers):
 def test_reorder(client, auth_headers):
     a = _new_page(client, auth_headers, title="A").json()
     b = _new_page(client, auth_headers, title="B").json()
-    client.post("/api/pages/reorder", json={"ids": [b["id"], a["id"]]}, headers=auth_headers)
+    client.post(
+        "/api/pages/reorder", json={"ids": [b["id"], a["id"]]}, headers=auth_headers
+    )
     nav = client.get("/api/pages/nav").json()
     assert [n["title"] for n in nav] == ["B", "A"]
 
@@ -42,7 +44,12 @@ def test_assign_article_to_page_and_list(client, auth_headers):
     # 已发布、归属本页
     client.post(
         "/api/articles",
-        json={"title": "Vue 教程", "content": "x", "published": True, "page_id": page["id"]},
+        json={
+            "title": "Vue 教程",
+            "content": "x",
+            "published": True,
+            "page_id": page["id"],
+        },
         headers=auth_headers,
     )
     # 已发布、未归属
@@ -64,7 +71,10 @@ def test_delete_page_unassigns_articles(client, auth_headers):
         headers=auth_headers,
     ).json()
 
-    assert client.delete(f"/api/pages/{page['id']}", headers=auth_headers).status_code == 204
+    assert (
+        client.delete(f"/api/pages/{page['id']}", headers=auth_headers).status_code
+        == 204
+    )
     got = client.get(f"/api/articles/admin/{art['id']}", headers=auth_headers).json()
     assert got["page_id"] is None
 
@@ -118,27 +128,37 @@ def test_builtin_nav_paths_and_order(client, db_session, auth_headers):
 def test_builtin_tags_hidden_by_default_but_can_show(client, db_session, auth_headers):
     _seed_builtin(db_session)
     tags_page = next(
-        p for p in client.get("/api/pages/admin", headers=auth_headers).json()
+        p
+        for p in client.get("/api/pages/admin", headers=auth_headers).json()
         if p["slug"] == "tags"
     )
     assert tags_page["nav_visible"] is False
-    client.put(f"/api/pages/{tags_page['id']}", json={"nav_visible": True}, headers=auth_headers)
+    client.put(
+        f"/api/pages/{tags_page['id']}",
+        json={"nav_visible": True},
+        headers=auth_headers,
+    )
     assert "/tags" in [n["path"] for n in client.get("/api/pages/nav").json()]
 
 
 def test_builtin_delete_rejected(client, db_session, auth_headers):
     _seed_builtin(db_session)
     home = next(
-        p for p in client.get("/api/pages/admin", headers=auth_headers).json()
+        p
+        for p in client.get("/api/pages/admin", headers=auth_headers).json()
         if p["slug"] == "home"
     )
-    assert client.delete(f"/api/pages/{home['id']}", headers=auth_headers).status_code == 400
+    assert (
+        client.delete(f"/api/pages/{home['id']}", headers=auth_headers).status_code
+        == 400
+    )
 
 
 def test_builtin_update_whitelist(client, db_session, auth_headers):
     _seed_builtin(db_session)
     home = next(
-        p for p in client.get("/api/pages/admin", headers=auth_headers).json()
+        p
+        for p in client.get("/api/pages/admin", headers=auth_headers).json()
         if p["slug"] == "home"
     )
     resp = client.put(
@@ -147,10 +167,10 @@ def test_builtin_update_whitelist(client, db_session, auth_headers):
         headers=auth_headers,
     )
     body = resp.json()
-    assert body["title"] == "主页"          # 导航名可改
-    assert body["nav_visible"] is False     # 显隐可改
-    assert body["slug"] == "home"           # slug 不可改
-    assert body["content"] == ""            # 内容不可改
+    assert body["title"] == "主页"  # 导航名可改
+    assert body["nav_visible"] is False  # 显隐可改
+    assert body["slug"] == "home"  # slug 不可改
+    assert body["content"] == ""  # 内容不可改
 
 
 def test_builtin_not_served_as_content_page(client, db_session):

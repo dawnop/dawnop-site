@@ -1,4 +1,5 @@
 """应用配置：从 backend/.env 读取，集中管理敏感信息与可调参数。"""
+
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict

@@ -3,6 +3,7 @@
 路由声明顺序很重要：静态路径（/admin）与带前缀的整型路径需先于
 GET /{slug} 声明，避免被 slug 通配吞掉。
 """
+
 import re
 from urllib.parse import quote
 
@@ -66,11 +67,17 @@ def list_published(
 # ---------- 受保护：管理列表 / 单篇（含草稿）----------
 
 
-@router.get("/admin", response_model=ArticleListResponse, summary="管理文章列表（含草稿，可筛选）")
+@router.get(
+    "/admin",
+    response_model=ArticleListResponse,
+    summary="管理文章列表（含草稿，可筛选）",
+)
 def list_all(
     page: int = Query(1, ge=1),
     size: int = Query(10, ge=1, le=100),
-    published: bool | None = Query(None, description="按状态筛选：true=已发布 false=草稿 省略=全部"),
+    published: bool | None = Query(
+        None, description="按状态筛选：true=已发布 false=草稿 省略=全部"
+    ),
     page_id: int | None = Query(None, description="按所属列表页筛选"),
     q: str | None = Query(None, description="按标题模糊搜索"),
     db: Session = Depends(get_db),
@@ -94,7 +101,8 @@ def admin_stats(
 ):
     total = db.query(func.count(Article.id)).scalar() or 0
     published = (
-        db.query(func.count(Article.id)).filter(Article.published.is_(True)).scalar() or 0
+        db.query(func.count(Article.id)).filter(Article.published.is_(True)).scalar()
+        or 0
     )
     total_views = db.query(func.coalesce(func.sum(Article.views), 0)).scalar() or 0
     return {
@@ -105,7 +113,9 @@ def admin_stats(
     }
 
 
-@router.get("/admin/{article_id}", response_model=ArticleOut, summary="取单篇（编辑用，含草稿）")
+@router.get(
+    "/admin/{article_id}", response_model=ArticleOut, summary="取单篇（编辑用，含草稿）"
+)
 def get_for_edit(
     article_id: int,
     db: Session = Depends(get_db),
@@ -117,7 +127,12 @@ def get_for_edit(
 # ---------- 受保护：增删改 ----------
 
 
-@router.post("", response_model=ArticleOut, status_code=status.HTTP_201_CREATED, summary="创建文章")
+@router.post(
+    "",
+    response_model=ArticleOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="创建文章",
+)
 def create_article(
     payload: ArticleCreate,
     db: Session = Depends(get_db),
@@ -172,7 +187,9 @@ def update_article(
     return article
 
 
-@router.delete("/{article_id}", status_code=status.HTTP_204_NO_CONTENT, summary="删除文章")
+@router.delete(
+    "/{article_id}", status_code=status.HTTP_204_NO_CONTENT, summary="删除文章"
+)
 def delete_article(
     article_id: int,
     db: Session = Depends(get_db),
@@ -190,7 +207,12 @@ def delete_article(
 
 def _yaml_scalar(s: str) -> str:
     """极简标量序列化：含特殊字符或首尾空白就双引号包裹转义，否则裸写。"""
-    if s == "" or s[0] in " -" or s[-1] == " " or re.search(r"""[:#\[\]{}>|*&!%@`"'\n]""", s):
+    if (
+        s == ""
+        or s[0] in " -"
+        or s[-1] == " "
+        or re.search(r"""[:#\[\]{}>|*&!%@`"'\n]""", s)
+    ):
         return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
     return s
 
@@ -230,7 +252,11 @@ def export_markdown(
 # ---------- 公开：按 slug 取单篇（须放在最后）----------
 
 
-@router.get("/{slug}", response_model=ArticleOut, summary="按 slug 取单篇（已发布公开；草稿仅登录可见）")
+@router.get(
+    "/{slug}",
+    response_model=ArticleOut,
+    summary="按 slug 取单篇（已发布公开；草稿仅登录可见）",
+)
 def get_published(
     slug: str,
     db: Session = Depends(get_db),

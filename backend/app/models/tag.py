@@ -1,4 +1,5 @@
 """Tag 模型：文章标签，文章↔标签多对多。"""
+
 from datetime import datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, String, Table, func
@@ -10,7 +11,9 @@ from app.database import Base
 article_tags = Table(
     "article_tags",
     Base.metadata,
-    Column("article_id", ForeignKey("articles.id", ondelete="CASCADE"), primary_key=True),
+    Column(
+        "article_id", ForeignKey("articles.id", ondelete="CASCADE"), primary_key=True
+    ),
     Column("tag_id", ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
 )
 

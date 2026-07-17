@@ -8,6 +8,7 @@
 只用只读接口。未配置密钥（tencent_secret_id/key 为空）时函数抛 RuntimeError，
 由上层降级——监控页「腾讯云」块只显示本机指标。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -35,7 +36,9 @@ def _sign(secret_key: str, date: str, service: str) -> bytes:
     return h(h(h(("TC3" + secret_key).encode(), date), service), "tc3_request")
 
 
-def _call(service: str, action: str, version: str, payload: dict, region: str | None = None) -> dict:
+def _call(
+    service: str, action: str, version: str, payload: dict, region: str | None = None
+) -> dict:
     """调用腾讯云 v3 接口，返回 Response 体；接口级 Error 抛 RuntimeError。"""
     if not _configured():
         raise RuntimeError("未配置腾讯云密钥（TENCENT_SECRET_ID / TENCENT_SECRET_KEY）")
@@ -47,10 +50,14 @@ def _call(service: str, action: str, version: str, payload: dict, region: str | 
     date = datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
     ct = "application/json; charset=utf-8"
 
-    canonical_headers = f"content-type:{ct}\nhost:{host}\nx-tc-action:{action.lower()}\n"
+    canonical_headers = (
+        f"content-type:{ct}\nhost:{host}\nx-tc-action:{action.lower()}\n"
+    )
     signed_headers = "content-type;host;x-tc-action"
     payload_hash = hashlib.sha256(body.encode()).hexdigest()
-    canonical_request = f"POST\n/\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+    canonical_request = (
+        f"POST\n/\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+    )
 
     scope = f"{date}/{service}/tc3_request"
     string_to_sign = (
@@ -58,7 +65,9 @@ def _call(service: str, action: str, version: str, payload: dict, region: str | 
         f"{hashlib.sha256(canonical_request.encode()).hexdigest()}"
     )
     signing_key = _sign(settings.tencent_secret_key, date, service)
-    signature = hmac.new(signing_key, string_to_sign.encode(), hashlib.sha256).hexdigest()
+    signature = hmac.new(
+        signing_key, string_to_sign.encode(), hashlib.sha256
+    ).hexdigest()
     authorization = (
         f"TC3-HMAC-SHA256 Credential={settings.tencent_secret_id}/{scope}, "
         f"SignedHeaders={signed_headers}, Signature={signature}"
@@ -167,7 +176,11 @@ def monitor_series(metric: str, days: int = 30, period: int = 86400) -> dict:
             "StartTime": start.strftime(fmt),
             "EndTime": end.strftime(fmt),
             "Instances": [
-                {"Dimensions": [{"Name": "InstanceId", "Value": settings.lighthouse_instance_id}]}
+                {
+                    "Dimensions": [
+                        {"Name": "InstanceId", "Value": settings.lighthouse_instance_id}
+                    ]
+                }
             ],
         },
         region=settings.tencent_region,

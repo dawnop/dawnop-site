@@ -4,6 +4,7 @@
 不必为不同错误形状写分支。HTTPException 已是 {detail}，这里主要规整校验错误
 （默认是数组）与未捕获异常（默认会泄漏栈/500 HTML）。
 """
+
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse

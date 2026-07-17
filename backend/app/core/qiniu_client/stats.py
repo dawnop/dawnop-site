@@ -2,6 +2,7 @@
 
 注意各端点参数约定不一致（实测）：space/count 用 `bucket=`，blob_io 用 `$bucket=` + `select=`。
 """
+
 from datetime import datetime, timedelta
 
 from qiniu import QiniuMacAuth
@@ -19,7 +20,10 @@ def _stat_get(path: str):
     url = f"http://{_STAT_HOST}{path}"
     mac = QiniuMacAuth(settings.qiniu_access_key, settings.qiniu_secret_key)
     token = mac.token_of_request(
-        method="GET", host=_STAT_HOST, url=url, qheaders="",
+        method="GET",
+        host=_STAT_HOST,
+        url=url,
+        qheaders="",
         content_type="application/x-www-form-urlencoded",
     )
     r = _plain_http.get(
@@ -37,13 +41,17 @@ def _stat_get(path: str):
 
 def _range(days: int) -> tuple[str, str]:
     now = datetime.now()
-    return (now - timedelta(days=days)).strftime("%Y%m%d000000"), now.strftime("%Y%m%d%H%M%S")
+    return (now - timedelta(days=days)).strftime("%Y%m%d000000"), now.strftime(
+        "%Y%m%d%H%M%S"
+    )
 
 
 def space_series(days: int = 30) -> dict:
     """空间存储量按天序列（字节）。返回 {times:[unix秒], datas:[int]}。"""
     begin, end = _range(days)
-    j = _stat_get(f"/v6/space?bucket={settings.qiniu_bucket}&begin={begin}&end={end}&g=day")
+    j = _stat_get(
+        f"/v6/space?bucket={settings.qiniu_bucket}&begin={begin}&end={end}&g=day"
+    )
     return {
         "times": [int(t) for t in (j.get("times") or [])],
         "datas": [int(v or 0) for v in (j.get("datas") or [])],
@@ -53,7 +61,9 @@ def space_series(days: int = 30) -> dict:
 def count_series(days: int = 30) -> dict:
     """空间文件数按天序列。返回 {times, datas}。"""
     begin, end = _range(days)
-    j = _stat_get(f"/v6/count?bucket={settings.qiniu_bucket}&begin={begin}&end={end}&g=day")
+    j = _stat_get(
+        f"/v6/count?bucket={settings.qiniu_bucket}&begin={begin}&end={end}&g=day"
+    )
     return {
         "times": [int(t) for t in (j.get("times") or [])],
         "datas": [int(v or 0) for v in (j.get("datas") or [])],
@@ -69,7 +79,13 @@ def flow_series(days: int = 30, select: str = "flow") -> list[dict]:
     arr = _stat_get(
         f"/v6/blob_io?$bucket={settings.qiniu_bucket}&select={select}&begin={begin}&end={end}&g=day"
     )
-    return [{"time": it.get("time"), "value": int((it.get("values") or {}).get(select) or 0)} for it in (arr or [])]
+    return [
+        {
+            "time": it.get("time"),
+            "value": int((it.get("values") or {}).get(select) or 0),
+        }
+        for it in (arr or [])
+    ]
 
 
 def _last_nonzero(datas: list[int]) -> int | None:

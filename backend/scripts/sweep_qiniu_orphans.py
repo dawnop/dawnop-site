@@ -22,6 +22,7 @@
     python scripts/sweep_qiniu_orphans.py --full             # 全量比对干跑（危险）
     python scripts/sweep_qiniu_orphans.py --full --delete
 """
+
 import argparse
 import sys
 from datetime import datetime, timedelta, timezone
@@ -79,7 +80,7 @@ def sweep_ledger(bucket: str, mgr, older_than_h: float, do_delete: bool) -> None
         known = {
             k for (k,) in db.query(FileObject.key).filter(FileObject.key.isnot(None))
         }
-        stale_rows = []   # 已登记成功、账本残留 → 只清账本
+        stale_rows = []  # 已登记成功、账本残留 → 只清账本
         orphan_keys = []  # 过期未登记 → 真孤儿
         for p in pendings:
             if p.key in known:
@@ -101,9 +102,9 @@ def sweep_ledger(bucket: str, mgr, older_than_h: float, do_delete: bool) -> None
 
         if stale_rows:
             # 登记已成功的残留账本行随手清掉（不碰七牛对象）
-            db.query(PendingUpload).filter(
-                PendingUpload.key.in_(stale_rows)
-            ).delete(synchronize_session=False)
+            db.query(PendingUpload).filter(PendingUpload.key.in_(stale_rows)).delete(
+                synchronize_session=False
+            )
             db.commit()
             print(f"（已清理 {len(stale_rows)} 条已登记的残留账本行）")
 
@@ -115,9 +116,9 @@ def sweep_ledger(bucket: str, mgr, older_than_h: float, do_delete: bool) -> None
         if not _confirm(len(orphan_keys)):
             return
         _delete_keys(bucket, mgr, orphan_keys)
-        db.query(PendingUpload).filter(
-            PendingUpload.key.in_(orphan_keys)
-        ).delete(synchronize_session=False)
+        db.query(PendingUpload).filter(PendingUpload.key.in_(orphan_keys)).delete(
+            synchronize_session=False
+        )
         db.commit()
         print(f"已删除 {len(orphan_keys)} 个孤儿对象并清账本。")
     finally:
@@ -126,7 +127,9 @@ def sweep_ledger(bucket: str, mgr, older_than_h: float, do_delete: bool) -> None
 
 def sweep_full(bucket: str, mgr, do_delete: bool) -> None:
     """全量比对模式（危险，仅唯一权威库、生产环境用）。"""
-    print("⚠️  全量比对模式：仅当本库是该空间唯一权威库时可用（勿在共用空间的本地库跑）。\n")
+    print(
+        "⚠️  全量比对模式：仅当本库是该空间唯一权威库时可用（勿在共用空间的本地库跑）。\n"
+    )
     remote = _all_remote(mgr, bucket)
     db = SessionLocal()
     try:
@@ -138,8 +141,10 @@ def sweep_full(bucket: str, mgr, do_delete: bool) -> None:
 
     orphans = {k: sz for k, sz in remote.items() if k not in known}
     total = sum(orphans.values())
-    print(f"空间 '{bucket}'：共 {len(remote)} 个对象，登记 {len(known)} 个，"
-          f"孤儿 {len(orphans)} 个（{total / 1024 / 1024:.1f} MB）。")
+    print(
+        f"空间 '{bucket}'：共 {len(remote)} 个对象，登记 {len(known)} 个，"
+        f"孤儿 {len(orphans)} 个（{total / 1024 / 1024:.1f} MB）。"
+    )
     for k, sz in sorted(orphans.items()):
         print(f"  {k}  {sz}")
     if not orphans:
@@ -156,9 +161,15 @@ def sweep_full(bucket: str, mgr, do_delete: bool) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="清理七牛孤儿对象")
     ap.add_argument("--delete", action="store_true", help="确认后执行删除（默认干跑）")
-    ap.add_argument("--full", action="store_true", help="全量比对模式（危险，仅权威库）")
-    ap.add_argument("--older-than", type=float, default=24.0,
-                    help="账本模式：只清早于该小时数的未登记 key（默认 24）")
+    ap.add_argument(
+        "--full", action="store_true", help="全量比对模式（危险，仅权威库）"
+    )
+    ap.add_argument(
+        "--older-than",
+        type=float,
+        default=24.0,
+        help="账本模式：只清早于该小时数的未登记 key（默认 24）",
+    )
     args = ap.parse_args()
 
     bucket = settings.qiniu_bucket

@@ -1,4 +1,5 @@
 """可读写 WebDAV 适配层测试。"""
+
 import base64
 
 import pytest
@@ -68,7 +69,9 @@ def test_requires_basic_auth(client):
 
 
 def test_bad_credentials_rejected(client):
-    r = client.request("PROPFIND", "/dav/", headers={**_basic(password="wrong"), "Depth": "0"})
+    r = client.request(
+        "PROPFIND", "/dav/", headers={**_basic(password="wrong"), "Depth": "0"}
+    )
     assert r.status_code == 401
 
 
@@ -97,17 +100,18 @@ def test_propfind_root_prefix_via_header(client, auth_headers, stub_qiniu):
     )
     assert r.status_code == 207
     body = r.text
-    assert "<D:href>/</D:href>" in body          # 根
+    assert "<D:href>/</D:href>" in body  # 根
     assert "<D:href>/readme.txt</D:href>" in body
     assert "<D:href>/docs/</D:href>" in body
-    assert "/dav/" not in body                    # 绝不带 /dav 前缀
+    assert "/dav/" not in body  # 绝不带 /dav 前缀
 
 
 def test_move_root_prefix_destination(client, stub_qiniu):
     """子域名下 Destination 形如 https://dav.dawnop.com/new.txt（无 /dav）。"""
     client.request("PUT", "/dav/old.txt", headers=_basic(), content=b"data")
     r = client.request(
-        "MOVE", "/dav/old.txt",
+        "MOVE",
+        "/dav/old.txt",
         headers={
             **_basic(),
             "X-Dav-Prefix": "/",
@@ -115,9 +119,12 @@ def test_move_root_prefix_destination(client, stub_qiniu):
         },
     )
     assert r.status_code == 201
-    assert client.request(
-        "PROPFIND", "/dav/new.txt", headers={**_basic(), "Depth": "0"}
-    ).status_code == 207
+    assert (
+        client.request(
+            "PROPFIND", "/dav/new.txt", headers={**_basic(), "Depth": "0"}
+        ).status_code
+        == 207
+    )
 
 
 def test_propfind_depth0_only_self(client, auth_headers, stub_qiniu):
@@ -128,11 +135,15 @@ def test_propfind_depth0_only_self(client, auth_headers, stub_qiniu):
 
 
 def test_propfind_missing_is_404(client, stub_qiniu):
-    r = client.request("PROPFIND", "/dav/nope/x.txt", headers={**_basic(), "Depth": "0"})
+    r = client.request(
+        "PROPFIND", "/dav/nope/x.txt", headers={**_basic(), "Depth": "0"}
+    )
     assert r.status_code == 404
 
 
-def test_get_default_client_proxies_bytes(client, auth_headers, stub_qiniu, monkeypatch):
+def test_get_default_client_proxies_bytes(
+    client, auth_headers, stub_qiniu, monkeypatch
+):
     _upload(client, auth_headers, "qiniu://", "hi.txt", b"PROXY-BODY", "text/plain")
 
     class FakeResp:
@@ -142,9 +153,7 @@ def test_get_default_client_proxies_bytes(client, auth_headers, stub_qiniu, monk
         def iter_content(self, n):
             yield b"PROXY-BODY"
 
-    monkeypatch.setattr(
-        "app.api.webdav._plain_http.get", lambda *a, **k: FakeResp()
-    )
+    monkeypatch.setattr("app.api.webdav._plain_http.get", lambda *a, **k: FakeResp())
     # 默认 UA（非白名单）→ 后端代理，直接拿到字节
     r = client.request("GET", "/dav/hi.txt", headers=_basic())
     assert r.status_code == 200
@@ -155,7 +164,8 @@ def test_get_redirect_client_gets_302(client, auth_headers, stub_qiniu):
     _upload(client, auth_headers, "qiniu://", "hi.txt", b"x", "text/plain")
     # rclone UA → 302 直连七牛
     r = client.request(
-        "GET", "/dav/hi.txt",
+        "GET",
+        "/dav/hi.txt",
         headers={**_basic(), "User-Agent": "rclone/v1.65"},
         follow_redirects=False,
     )
@@ -163,8 +173,17 @@ def test_get_redirect_client_gets_302(client, auth_headers, stub_qiniu):
     assert "token=sig" in r.headers["location"]
 
 
-def test_get_range_forwarded_when_proxying(client, auth_headers, stub_qiniu, monkeypatch):
-    _upload(client, auth_headers, "qiniu://", "big.bin", b"0123456789", "application/octet-stream")
+def test_get_range_forwarded_when_proxying(
+    client, auth_headers, stub_qiniu, monkeypatch
+):
+    _upload(
+        client,
+        auth_headers,
+        "qiniu://",
+        "big.bin",
+        b"0123456789",
+        "application/octet-stream",
+    )
     seen = {}
 
     class FakeResp:
@@ -179,7 +198,9 @@ def test_get_range_forwarded_when_proxying(client, auth_headers, stub_qiniu, mon
         return FakeResp()
 
     monkeypatch.setattr("app.api.webdav._plain_http.get", fake_get)
-    r = client.request("GET", "/dav/big.bin", headers={**_basic(), "Range": "bytes=2-4"})
+    r = client.request(
+        "GET", "/dav/big.bin", headers={**_basic(), "Range": "bytes=2-4"}
+    )
     assert r.status_code == 206
     assert seen["range"] == "bytes=2-4"
     assert r.headers.get("Content-Range") == "bytes 2-4/10"
@@ -204,19 +225,17 @@ def test_propfind_includes_etag(client, auth_headers, stub_qiniu):
 
 def test_if_none_match_returns_304(client, auth_headers, stub_qiniu):
     _upload(client, auth_headers, "qiniu://", "c.txt", b"cache me", "text/plain")
-    etag = client.request(
-        "HEAD", "/dav/c.txt", headers=_basic()
-    ).headers["ETag"]
+    etag = client.request("HEAD", "/dav/c.txt", headers=_basic()).headers["ETag"]
     # 拿着相同 ETag 复验 → 304，无 body
-    r = client.request(
-        "GET", "/dav/c.txt", headers={**_basic(), "If-None-Match": etag}
-    )
+    r = client.request("GET", "/dav/c.txt", headers={**_basic(), "If-None-Match": etag})
     assert r.status_code == 304
     assert r.content == b""
     assert r.headers.get("ETag") == etag
 
 
-def test_if_none_match_mismatch_serves_full(client, auth_headers, stub_qiniu, monkeypatch):
+def test_if_none_match_mismatch_serves_full(
+    client, auth_headers, stub_qiniu, monkeypatch
+):
     _upload(client, auth_headers, "qiniu://", "c.txt", b"FULLBODY", "text/plain")
 
     class FakeResp:
@@ -309,12 +328,23 @@ def test_delete_missing_404(client, stub_qiniu):
 def test_move_renames(client, stub_qiniu):
     client.request("PUT", "/dav/old.txt", headers=_basic(), content=b"data")
     r = client.request(
-        "MOVE", "/dav/old.txt",
+        "MOVE",
+        "/dav/old.txt",
         headers={**_basic(), "Destination": "http://testserver/dav/new.txt"},
     )
     assert r.status_code == 201
-    assert client.request("PROPFIND", "/dav/old.txt", headers={**_basic(), "Depth": "0"}).status_code == 404
-    assert client.request("PROPFIND", "/dav/new.txt", headers={**_basic(), "Depth": "0"}).status_code == 207
+    assert (
+        client.request(
+            "PROPFIND", "/dav/old.txt", headers={**_basic(), "Depth": "0"}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.request(
+            "PROPFIND", "/dav/new.txt", headers={**_basic(), "Depth": "0"}
+        ).status_code
+        == 207
+    )
 
 
 def test_move_overwrite_flag(client, stub_qiniu):
@@ -322,13 +352,19 @@ def test_move_overwrite_flag(client, stub_qiniu):
     client.request("PUT", "/dav/b.txt", headers=_basic(), content=b"b")
     # Overwrite: F → 已存在则 412
     r = client.request(
-        "MOVE", "/dav/a.txt",
-        headers={**_basic(), "Destination": "http://testserver/dav/b.txt", "Overwrite": "F"},
+        "MOVE",
+        "/dav/a.txt",
+        headers={
+            **_basic(),
+            "Destination": "http://testserver/dav/b.txt",
+            "Overwrite": "F",
+        },
     )
     assert r.status_code == 412
     # 默认覆盖 → 204
     r = client.request(
-        "MOVE", "/dav/a.txt",
+        "MOVE",
+        "/dav/a.txt",
         headers={**_basic(), "Destination": "http://testserver/dav/b.txt"},
     )
     assert r.status_code == 204
@@ -337,13 +373,24 @@ def test_move_overwrite_flag(client, stub_qiniu):
 def test_copy_duplicates(client, stub_qiniu):
     client.request("PUT", "/dav/src.txt", headers=_basic(), content=b"payload")
     r = client.request(
-        "COPY", "/dav/src.txt",
+        "COPY",
+        "/dav/src.txt",
         headers={**_basic(), "Destination": "http://testserver/dav/dst.txt"},
     )
     assert r.status_code == 201
     # 源仍在、副本也在
-    assert client.request("PROPFIND", "/dav/src.txt", headers={**_basic(), "Depth": "0"}).status_code == 207
-    assert client.request("PROPFIND", "/dav/dst.txt", headers={**_basic(), "Depth": "0"}).status_code == 207
+    assert (
+        client.request(
+            "PROPFIND", "/dav/src.txt", headers={**_basic(), "Depth": "0"}
+        ).status_code
+        == 207
+    )
+    assert (
+        client.request(
+            "PROPFIND", "/dav/dst.txt", headers={**_basic(), "Depth": "0"}
+        ).status_code
+        == 207
+    )
 
 
 def test_lock_grants_token(client, stub_qiniu):

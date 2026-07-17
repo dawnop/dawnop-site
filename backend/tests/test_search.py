@@ -1,4 +1,5 @@
 """搜索接口测试：FTS 路径（带 fts 夹具建虚拟表）+ LIKE 兜底路径。"""
+
 from pathlib import Path
 
 import pytest
@@ -27,7 +28,13 @@ def fts(db_session):
 
 
 def _create(client, headers, **kw):
-    payload = {"title": "t", "content": "", "summary": "", "published": True, "tags": []}
+    payload = {
+        "title": "t",
+        "content": "",
+        "summary": "",
+        "published": True,
+        "tags": [],
+    }
     payload.update(kw)
     r = client.post("/api/articles", json=payload, headers=headers)
     assert r.status_code == 201, r.text
@@ -133,7 +140,9 @@ def test_tags_included_in_results(client, auth_headers, fts):
     assert names == {"算法", "GPU"}
 
 
-@pytest.mark.skipif(not _ext_present(), reason="simple 扩展未下载（scripts/fetch_simple_ext.py）")
+@pytest.mark.skipif(
+    not _ext_present(), reason="simple 扩展未下载（scripts/fetch_simple_ext.py）"
+)
 def test_simple_tokenizer_short_cjk_and_pinyin():
     """扩展在位时走 simple 分词：2 字中文词与拼音都应命中（trigram 做不到）。"""
     engine = create_engine(
@@ -149,7 +158,14 @@ def test_simple_tokenizer_short_cjk_and_pinyin():
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     db = Session()
-    db.add(Article(title="CUDA 内存模型笔记", slug="m", content="内存层级与合并访问", published=True))
+    db.add(
+        Article(
+            title="CUDA 内存模型笔记",
+            slug="m",
+            content="内存层级与合并访问",
+            published=True,
+        )
+    )
     db.commit()
 
     ensure_article_fts(engine)  # 应择优选中 simple 并 rebuild

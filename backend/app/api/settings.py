@@ -3,6 +3,7 @@
 key-value 存 settings 表（JSON 编码），读取时与 DEFAULTS 合并——
 库里只落被改过的项，新增配置项无需迁移。校验集中在 VALIDATORS。
 """
+
 import json
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status

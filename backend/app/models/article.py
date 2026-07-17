@@ -1,4 +1,5 @@
 """Article 模型：博客文章，正文为 Markdown 文本。"""
+
 import re
 from datetime import datetime
 from typing import TYPE_CHECKING

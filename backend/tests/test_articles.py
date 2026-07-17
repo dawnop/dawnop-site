@@ -90,17 +90,15 @@ def test_export_markdown(client, auth_headers):
         client, auth_headers, title="Imported Title", summary="sum", content=md
     ).json()
 
-    exported = client.get(
-        f"/api/articles/{art['id']}/export", headers=auth_headers
-    )
+    exported = client.get(f"/api/articles/{art['id']}/export", headers=auth_headers)
     assert exported.status_code == 200
     text = exported.text
-    assert text.startswith("---\n")              # 顶部生成 front matter
-    assert "title: Imported Title" in text       # auto_title=False → 写 title
+    assert text.startswith("---\n")  # 顶部生成 front matter
+    assert "title: Imported Title" in text  # auto_title=False → 写 title
     assert "summary: sum" in text
     assert f"slug: {art['slug']}" in text
     assert "published: true" in text
-    assert text.endswith(md)                      # 正文原样在末尾
+    assert text.endswith(md)  # 正文原样在末尾
     assert "attachment" in exported.headers["content-disposition"]
 
 
@@ -109,10 +107,8 @@ def test_export_omits_title_when_auto_title(client, auth_headers):
     art = _create(
         client, auth_headers, title="Auto Heading", content=md, auto_title=True
     ).json()
-    text = client.get(
-        f"/api/articles/{art['id']}/export", headers=auth_headers
-    ).text
-    assert "title:" not in text                   # auto_title=True → 不写 title（标题取自正文 H1）
+    text = client.get(f"/api/articles/{art['id']}/export", headers=auth_headers).text
+    assert "title:" not in text  # auto_title=True → 不写 title（标题取自正文 H1）
     assert f"slug: {art['slug']}" in text
     assert text.endswith(md)
 
@@ -189,13 +185,17 @@ def test_views_increment_on_anonymous_read(client, auth_headers):
         assert client.get(f"/api/articles/{slug}").json()["views"] == expected
 
     # 管理员带 token 的预览不计数
-    assert client.get(f"/api/articles/{slug}", headers=auth_headers).json()["views"] == 3
+    assert (
+        client.get(f"/api/articles/{slug}", headers=auth_headers).json()["views"] == 3
+    )
 
 
 def test_views_not_counted_for_draft(client, auth_headers):
     # 草稿被管理员预览不应计数（匿名访问草稿本就 404）
     slug = _create(client, auth_headers, title="Draft", published=False).json()["slug"]
-    assert client.get(f"/api/articles/{slug}", headers=auth_headers).json()["views"] == 0
+    assert (
+        client.get(f"/api/articles/{slug}", headers=auth_headers).json()["views"] == 0
+    )
 
 
 def test_admin_stats_requires_auth(client):

@@ -6,6 +6,7 @@
 按当前系统/架构选对应的预编译库，只取共享库本体（不含 jieba 词典——本项目仅用
 simple_query，字级 + 拼音，不启用 jieba）。生产（Ubuntu 22.04 x86-64）上直接跑本脚本即可。
 """
+
 import io
 import platform
 import sys
@@ -36,7 +37,10 @@ def main() -> None:
     asset = _ASSETS.get((system, machine))
     if asset is None:
         print(f"未找到匹配的预编译包：{system}/{machine}。", file=sys.stderr)
-        print("请到 https://github.com/wangfenjin/simple/releases 手动下载，", file=sys.stderr)
+        print(
+            "请到 https://github.com/wangfenjin/simple/releases 手动下载，",
+            file=sys.stderr,
+        )
         print(f"把 libsimple.(so|dylib|dll) 放到 {DEST}/。", file=sys.stderr)
         sys.exit(1)
 

@@ -1,4 +1,5 @@
 """通用 schema：统一分页响应。"""
+
 from typing import Generic, TypeVar
 
 from pydantic import BaseModel

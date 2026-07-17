@@ -3,6 +3,7 @@
 注意：使用 TestClient(app) 而非 `with TestClient(app)`，以免触发 lifespan 在真实库建表。
 表结构与种子数据由夹具自行创建。
 """
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -36,9 +37,7 @@ def db_session():
 def client(db_session):
     # 种子管理员
     seed = db_session()
-    seed.add(
-        User(username=ADMIN_USERNAME, password_hash=hash_password(ADMIN_PASSWORD))
-    )
+    seed.add(User(username=ADMIN_USERNAME, password_hash=hash_password(ADMIN_PASSWORD)))
     seed.commit()
     seed.close()
 

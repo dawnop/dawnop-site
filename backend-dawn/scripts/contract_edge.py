@@ -20,6 +20,7 @@ TOKEN is an admin JWT (fetch it in the caller so creds never touch this file).
 Exit code is non-zero if any case is a hard mismatch (different status, or a
 non-message body difference, or an unexpected write success).
 """
+
 import argparse
 import json
 import os
@@ -32,9 +33,24 @@ import urllib.request
 # legitimately differ between two independently-serving backends. Scrubbed
 # recursively before comparing bodies.
 VOLATILE = {
-    "views", "updated_at", "cached_at", "latency_ms", "cpu_percent", "load",
-    "uptime", "mem", "memory", "disk", "net", "used", "used_bytes",
-    "remote_space", "space_used", "generated_at", "now", "timestamp",
+    "views",
+    "updated_at",
+    "cached_at",
+    "latency_ms",
+    "cpu_percent",
+    "load",
+    "uptime",
+    "mem",
+    "memory",
+    "disk",
+    "net",
+    "used",
+    "used_bytes",
+    "remote_space",
+    "space_used",
+    "generated_at",
+    "now",
+    "timestamp",
 }
 
 
@@ -93,7 +109,14 @@ def build_cases(token, content_page_id):
     AUTH = {"Authorization": f"Bearer {token}"}
     # A structurally-valid JWT with a corrupted signature -> must fail verify.
     parts = token.split(".")
-    tampered = parts[0] + "." + parts[1] + "." + ("A" if parts[2][:1] != "A" else "B") + parts[2][1:]
+    tampered = (
+        parts[0]
+        + "."
+        + parts[1]
+        + "."
+        + ("A" if parts[2][:1] != "A" else "B")
+        + parts[2][1:]
+    )
     BADSIG = {"Authorization": f"Bearer {tampered}"}
     GARBAGE = {"Authorization": "Bearer not.a.jwt"}
     LONGQ = "x" * 500
@@ -115,24 +138,73 @@ def build_cases(token, content_page_id):
     add("articles.pageNaN", "GET", "/api/articles?page=abc", None, None, "full")
     add("articles.sizeNaN", "GET", "/api/articles?size=abc", None, None, "full")
     # ---- public reads: not-found ----
-    add("articles.slug404", "GET", "/api/articles/zzz-does-not-exist", None, None, "full")
+    add(
+        "articles.slug404",
+        "GET",
+        "/api/articles/zzz-does-not-exist",
+        None,
+        None,
+        "full",
+    )
     add("pages.slug404", "GET", "/api/pages/zzz-nope", None, None, "full")
     add("pages.slug404.arts", "GET", "/api/pages/zzz-nope/articles", None, None, "full")
     add("tags.slug404", "GET", "/api/tags/zzz-nope", None, None, "full")
     add("viz.slug404", "GET", "/api/viz/zzz-nope", None, None, "full")
     # ---- list-page article pagination bounds ----
     add("pageArts.page0", "GET", "/api/pages/blog/articles?page=0", None, None, "full")
-    add("pageArts.sizeBig", "GET", "/api/pages/blog/articles?size=999", None, None, "full")
+    add(
+        "pageArts.sizeBig",
+        "GET",
+        "/api/pages/blog/articles?size=999",
+        None,
+        None,
+        "full",
+    )
     # ---- search: missing/empty/clamp/injection/cjk/long ----
     add("search.noQ", "GET", "/api/search", None, None, "full")
     add("search.emptyQ", "GET", "/api/search?q=", None, None, "full")
     add("search.sizeClamp", "GET", "/api/search?q=dawn&size=999", None, None, "full")
     add("search.page0", "GET", "/api/search?q=dawn&page=0", None, None, "full")
-    add("search.xss", "GET", "/api/search?" + urllib.parse.urlencode({"q": "<script>alert(1)</script>"}), None, None, "full")
-    add("search.sqli", "GET", "/api/search?" + urllib.parse.urlencode({"q": "' OR '1'='1"}), None, None, "full")
-    add("search.cjk", "GET", "/api/search?" + urllib.parse.urlencode({"q": "编译器"}), None, None, "full")
-    add("search.long", "GET", "/api/search?" + urllib.parse.urlencode({"q": LONGQ}), None, None, "full")
-    add("search.pct", "GET", "/api/search?" + urllib.parse.urlencode({"q": "100% done"}), None, None, "full")
+    add(
+        "search.xss",
+        "GET",
+        "/api/search?" + urllib.parse.urlencode({"q": "<script>alert(1)</script>"}),
+        None,
+        None,
+        "full",
+    )
+    add(
+        "search.sqli",
+        "GET",
+        "/api/search?" + urllib.parse.urlencode({"q": "' OR '1'='1"}),
+        None,
+        None,
+        "full",
+    )
+    add(
+        "search.cjk",
+        "GET",
+        "/api/search?" + urllib.parse.urlencode({"q": "编译器"}),
+        None,
+        None,
+        "full",
+    )
+    add(
+        "search.long",
+        "GET",
+        "/api/search?" + urllib.parse.urlencode({"q": LONGQ}),
+        None,
+        None,
+        "full",
+    )
+    add(
+        "search.pct",
+        "GET",
+        "/api/search?" + urllib.parse.urlencode({"q": "100% done"}),
+        None,
+        None,
+        "full",
+    )
     # ---- routing / method ----
     add("route.404", "GET", "/api/nope-endpoint", None, None, "full")
     add("method.health.POST", "POST", "/api/health", None, None, "full")
@@ -156,21 +228,71 @@ def build_cases(token, content_page_id):
     add("art.create.noTok", "POST", "/api/articles", None, {"title": "x"}, "write")
     add("art.create.empty", "POST", "/api/articles", AUTH, {}, "write")
     add("art.create.blank", "POST", "/api/articles", AUTH, {"title": "   "}, "write")
-    add("art.create.badSlug", "POST", "/api/articles", AUTH, {"title": "x", "slug": "BAD SLUG"}, "write")
-    add("art.create.upperSlug", "POST", "/api/articles", AUTH, {"title": "x", "slug": "Upper"}, "write")
-    add("art.create.dashSlug", "POST", "/api/articles", AUTH, {"title": "x", "slug": "-lead"}, "write")
-    add("art.create.pageMissing", "POST", "/api/articles", AUTH, {"title": "x", "slug": "bad slug so also rejected", "page_id": 99999999}, "write")
-    add("art.update.404", "PUT", "/api/articles/99999999", AUTH, {"title": "x"}, "write")
+    add(
+        "art.create.badSlug",
+        "POST",
+        "/api/articles",
+        AUTH,
+        {"title": "x", "slug": "BAD SLUG"},
+        "write",
+    )
+    add(
+        "art.create.upperSlug",
+        "POST",
+        "/api/articles",
+        AUTH,
+        {"title": "x", "slug": "Upper"},
+        "write",
+    )
+    add(
+        "art.create.dashSlug",
+        "POST",
+        "/api/articles",
+        AUTH,
+        {"title": "x", "slug": "-lead"},
+        "write",
+    )
+    add(
+        "art.create.pageMissing",
+        "POST",
+        "/api/articles",
+        AUTH,
+        {"title": "x", "slug": "bad slug so also rejected", "page_id": 99999999},
+        "write",
+    )
+    add(
+        "art.update.404", "PUT", "/api/articles/99999999", AUTH, {"title": "x"}, "write"
+    )
     add("art.delete.404", "DELETE", "/api/articles/99999999", AUTH, None, "write")
     if content_page_id is not None:
         # page_id points at a content page (not article_list) -> 400; slug also
         # invalid as a belt-and-suspenders guard so nothing can insert.
-        add("art.create.pageWrongType", "POST", "/api/articles", AUTH,
-            {"title": "x", "slug": "BAD SLUG", "page_id": content_page_id}, "write")
+        add(
+            "art.create.pageWrongType",
+            "POST",
+            "/api/articles",
+            AUTH,
+            {"title": "x", "slug": "BAD SLUG", "page_id": content_page_id},
+            "write",
+        )
 
-    add("viz.create.noTok", "POST", "/api/viz", None, {"slug": "x", "name": "n", "source": "s"}, "write")
+    add(
+        "viz.create.noTok",
+        "POST",
+        "/api/viz",
+        None,
+        {"slug": "x", "name": "n", "source": "s"},
+        "write",
+    )
     add("viz.create.empty", "POST", "/api/viz", AUTH, {}, "write")
-    add("viz.create.badSlug", "POST", "/api/viz", AUTH, {"slug": "BAD SLUG", "name": "n", "source": "s"}, "write")
+    add(
+        "viz.create.badSlug",
+        "POST",
+        "/api/viz",
+        AUTH,
+        {"slug": "BAD SLUG", "name": "n", "source": "s"},
+        "write",
+    )
     add("viz.update.404", "PUT", "/api/viz/99999999", AUTH, {"name": "n"}, "write")
     add("viz.delete.404", "DELETE", "/api/viz/99999999", AUTH, None, "write")
 
@@ -180,7 +302,14 @@ def build_cases(token, content_page_id):
     add("page.delete.404", "DELETE", "/api/pages/99999999", AUTH, None, "write")
     # reorder with only non-existent ids -> no existing row is touched; both
     # backends return the unchanged admin list. Compared as a plain no-op diff.
-    add("page.reorder.ghosts", "POST", "/api/pages/reorder", AUTH, {"ids": [99999999, 88888888]}, "full")
+    add(
+        "page.reorder.ghosts",
+        "POST",
+        "/api/pages/reorder",
+        AUTH,
+        {"ids": [99999999, 88888888]},
+        "full",
+    )
 
     add("tag.merge.noTok", "POST", "/api/tags/merge", None, {}, "write")
     add("tag.cleanup.noTok", "POST", "/api/tags/cleanup", None, {}, "write")
@@ -190,12 +319,49 @@ def build_cases(token, content_page_id):
     # ---- fm reads (safe) + fm write rejections ----
     add("fm.list.noTok", "GET", "/api/fm", None, None, "full")
     add("fm.list.ok", "GET", "/api/fm?path=qiniu://", AUTH, None, "full")
-    add("fm.search.ok", "GET", "/api/fm/search?" + urllib.parse.urlencode({"q": "x"}), AUTH, None, "full")
-    add("fm.sign.404", "GET", "/api/fm/sign?" + urllib.parse.urlencode({"path": "qiniu://zzz-nope.bin"}), AUTH, None, "full")
-    add("fm.stats.ok", "GET", "/api/fm/stats", AUTH, None, "status")  # live qiniu usage -> status-only
-    add("fm.delete.noTok", "POST", "/api/fm/delete", None, {"path": "qiniu://x"}, "write")
-    add("fm.mkfolder.noTok", "POST", "/api/fm/create-folder", None, {"path": "qiniu://x"}, "write")
-    add("fm.uptok.noTok", "POST", "/api/fm/upload-token", None, {"path": "qiniu://x"}, "write")
+    add(
+        "fm.search.ok",
+        "GET",
+        "/api/fm/search?" + urllib.parse.urlencode({"q": "x"}),
+        AUTH,
+        None,
+        "full",
+    )
+    add(
+        "fm.sign.404",
+        "GET",
+        "/api/fm/sign?" + urllib.parse.urlencode({"path": "qiniu://zzz-nope.bin"}),
+        AUTH,
+        None,
+        "full",
+    )
+    add(
+        "fm.stats.ok", "GET", "/api/fm/stats", AUTH, None, "status"
+    )  # live qiniu usage -> status-only
+    add(
+        "fm.delete.noTok",
+        "POST",
+        "/api/fm/delete",
+        None,
+        {"path": "qiniu://x"},
+        "write",
+    )
+    add(
+        "fm.mkfolder.noTok",
+        "POST",
+        "/api/fm/create-folder",
+        None,
+        {"path": "qiniu://x"},
+        "write",
+    )
+    add(
+        "fm.uptok.noTok",
+        "POST",
+        "/api/fm/upload-token",
+        None,
+        {"path": "qiniu://x"},
+        "write",
+    )
     return C
 
 
@@ -204,8 +370,11 @@ def main():
     ap.add_argument("--dawn", required=True)
     ap.add_argument("--fast", required=True)
     ap.add_argument("--verbose", action="store_true")
-    ap.add_argument("--allow-mutations", action="store_true",
-                    help="run row-creating cases too — ONLY against a sandbox DB, never prod")
+    ap.add_argument(
+        "--allow-mutations",
+        action="store_true",
+        help="run row-creating cases too — ONLY against a sandbox DB, never prod",
+    )
     args = ap.parse_args()
 
     token = os.environ.get("TOKEN", "").strip()
@@ -215,7 +384,9 @@ def main():
 
     # find a content-type page id (for the wrong-page-type rejection case)
     content_page_id = None
-    st, body = req(args.fast, "GET", "/api/pages/admin", {"Authorization": f"Bearer {token}"})
+    st, body = req(
+        args.fast, "GET", "/api/pages/admin", {"Authorization": f"Bearer {token}"}
+    )
     j = as_json(body)
     if isinstance(j, list):
         for p in j:
@@ -225,8 +396,15 @@ def main():
 
     cases = build_cases(token, content_page_id)
 
-    tallies = {"EXACT": 0, "SCRUBBED": 0, "ACCEPTED": 0, "STATUS_MISMATCH": 0,
-               "BODY_MISMATCH": 0, "UNEXPECTED_WRITE": 0, "ERROR": 0}
+    tallies = {
+        "EXACT": 0,
+        "SCRUBBED": 0,
+        "ACCEPTED": 0,
+        "STATUS_MISMATCH": 0,
+        "BODY_MISMATCH": 0,
+        "UNEXPECTED_WRITE": 0,
+        "ERROR": 0,
+    }
     problems = []
     skipped = 0
 
@@ -262,8 +440,15 @@ def main():
                 verdict = "UNEXPECTED_WRITE"
 
         tallies[verdict] += 1
-        flag = verdict in ("STATUS_MISMATCH", "BODY_MISMATCH", "UNEXPECTED_WRITE", "ERROR")
-        mark = {"EXACT": "OK ", "SCRUBBED": "OK~", "ACCEPTED": "OK≈"}.get(verdict, "XX ")
+        flag = verdict in (
+            "STATUS_MISMATCH",
+            "BODY_MISMATCH",
+            "UNEXPECTED_WRITE",
+            "ERROR",
+        )
+        mark = {"EXACT": "OK ", "SCRUBBED": "OK~", "ACCEPTED": "OK≈"}.get(
+            verdict, "XX "
+        )
         line = f"{mark} {verdict:16s} {name:24s} {method:6s} {path[:48]:48s} dawn={ds} fast={fs}"
         if flag or args.verbose:
             print(line)
@@ -274,7 +459,9 @@ def main():
     for k, v in tallies.items():
         print(f"  {k:18s} {v}")
     if skipped:
-        print(f"  {'SKIPPED(mut)':18s} {skipped}  (row-creating; run with --allow-mutations on a sandbox)")
+        print(
+            f"  {'SKIPPED(mut)':18s} {skipped}  (row-creating; run with --allow-mutations on a sandbox)"
+        )
 
     if problems:
         print("\n=== problem detail ===")
@@ -283,8 +470,12 @@ def main():
             print(f"  dawn  {ds}: {dt[:400]}")
             print(f"  fast  {fs}: {ft[:400]}")
 
-    hard = (tallies["STATUS_MISMATCH"] + tallies["BODY_MISMATCH"]
-            + tallies["UNEXPECTED_WRITE"] + tallies["ERROR"])
+    hard = (
+        tallies["STATUS_MISMATCH"]
+        + tallies["BODY_MISMATCH"]
+        + tallies["UNEXPECTED_WRITE"]
+        + tallies["ERROR"]
+    )
     print(f"\nhard mismatches: {hard}")
     return 1 if hard else 0
 

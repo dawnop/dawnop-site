@@ -3,6 +3,7 @@
 空间为**私有**：下载/预览均通过带签名、有时效的 URL（private_download_url）。
 所有函数失败时抛 RuntimeError，由上层转换为 HTTP 错误。
 """
+
 from functools import lru_cache
 from urllib.parse import quote
 
@@ -61,9 +62,7 @@ def proxy_upload(key: str, data: bytes, mime: str | None = None) -> dict:
     大文件走 proxy_upload_file（磁盘流式、自动分片续传），避免内存峰值。
     """
     token = _auth().upload_token(settings.qiniu_bucket, key, 3600)
-    ret, info = put_data(
-        token, key, data, mime_type=mime or "application/octet-stream"
-    )
+    ret, info = put_data(token, key, data, mime_type=mime or "application/octet-stream")
     if ret is None or info.status_code != 200:
         raise RuntimeError(f"七牛上传失败: {info}")
     return ret

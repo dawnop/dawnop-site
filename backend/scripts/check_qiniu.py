@@ -5,6 +5,7 @@
 
 不打印任何密钥；仅用于验证 AK/SK/Bucket/Domain 配置与网络是否可用。
 """
+
 import sys
 import urllib.request
 from pathlib import Path

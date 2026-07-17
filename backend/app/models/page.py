@@ -6,6 +6,7 @@ type:
 - "builtin"      内置页（首页、标签页等 SPA 固定路由）：启动时幂等注入，
                  页面管理里可改导航名称/显隐/排序，不可删除、不可改 slug/内容。
 """
+
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Integer, String, Text, func, text
@@ -30,7 +31,9 @@ class Page(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String(255))
     slug: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    type: Mapped[str] = mapped_column(String(32), default="content")  # content | article_list
+    type: Mapped[str] = mapped_column(
+        String(32), default="content"
+    )  # content | article_list
     description: Mapped[str] = mapped_column(Text, default="")  # 页面摘要 / SEO 描述
     content: Mapped[str] = mapped_column(Text, default="")  # 仅内容页使用
     # 是否用正文首个 H1 作标题（前端开关，仅内容页有意义）：为真时页面渲染隐藏正文那行 H1

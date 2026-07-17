@@ -3,6 +3,7 @@
 七牛 key 为不透明 uuid：rename/move 只改 path（不动七牛对象，见 _reparent），
 copy 才真正复制七牛对象（在路由层处理）。文件夹用 FileObject(is_dir=True) 行表示。
 """
+
 from fastapi import HTTPException, status
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -31,9 +32,9 @@ def _entry(o: FileObject) -> dict:
 def _children(db: Session, parent_rel: str) -> list[FileObject]:
     """直接子项：path 的父目录恰为 parent_rel。"""
     if parent_rel:
-        rows = db.query(FileObject).filter(
-            FileObject.path.like(f"{parent_rel}/%")
-        ).all()
+        rows = (
+            db.query(FileObject).filter(FileObject.path.like(f"{parent_rel}/%")).all()
+        )
     else:
         rows = db.query(FileObject).all()
     kids = [o for o in rows if _parent_rel(o.path) == parent_rel]
@@ -95,4 +96,4 @@ def _conflict_if_exists(db: Session, rel: str) -> None:
 def _reparent(db: Session, old_rel: str, new_rel: str) -> None:
     """把 old_rel（及其后代）的 path 前缀整体改为 new_rel。"""
     for o in _subtree(db, old_rel):
-        o.path = new_rel + o.path[len(old_rel):]
+        o.path = new_rel + o.path[len(old_rel) :]

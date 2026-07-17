@@ -3,6 +3,7 @@
 预览/下载默认 302 到七牛私有签名 URL（浏览器直连取字节，省后端流量）；图片给了
 w/h 且为光栅图时改跳 imageView2 缩略图。文本预览走 /sign 直连或 /content 代理兜底。
 """
+
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse, StreamingResponse
@@ -113,7 +114,9 @@ def content(
         url, stream=True, timeout=30, headers={"Accept-Encoding": "identity"}
     )
     if r.status_code != 200:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"七牛取回失败：{r.status_code}")
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"七牛取回失败：{r.status_code}"
+        )
     headers = {}
     if r.headers.get("Content-Length") and not r.headers.get("Content-Encoding"):
         headers["Content-Length"] = r.headers["Content-Length"]
@@ -129,7 +132,9 @@ def preview(
     path: str = Query(...),
     w: int | None = Query(None, ge=1, le=2000, description="缩略图目标宽度"),
     h: int | None = Query(None, ge=1, le=2000, description="缩略图目标高度"),
-    mode: str = Query("fit", pattern="^(fit|fill)$", description="fit=等比, fill=裁剪铺满"),
+    mode: str = Query(
+        "fit", pattern="^(fit|fill)$", description="fit=等比, fill=裁剪铺满"
+    ),
     db: Session = Depends(get_db),
     _: object = Depends(get_current_user_flexible),
 ):
