@@ -20,9 +20,42 @@ jobs:
   secrets:
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 so the trailer check below can see the commit range's
+      # history; the other guards here only look at the tree and do not need it.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: no server identity in the tree
         run: python3 scripts/check-no-server-identity.py
+
+      # No Claude attribution in new commits. The rule is suppressed at the Claude
+      # Code settings source, but that is per-machine/per-session — a different
+      # machine or a session whose system prompt insists will slip it in. This is
+      # the backstop that does not depend on who committed: commit-msg catches it
+      # locally (an opt-in hook), this catches it authoritatively. 20 such trailers
+      # once had to be force-pushed out of history; this exists so that cannot recur.
+      - name: no Claude attribution in commit messages
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            range="origin/${{ github.base_ref }}...HEAD"
+          elif [ "${{ github.event.before }}" = 0000000000000000000000000000000000000000 ]; then
+            range="HEAD~1..HEAD"
+          else
+            range="${{ github.event.before }}..HEAD"
+          fi
+          python3 scripts/check-no-claude-trailer.py --range "$range"
+
+      # .gitignore keeps the .env *file* out of the tree; it does not stop a key
+      # value being pasted into a tracked source file or doc — a mistake an agent
+      # that reads .env for context is prone to. gitleaks scans the tree for that.
+      # Pinned binary rather than the action: no org-license prompt, and the
+      # ruleset version is pinned like every other tool here. --no-git because this
+      # job is checkout-only, so the tree is tracked files only (no .venv/node_modules).
+      - name: no secret values in tracked files
+        run: |
+          v=8.18.4
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" | tar xz gitleaks
+          ./gitleaks detect --no-git --source . --config .gitleaks.toml --redact --exit-code 1
 
       # The deploy and rollback scripts are the least-exercised code in the repo:
       # nothing runs them until production is already on fire, which is the worst

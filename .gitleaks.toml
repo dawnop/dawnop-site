@@ -1,0 +1,20 @@
+# gitleaks 配置：用内置默认规则集扫描被跟踪文件里的密钥「值」。
+# .gitignore 挡的是 .env 这个文件本身，挡不住有人（尤其是读了 .env 拿上下文的 agent）
+# 把七牛 AK/SK 或 SECRET_KEY 抄进某个源文件或 doc。这一层就是补那个缺口。
+# CI 在 checkout-only 的 job 里跑 `gitleaks detect --no-git`，故此时树上只有被跟踪文件。
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "已知非泄露"
+# .env.example 是模板，值都是占位/空串（低熵，默认规则本就不命中；列在此处是声明意图）。
+# 其余是 vendored/构建目录，只在本地跑 gitleaks 时才存在（CI 的 checkout-only job 里没有），
+# 列出来省得本地扫描误报。
+paths = [
+  '''backend/\.env\.example''',
+  '''(^|/)\.git/.*''',
+  '''.*/node_modules/.*''',
+  '''.*/\.venv/.*''',
+  '''frontend/dist/.*''',
+]

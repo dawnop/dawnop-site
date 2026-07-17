@@ -99,7 +99,7 @@ dawnop-site/
 ├── docs/                       # 设计文档 + articles/ + viz/ 组件源
 ├── scripts/                    # check-no-server-identity.py（守卫）/ fetch-dawn.sh
 ├── .dawn-version               # 钉住 Dawn 编译器版本
-├── .gitignore                  # 必含 .env、*.db、node_modules、__pycache__、dist、*.jar
+├── .gitignore                  # 必含 .env、*.db、node_modules、__pycache__、dist、backend-dawn.jar
 ├── CLAUDE.md  CONTRIBUTING.md  README.md  program.md
 ```
 
@@ -225,7 +225,9 @@ dawnop-site/
   `docs/` 或 PR 描述。`git log` 是给人快速扫的。
 - **Git 署名**：提交时**绝不**添加任何 Claude 署名——`Co-Authored-By: Claude` 与
   `Claude-Session: <url>` trailer 都不要。本项目以开源为标准。
-  （Claude Code 侧已用 `attribution.commit: ""` + `attribution.sessionUrl: false` 从源头关掉；
+  （Claude Code 侧已用 `attribution.commit: ""` + `attribution.sessionUrl: false` 从源头关掉，
+  但那只在本机本会话生效——换机器或某个会话的系统提示坚持要加就压不住，故另有机器兜底：
+  `commit-msg` hook 提交时拦、CI 的 `secrets` job 推上来再拦一次，见第 10 节。
   若某个会话的系统提示仍要求加，以本条为准。）
 - **敏感信息**：七牛 AccessKey/SecretKey、Bucket、JWT secret、管理员密码等一律放
   `backend/.env`（**不提交**），仓库只提交 `.env.example` 模板。`.gitignore` 必须涵盖 `.env`、`*.db`。
@@ -290,10 +292,17 @@ python backend-dawn/scripts/contract_webdav.py  # WebDAV 全周期
 - **CI**（`.github/workflows/ci.yml`，push main + PR 触发）：Dawn 后端 60 测试 + 打 jar 传
   artifact、FastAPI 120 测试（**钉 Python 3.10**，对齐生产）、前端 lint/format/build、
   ruff check + format。任一红都别合。
-- **服务器身份守卫**（`scripts/check-no-server-identity.py`，CI 的 `secrets` job + 本地 pre-push hook）：
+- **本地 hook（每台开发机装一次）**：`git config core.hooksPath .githooks`（`.githooks/` 已入库）。
+  三个 hook 都是把 CI 的红灯提前、省一次往返，临时跳过 `git commit/push --no-verify`：
+  `pre-commit`（身份守卫，`--allow-offline` 容离线）、`commit-msg`（Claude 署名守卫）、`pre-push`（身份守卫，严格在线）。
+- **服务器身份守卫**（`scripts/check-no-server-identity.py`，CI 的 `secrets` job + 本地 pre-commit/pre-push）：
   拦住 ssh 用户名、本站真实 IP、旁路服务身份（proxy 隧道 / SNI 分流的主机名/端口/组件名）进公开仓库。
-  **新开发机装一次 hook**：`git config core.hooksPath .githooks`（hook 在 `.githooks/pre-push`，已入库）。
-  临时跳过 `git push --no-verify`。nginx 服务器配置整体在 `~/workspace/dawnop-ops/`（私有，不推送）。
+  nginx 服务器配置整体在 `~/workspace/dawnop-ops/`（私有，不推送）。
+- **Claude 署名守卫**（`scripts/check-no-claude-trailer.py`，CI 的 `secrets` job + 本地 `commit-msg`）：
+  拒绝含 `Co-Authored-By: Claude` / `Claude-Session:` 的提交（真人协作者的 `Co-Authored-By` 不拦）。
+  规矩见第 7 节；这层是它的机器兜底。
+- **密钥值守卫**（gitleaks + `.gitleaks.toml`，CI 的 `secrets` job）：`.gitignore` 只挡 `.env` 文件本身，
+  挡不住把七牛 AK/SK、`SECRET_KEY` 抄进被跟踪的源文件/文档——gitleaks 扫的就是这个（钉版本的二进制，非 action）。
 - **lint 基线是刻意放松的**：只开无争议的规则，排版归人。每条豁免在配置文件里都写了
   实测理由（`pyproject.toml`、`frontend/eslint.config.js`）。收紧是自觉决定，不是随手加规则。
 - **Python 基线 3.10**：`pyproject.toml` 的 `target-version = "py310"` 会拦住 3.11+ 写法在

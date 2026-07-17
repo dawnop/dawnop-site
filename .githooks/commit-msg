@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# 提交信息里不得出现 Claude 署名（Co-Authored-By: Claude / Claude-Session: <url>）。
+# 约定见 CLAUDE.md 第 7 节。源头（settings.json 的 attribution）只在本机本会话生效，
+# 换机器或某个会话的系统提示坚持要加就压不住——这个 hook 是本地兜底，CI 里还有一层。
+#
+# 安装（每台开发机一次，与 pre-push 同一条）：  git config core.hooksPath .githooks
+# 临时跳过（清楚自己在做什么再用）：            git commit --no-verify
+set -euo pipefail
+root=$(git rev-parse --show-toplevel)
+exec python3 "$root/scripts/check-no-claude-trailer.py" --commit-msg "$1"
