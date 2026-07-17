@@ -21,20 +21,21 @@ jobs:
           distribution: 'graalvm-community'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # backend-dawn is written in Dawn, so building it needs the compiler from
-      # the sibling repo. Tracking main (rather than pinning) is deliberate: the
-      # backend has to compile with the language as it actually is today, and a
-      # cross-repo break should surface here rather than at deploy time.
-      - uses: actions/checkout@v4
+      # backend-dawn is written in Dawn, so building it needs the sibling repo's
+      # compiler. It used to be checked out and built from main on every run.
+      # That was deliberate — "compile against the language as it is today" — but
+      # the price was that any commit in dawn-lang could turn this repo red
+      # without this repo changing, and nothing recorded which compiler built a
+      # given backend. Production runs on this; it had outgrown that trade.
+      #
+      # build.sh now resolves the toolchain through scripts/fetch-dawn.sh, which
+      # reads .dawn-version — the same file this laptop reads. Bumping the
+      # compiler is a commit here, reviewable and revertable like any other.
+      - name: cache the pinned dawn toolchain
+        uses: actions/cache@v4
         with:
-          repository: dawnop/dawn-lang
-          path: .dawn-lang
-
-      - uses: gradle/actions/setup-gradle@v4
-
-      - name: build the dawn compiler
-        run: ./gradlew :compiler:fatJar
-        working-directory: .dawn-lang
+          path: .dawn
+          key: dawn-${{ hashFiles('.dawn-version') }}
 
       # dawn.toml's [java-deps] are resolved by coursier, which caches here.
       # Keyed on dawn.toml since that is the single source of truth for versions.
@@ -45,14 +46,12 @@ jobs:
           key: coursier-${{ hashFiles('backend-dawn/dawn.toml') }}
           restore-keys: coursier-
 
-      # build.sh = `dawn test .` then `dawn build .`. The tests are hermetic (no
-      # .env, no DB, no libsimple, no live host); `dawn build` fetches java-deps
-      # into backend-dawn/lib/ next to the jar, which is what the jar's relative
-      # manifest Class-Path points at.
+      # build.sh = fetch the pinned dawn, then `dawn test .` and `dawn build .`.
+      # The tests are hermetic (no .env, no DB, no libsimple, no live host);
+      # `dawn build` fetches java-deps into backend-dawn/lib/ next to the jar,
+      # which is what the jar's relative manifest Class-Path points at.
       - name: backend tests + jar
-        run: |
-          export PATH="$GITHUB_WORKSPACE/.dawn-lang/bin:$PATH"
-          ./backend-dawn/build.sh
+        run: ./backend-dawn/build.sh
 
       # The deployable artifact. The jar is deliberately NOT in git: a build
       # output committed by hand drifts from src/ silently, and its lib/ is

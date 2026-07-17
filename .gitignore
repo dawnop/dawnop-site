@@ -48,6 +48,10 @@ docs/memory
 backend-dawn/backend-dawn.jar
 backend-dawn/lib/
 
+# The pinned Dawn toolchain, downloaded by scripts/fetch-dawn.sh per .dawn-version.
+# A cache keyed by version — .dawn-version is the thing under version control.
+.dawn/
+
 # ---- Editor / OS ----
 .DS_Store
 .idea/
