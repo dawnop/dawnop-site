@@ -8,10 +8,17 @@ FastAPI/uvicorn（`:8000`，systemd `dawnop-backend`）**已 `systemctl disable`
 
 > ## ⚠️ 先读这段再碰 nginx
 >
-> **443 不属于站点配置。** nginx 的 `stream` 模块占着 443，按 TLS 的 SNI 分流（不解密）：
+> **443 不属于站点配置。** 同一个 nginx 里有两层：`stream {}`（TCP 层，与 `http {}` 平级，写在
+> `/etc/nginx/nginx.conf`，仓库版本是 [`nginx-main.conf`](./nginx-main.conf)）占着 443，按 TLS
+> 握手里的 SNI 分流**且不解密**（所以 stream 块里没有证书——证书都在 8443 的 server 块上）：
 > `bypass.invalid` → REDACTED:REDACTED（Claude 代理隧道，与本站无关），**其余 → `127.0.0.1:8443`**
-> ——站点的 server 块全在 8443。这套在 `/etc/nginx/nginx.conf` 里，仓库版本是
-> [`nginx-main.conf`](./nginx-main.conf)。**把站点块改回 `listen 443 ssl` = 抢端口 = 全站下线。**
+> ——站点的 server 块全在那儿。这么绕是因为 REDACTED 和网站都得占 443，一个端口两个用户只能靠 SNI 分。
+>
+> **别把站点块改回 `listen 443 ssl`——它的失败方式是延时的**（实测）：`nginx -t` **会说
+> test is successful**（它不检查跨 stream/http 的端口冲突）；`systemctl reload` **看起来也成功**、
+> 站点照常服务，只在 error_log 里默默记 `bind() ... Address already in use`，而且 master 绑不上
+> 端口就放弃整次 reload——**你这次改动的其余部分也没生效**。炸弹在**下一次重启**才响，nginx
+> 起不来、站点下线，可能是几周后由内核更新或机房重启触发。即时下线反而是好事，这个不是。
 >
 > **真实客户端 IP 已丢失。** stream 终止 TCP 后从本机新建连接到 8443，且没开 `proxy_protocol`，
 > 故 http 层 `$remote_addr` **恒为 `127.0.0.1`**（实测最近 200 条访问日志无一例外）。

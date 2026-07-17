@@ -233,8 +233,11 @@ dawnop-site/
 - 形态：Nginx 托管 `frontend/dist` 静态文件，并将 `/api` 反向代理到
   **Dawn 后端 `127.0.0.1:8001`**（systemd `dawnop-dawn`）。uvicorn（`:8000`，
   `deploy/dawnop-backend.service`）已 disable，是回滚目标。
-- **443 不是站点在听**：nginx 的 `stream` 块占 443 做 SNI 分流（`bypass.invalid`→REDACTED:REDACTED，
-  其余→`127.0.0.1:8443`），站点 server 块全在 8443。**代价：`$remote_addr` 恒为 127.0.0.1**，
+- **443 不是站点在听**：nginx 的 `stream` 块（TCP 层，与 `http{}` 平级）占 443 做 SNI 分流
+  （`bypass.invalid`→REDACTED:REDACTED，其余→`127.0.0.1:8443`），站点 server 块全在 8443。
+  改回 `listen 443 ssl` 的失败是**延时**的：`nginx -t` 说通过、reload 看起来也成功、站点照常，
+  只在 error_log 默默记 bind 失败且**整次 reload 被放弃**（其余改动也没生效），
+  到**下次重启**才起不来。**代价：`$remote_addr` 恒为 127.0.0.1**，
   按 IP 的限流/封禁/日志全部失效（含 playground 已有的 `limit_req`，2026-07-14 起静默失效）。
   改 nginx 前必读 [`deploy/README.md`](./deploy/README.md) 开头的警告。
   仓库里 `deploy/nginx.conf`（站点）+ `nginx-main.conf`（nginx.conf 里的 stream 与 zone）+
