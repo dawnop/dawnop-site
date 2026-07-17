@@ -16,13 +16,27 @@
 #   sudo bash /opt/dawnop-dawn/rollback-to-fastapi.sh
 set -euo pipefail
 
-# Edit sites-available, NOT sites-enabled. sites-enabled/dawnop is a symlink to
-# it, and GNU `sed -i` does not follow symlinks: it writes a temp file and
-# renames over the path, so editing through the link silently *replaces the
-# symlink with a regular file* and leaves sites-available still saying :8001.
-# nginx would serve the rollback until the next config deploy (`cp` to
-# sites-available + `ln -sf`) restored the link — silently undoing the rollback.
-CONF=/etc/nginx/sites-available/dawnop
+# Resolve the file nginx actually reads instead of assuming a layout — every
+# hardcoded answer here has been wrong at least once:
+#
+#   - sites-enabled/dawnop, edited directly: correct today (it is a plain file),
+#     but wrong the moment anyone restores the documented symlink layout, because
+#     GNU `sed -i` does not follow symlinks — it writes a temp file and renames
+#     over the path, replacing the link with a regular file and leaving the real
+#     config untouched.
+#   - sites-available/dawnop: what this script said until 2026-07-17, on the
+#     strength of the deploy docs claiming a symlink. Production has no symlink:
+#     sites-enabled/dawnop is a plain file and sites-available/dawnop is a stale
+#     copy nobody reads (nginx only includes sites-enabled/*). So the "fix" aimed
+#     the rollback at a file with no effect — a rollback that prints success and
+#     changes nothing, which is exactly the failure it was meant to prevent.
+#
+# `readlink -f` answers the question for both layouts: a plain file resolves to
+# itself, a symlink resolves to its target. Editing the resolved path is always
+# the real config and can never eat a symlink.
+ENABLED=/etc/nginx/sites-enabled/dawnop
+[ -e "$ENABLED" ] || { echo "!!! $ENABLED does not exist — is this the right host?" >&2; exit 1; }
+CONF=$(readlink -f "$ENABLED")
 STAMP=$(date +%s)
 BACKUP="/etc/nginx/backups/dawnop.pre-rollback.$STAMP"
 
@@ -42,6 +56,7 @@ fi
 
 echo "==> 2/3 pointing nginx /api and dav.dawnop.com back at :8000"
 [ -f "$CONF" ] || { echo "!!! $CONF is not a regular file" >&2; exit 1; }
+echo "    nginx reads: $ENABLED -> $CONF"
 mkdir -p /etc/nginx/backups
 cp -a "$CONF" "$BACKUP"
 
