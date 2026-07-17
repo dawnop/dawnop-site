@@ -38,7 +38,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | LaTeX | **KaTeX**（编辑器内置 + 文章页 `@mdit/plugin-katex`） | 编辑器与文章页同款渲染；本地实例(不依赖 CDN) |
 | 代码高亮 | `highlight.js` | 文章代码块 |
 | 文件管理 UI | **自建**（Element Plus + `qiniu-js`） | SVAR 观感：目录树/面包屑/右键菜单/框选多选/拖拽上传/拖动移动/预览编辑/传输列表 |
-| 部署 | **Nginx**（80→443）+ systemd 托管 Dawn 后端（`dawnop-dawn`，:8001） | 4 核 4G 足够。发版 = CI 出 artifact + `deploy.sh` 拉取，见 `deploy/README.md` |
+| 部署 | **Nginx**（443 走 stream 层 SNI 分流 → 站点在 `127.0.0.1:8443`）+ systemd 托管 Dawn 后端（`dawnop-dawn`，:8001） | 4 核 4G 足够。发版 = CI 出 artifact + `deploy.sh` 拉取，见 `deploy/README.md`（**先读开头的 443 / 真实 IP 警告**） |
 
 > 这些是推荐默认值。若你（用户）更倾向 Flask / React 等，请在动工前提出，我会相应调整计划。
 
@@ -80,7 +80,10 @@ dawnop-site/
 │   ├── package.json
 │   └── vite.config.js
 ├── deploy/
-│   ├── nginx.conf               # 静态前端 + /api 反代 8001 + dav/cdn/vault 子域名
+│   ├── nginx.conf               # 站点（sites-enabled/dawnop）：前端 + /api→8001 + dav/cdn/vault/p5play/dawn-lang
+│   ├── nginx-main.conf          # /etc/nginx/nginx.conf 里属本项目的段：stream SNI 分流 + playground zone
+│   ├── nginx-snippets/          # /etc/nginx/snippets/：/api 的公共 proxy 头
+│   ├── fail2ban/                # dav 鉴权爆破 jail（**enabled=false**，等真实 IP 恢复）
 │   ├── dawnop-backend.service   # systemd 单元（FastAPI，已 disable，回滚目标）
 │   └── README.md                # 部署权威文档（现状 = Dawn）
 ├── backend-dawn/deploy/
@@ -227,9 +230,16 @@ dawnop-site/
 
 - 机器：4 核 4G；登录：`ssh <user>@<server>`（真实地址见本地私有记录，不入库）；**80 端口已开放**。
 - 验证：可用公网域名 `dawnop.com` 测试。
-- 形态：Nginx 监听 80/443，托管 `frontend/dist` 静态文件，并将 `/api` 反向代理到
+- 形态：Nginx 托管 `frontend/dist` 静态文件，并将 `/api` 反向代理到
   **Dawn 后端 `127.0.0.1:8001`**（systemd `dawnop-dawn`）。uvicorn（`:8000`，
   `deploy/dawnop-backend.service`）已 disable，是回滚目标。
+- **443 不是站点在听**：nginx 的 `stream` 块占 443 做 SNI 分流（`bypass.invalid`→REDACTED:REDACTED，
+  其余→`127.0.0.1:8443`），站点 server 块全在 8443。**代价：`$remote_addr` 恒为 127.0.0.1**，
+  按 IP 的限流/封禁/日志全部失效（含 playground 已有的 `limit_req`，2026-07-14 起静默失效）。
+  改 nginx 前必读 [`deploy/README.md`](./deploy/README.md) 开头的警告。
+  仓库里 `deploy/nginx.conf`（站点）+ `nginx-main.conf`（nginx.conf 里的 stream 与 zone）+
+  `nginx-snippets/` 于 2026-07-17 以生产实配重建——在那之前它们**双向漂移**过：仓库单方面更新
+  注释、生产单方面改结构，而文档把仓库那份称作「权威」，照着部署会打挂站点。
   **部署的权威文档是 [`deploy/README.md`](./deploy/README.md)**（本节只是环境事实）。
 
 ## 9. 常用命令
