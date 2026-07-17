@@ -28,7 +28,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 层 | 选型 | 理由 |
 |----|------|------|
 | 后端 | **Dawn**（自制语言 → JVM 字节码），版本由根目录 `.dawn-version` 钉住 | M6 用 strangler-fig 逐路由迁移，2026-07 全量切流，uvicorn 已退役。见 `backend-dawn/` 与 [`docs/m6-retro.md`](https://github.com/dawnop/dawn-lang/blob/main/docs/m6-retro.md) |
-| 后端框架（历史 / 回滚目标） | **FastAPI** + Uvicorn | 原选型。`backend/` **仍在维护**：紧急回滚目标（`backend-dawn/deploy/rollback-to-fastapi.sh`）+ `contract_*.py` 的对拍参照，两套测试都在 CI 里跑 |
+| 后端框架（历史 / 回滚目标） | **FastAPI** + Uvicorn | 原选型。`backend/` 已**冻结**（新功能只进 Dawn，见 CONTRIBUTING）：紧急回滚目标（`backend-dawn/deploy/rollback-to-fastapi.sh`）+ `contract_*.py` 的对拍参照，仍在 CI 里跑确保能启动 |
 | ORM / DB | **SQLAlchemy 2.x** + **SQLite**（Dawn 侧直接用 sqlite-jdbc） | 需求明确指定 SQLite |
 | 鉴权 | OAuth2 Password + **JWT**（**PyJWT** + **bcrypt**） | 前后端分离用 token；PyJWT/bcrypt 比 python-jose/passlib 维护更活跃、依赖更少 |
 | 对象存储 | 七牛云 **Kodo**，官方 `qiniu` Python SDK | 需求指定 |
