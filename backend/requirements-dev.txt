@@ -1,0 +1,10 @@
+# Dev/test only. The server installs requirements.txt and never this file.
+-r requirements.txt
+
+httpx
+pytest
+
+# Pinned exactly, unlike everything else here: a linter is the one dependency
+# whose *new releases* turn CI red on a commit that changed nothing — a new
+# version means new rules. Bumping it should be a commit, not a Tuesday.
+ruff==0.15.22

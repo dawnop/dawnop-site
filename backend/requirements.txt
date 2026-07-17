@@ -9,6 +9,3 @@ python-multipart
 qiniu
 requests
 psutil
-# --- dev / test ---
-httpx
-pytest
