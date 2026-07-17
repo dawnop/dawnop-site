@@ -27,27 +27,35 @@ function submit() {
   router.push({ name: 'search', query: { q } })
 }
 
+// 与 SearchModal 同款的请求序号：翻页或改词太快时，先发的可能后到，
+// 结果是 total 来自这次查询、items 来自上一次。丢弃过期响应。
+let reqId = 0
+
 async function load() {
   const q = (route.query.q || '').trim()
   kw.value = route.query.q || ''
   if (!q) {
+    reqId++ // 让在飞的请求作废，否则它回来会把列表又填上
     items.value = []
     total.value = 0
     searched.value = false
     return
   }
+  const my = ++reqId
   loading.value = true
   searched.value = true
   try {
     const { data } = await searchApi.query(q, page.value, size)
+    if (my !== reqId) return
     items.value = data.items
     total.value = data.total
     document.title = `“${q}” 的搜索结果 · dawnop`
   } catch (e) {
+    if (my !== reqId) return
     items.value = []
     total.value = 0
   } finally {
-    loading.value = false
+    if (my === reqId) loading.value = false
   }
 }
 

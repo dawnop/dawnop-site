@@ -145,15 +145,22 @@ export function useFileManager() {
   const rowClass = ({ row }) => (row.path === selectedPath.value ? 'is-sel' : '')
 
   // ---------- 加载 ----------
+  // 请求序号：快速连点两个目录时，先发的可能后到，把后发的结果盖掉——列表显示 A 的行，
+  // 面包屑/cwd 却是 B，随后的删除/改名都会拿 B 当基准去操作 A 的行。丢弃过期响应即可。
+  let cwdReq = 0
   async function loadCwd() {
+    const my = ++cwdReq
     loading.value = true
     try {
-      entries.value = await fm.listDir(cwd.value)
+      const rows = await fm.listDir(cwd.value)
+      if (my !== cwdReq) return // 已有更新的请求在飞，这份结果作废
+      entries.value = rows
     } catch {
       // 失败已由 axios 拦截器统一提示，这里只需结束 loading
     } finally {
-      loading.value = false
+      if (my === cwdReq) loading.value = false
     }
+    if (my !== cwdReq) return
     loadStats() // 每次目录变动/增删改后顺带刷新用量条（不阻塞列表）
   }
   function goto(path) {
@@ -207,8 +214,11 @@ export function useFileManager() {
         return
       }
       try {
-        previewText.value = await fm.textContent(row.path)
+        const text = await fm.textContent(row.path)
+        if (selectedPath.value !== row.path) return // 期间已选中别的文件，这份作废
+        previewText.value = text
       } catch (e) {
+        if (selectedPath.value !== row.path) return
         previewErr.value = e.message || '预览失败'
       }
     }
@@ -269,9 +279,16 @@ export function useFileManager() {
         return
       }
       try {
-        modal.text = await fm.textContent(row.path)
+        const text = await fm.textContent(row.path)
+        // 取字节是「签名 + 直连七牛」两跳（上限 8s），慢到足以被下面这串操作插队：
+        // 开 A（大文件，还在飞）→ Esc/点遮罩关掉 → 开 B（小文件，秒回）→ A 才回来。
+        // 若不认领，A 的正文就落进标题是 B 的弹窗里；再「编辑 → 保存」写的是 modal.row.path，
+        // 即把 A 的内容存进 B——静默覆盖。认领一下，过期响应直接丢。
+        if (modal.row !== row) return
+        modal.text = text
         modal.loaded = true
       } catch (e) {
+        if (modal.row !== row) return
         modal.err = e.message || '预览失败'
       }
     }

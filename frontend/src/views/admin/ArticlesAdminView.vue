@@ -106,14 +106,24 @@ async function remove(a) {
   } catch (e) {
     return // 取消
   }
-  await articlesApi.remove(a.id)
-  ElMessage.success('已删除')
-  load()
+  // 失败提示由 axios 拦截器统一给；这里 catch 掉是为了别漏出 unhandled rejection，
+  // 且失败时不弹「已删除」。同文件其余变更操作都是这个写法。
+  try {
+    await articlesApi.remove(a.id)
+    ElMessage.success('已删除')
+  } catch {
+    // 已提示
+  }
+  load() // 无论成败都刷新：失败时留着旧行更容易误导
 }
 
 async function togglePublish(a) {
-  await articlesApi.update(a.id, { published: !a.published })
-  ElMessage.success(a.published ? '已转为草稿' : '已发布')
+  try {
+    await articlesApi.update(a.id, { published: !a.published })
+    ElMessage.success(a.published ? '已转为草稿' : '已发布')
+  } catch {
+    // 已提示
+  }
   load()
 }
 
