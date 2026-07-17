@@ -25,6 +25,8 @@ FastAPI/uvicorn（`:8000`，systemd `dawnop-backend`）**已 `systemctl disable`
 > 于是：日志里没有来源 IP；任何按 `$binary_remote_addr` 的 `limit_req` 都是**全站共用一个桶**
 > （playground 的 `playrun`/`playcheck` 就这么静默失效了，2026-07-14 起）；按 IP 封禁只会封到
 > 分流层自己。**修好之前别往 nginx 加任何按 IP 的防护**，那只会制造「以为堵上了」的错觉。
+> 怎么修（PROXY protocol，分步、含回滚，已调研待执行）见
+> [`real-ip-proxy-protocol.md`](./real-ip-proxy-protocol.md)。
 >
 > 这两件事在 2026-07-17 之前**都不在版本控制里**，本文件当时还写着「Nginx 监听 80/443」。
 > 仓库与生产曾双向漂移：仓库单方面更新注释、生产单方面改结构，而本文件把仓库那份称作「权威」。
