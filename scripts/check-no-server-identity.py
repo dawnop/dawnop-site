@@ -132,10 +132,12 @@ def main() -> int:
                     )
             for m in USER_AT_HOST.finditer(line):
                 user, host = m.group(1), m.group(2)
-                if user in ALLOWED_USERS or host.startswith("<") or "example" in host:
+                # 只看用户名：占位主机（<server>）不豁免——`<user>@<server>` 里真实的是用户名，
+                # 主机是不是占位无所谓。曾因豁免占位主机而漏掉 `ssh <user>@<server>` 这类泄漏。
+                if user in ALLOWED_USERS or "example" in host:
                     continue
                 hits.append(
-                    f"{path}:{n}: ssh 用户名 `{user}@{host}` —— 改成 <user>@<server>"
+                    f"{path}:{n}: ssh 用户名 `{user}@{host}` —— 用户名改成 <user>"
                 )
             for pat in FORBIDDEN_TERMS:
                 if pat.search(line):
