@@ -71,9 +71,12 @@ export default defineConfig(({ command, mode }) => {
     },
     server: {
       proxy: {
-        // 开发期把 /api 反代到本地 FastAPI，避免 CORS 与端口问题
+        // 开发期把 /api 反代到本地后端，避免 CORS 与端口问题。
+        // 默认 8001 = Dawn 后端（backend-dawn，生产跑的就是它）。M6 切流后这里一直
+        // 还指着 8000，即已退役的 FastAPI——本地调 Dawn 后端会静默打到一个没人听的端口。
+        // 要对拍 FastAPI（回滚目标）时：VITE_API_TARGET=http://127.0.0.1:8000 npm run dev
         '/api': {
-          target: 'http://127.0.0.1:8000',
+          target: env.VITE_API_TARGET || 'http://127.0.0.1:8001',
           changeOrigin: true,
         },
       },
