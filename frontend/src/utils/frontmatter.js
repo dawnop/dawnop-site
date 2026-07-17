@@ -24,7 +24,7 @@ function parseValue(raw) {
 // 返回 { meta, body }。无合法 front matter（不以 --- 开头、或未闭合）时 meta={}、body 为原文。
 export function parseFrontmatter(md) {
   if (!md) return { meta: {}, body: md || '' }
-  const src = md.replace(/^﻿/, '') // 去 BOM
+  const src = md.replace(/^\uFEFF/, '') // 去 BOM（写转义而非字面 BOM：后者在编辑器里是隐形的）
   const lines = src.split('\n')
   if (lines[0].trim() !== '---') return { meta: {}, body: md }
   let end = -1

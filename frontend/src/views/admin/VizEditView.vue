@@ -14,6 +14,11 @@ const router = useRouter()
 const id = computed(() => route.params.id)
 const isEdit = computed(() => !!id.value)
 
+// eslint-disable no-useless-escape —— 下面 STARTER 里的 `<\/script>` 必须转义：
+// 这段模板字符串的内容是一个 Vue SFC，而它自己就住在本文件的 <script setup> 块里。
+// 不转义的话，HTML 解析器会在那儿提前闭合外层 script，整个文件报废。ESLint 只看到
+// 「JS 里 \/ 是无用转义」，不知道这个字符串所处的宿主环境——照它的自动修复会把页面改坏。
+/* eslint-disable no-useless-escape */
 const STARTER = `<script setup>
 import { ref, computed } from 'vue'
 
@@ -48,6 +53,7 @@ const bars = computed(() => [...Array(n.value).keys()])
 .cap { color: #6b7280; font-size: .85rem; margin-top: 10px; }
 </style>
 `
+/* eslint-enable no-useless-escape */
 
 const form = ref({ slug: '', name: '', source: STARTER })
 const saving = ref(false)
@@ -117,7 +123,7 @@ watch(
 
 // ---- 未保存离开拦截（守卫逻辑见 useUnsavedGuard）----
 const serialize = () => JSON.stringify(form.value)
-const { dirty, takeSnapshot, markSaved } = useUnsavedGuard(serialize)
+const { takeSnapshot, markSaved } = useUnsavedGuard(serialize)
 
 onMounted(async () => {
   if (isEdit.value) {

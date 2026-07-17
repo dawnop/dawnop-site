@@ -92,7 +92,7 @@ function serialize() {
     publishAt: publishAt.value ? publishAt.value.getTime() : null,
   })
 }
-const { dirty, takeSnapshot, markSaved } = useUnsavedGuard(serialize)
+const { takeSnapshot, markSaved } = useUnsavedGuard(serialize)
 
 onMounted(async () => {
   if (isEdit.value) {

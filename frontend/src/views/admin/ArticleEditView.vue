@@ -94,7 +94,7 @@ function serialize() {
     publishAt: publishAt.value ? publishAt.value.getTime() : null,
   })
 }
-const { dirty, takeSnapshot, markSaved } = useUnsavedGuard(serialize)
+const { takeSnapshot, markSaved } = useUnsavedGuard(serialize)
 
 onMounted(async () => {
   const { data: allPages } = await pagesApi.listAll()

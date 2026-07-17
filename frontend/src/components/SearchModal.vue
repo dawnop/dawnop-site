@@ -1,7 +1,7 @@
 <script setup>
-import { ref, watch, computed, nextTick, onBeforeUnmount } from 'vue'
+import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
 import { fmtDate } from '../utils/format'
-import { useRouter, RouterLink } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { Search, Clock, Close } from '@element-plus/icons-vue'
 import { searchApi } from '../api'
 import { useIsMobile } from '../composables/useIsMobile'
@@ -25,9 +25,6 @@ const listEl = ref(null)
 
 const MODAL_TOP_N = 6 // 面板只取前 N 条，「查看全部」跳整页
 const RECENT_KEY = 'dawnop:recent-search'
-
-const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent)
-const modKey = computed(() => (isMac ? '⌘' : 'Ctrl'))
 
 function readMinutes(wc) {
   return Math.max(1, Math.round((wc || 0) / 300))
