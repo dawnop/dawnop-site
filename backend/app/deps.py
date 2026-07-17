@@ -36,9 +36,8 @@ def get_current_user(
         if not username:
             raise credentials_exc
     except jwt.PyJWTError:
-        # from None: a malformed/expired token is routine input, not an internal
-        # fault. credentials_exc is the whole story; chaining the parse error just
-        # noises up logs.
+        # from None：畸形/过期 token 是常规输入而非内部故障，credentials_exc 已是
+        # 全部信息；把解析错误链上去只会给日志添噪音。
         raise credentials_exc from None
 
     user = db.query(User).filter(User.username == username).first()
@@ -61,9 +60,8 @@ def _resolve_user(raw_token: str | None, db: Session) -> User:
         if not username:
             raise credentials_exc
     except jwt.PyJWTError:
-        # from None: a malformed/expired token is routine input, not an internal
-        # fault. credentials_exc is the whole story; chaining the parse error just
-        # noises up logs.
+        # from None：畸形/过期 token 是常规输入而非内部故障，credentials_exc 已是
+        # 全部信息；把解析错误链上去只会给日志添噪音。
         raise credentials_exc from None
     user = db.query(User).filter(User.username == username).first()
     if user is None:

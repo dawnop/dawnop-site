@@ -2,9 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本仓库目前为空（仅有 `program.md` 需求说明），尚无代码。下面是基于 `program.md`
-> 制定的完整开发计划与约定。每完成一个阶段，请回来更新本文件中的「常用命令」「目录结构」
-> 等小节，使其与实际代码保持一致。
+> **状态：已上线并持续演进**（[dawnop.com](https://dawnop.com)）。本文件最初是动工前
+> 基于 `program.md` 写的开发计划，第 1–8 节的技术选型与约定仍然有效，但第 6 节的
+> 「阶段计划」是历史记录——那些阶段早已完成，此后还发生了本文件未预见的事：Element Plus
+> 重构、全站搜索、WebDAV、可视化组件，以及最大的一件——**M6 把整个后端用自制语言
+> [Dawn](https://github.com/dawnop/dawn-lang) 重写并全量切流**（见第 2 节的「后端」一行）。
+>
+> 改动结构后请回来更新「常用命令」「目录结构」，别让本文件重蹈覆辙：它曾在有 4 万行代码
+> 的仓库里，开篇写着「本仓库目前为空」。
 
 ## 1. 项目目标（来自 program.md）
 
@@ -22,8 +27,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | 层 | 选型 | 理由 |
 |----|------|------|
-| 后端框架 | **FastAPI** + Uvicorn | Python、轻量、自带 OpenAPI 文档（利于后续多客户端对接） |
-| ORM / DB | **SQLAlchemy 2.x** + **SQLite** | 需求明确指定 SQLite |
+| 后端 | **Dawn**（自制语言 → JVM 字节码），版本由根目录 `.dawn-version` 钉住 | M6 用 strangler-fig 逐路由迁移，2026-07 全量切流，uvicorn 已退役。见 `backend-dawn/` 与 [`docs/m6-retro.md`](https://github.com/dawnop/dawn-lang/blob/main/docs/m6-retro.md) |
+| 后端框架（历史 / 回滚目标） | **FastAPI** + Uvicorn | 原选型。`backend/` **仍在维护**：紧急回滚目标（`backend-dawn/deploy/rollback-to-fastapi.sh`）+ `contract_*.py` 的对拍参照，两套测试都在 CI 里跑 |
+| ORM / DB | **SQLAlchemy 2.x** + **SQLite**（Dawn 侧直接用 sqlite-jdbc） | 需求明确指定 SQLite |
 | 鉴权 | OAuth2 Password + **JWT**（**PyJWT** + **bcrypt**） | 前后端分离用 token；PyJWT/bcrypt 比 python-jose/passlib 维护更活跃、依赖更少 |
 | 对象存储 | 七牛云 **Kodo**，官方 `qiniu` Python SDK | 需求指定 |
 | 前端框架 | **Vue 3 + Vite** | 简单、构建快、契合「简洁干净」 |
@@ -219,19 +225,55 @@ dawnop-site/
 - 形态：Nginx 监听 80，托管 `frontend/dist` 静态文件，并将 `/api` 反向代理到本地 uvicorn；
   uvicorn 由 systemd（`deploy/dawnop-backend.service`）守护。
 
-## 9. 常用命令（脚手架建立后补全到此）
+## 9. 常用命令
 
 ```bash
-# 后端（建立后）
+# ---- 后端：Dawn（生产用的这套）----
+./backend-dawn/build.sh                 # 取编译器 → 60 个测试 → 打 jar（+ lib/）
+java -jar backend-dawn/backend-dawn.jar # 跑起来（lib/ 须在 jar 旁边）
+
+# 编译器版本由 .dawn-version 钉住，scripts/fetch-dawn.sh 自动下载并缓存到 .dawn/。
+# 同时改语言和后端时的逃生阀（二选一）：
+#   echo main > .dawn-version                                  # 克隆 dawn-lang 现编
+#   DAWN_BIN=~/workspace/dawn-lang/bin/dawn ./backend-dawn/build.sh
+
+# ---- 后端：FastAPI（回滚目标 + 契约参照）----
 cd backend && python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt     # 生产只装 requirements.txt
 python scripts/seed_admin.py            # 初始化管理员
-uvicorn app.main:app --reload           # 本地开发, http://127.0.0.1:8000, 文档 /docs
-pytest                                   # 全部测试
+python scripts/fetch_simple_ext.py      # 中文分词扩展（不入库；本机/服务器连不上 GitHub 时手动 scp）
+uvicorn app.main:app --reload           # http://127.0.0.1:8000, 文档 /docs
+pytest                                  # 120 个测试
 pytest tests/test_articles.py::test_x   # 单个测试
 
-# 前端（建立后）
+# ---- 前端 ----
 cd frontend && npm install
-npm run dev                              # Vite 开发服务器
-npm run build                            # 产出 dist/
+npm run dev                             # Vite 开发服务器
+npm run build                           # 产出 dist/
+npm run lint                            # eslint（配置 eslint.config.js）
+npm run format                          # prettier
+
+# ---- 质量检查（CI 跑的就是这些）----
+ruff check . && ruff format --check .   # 配置见 pyproject.toml，target 钉 3.10
+cd frontend && npm run lint && npm run format:check
+
+# ---- 契约对拍（需两套后端都在跑）----
+python backend-dawn/scripts/contract_read.py    # 68 项只读对拍
+python backend-dawn/scripts/contract_edge.py    # 边界/错误路径
+python backend-dawn/scripts/contract_webdav.py  # WebDAV 全周期
 ```
+
+## 10. 工程约定（机器强制的部分）
+
+规范尽量落在 CI 与配置里，而不是文档里——文档会过期，CI 不会。
+
+- **CI**（`.github/workflows/ci.yml`，push main + PR 触发）：Dawn 后端 60 测试 + 打 jar 传
+  artifact、FastAPI 120 测试（**钉 Python 3.10**，对齐生产）、前端 lint/format/build、
+  ruff check + format。任一红都别合。
+- **lint 基线是刻意放松的**：只开无争议的规则，排版归人。每条豁免在配置文件里都写了
+  实测理由（`pyproject.toml`、`frontend/eslint.config.js`）。收紧是自觉决定，不是随手加规则。
+- **Python 基线 3.10**：`pyproject.toml` 的 `target-version = "py310"` 会拦住 3.11+ 写法在
+  3.14 的笔记本上过审。
+- **依赖钉版本**：`requirements.txt`（生产）与 `requirements-dev.txt`（含 ruff，钉死）分离；
+  `.dawn-version` 钉编译器；`package-lock.json` 入库并用 `npm ci`。
+- **覆盖率只报数不设门槛**：backend ~80%、compiler ~88%。门槛会被防守。
