@@ -24,6 +24,15 @@ jobs:
       - name: no server identity in the tree
         run: python3 scripts/check-no-server-identity.py
 
+      # The deploy and rollback scripts are the least-exercised code in the repo:
+      # nothing runs them until production is already on fire, which is the worst
+      # possible moment to find out `sed -i` ate a symlink. shellcheck is not a
+      # test — nothing here boots a server — but it is the only automated opinion
+      # they get, and it is the one that caught `rm -rf "$APP/lib"` running as root
+      # with no guard on $APP being non-empty.
+      - name: shellcheck deploy scripts
+        run: shellcheck backend-dawn/deploy/*.sh backend-dawn/build.sh scripts/fetch-dawn.sh
+
   backend:
     runs-on: ubuntu-latest
     steps:

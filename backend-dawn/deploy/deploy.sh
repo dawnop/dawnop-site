@@ -16,9 +16,10 @@
 # scoped to this repo with Actions: read-only is enough; nothing here writes to
 # GitHub.
 #
-# Safe by construction: the running jar is kept and restored if the new one does
-# not come up healthy, so a bad deploy self-reverts instead of leaving the site
-# down.
+# A bad deploy self-reverts: the running jar is kept and restored if the new one
+# does not come up healthy. The exception is the very first deploy onto a fresh
+# machine, where there is nothing to revert *to* — the script says so up front
+# rather than discovering it in the failure path.
 set -euo pipefail
 
 REPO="dawnop/dawnop-site"
@@ -112,17 +113,29 @@ for want in $(unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' |
               sed -n 's/^Class-Path: //p' | tr ' ' '\n' | grep -v '^$'); do
   [ -f "$SRC/$want" ] || { echo "!!! manifest wants $want, not in artifact" >&2; exit 1; }
 done
-echo "    jar + $(ls "$SRC/lib" | wc -l) lib jar(s), manifest Class-Path satisfied"
+echo "    jar + $(find "$SRC/lib" -name '*.jar' -type f | wc -l) lib jar(s), manifest Class-Path satisfied"
 
 echo "==> 4/6 backing up what is running now"
-rm -rf "$PREV" && mkdir -p "$PREV"
+rm -rf "${PREV:?}" && mkdir -p "$PREV"
 cp -a "$APP/backend-dawn.jar" "$PREV/" 2>/dev/null || true
 cp -a "$APP/lib" "$PREV/" 2>/dev/null || true
-echo "    saved to $PREV ($CURRENT)"
+# Whether the backup is complete decides whether the health check below may roll
+# back at all. On a first deploy there is nothing running to save, and the two
+# `|| true` above quietly leave $PREV empty — so the rollback path would die on
+# its first `cp` under `set -e`, having restored nothing and leaving the bad jar
+# installed. Deciding it here, before anything is installed, keeps the failure
+# path honest about what it can actually do.
+CAN_ROLLBACK=""
+if [ -f "$PREV/backend-dawn.jar" ] && [ -d "$PREV/lib" ]; then
+  CAN_ROLLBACK=1
+  echo "    saved to $PREV ($CURRENT)"
+else
+  echo "    nothing running to back up — first deploy; health check cannot roll back"
+fi
 
 echo "==> 5/6 installing and restarting"
 cp -a "$JAR" "$APP/backend-dawn.jar"
-rm -rf "$APP/lib" && cp -a "$SRC/lib" "$APP/lib"
+rm -rf "${APP:?}/lib" && cp -a "$SRC/lib" "$APP/lib"
 printf '%s' "$RUN_SHA" > "$APP/.deployed-sha"
 chown -R "$OWNER" "$APP/backend-dawn.jar" "$APP/lib" "$APP/.deployed-sha"
 chmod 644 "$APP/backend-dawn.jar" "$APP/.deployed-sha"
@@ -141,12 +154,29 @@ for _ in $(seq 1 40); do
 done
 
 if [ -z "$ok" ]; then
+  if [ -z "$CAN_ROLLBACK" ]; then
+    echo "!!! did not come healthy, and there is no previous build to roll back to." >&2
+    echo "    the new jar is installed and the service is down." >&2
+    echo "    logs: journalctl -u $SERVICE -n 50 --no-pager" >&2
+    exit 1
+  fi
   echo "!!! did not come healthy — rolling back to $CURRENT" >&2
   cp -a "$PREV/backend-dawn.jar" "$APP/backend-dawn.jar"
-  rm -rf "$APP/lib" && cp -a "$PREV/lib" "$APP/lib"
-  printf '%s' "$CURRENT" > "$APP/.deployed-sha"
-  chown -R "$OWNER" "$APP/backend-dawn.jar" "$APP/lib" "$APP/.deployed-sha"
-  chmod 644 "$APP/backend-dawn.jar" "$APP/.deployed-sha"
+  rm -rf "${APP:?}/lib" && cp -a "$PREV/lib" "$APP/lib"
+  # "unknown" is not a sha. Recording it would make .deployed-sha lie about what
+  # is installed; absent is the honest state, and step 1 already treats a missing
+  # file as "deploy whatever is green".
+  if [ "$CURRENT" = "unknown" ]; then
+    rm -f "$APP/.deployed-sha"
+  else
+    printf '%s' "$CURRENT" > "$APP/.deployed-sha"
+  fi
+  # .deployed-sha is named separately because the branch above may have removed it.
+  chown -R "$OWNER" "$APP/backend-dawn.jar" "$APP/lib"
+  chmod 644 "$APP/backend-dawn.jar"
+  if [ -f "$APP/.deployed-sha" ]; then
+    chown "$OWNER" "$APP/.deployed-sha" && chmod 644 "$APP/.deployed-sha"
+  fi
   chmod 755 "$APP/lib" && chmod 644 "$APP/lib"/*.jar
   systemctl restart "$SERVICE"
   for _ in $(seq 1 40); do
