@@ -46,7 +46,10 @@
 
 ```bash
 # 1) nginx：dav vhost 的 access_log 换成带 auth= 标记的 dawnop_dav 格式
-sudo cp deploy/nginx.conf /etc/nginx/sites-available/dawnop
+#    写 nginx 真正读的那个文件——nginx 只 include sites-enabled/*，而 sites-available/dawnop
+#    是没人读的陈旧副本。写错了 = 日志里没有 auth= 字段 = filter 一条都匹配不到，
+#    而 jail 状态永远 0 failed 且不报错，看起来就像「没人攻击」。
+sudo cp deploy/nginx.conf "$(readlink -f /etc/nginx/sites-enabled/dawnop)"
 sudo nginx -t && sudo systemctl reload nginx
 
 # 2) 过滤器 + jail
