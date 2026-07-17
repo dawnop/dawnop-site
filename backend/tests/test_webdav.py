@@ -3,7 +3,6 @@
 import base64
 
 import pytest
-
 from app.core import qiniu_client
 from tests.conftest import ADMIN_PASSWORD, ADMIN_USERNAME
 

@@ -49,7 +49,7 @@ def upload_token(
         token = qiniu_client.upload_token(key)
         host = qiniu_client.upload_host()
     except RuntimeError as e:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
     # 记账：本环境亲自签发的 key。/register 成功后清除；始终没登记的即孤儿。
     db.execute(
         sqlite_insert(PendingUpload)
@@ -81,10 +81,10 @@ def register(
     # 多一步验证：确认直传真的落到了七牛，并取权威大小/类型。
     try:
         info = qiniu_client.stat(key)
-    except RuntimeError:
+    except RuntimeError as e:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "上传校验失败：对象未在七牛找到，请重试上传"
-        )
+        ) from e
     size = int(info.get("fsize") or payload.get("size") or 0)
     mime = (
         info.get("mimeType")
@@ -138,7 +138,7 @@ async def upload(
     try:
         qiniu_client.proxy_upload(key, data, mime)
     except RuntimeError as e:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
 
     _ensure_dirs(db, rel)
     if existing and not existing.is_dir:

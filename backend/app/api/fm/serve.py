@@ -88,7 +88,7 @@ def sign(
     try:
         return {"url": qiniu_client.private_url(o.key)}
     except RuntimeError as e:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
 
 
 @router.get("/content")
@@ -107,7 +107,7 @@ def content(
     try:
         url = qiniu_client.private_url(o.key)
     except RuntimeError as e:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
     # 要求 identity 编码：iter_content 会自动解压 gzip，解压后的字节数与上游
     # Content-Length 不符会让 uvicorn 报「shorter than Content-Length」
     r = _plain_http.get(
@@ -144,7 +144,7 @@ def preview(
     try:
         return _redirect(qiniu_client.private_url(o.key, fop=fop))
     except RuntimeError as e:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
 
 
 @router.get("/download")
@@ -157,7 +157,7 @@ def download(
     try:
         return _redirect(qiniu_client.private_url(o.key, attname=_basename(o.path)))
     except RuntimeError as e:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
 
 
 # ---------------- search ----------------

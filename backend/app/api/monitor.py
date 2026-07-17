@@ -80,7 +80,7 @@ def _lighthouse() -> dict:
     try:
         s = tencent_client.monitor_series("CpuUsage", days=30)
         out["cpu_trend"] = [
-            {"t": t, "v": v} for t, v in zip(s["timestamps"], s["values"])
+            {"t": t, "v": v} for t, v in zip(s["timestamps"], s["values"], strict=True)
         ]
     except Exception as e:  # noqa: BLE001
         out["cpu_trend_error"] = str(e)
@@ -104,7 +104,8 @@ def _qiniu() -> dict:
         out["flow_30d"] = sum(x["value"] for x in flow)
         out["hits_30d"] = sum(x["value"] for x in hits)
         out["space_trend"] = [
-            {"t": t, "v": v} for t, v in zip(space["times"], space["datas"])
+            {"t": t, "v": v}
+            for t, v in zip(space["times"], space["datas"], strict=True)
         ]
         out["flow_trend"] = [{"t": x["time"], "v": x["value"]} for x in flow]
     except Exception as e:  # noqa: BLE001
@@ -117,7 +118,7 @@ def _qiniu() -> dict:
         out["cdn_peak_bps"] = qiniu_client.cdn_bandwidth_peak(days=30)
         out["cdn_domains"] = cdn["domains"]
         out["cdn_trend"] = [
-            {"t": t, "v": v} for t, v in zip(cdn["times"], cdn["values"])
+            {"t": t, "v": v} for t, v in zip(cdn["times"], cdn["values"], strict=True)
         ]
     except Exception as e:  # noqa: BLE001
         out["cdn_error"] = str(e)

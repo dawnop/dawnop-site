@@ -7,8 +7,7 @@ GET /{slug} 声明，避免被 slug 通配吞掉。
 import re
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi import status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session

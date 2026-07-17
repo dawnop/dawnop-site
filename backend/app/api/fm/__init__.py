@@ -19,6 +19,9 @@ from fastapi import APIRouter
 
 from . import crud, serve, uploads
 
+# tests 猴补丁的存储统计缓存（必须与 crud.stats 用的是同一个 dict 对象）
+from .crud import _space_cache  # noqa: F401
+
 # webdav.py 复用的文件树原语
 from .paths import (  # noqa: F401
     _basename,
@@ -34,9 +37,6 @@ from .tree import (  # noqa: F401
     _reparent,
     _subtree,
 )
-
-# tests 猴补丁的存储统计缓存（必须与 crud.stats 用的是同一个 dict 对象）
-from .crud import _space_cache  # noqa: F401
 
 router = APIRouter()
 # 列目录挂在空路径（历史线格式），直接注册到聚合 router（不走 include_router）

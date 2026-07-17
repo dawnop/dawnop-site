@@ -86,7 +86,7 @@ def update_settings(
         try:
             value = VALIDATORS[key](value)
         except ValueError as e:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{key} {e}")
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{key} {e}") from e
         row = db.get(Setting, key)
         if row is None:
             db.add(Setting(key=key, value=json.dumps(value)))

@@ -3,14 +3,13 @@
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
 from app.core import search as search_mod
 from app.core.search import ensure_article_fts, search_published
 from app.database import Base
 from app.models.article import Article
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 _EXT = Path(__file__).resolve().parents[1] / "extensions" / "libsimple"
 

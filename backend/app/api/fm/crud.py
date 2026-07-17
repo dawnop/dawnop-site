@@ -112,7 +112,7 @@ def delete(
                 try:
                     qiniu_client.delete(o.key)
                 except RuntimeError as e:
-                    raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+                    raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
             deleted.append(_entry(o))
             db.delete(o)
     db.commit()
@@ -198,7 +198,7 @@ def copy(
                 try:
                     qiniu_client.copy(o.key, new_key)
                 except RuntimeError as e:
-                    raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+                    raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
                 db.add(
                     FileObject(
                         path=dst_path,
@@ -252,7 +252,7 @@ def create_file(
     try:
         qiniu_client.proxy_upload(key, b"", mime)
     except RuntimeError as e:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
     _ensure_dirs(db, rel)
     db.add(FileObject(path=rel, is_dir=False, key=key, content_type=mime, size=0))
     db.commit()
@@ -280,7 +280,7 @@ def save(
     try:
         qiniu_client.proxy_upload(key, content, mime)
     except RuntimeError as e:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
     old_key = o.key if o else None
     if o is None:
         _ensure_dirs(db, rel)

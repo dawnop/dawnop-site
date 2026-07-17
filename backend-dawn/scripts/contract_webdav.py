@@ -249,7 +249,7 @@ def main():
         check("UNLOCK 204 (dawn)", st == 204, str(st))
 
     print(f"\n{INFO} 9. Cross-direction: PUT on FAST -> GET on Dawn")
-    txt = "跨方向验证 cross-check ✓\n".encode("utf-8")
+    txt = "跨方向验证 cross-check ✓\n".encode()
     st, _, _ = dav(
         F,
         "PUT",

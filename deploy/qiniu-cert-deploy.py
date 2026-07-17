@@ -2,9 +2,15 @@
 # acme.sh 续期后调用（部署于服务器 /home/dawn/qiniu-cert-deploy.py，由 Le_ReloadCmd 触发）：
 # 把 /etc/ssl/dawnop/ 的新通配符证书上传七牛，并把 DOMAINS 里的加速域名改绑到新 certID。
 # 七牛 AK/SK 从后端 .env 读，不打印。幂等：每次上传生成一张新证书对象。
-import json, hmac, hashlib, base64, datetime, sys
+import base64
+import datetime
+import hashlib
+import hmac
+import json
+import sys
+import urllib.error
+import urllib.request
 from urllib.parse import urlparse
-import urllib.request, urllib.error
 
 ENV = "/opt/dawnop/backend/.env"
 CA_PATH = "/etc/ssl/dawnop/dawnop.com_bundle.crt"
@@ -37,7 +43,7 @@ def b64url(b):
 def qbox(url):
     p = urlparse(url)
     s = p.path + ("?" + p.query if p.query else "") + "\n"
-    return "QBox %s:%s" % (AK, b64url(hmac.new(SK, s.encode(), hashlib.sha1).digest()))
+    return f"QBox {AK}:{b64url(hmac.new(SK, s.encode(), hashlib.sha1).digest())}"
 
 
 def req(method, url, obj):
@@ -70,7 +76,7 @@ fail = False
 for domain, force in DOMAINS.items():
     st2, rp2 = req(
         "PUT",
-        "https://api.qiniu.com/domain/%s/httpsconf" % domain,
+        f"https://api.qiniu.com/domain/{domain}/httpsconf",
         {"certId": cert_id, "forceHttps": force, "http2Enable": True},
     )
     print("[httpsconf]", domain, st2, rp2)
@@ -78,4 +84,4 @@ for domain, force in DOMAINS.items():
         fail = True
 if fail:
     sys.exit("httpsconf update failed")
-print("OK bound %s -> certId=%s" % (", ".join(DOMAINS), cert_id))
+print(f"OK bound {', '.join(DOMAINS)} -> certId={cert_id}")

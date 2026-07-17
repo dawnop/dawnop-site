@@ -9,6 +9,12 @@
 所有函数失败抛 RuntimeError，由上层转 HTTP 错误。
 """
 
+from .cdn import (  # noqa: F401
+    cdn_bandwidth_peak,
+    cdn_domains,
+    cdn_flux_series,
+    respack_summary,
+)
 from .kodo import (  # noqa: F401
     copy,
     delete,
@@ -25,10 +31,4 @@ from .stats import (  # noqa: F401
     count_series,
     flow_series,
     space_series,
-)
-from .cdn import (  # noqa: F401
-    cdn_bandwidth_peak,
-    cdn_domains,
-    cdn_flux_series,
-    respack_summary,
 )

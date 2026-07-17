@@ -125,7 +125,9 @@ def build_cases(token, content_page_id):
     #   compare: "full" (status+scrubbed body) | "status" (status only) | "write"
     #   "write": like full, but 2xx is treated as an unexpected mutation and flagged.
     C = []
-    add = lambda *a: C.append(a)
+
+    def add(*a):
+        C.append(a)
 
     # ---- public reads: pagination bounds ----
     add("articles.ok", "GET", "/api/articles", None, None, "full")

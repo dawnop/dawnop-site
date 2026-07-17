@@ -12,10 +12,12 @@ from app.api import (
     monitor,
     pages,
     search,
-    settings as settings_api,
     tags,
     viz,
     webdav,
+)
+from app.api import (
+    settings as settings_api,
 )
 from app.config import settings
 from app.core.bootstrap import ensure_builtin_pages

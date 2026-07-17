@@ -39,7 +39,6 @@ from sqlalchemy.orm import Session
 from app.api.fm import (
     _basename,
     _children,
-    _ensure_dirs,
     _ext,
     _get,
     _guess_mime,
@@ -85,7 +84,7 @@ def _dav_user(request: Request, db: Session) -> User:
     try:
         raw = base64.b64decode(header[6:]).decode("utf-8")
     except Exception:
-        raise _dav_401()
+        raise _dav_401() from None
     username, sep, password = raw.partition(":")
     if not sep:
         raise _dav_401()
@@ -301,7 +300,7 @@ def _get_or_head(request: Request, db: Session, rel: str, head: bool) -> Respons
     try:
         url = qiniu_client.private_url(o.key)
     except RuntimeError as e:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
 
     # 会跟随 302 的客户端：直连七牛，省后端流量
     if _follows_redirect(request):
@@ -402,7 +401,7 @@ async def _put(request: Request, db: Session, rel: str) -> Response:
     try:
         qiniu_client.proxy_upload_file(key, tmp_path, mime)
     except RuntimeError as e:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
     finally:
         try:
             os.unlink(tmp_path)
@@ -478,7 +477,7 @@ def _move_or_copy(request: Request, db: Session, rel: str, is_move: bool) -> Res
                 try:
                     qiniu_client.copy(o.key, new_key)
                 except RuntimeError as e:
-                    raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e))
+                    raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
                 db.add(
                     FileObject(
                         path=dst_path,

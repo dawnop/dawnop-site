@@ -1,7 +1,6 @@
 """VueFinder 文件管理端点单测：打桩七牛，不触网。"""
 
 import pytest
-
 from app.core import qiniu_client
 
 

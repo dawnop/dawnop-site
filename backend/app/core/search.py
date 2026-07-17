@@ -256,7 +256,10 @@ def _collect_ids(db: Session, q: str, terms: list[str], offset: int, size: int):
     if tok == "trigram":
         fts_terms = [t for t in terms if len(t) >= 3]
         if fts_terms:
-            match = " AND ".join('"%s"' % t.replace('"', '""') for t in fts_terms)
+            # escaped first, then quoted: an f-string cannot nest the same quote
+            # it is delimited by until 3.12, and the baseline here is 3.10.
+            escaped = (t.replace('"', '""') for t in fts_terms)
+            match = " AND ".join(f'"{t}"' for t in escaped)
             try:
                 return _trigram_query(db, match, offset, size)
             except OperationalError:

@@ -30,13 +30,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from qiniu import build_batch_delete  # noqa: E402
-
 from app.config import settings  # noqa: E402
 from app.core import qiniu_client  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models.file_object import FileObject  # noqa: E402
 from app.models.pending_upload import PendingUpload  # noqa: E402
+from qiniu import build_batch_delete  # noqa: E402
 
 
 def _all_remote(bucket_mgr, bucket: str) -> dict:
