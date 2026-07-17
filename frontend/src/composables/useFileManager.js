@@ -649,6 +649,11 @@ export function useFileManager() {
     }
   }
 
+  // 拖拽中的收尾函数（框选 / 拖动侧栏宽度各一个）。正常在 mouseup 时自己清空，
+  // 中途卸载则由 onUnmounted 调用，避免 document 上留下监听。
+  let dragCleanup = null
+  let resizeCleanup = null
+
   // ---------- 框选多选（在空白处按下并拖动画选择框）----------
   function onContentMousedown(ev) {
     if (ev.button !== 0) return
@@ -660,6 +665,9 @@ export function useFileManager() {
       )
     )
       return
+    // 上一轮拖拽若在内容区外松手，就不会补发 click，抑制标志会一直挂着，把下一次
+    // 真正的空白点击吃掉（表现为「偶尔点空白清不掉选中」）。每次按下先归零。
+    marqueeSuppressBlank = false
     const sx = ev.clientX
     const sy = ev.clientY
     let moved = false
@@ -677,6 +685,7 @@ export function useFileManager() {
       applyMarquee()
     }
     const onUp = () => {
+      dragCleanup = null
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
       document.body.style.userSelect = ''
@@ -687,6 +696,10 @@ export function useFileManager() {
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
+    // 这两个监听挂在 document 上，只有 onUp 会摘。拖拽途中离开本页（如按 Esc 走路由）
+    // 就永远等不到 onUp，监听连同整个 composable 闭包留在 document 上继续改 marquee。
+    // 交给 onUnmounted 兜底。
+    dragCleanup = onUp
   }
   // 选择框与各行/卡片求交（DOM 顺序与 filtered 一致，按下标映射回数据行）
   function applyMarquee() {
@@ -912,6 +925,7 @@ export function useFileManager() {
       else infoW.value = Math.min(520, Math.max(220, startW - d)) // 右面板往左拖变宽
     }
     const up = () => {
+      resizeCleanup = null
       document.removeEventListener('mousemove', move)
       document.removeEventListener('mouseup', up)
       document.body.style.cursor = ''
@@ -921,6 +935,9 @@ export function useFileManager() {
     }
     document.addEventListener('mousemove', move)
     document.addEventListener('mouseup', up)
+    // 同框选：中途卸载就等不到 mouseup，另外 body 的 cursor/userSelect 也会卡在拖拽态，
+    // 影响的是整个应用而不只是本页。
+    resizeCleanup = up
   }
 
   // ---------- 展示辅助 ----------
@@ -955,6 +972,12 @@ export function useFileManager() {
   onUnmounted(() => {
     document.removeEventListener('click', closeCtx)
     document.removeEventListener('keydown', onGlobalKey)
+    // 单击延迟：250ms 内离开本页的话，selectFile 会在已卸载的组件上跑起来，
+    // 白发一次取字节请求。
+    clearTimeout(clickTimer)
+    // 拖拽途中卸载：这两个还挂在 document 上。
+    dragCleanup?.()
+    resizeCleanup?.()
   })
 
   return {
@@ -962,7 +985,6 @@ export function useFileManager() {
     fm,
     // 状态
     cwd,
-    entries,
     loading,
     q,
     viewMode,
@@ -978,7 +1000,6 @@ export function useFileManager() {
     sheet,
     effectiveView,
     drive,
-    conf,
     drivePct,
     tasks,
     tasksCollapsed,
@@ -1005,36 +1026,25 @@ export function useFileManager() {
     imgViewer,
     modal,
     destDlg,
-    dragDepth,
     dragging,
     ctx,
     ctxItems,
     // 方法
     openSearch,
     closeSearch,
-    loadStats,
-    loadConf,
-    addTask,
-    loadCwd,
     goto,
     loadTreeNode,
     onTreeClick,
-    reloadTree,
     onSelChange,
     clearSel,
-    textTooLarge,
-    selectFile,
     onRowClick,
     onRowDblclick,
     onBlankClick,
     openImgViewer,
-    openModal,
     startEdit,
     saveEdit,
     beforeCloseModal,
-    onCellClick,
     onCellTap,
-    toggleCheck,
     toggleSelectMode,
     openSheet,
     sheetDo,
@@ -1042,14 +1052,10 @@ export function useFileManager() {
     doDownloadMany,
     newFolder,
     doRename,
-    doDelete,
     doDeleteMany,
     onRowCommand,
     startMoveCopy,
     confirmDest,
-    parentOf,
-    dragSetFor,
-    canDropDest,
     onDragStartRow,
     onDragEndRow,
     onDestDragOver,
@@ -1058,25 +1064,17 @@ export function useFileManager() {
     onRowDragOver,
     onRowDragLeave,
     onRowDrop,
-    moveInto,
     onContentMousedown,
-    applyMarquee,
-    openCtx,
     openCtxRow,
     openCtxBlank,
     onTableRowCtx,
-    closeCtx,
     runCtx,
-    onGlobalKey,
     pickFiles,
     pickFolder,
     onFilesPicked,
-    uploadMany,
-    hasFiles,
     onDragEnter,
     onDragLeave,
     onDrop,
-    walkEntry,
     startResize,
     isImage,
     isText,

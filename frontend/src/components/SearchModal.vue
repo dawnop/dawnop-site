@@ -171,6 +171,7 @@ watch(
 
 onBeforeUnmount(() => {
   unlockScroll()
+  clearTimeout(timer) // 防抖还没到点就卸载的话，run() 会在已卸载的组件上发请求
 })
 </script>
 

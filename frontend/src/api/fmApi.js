@@ -54,12 +54,16 @@ export function downloadUrl(rel) {
 // 直连依赖存储域名 CORS（生产已配；本地开发走七牛测试域名没有），被拦时走后端代理兜底。
 // 直连限时 8s：有些网络环境下失败表现为挂起而非快速报错，不限时就轮不到兜底。
 export async function textContent(rel) {
+  // 签名接口不在兜底范围内：它失败是鉴权/后端问题，代理兜底照样会失败。
+  // 旧版把它一起 catch 进「直连被拦」分支，401 会再打一次 /fm/content 又 401，
+  // 于是两次「登录已过期」提示 + 两次登出跳转。
+  const { data: signed } = await client.get('/fm/sign', { params: { path: toFull(rel) } })
   try {
-    const { data } = await client.get('/fm/sign', { params: { path: toFull(rel) } })
-    const resp = await fetch(data.url, { signal: AbortSignal.timeout(8000) })
+    const resp = await fetch(signed.url, { signal: AbortSignal.timeout(8000) })
     if (!resp.ok) throw new Error(`预览失败: ${resp.status}`)
-    return resp.text()
+    return await resp.text() // await：不然 text() 的失败会绕过下面的兜底
   } catch {
+    // 直连被 CORS 拦 / 网络失败 / 超时 → 后端代理兜底
     const { data } = await client.get('/fm/content', {
       params: { path: toFull(rel) },
       responseType: 'text',
@@ -76,13 +80,18 @@ export const saveText = (rel, content) => client.post('/fm/save', { path: toFull
 // 直连被 CORS 拦（本地开发测试域名）时改走后端代理，进度不丢。
 // 拿到 Blob 后由调用方触发另存。sizeHint 兜底 Content-Length 缺失的场景。
 export async function downloadBlob(rel, onProgress, sizeHint) {
+  // 同 textContent：签名失败不走兜底，否则 401 会被当成 CORS 再打一次代理，双份提示。
+  const { data: signed } = await client.get('/fm/sign', { params: { path: toFull(rel) } })
   try {
-    const { data } = await client.get('/fm/sign', { params: { path: toFull(rel) } })
     // 只对「等响应头」限时 8s（直连失败在有些网络下表现为挂起）；开始收流后不设限，大文件慢慢下
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), 8000)
-    const resp = await fetch(data.url, { signal: ctrl.signal })
-    clearTimeout(timer)
+    let resp
+    try {
+      resp = await fetch(signed.url, { signal: ctrl.signal })
+    } finally {
+      clearTimeout(timer) // finally：fetch 抛出时旧版会漏掉这行，定时器一直挂着
+    }
     if (!resp.ok) throw new Error(`下载失败: ${resp.status}`)
     const total = Number(resp.headers.get('content-length')) || sizeHint || 0
     const reader = resp.body.getReader()
