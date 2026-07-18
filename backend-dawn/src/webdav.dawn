@@ -397,13 +397,13 @@ fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int, existi
   }
 
 # best-effort delete of the replaced object (ignore failure)
-fn delete_superseded(q: Qiniu, existing: Option[FileRow], new_key: String) -> Result[Bool, String] !io =
+fn delete_superseded(q: Qiniu, existing: Option[FileRow], new_key: String) -> Result[Unit, String] !io =
   match existing {
     Some(o) -> match o.key {
-      Some(ok) -> if ok != new_key { delete_obj(q.ak, q.sk, q.bucket, ok) } else { Ok(true) }
-      None -> Ok(true)
+      Some(ok) -> if ok != new_key { delete_obj(q.ak, q.sk, q.bucket, ok) } else { Ok(()) }
+      None -> Ok(())
     }
-    None -> Ok(true)
+    None -> Ok(())
   }
 
 # ---- DELETE ----
@@ -429,9 +429,9 @@ fn purge(a: Auth, rel: String) -> Result[Response, HttpError] !io =
 fn del_qiniu(q: Qiniu, rows: List[FileRow], i: Int) -> Int !io =
   if i >= len(rows) { 0 } else {
     let o = rows[i]
-    let _r: Result[Bool, String] = match o.key {
-      Some(k) -> if o.is_dir { Ok(true) } else { delete_obj(q.ak, q.sk, q.bucket, k) }
-      None -> Ok(true)
+    let _r: Result[Unit, String] = match o.key {
+      Some(k) -> if o.is_dir { Ok(()) } else { delete_obj(q.ak, q.sk, q.bucket, k) }
+      None -> Ok(())
     }
     del_qiniu(q, rows, i + 1)
   }

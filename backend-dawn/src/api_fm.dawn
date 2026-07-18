@@ -467,10 +467,10 @@ fn delete_rows(q: Qiniu, c: Connection, rows: List[FileRow], i: Int, acc: List[J
     let _obj = if o.is_dir == false {
       match o.key {
         Some(k) -> delete_obj(q.ak, q.sk, q.bucket, k)?
-        None -> true
+        None -> ()
       }
     } else {
-      true
+      ()
     }
     let e = entry_json(o)
     let _d = delete_row(c, o.path)?
@@ -549,9 +549,9 @@ fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !io = 
   let _up = upload_text(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, new_key, content, mime, now_secs() + a.qiniu.expires)?
   let _db = with_db(a.db.path, a.db.ext, fn(c) => save_db(c, rel, new_key, mime, str_len(content)))?
   # best-effort delete of the superseded object (ignore failure)
-  let _del: Result[Bool, String] = match old_key {
-    Some(k) -> if k != new_key { delete_obj(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, k) } else { Ok(true) }
-    None -> Ok(true)
+  let _del: Result[Unit, String] = match old_key {
+    Some(k) -> if k != new_key { delete_obj(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, k) } else { Ok(()) }
+    None -> Ok(())
   }
   Ok(obj([("path", jstr(full(rel)))]))
 }
