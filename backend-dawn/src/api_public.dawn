@@ -2,7 +2,7 @@
 # a connection per request via with_db. Errors map to the FastAPI JSON shape
 # {"detail": ...} through the web framework's Err branch.
 use java "java.sql.Connection"
-use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, query, query_int_bounded}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, json_response, query, query_int_bounded}
 use web/router.{Route, route_get}
 use json/value.{Json, JArr}
 use jsonx.{paginated, detail, obj, jstr}
@@ -30,14 +30,8 @@ pub fn list_articles(db: Db) -> Handler =
       Some(s) -> if s == "" { None } else { Some(s) }
       None -> None
     }
-    let outcome = with_db(db.path, db.ext, fn(c) => list_published(c, tag, page, size))
-    match outcome {
-      Ok(pair) -> {
-        let (total, items) = pair
-        Ok(json_ok(paginated(total, page, size, items)))
-      }
-      Err(m) -> Err(http_error(500, m))
-    }
+    let (total, items) = as_http(with_db(db.path, db.ext, fn(c) => list_published(c, tag, page, size)), 500)?
+    Ok(json_ok(paginated(total, page, size, items)))
   }
 
 ## GET /api/articles/{slug} — one article. Drafts are visible only to a logged-in
@@ -49,10 +43,9 @@ pub fn get_article(db: Db, a: Auth) -> Handler =
   fn(req) => {
     let slug = map_get_or(req.params, "slug", "")
     let authed = is_authed(a, req)
-    match with_db(db.path, db.ext, fn(c) => fetch_detail(c, slug, authed)) {
-      Ok(Some(j)) -> Ok(json_ok(j))
-      Ok(None) -> Err(http_error(404, "文章不存在"))
-      Err(m) -> Err(http_error(500, m))
+    match as_http(with_db(db.path, db.ext, fn(c) => fetch_detail(c, slug, authed)), 500)? {
+      Some(j) -> Ok(json_ok(j))
+      None -> Err(http_error(404, "文章不存在"))
     }
   }
 
@@ -77,19 +70,15 @@ fn map_get_or(m: Map[String, String], k: String, fallback: String) -> String =
 ## GET /api/pages/nav — visible nav items.
 pub fn get_nav(db: Db) -> Handler =
   fn(req) =>
-  match with_db(db.path, db.ext, fn(c) => repo_page.nav(c)) {
-    Ok(items) -> Ok(json_ok(JArr(items)))
-    Err(m) -> Err(http_error(500, m))
-  }
+  Ok(json_ok(JArr(as_http(with_db(db.path, db.ext, fn(c) => repo_page.nav(c)), 500)?)))
 
 ## GET /api/pages/{slug} — one page, 404 when absent.
 pub fn get_page(db: Db) -> Handler =
   fn(req) => {
     let slug = map_get_or(req.params, "slug", "")
-    match with_db(db.path, db.ext, fn(c) => repo_page.by_slug(c, slug)) {
-      Ok(Some(j)) -> Ok(json_ok(j))
-      Ok(None) -> Err(http_error(404, "页面不存在"))
-      Err(m) -> Err(http_error(500, m))
+    match as_http(with_db(db.path, db.ext, fn(c) => repo_page.by_slug(c, slug)), 500)? {
+      Some(j) -> Ok(json_ok(j))
+      None -> Err(http_error(404, "页面不存在"))
     }
   }
 
@@ -99,13 +88,12 @@ pub fn get_page_articles(db: Db) -> Handler =
     let slug = map_get_or(req.params, "slug", "")
     let page = query_int_bounded(req, "page", 1, 1, -1)?
     let size = query_int_bounded(req, "size", 10, 1, 100)?
-    match with_db(db.path, db.ext, fn(c) => fetch_page_articles(c, slug, page, size)) {
-      Ok(Some(pair)) -> {
+    match as_http(with_db(db.path, db.ext, fn(c) => fetch_page_articles(c, slug, page, size)), 500)? {
+      Some(pair) -> {
         let (total, items) = pair
         Ok(json_ok(paginated(total, page, size, items)))
       }
-      Ok(None) -> Err(http_error(404, "页面不存在"))
-      Err(m) -> Err(http_error(500, m))
+      None -> Err(http_error(404, "页面不存在"))
     }
   }
 
@@ -121,19 +109,15 @@ fn fetch_page_articles(c: Connection, slug: String, page: Int, size: Int) -> Res
 ## GET /api/tags — all tags with counts.
 pub fn get_tags(db: Db) -> Handler =
   fn(req) =>
-  match with_db(db.path, db.ext, fn(c) => repo_tag.list_public(c)) {
-    Ok(items) -> Ok(json_ok(JArr(items)))
-    Err(m) -> Err(http_error(500, m))
-  }
+  Ok(json_ok(JArr(as_http(with_db(db.path, db.ext, fn(c) => repo_tag.list_public(c)), 500)?)))
 
 ## GET /api/tags/{slug} — one tag, 404 when absent.
 pub fn get_tag(db: Db) -> Handler =
   fn(req) => {
     let slug = map_get_or(req.params, "slug", "")
-    match with_db(db.path, db.ext, fn(c) => repo_tag.by_slug(c, slug)) {
-      Ok(Some(j)) -> Ok(json_ok(j))
-      Ok(None) -> Err(http_error(404, "标签不存在"))
-      Err(m) -> Err(http_error(500, m))
+    match as_http(with_db(db.path, db.ext, fn(c) => repo_tag.by_slug(c, slug)), 500)? {
+      Some(j) -> Ok(json_ok(j))
+      None -> Err(http_error(404, "标签不存在"))
     }
   }
 
@@ -146,20 +130,16 @@ pub fn search(db: Db) -> Handler =
     }
     let page = query_int_bounded(req, "page", 1, 1, -1)?
     let size = query_int_bounded(req, "size", 10, 1, 50)?
-    match with_db(db.path, db.ext, fn(c) => search_published(c, q, page, size)) {
-      Ok(j) -> Ok(json_ok(j))
-      Err(m) -> Err(http_error(500, m))
-    }
+    Ok(json_ok(as_http(with_db(db.path, db.ext, fn(c) => search_published(c, q, page, size)), 500)?))
   }
 
 ## GET /api/viz/{slug} — public component for readers to mount.
 pub fn get_viz(db: Db) -> Handler =
   fn(req) => {
     let slug = map_get_or(req.params, "slug", "")
-    match with_db(db.path, db.ext, fn(c) => repo_viz.by_slug_public(c, slug)) {
-      Ok(Some(j)) -> Ok(json_ok(j))
-      Ok(None) -> Err(http_error(404, "组件不存在"))
-      Err(m) -> Err(http_error(500, m))
+    match as_http(with_db(db.path, db.ext, fn(c) => repo_viz.by_slug_public(c, slug)), 500)? {
+      Some(j) -> Ok(json_ok(j))
+      None -> Err(http_error(404, "组件不存在"))
     }
   }
 
