@@ -59,7 +59,7 @@ dawnop-site/
 │   ├── src/
 │   │   ├── main.dawn           # 入口：读 config、装路由/中间件、绑 127.0.0.1:8001
 │   │   ├── config.dawn db.dawn crypto.dawn jwt.dawn auth.dawn slugify.dawn ttl.dawn
-│   │   ├── api_*.dawn          # 路由层：public / admin / admin2 / fm / monitor
+│   │   ├── api_*.dawn          # 路由层：public / articles / settings / tags / pages / viz / fm / monitor
 │   │   ├── repo_*.dawn sql.dawn  # 数据层：article/page/tag/pagetag/viz/settings/fm/write
 │   │   ├── webdav.dawn export.dawn multipart.dawn search.dawn monitor.dawn fm_paths.dawn
 │   │   ├── http.dawn           # 出站 HTTP 客户端（七牛/腾讯管理 API、register stat、探针）

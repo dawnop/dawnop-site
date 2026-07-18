@@ -1,0 +1,213 @@
+# Page admin (M6 knife 9, split out of api_admin2 2026-07-19): CRUD plus nav
+# reordering. Builtin pages accept only the nav fields — slug/type/content are
+# routing and render roots the FastAPI builtin filter strips.
+use java "java.sql.Connection"
+use web/types.{Handler, http_error, as_http, opt_param_int, json_ok, json_response, text}
+use web/router.{Route, route_get, route_post, route_put, route_delete}
+use json/value.{Json, JArr, JInt}
+use db.{with_db}
+use auth.{Auth, guarded}
+use jsonread.{body_obj, has, str_or, opt_str, bool_or, int_field}
+use repo_page
+use repo_pagetag.{NewPage, create_page, page_kind, delete_page, reorder_pages, set_page_str, set_page_int, set_page_created, touch_page, regen_page_slug, page_title}
+
+## GET /api/pages/admin — all pages.
+pub fn pages_admin(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_page.list_admin(c)), 500)?))))
+
+## POST /api/pages — create; returns the created page (201).
+pub fn page_create(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        if trim(str_or(m, "title", "")) == "" {
+          Err(http_error(422, "标题不能为空"))
+        } else if page_over_len(str_or(m, "title", "")) || page_over_len(str_or(m, "slug", "")) {
+          Err(http_error(422, "标题或 slug 长度超出 255"))
+        } else if bad_page_type(str_or(m, "type", "content")) {
+          Err(http_error(422, "type 只能是 content 或 article_list"))
+        } else {
+          let np = NewPage {
+            title: trim(str_or(m, "title", "")),
+            slug_hint: str_or(m, "slug", ""),
+            kind: str_or(m, "type", "content"),
+            description: str_or(m, "description", ""),
+            content: str_or(m, "content", ""),
+            auto_title: bool_or(m, "auto_title", false),
+            # FastAPI PageCreate.nav_visible defaults True (a page created without
+            # the field shows in the nav bar)
+            nav_visible: bool_or(m, "nav_visible", true),
+            nav_order: match int_field(m, "nav_order") { Some(n) -> n
+              None -> 0 },
+            created_at: opt_str(m, "created_at"),
+          }
+          Ok(json_response(201, as_http(with_db(a.db.path, a.db.ext, fn(c) => page_create_read(c, np)), 500)?))
+        }
+      })
+
+# title/slug carry Field(max_length=255)
+fn page_over_len(s: String) -> Bool = str_len(s) > 255
+
+# type is Literal["content","article_list"]; anything else (incl. "builtin") is a 422
+fn bad_page_type(t: String) -> Bool = t != "content" && t != "article_list"
+
+# a key present with an explicit JSON null — a non-optional str field rejects it (422)
+fn present_null(m: Map[String, Json], key: String) -> Bool =
+  match map_get(m, key) {
+    Some(JNull) -> true
+    _ -> false
+  }
+
+fn page_create_read(c: Connection, np: NewPage) -> Result[Json, String] !io = {
+  let id = create_page(c, np)?
+  match repo_page.by_id_admin(c, id)? {
+    Some(j) -> Ok(j)
+    None -> Err("created page vanished")
+  }
+}
+
+## PUT /api/pages/{page_id} — partial update (builtin pages: only nav fields).
+pub fn page_update(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match opt_param_int(req, "page_id") {
+        Some(id) ->
+          {
+            let m = as_http(body_obj(req.body), 422)?
+            # PageUpdate validation: present title non-blank, title/slug ≤255,
+            # present type must be a valid Literal (checked before the builtin filter)
+            if has(m, "title") && trim(str_or(m, "title", "")) == "" {
+              Err(http_error(422, "标题不能为空"))
+            } else if page_over_len(str_or(m, "title", "")) || page_over_len(str_or(m, "slug", "")) {
+              Err(http_error(422, "标题或 slug 长度超出 255"))
+            } else if has(m, "type") && bad_page_type(str_or(m, "type", "content")) {
+              Err(http_error(422, "type 只能是 content 或 article_list"))
+            } else {
+              match as_http(with_db(a.db.path, a.db.ext, fn(c) => page_update_read(c, id, m)), 500)? {
+                Some(j) -> Ok(json_ok(j))
+                None -> Err(http_error(404, "页面不存在"))
+              }
+            }
+          }
+        None -> Err(http_error(422, "page_id must be an integer"))
+      })
+
+fn page_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Option[Json], String] !io =
+  match page_kind(c, id)? {
+    None -> Ok(None)
+    Some(kind) -> {
+      let builtin = kind == "builtin"
+      # builtin pages accept only title/nav_visible/nav_order (slug/type/description/
+      # content/auto_title/created_at are routing/render roots FastAPI's builtin
+      # filter strips); non-builtin pages accept the full editable set.
+      let _t = if has(m, "title") { set_page_str(c, id, "title", trim(str_or(m, "title", "")))? } else { 0 }
+      let _nv = if has(m, "nav_visible") { set_page_int(c, id, "nav_visible", bool_int(bool_or(m, "nav_visible", false)))? } else { 0 }
+      let _no = if has(m, "nav_order") { set_page_int(c, id, "nav_order", nav_order_of(m))? } else { 0 }
+      let _ty = if builtin == false && has(m, "type") { set_page_str(c, id, "type", str_or(m, "type", "content"))? } else { 0 }
+      let _de = if builtin == false && has(m, "description") { set_page_str(c, id, "description", str_or(m, "description", ""))? } else { 0 }
+      let _co = if builtin == false && has(m, "content") { set_page_str(c, id, "content", str_or(m, "content", ""))? } else { 0 }
+      let _au = if builtin == false && has(m, "auto_title") { set_page_int(c, id, "auto_title", bool_int(bool_or(m, "auto_title", false)))? } else { 0 }
+      let _ca = if builtin == false { match opt_str(m, "created_at") { Some(s) -> set_page_created(c, id, s)? None -> 0 } } else { 0 }
+      let _sl = if builtin == false && has(m, "slug") { regen_page_slug(c, id, slug_base(c, id, m)?)? } else { 0 }
+      let _u = touch_page(c, id)?
+      repo_page.by_id_admin(c, id)
+    }
+  }
+
+fn slug_base(c: Connection, id: Int, m: Map[String, Json]) -> Result[String, String] !io = {
+  let s = str_or(m, "slug", "")
+  if s != "" {
+    Ok(s)
+  } else if has(m, "title") {
+    Ok(trim(str_or(m, "title", "")))
+  } else {
+    page_title(c, id)
+  }
+}
+
+fn nav_order_of(m: Map[String, Json]) -> Int =
+  match int_field(m, "nav_order") {
+    Some(n) -> n
+    None -> 0
+  }
+
+fn bool_int(b: Bool) -> Int = if b { 1 } else { 0 }
+
+## DELETE /api/pages/{page_id} — 204 (builtin pages are protected: 400).
+pub fn page_delete(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match opt_param_int(req, "page_id") {
+        Some(id) ->
+          match as_http(with_db(a.db.path, a.db.ext, fn(c) => page_delete_guarded(c, id)), 500)? {
+            0 -> Err(http_error(404, "页面不存在"))
+            1 -> Ok(text(204, ""))
+            _o -> Err(http_error(400, "内置页面不可删除，可在导航中隐藏"))
+          }
+        None -> Err(http_error(422, "page_id must be an integer"))
+      })
+
+# returns 0=absent, 1=deleted, 2=builtin-refused
+fn page_delete_guarded(c: Connection, id: Int) -> Result[Int, String] !io =
+  match page_kind(c, id)? {
+    None -> Ok(0)
+    Some(kind) ->
+      if kind == "builtin" {
+        Ok(2)
+      } else {
+        let _d = delete_page(c, id)?
+        Ok(1)
+      }
+  }
+
+## POST /api/pages/reorder — set nav_order by id-list position, return admin list.
+pub fn page_reorder(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        # ReorderRequest.ids is a required list[int]: absent / non-array / any
+        # non-integer element is a 422 in FastAPI (not a silently-empty reorder).
+        match strict_int_list(m, "ids") {
+          None -> Err(http_error(422, "ids 必须是整数数组"))
+          Some(ids) -> Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, fn(c) => reorder_read(c, ids)), 500)?)))
+        }
+      })
+
+# a present JSON array whose every element is an integer → Some(list); absent,
+# non-array, or any non-int element → None (→ 422). Empty array is valid (Some []).
+fn strict_int_list(m: Map[String, Json], key: String) -> Option[List[Int]] =
+  match map_get(m, key) {
+    Some(JArr(xs)) -> all_ints(xs, [])
+    _ -> None
+  }
+
+fn all_ints(xs: List[Json], acc: List[Int]) -> Option[List[Int]] =
+  if len(xs) == 0 {
+    Some(acc)
+  } else {
+    match xs[0] {
+      JInt(n) -> all_ints(tail_json(xs), acc ++ [n])
+      _ -> None
+    }
+  }
+
+fn tail_json(xs: List[Json]) -> List[Json] = map(range(1, len(xs)), fn(i) => xs[i])
+
+fn reorder_read(c: Connection, ids: List[Int]) -> Result[List[Json], String] !io = {
+  let _r = reorder_pages(c, ids)?
+  repo_page.list_admin(c)
+}
+
+## The pages admin routes. Static paths precede /{id} captures.
+pub fn routes(a: Auth) -> List[Route] =
+  [
+    route_get("/api/pages/admin", pages_admin(a)),
+    route_post("/api/pages/reorder", page_reorder(a)),
+    route_post("/api/pages", page_create(a)),
+    route_put("/api/pages/{page_id}", page_update(a)),
+    route_delete("/api/pages/{page_id}", page_delete(a)),
+  ]

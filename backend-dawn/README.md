@@ -51,7 +51,10 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `repo_article.dawn` / `repo_page.dawn` / `repo_tag.dawn` — 只读查询 + `word_count`/分页/标签。
 
 **后台写（刀 9/10）**
-- `api_admin.dawn` / `api_admin2.dawn` — 文章 CRUD + 导出；设置 / 标签管理 / 页面 / viz。
+- `api_articles.dawn` — 文章 CRUD + Markdown 导出。
+- `api_settings.dawn` / `api_tags.dawn` / `api_pages.dawn` / `api_viz.dawn` — 一文件一后台页面。
+  （曾是一个 `api_admin2.dawn`：它不是从 `api_admin` 拆出来的，是刀 9 的新功能进了新文件、
+  名字随手叫了 `2`，于是文件名记的是写作顺序而非内容。2026-07-19 按内部已有的分区注释拆开。）
 - `repo_write.dawn` / `repo_pagetag.dawn` / `repo_viz.dawn` / `repo_settings.dawn` — 写模型（唯一 slug、标签解析、校验、reorder）。
 - `slugify.dawn` / `export.dawn` — slug 生成（对齐 `core/slug.py`）/ Markdown frontmatter 导出。
 - `search.dawn` — FTS5 排序委托同一 SQL bm25，仅高亮在 Dawn 侧重写。

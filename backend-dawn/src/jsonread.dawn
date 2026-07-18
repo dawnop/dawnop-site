@@ -83,3 +83,21 @@ test "null page_id reads as None" {
     Err(e) -> panic(e)
   }
 }
+
+## An integer field, accepting a JSON number that happens to be integral.
+## Distinct from `strict_int`, which the settings handler keeps local because it
+## must reject a float the way FastAPI's isinstance(v, int) check does.
+pub fn int_field(m: Map[String, Json], key: String) -> Option[Int] =
+  match map_get(m, key) {
+    Some(JInt(n)) -> Some(n)
+    Some(JNum(x)) -> Some(to_int(x))
+    _ -> None
+  }
+
+## A key present with an explicit JSON null — a non-optional str field rejects
+## it (422), which is different from the key being absent (left untouched).
+pub fn present_null(m: Map[String, Json], key: String) -> Bool =
+  match map_get(m, key) {
+    Some(JNull) -> true
+    _ -> false
+  }

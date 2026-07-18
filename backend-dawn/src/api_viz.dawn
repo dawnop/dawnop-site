@@ -1,0 +1,135 @@
+# Visualization-component admin (M6 knife 9, split out of api_admin2 2026-07-19).
+# Components are Vue SFCs compiled in the browser; the backend only stores the
+# source, the compiled output and the style, keyed by a slug.
+use java "java.sql.Connection"
+use web/types.{HttpError, Handler, http_error, as_http, as_http_with, opt_param_int, json_ok, json_response, text}
+use web/router.{Route, route_get, route_post, route_put, route_delete}
+use json/value.{Json, JArr}
+use db.{with_db}
+use auth.{Auth, guarded}
+use jsonread.{body_obj, opt_str, str_or, present_null}
+use repo_viz.{NewViz, valid_slug, slug_free, viz_exists, create_viz, set_viz_str, touch_viz, delete_viz, list_all, by_id}
+
+## GET /api/viz — all components (admin).
+pub fn viz_list(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, fn(c) => list_all(c)), 500)?))))
+
+## POST /api/viz — create (201). slug format + uniqueness + source required.
+pub fn viz_create(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        {
+          # _clean_slug lowercases+trims before the regex; slug carries max_length=255.
+          let slug = to_lower(trim(str_or(m, "slug", "")))
+          let source = str_or(m, "source", "")
+          if present_null(m, "name") || present_null(m, "compiled") || present_null(m, "style") || present_null(m, "source") {
+            Err(http_error(422, "字段不能为 null"))
+          } else if str_len(str_or(m, "slug", "")) > 255 {
+            Err(http_error(422, "slug 长度超出 255"))
+          } else if valid_slug(slug) == false {
+            Err(http_error(422, "slug 格式非法"))
+          } else if trim(source) == "" {
+            Err(http_error(422, "source 不能为空"))
+          } else {
+            let nv = NewViz {
+              slug: slug, name: str_or(m, "name", ""), source: source,
+              compiled: str_or(m, "compiled", ""), style: str_or(m, "style", ""),
+            }
+            match as_http(with_db(a.db.path, a.db.ext, fn(c) => viz_create_read(c, nv)), 500)? {
+              Some(j) -> Ok(json_response(201, j))
+              None -> Err(http_error(409, "标识 $slug 已存在"))
+            }
+          }
+        }
+      })
+
+fn viz_create_read(c: Connection, nv: NewViz) -> Result[Option[Json], String] !io = {
+  let free = slug_free(c, nv.slug, None)?
+  if free == false {
+    Ok(None)
+  } else {
+    let id = create_viz(c, nv)?
+    by_id(c, id)
+  }
+}
+
+## PUT /api/viz/{viz_id} — partial update.
+pub fn viz_update(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match opt_param_int(req, "viz_id") {
+        Some(id) ->
+          {
+            let m = as_http(body_obj(req.body), 422)?
+            match as_http_with(with_db(a.db.path, a.db.ext, fn(c) => viz_update_read(c, id, m)), classify_viz)? {
+              Some(j) -> Ok(json_ok(j))
+              None -> Err(http_error(404, "组件不存在"))
+            }
+          }
+        None -> Err(http_error(422, "viz_id must be an integer"))
+      })
+
+# a slug collision is a 409, every other update failure a 422 (validation)
+fn classify_viz(msg: String) -> HttpError =
+  if contains(msg, "已存在") { http_error(409, msg) } else { http_error(422, msg) }
+
+fn viz_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Option[Json], String] !io = {
+  let ex = viz_exists(c, id)?
+  if ex == false {
+    Ok(None)
+  } else {
+    # PATCH semantics: a present, non-null field is applied; an explicit null is
+    # skipped (FastAPI's exclude_unset + `if value is not None`), NOT written as ""
+    # — writing "" here was silent data loss.
+    let _sl = match opt_str(m, "slug") { Some(s) -> update_viz_slug(c, id, s)? None -> 0 }
+    let _na = match opt_str(m, "name") { Some(s) -> set_viz_str(c, id, "name", s)? None -> 0 }
+    let _so = match opt_str(m, "source") { Some(s) -> set_viz_source(c, id, s)? None -> 0 }
+    let _co = match opt_str(m, "compiled") { Some(s) -> set_viz_str(c, id, "compiled", s)? None -> 0 }
+    let _st = match opt_str(m, "style") { Some(s) -> set_viz_str(c, id, "style", s)? None -> 0 }
+    let _t = touch_viz(c, id)?
+    by_id(c, id)
+  }
+}
+
+fn update_viz_slug(c: Connection, id: Int, raw: String) -> Result[Int, String] !io = {
+  # _clean_slug lowercases+trims before validating; VizUpdate.slug is max_length=255
+  let slug = to_lower(trim(raw))
+  if str_len(raw) > 255 {
+    Err("slug 长度超出 255")
+  } else if valid_slug(slug) == false {
+    Err("slug 格式非法")
+  } else {
+    let free = slug_free(c, slug, Some(id))?
+    if free == false { Err("标识 $slug 已存在") } else { set_viz_str(c, id, "slug", slug) }
+  }
+}
+
+# _clean_source: a present source must be non-blank (422), else stored verbatim
+fn set_viz_source(c: Connection, id: Int, s: String) -> Result[Int, String] !io =
+  if trim(s) == "" { Err("组件源码不能为空") } else { set_viz_str(c, id, "source", s) }
+
+## DELETE /api/viz/{viz_id} — 204.
+pub fn viz_delete(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match opt_param_int(req, "viz_id") {
+        Some(id) ->
+          {
+            let n = as_http(with_db(a.db.path, a.db.ext, fn(c) => delete_viz(c, id)), 500)?
+            if n == 0 { Err(http_error(404, "组件不存在")) } else { Ok(text(204, "")) }
+          }
+        None -> Err(http_error(422, "viz_id must be an integer"))
+      })
+
+## The viz admin routes. Static paths precede /{id} captures.
+pub fn routes(a: Auth) -> List[Route] =
+  [
+    route_get("/api/viz", viz_list(a)),
+    route_post("/api/viz", viz_create(a)),
+    route_put("/api/viz/{viz_id}", viz_update(a)),
+    route_delete("/api/viz/{viz_id}", viz_delete(a)),
+  ]

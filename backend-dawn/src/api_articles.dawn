@@ -2,16 +2,16 @@
 # handler authenticates first via auth.current_user; the request body is JSON
 # (create/update). Writes run on a connection with the FTS extension loaded.
 use java "java.sql.Connection"
-use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text, raw, with_header, query_int_bounded}
+use web/types.{Request, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text, raw, with_header, query_int_bounded}
 use export.{export_markdown, url_encode}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json}
-use jsonx.{paginated, obj, jstr, jint}
-use db.{Db, with_db}
-use auth.{Auth, current_user}
+use jsonx.{paginated}
+use db.{with_db}
+use auth.{Auth, guarded_user}
 use jsonread.{body_obj, has, str_or, opt_str, bool_or, opt_int, str_list}
 use repo_article
-use repo_write.{NewArticle, ArticlePatch, create_article, update_article, delete_article, article_exists, unique_slug, resolve_tags, validate_page_ref}
+use repo_write.{NewArticle, ArticlePatch, create_article, update_article, delete_article}
 
 fn param(req: Request, name: String) -> String =
   match map_get(req.params, name) {
@@ -30,17 +30,10 @@ fn opt_query_int(req: Request, name: String) -> Result[Option[Int], HttpError] =
     }
   }
 
-# guard: run body only if authenticated, else 401
-fn guarded(a: Auth, req: Request, body: fn(String) -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io =
-  {
-    let user = current_user(a, req)?
-    body(user)
-  }
-
 ## GET /api/articles/admin — all articles, optional ?published= filter.
 pub fn list_admin(a: Auth) -> Handler =
   fn(req) =>
-  guarded(a, req, fn(_u) => {
+  guarded_user(a, req, fn(_u) => {
     let page = query_int_bounded(req, "page", 1, 1, -1)?
     let size = query_int_bounded(req, "size", 10, 1, 100)?
     let pub_filter: Option[Bool] = match map_get(req.query, "published") {
@@ -57,13 +50,13 @@ pub fn list_admin(a: Auth) -> Handler =
 ## GET /api/articles/admin/stats — counts and total views.
 pub fn admin_stats(a: Auth) -> Handler =
   fn(req) =>
-  guarded(a, req, fn(_u) =>
+  guarded_user(a, req, fn(_u) =>
       Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_article.stats(c)), 500)?)))
 
 ## GET /api/articles/admin/{article_id} — one article (any status).
 pub fn admin_get(a: Auth) -> Handler =
   fn(req) =>
-  guarded(a, req, fn(_u) =>
+  guarded_user(a, req, fn(_u) =>
       match parse_int(param(req, "article_id")) {
         Some(id) ->
           match as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_article.by_id_admin(c, id)), 500)? {
@@ -76,7 +69,7 @@ pub fn admin_get(a: Auth) -> Handler =
 ## POST /api/articles — create; returns the created article (201).
 pub fn create(a: Auth) -> Handler =
   fn(req) =>
-  guarded(a, req, fn(_u) =>
+  guarded_user(a, req, fn(_u) =>
       {
         let m = as_http(body_obj(req.body), 422)?
         if has(m, "title") == false || trim(str_or(m, "title", "")) == "" {
@@ -113,7 +106,7 @@ fn create_then_read(c: Connection, na: NewArticle) -> Result[Json, String] !io =
 ## PUT /api/articles/{article_id} — partial update; returns the updated article.
 pub fn update(a: Auth) -> Handler =
   fn(req) =>
-  guarded(a, req, fn(_u) =>
+  guarded_user(a, req, fn(_u) =>
       match parse_int(param(req, "article_id")) {
         Some(id) ->
           {
@@ -156,7 +149,7 @@ fn update_then_read(c: Connection, id: Int, p: ArticlePatch) -> Result[Option[Js
 ## GET /api/articles/{article_id}/export — Markdown file with YAML frontmatter.
 pub fn export_md(a: Auth) -> Handler =
   fn(req) =>
-  guarded(a, req, fn(_u) =>
+  guarded_user(a, req, fn(_u) =>
       match parse_int(param(req, "article_id")) {
         Some(id) ->
           match as_http(with_db(a.db.path, a.db.ext, fn(c) => export_markdown(c, id)), 500)? {
@@ -174,7 +167,7 @@ pub fn export_md(a: Auth) -> Handler =
 ## DELETE /api/articles/{article_id} — 204 on success.
 pub fn remove(a: Auth) -> Handler =
   fn(req) =>
-  guarded(a, req, fn(_u) =>
+  guarded_user(a, req, fn(_u) =>
       match parse_int(param(req, "article_id")) {
         Some(id) ->
           {

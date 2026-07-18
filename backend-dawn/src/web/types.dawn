@@ -162,6 +162,15 @@ pub fn param_int(req: Request, name: String) -> Result[Int, HttpError] = {
   }
 }
 
+# A path parameter as an Option rather than a Result: handlers that word their
+# own 422 ("tag_id must be an integer") need the failure back as data, not as a
+# ready-made HttpError. `param_int` above is the version that picks the message.
+pub fn opt_param_int(req: Request, name: String) -> Option[Int] =
+  match map_get(req.params, name) {
+    Some(v) -> parse_int(v)
+    None -> None
+  }
+
 pub fn query(req: Request, name: String) -> Option[String] = map_get(req.query, name)
 
 # Strict pagination reader matching FastAPI's Query(ge=lo, le=hi): an absent

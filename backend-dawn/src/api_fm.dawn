@@ -12,7 +12,7 @@ use http.{fetch_stream, ok_stream, close_stream}
 use web/router.{Route, route_get, route_post, tagged}
 use jsonx.{obj, jstr, jint}
 use db.{Db, with_db}
-use auth.{Auth, Qiniu, current_user, current_user_flexible}
+use auth.{Auth, Qiniu, guarded, guarded_flexible}
 use jsonread.{body_obj, str_or, str_list, opt_int}
 use fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full}
 use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, ledger_insert, ledger_delete, search_files, subtree_rows, entry_json, delete_row, stats_db, FileRow}
@@ -27,21 +27,6 @@ use ttl.{cache_get, cache_put}
 use json/value.{Json, JNull, JArr, JObj, JStr, JNum, JInt}
 use json/render.{render}
 use json/parser.{parse}
-
-fn guarded(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io =
-  {
-    let _u = current_user(a, req)?
-    body()
-  }
-
-# preview/download bytes are fetched by a browser <img>/download link that cannot
-# set an Authorization header, so these two accept a `?token=` fallback (only
-# these — matches FastAPI's get_current_user_flexible).
-fn guarded_flexible(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io =
-  {
-    let _u = current_user_flexible(a, req)?
-    body()
-  }
 
 fn strip_slash(s: String) -> String = fm_split(s)
 

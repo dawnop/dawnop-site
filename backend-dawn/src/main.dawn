@@ -7,8 +7,11 @@ use db.{Db}
 use web/server.{serve_app}
 use web/middleware.{with_logging, with_cors, with_body_limit}
 use api_public
-use api_admin
-use api_admin2
+use api_articles
+use api_settings
+use api_tags
+use api_pages
+use api_viz
 use api_fm
 use api_monitor.{MonCfg, mon_routes}
 use auth.{Auth, Qiniu, routes}
@@ -55,7 +58,7 @@ pub fn main() -> Unit !io = {
   println("backend-dawn starting: db=$db_path port=$port")
   # admin routes precede the public /api/{articles,pages,tags}/{slug} so the
   # static /admin, /reorder, /merge, /cleanup paths win over the {slug} capture
-  serve_app(port, api_admin.routes(a) ++ api_admin2.routes(a) ++ api_fm.routes(a, space_cell, respack_cell) ++ mon_routes(a, moncfg, mon_cell, respack_cell) ++ api_public.routes(db, a) ++ routes(a) ++ dav_routes(a, dav_cell), [
+  serve_app(port, api_articles.routes(a) ++ api_settings.routes(a) ++ api_tags.routes(a) ++ api_pages.routes(a) ++ api_viz.routes(a) ++ api_fm.routes(a, space_cell, respack_cell) ++ mon_routes(a, moncfg, mon_cell, respack_cell) ++ api_public.routes(db, a) ++ routes(a) ++ dav_routes(a, dav_cell), [
     with_logging,
     fn(next) => with_cors(origin, next),
     fn(next) => with_body_limit(2000000, next),

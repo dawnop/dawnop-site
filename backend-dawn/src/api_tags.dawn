@@ -1,0 +1,112 @@
+# Tag admin (M6 knife 9, split out of api_admin2 2026-07-19): admin listing with
+# draft counts, rename (slug follows the name), merge, cleanup, delete.
+use java "java.sql.Connection"
+use web/types.{Handler, http_error, as_http, opt_param_int, json_ok, text}
+use web/router.{Route, route_get, route_post, route_put, route_delete}
+use json/value.{Json, JArr}
+use jsonx.{obj, jint}
+use db.{with_db}
+use auth.{Auth, guarded}
+use jsonread.{body_obj, opt_str, int_field}
+use repo_tag
+use repo_pagetag.{tag_exists, rename_tag, merge_tags, cleanup_tags, delete_tag}
+
+## GET /api/tags/admin — all tags with counts (drafts included).
+pub fn tags_admin(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_tag.list_admin(c)), 500)?))))
+
+## PUT /api/tags/{tag_id} — rename (slug regenerates).
+pub fn tag_rename(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match opt_param_int(req, "tag_id") {
+        Some(id) ->
+          {
+            let m = as_http(body_obj(req.body), 422)?
+            # TagUpdate.name is a required str: absent or explicit null → 422
+            # (a present blank string is the handler's own 400, below).
+            match opt_str(m, "name") {
+              None -> Err(http_error(422, "name 不能为空"))
+              Some(nm) ->
+                match as_http(with_db(a.db.path, a.db.ext, fn(c) => rename_then_read(c, id, nm)), 400)? {
+                  Some(j) -> Ok(json_ok(j))
+                  None -> Err(http_error(404, "标签不存在"))
+                }
+            }
+          }
+        None -> Err(http_error(422, "tag_id must be an integer"))
+      })
+
+fn rename_then_read(c: Connection, id: Int, name: String) -> Result[Option[Json], String] !io = {
+  let ex = tag_exists(c, id)?
+  if ex == false {
+    Ok(None)
+  } else {
+    let _r = rename_tag(c, id, name)?
+    repo_tag.out_by_id(c, id)
+  }
+}
+
+## POST /api/tags/merge — merge source into target, return target with count.
+pub fn tag_merge(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        let sid = int_field(m, "source_id")
+        let tid = int_field(m, "target_id")
+        match (sid, tid) {
+          (Some(s), Some(t)) ->
+            if s == t {
+              Err(http_error(400, "不能与自身合并"))
+            } else {
+              match as_http(with_db(a.db.path, a.db.ext, fn(c) => merge_then_read(c, s, t)), 500)? {
+                Some(j) -> Ok(json_ok(j))
+                None -> Err(http_error(404, "源标签或目标标签不存在"))
+              }
+            }
+          _ -> Err(http_error(422, "source_id 和 target_id 必填"))
+        }
+      })
+
+fn merge_then_read(c: Connection, s: Int, t: Int) -> Result[Option[Json], String] !io = {
+  let se = tag_exists(c, s)?
+  let te = tag_exists(c, t)?
+  if se == false || te == false {
+    Ok(None)
+  } else {
+    let cnt = merge_tags(c, s, t)?
+    repo_tag.with_count(c, t, cnt)
+  }
+}
+
+## POST /api/tags/cleanup — delete unused tags, return {deleted}.
+pub fn tag_cleanup(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      Ok(json_ok(obj([("deleted", jint(as_http(with_db(a.db.path, a.db.ext, fn(c) => cleanup_tags(c)), 500)?))]))))
+
+## DELETE /api/tags/{tag_id} — 204.
+pub fn tag_delete(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      match opt_param_int(req, "tag_id") {
+        Some(id) ->
+          {
+            let n = as_http(with_db(a.db.path, a.db.ext, fn(c) => delete_tag(c, id)), 500)?
+            if n == 0 { Err(http_error(404, "标签不存在")) } else { Ok(text(204, "")) }
+          }
+        None -> Err(http_error(422, "tag_id must be an integer"))
+      })
+
+## The tags admin routes. Static paths precede /{id} captures.
+pub fn routes(a: Auth) -> List[Route] =
+  [
+    route_get("/api/tags/admin", tags_admin(a)),
+    route_post("/api/tags/merge", tag_merge(a)),
+    route_post("/api/tags/cleanup", tag_cleanup(a)),
+    route_put("/api/tags/{tag_id}", tag_rename(a)),
+    route_delete("/api/tags/{tag_id}", tag_delete(a)),
+  ]

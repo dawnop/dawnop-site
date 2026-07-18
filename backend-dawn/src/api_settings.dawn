@@ -1,0 +1,85 @@
+# Global settings admin (M6 knife 9, split out of api_admin2 2026-07-19).
+# GET returns the DEFAULTS-merged table; PUT validates every key before writing
+# any of them, so an invalid key persists nothing.
+use java "java.sql.Connection"
+use web/types.{Handler, as_http, json_ok}
+use web/router.{Route, route_get, route_put}
+use json/value.{Json, JInt}
+use db.{with_db}
+use auth.{Auth, guarded}
+use jsonread.{body_obj}
+use repo_settings
+
+## GET /api/settings — merged global settings.
+pub fn get_settings(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_settings.read_all(c, a.storage_quota)), 500)?)))
+
+## PUT /api/settings — validate & upsert known integer keys, return merged.
+pub fn put_settings(a: Auth) -> Handler =
+  fn(req) =>
+  guarded(a, req, fn() =>
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, fn(c) => write_settings(c, m, a.storage_quota)), 400)?))
+      })
+
+fn write_settings(c: Connection, m: Map[String, Json], storage_quota: Int) -> Result[Json, String] !io = {
+  let _w = apply_settings(c, map_keys(m), m, 0)?
+  repo_settings.read_all(c, storage_quota)
+}
+
+# FastAPI validates every key then commits once: an invalid key persists nothing.
+# Pass 1 validates all (unknown key / non-int value / out-of-range), pass 2 writes.
+fn apply_settings(c: Connection, keys: List[String], m: Map[String, Json], i: Int) -> Result[Bool, String] !io = {
+  let _v = validate_settings(keys, m, 0)?
+  write_all_settings(c, keys, m, 0)
+}
+
+fn validate_settings(keys: List[String], m: Map[String, Json], i: Int) -> Result[Bool, String] !io =
+  if i == len(keys) {
+    Ok(true)
+  } else {
+    let key = keys[i]
+    # unknown key is reported first (like FastAPI), even for a non-int value
+    match strict_int(m, key) {
+      Some(n) -> {
+        let _chk = repo_settings.check_setting(key, n)?
+        validate_settings(keys, m, i + 1)
+      }
+      None -> match repo_settings.range_of(key) {
+        None -> Err("未知配置项：$key")
+        Some(pair) -> {
+          let (lo, hi) = pair
+          Err("$key 应为 $lo~$hi 的整数")
+        }
+      }
+    }
+  }
+
+fn write_all_settings(c: Connection, keys: List[String], m: Map[String, Json], i: Int) -> Result[Bool, String] !io =
+  if i == len(keys) {
+    Ok(true)
+  } else {
+    let key = keys[i]
+    let v = match strict_int(m, key) { Some(n) -> n None -> 0 }
+    let _p = repo_settings.put_one(c, key, v)?
+    write_all_settings(c, keys, m, i + 1)
+  }
+
+# a strict integer JSON value: JInt only. A float (JNum, incl. 3.0), bool, string,
+# null, or absent → None, so FastAPI's `isinstance(v,int) and not isinstance(v,bool)`
+# rejection (a float is a 400, not silently truncated) is reproduced.
+fn strict_int(m: Map[String, Json], key: String) -> Option[Int] =
+  match map_get(m, key) {
+    Some(JInt(n)) -> Some(n)
+    _ -> None
+  }
+
+## The settings admin routes. Static paths precede /{id} captures.
+pub fn routes(a: Auth) -> List[Route] =
+  [
+    route_get("/api/settings", get_settings(a)),
+    route_put("/api/settings", put_settings(a)),
+  ]

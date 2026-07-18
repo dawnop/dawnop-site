@@ -134,6 +134,33 @@ pub fn current_user_flexible(a: Auth, req: Request) -> Result[String, HttpError]
     t -> t
   })
 
+# ---- guards ----
+#
+# Run a handler body only when the request authenticates, else propagate the 401.
+# These lived as three near-identical private copies in api_articles, api_admin2
+# and api_fm — the api_admin2 and api_fm ones were byte-for-byte the same, and a
+# single change to the guard had to be made three times. They belong next to
+# `current_user`, which is the only thing they do.
+
+## The common case: the body does not care who is logged in.
+pub fn guarded(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io = {
+  let _u = current_user(a, req)?
+  body()
+}
+
+## For handlers that need the username (article create/update record an author).
+pub fn guarded_user(a: Auth, req: Request, body: fn(String) -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io = {
+  let user = current_user(a, req)?
+  body(user)
+}
+
+## Accepts `?token=` as well as the header — only for fm preview/download, whose
+## bytes a browser fetches from an <img>/download link that carries no header.
+pub fn guarded_flexible(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io = {
+  let _u = current_user_flexible(a, req)?
+  body()
+}
+
 fn header_token(req: Request) -> String =
   match header(req, "authorization") {
     Some(h) -> if starts_with(h, "Bearer ") { substring(h, 7, str_len(h)) } else { h }
