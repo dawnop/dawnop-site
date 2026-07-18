@@ -68,6 +68,28 @@ pub type Middleware = fn(Handler) -> Handler
 pub fn http_error(status: Int, message: String) -> HttpError =
   HttpError { status: status, message: message }
 
+# Lift a repository/infrastructure result into a handler result.
+#
+# The two layers carry different error types — repos report `String`, handlers
+# report `HttpError` — and `?` refuses to cross that boundary (it demands the
+# error types be identical, and Dawn has no automatic conversion). Without this,
+# every call down a layer needs a `match` whose Ok arm does nothing but forward,
+# which wraps the real work in an extra level of nesting:
+#
+#   match with_db(...) {                    #   let rows = as_http(with_db(...), 500)?
+#     Err(m) -> Err(http_error(500, m))     #   ...body at the function's own indent...
+#     Ok(rows) -> { ...body... }            #
+#   }                                       #
+#
+# `status` is a parameter rather than one function per code because the call
+# sites use four (500 x57, 422 x19, 502 x9, 401 x1) and they differ in nothing
+# else.
+pub fn as_http[T](r: Result[T, String], status: Int) -> Result[T, HttpError] =
+  match r {
+    Ok(v) -> Ok(v)
+    Err(m) -> Err(http_error(status, m))
+  }
+
 # ---- response constructors ----
 
 pub fn text(status: Int, body: String) -> Response =

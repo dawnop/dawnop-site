@@ -21,9 +21,9 @@ fn param_int(req: Request, name: String) -> Option[Int] =
   }
 
 fn guarded(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io =
-  match current_user(a, req) {
-    Ok(_u) -> body()
-    Err(e) -> Err(e)
+  {
+    let _u = current_user(a, req)?
+    body()
   }
 
 fn int_field(m: Map[String, Json], key: String) -> Option[Int] =

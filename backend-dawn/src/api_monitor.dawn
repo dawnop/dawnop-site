@@ -31,25 +31,22 @@ pub type MonCfg = {
 ## cached_at}. Quota is read from the settings table on every request (editing
 ## the setting takes effect immediately, unaffected by the cache).
 pub fn get_monitor(a: Auth, cfg: MonCfg, cell: AtomicReference, respack_cell: AtomicReference) -> Handler =
-  fn(req) =>
-    match current_user(a, req) {
-      Ok(_u) -> {
-        let refresh = match query(req, "refresh") {
-          Some(v) -> v == "1" || v == "true"
-          None -> false
-        }
-        let third = third_party(a, cfg, cell, respack_cell, refresh)
-        let qn = with_quota(a, field(third, "qiniu"))
-        Ok(json_ok(obj([
-          ("server", server_block()),
-          ("lighthouse", field(third, "lighthouse")),
-          ("qiniu", qn),
-          ("vault", vault_block(cfg.vault_alive, cfg.vault_public)),
-          ("cached_at", field(third, "cached_at")),
-        ])))
-      }
-      Err(e) -> Err(e)
+  fn(req) => {
+    let _u = current_user(a, req)?
+    let refresh = match query(req, "refresh") {
+      Some(v) -> v == "1" || v == "true"
+      None -> false
     }
+    let third = third_party(a, cfg, cell, respack_cell, refresh)
+    let qn = with_quota(a, field(third, "qiniu"))
+    Ok(json_ok(obj([
+      ("server", server_block()),
+      ("lighthouse", field(third, "lighthouse")),
+      ("qiniu", qn),
+      ("vault", vault_block(cfg.vault_alive, cfg.vault_public)),
+      ("cached_at", field(third, "cached_at")),
+    ])))
+  }
 
 # the cached pair {lighthouse, qiniu, cached_at}; refilled past 120s or on refresh
 fn third_party(a: Auth, cfg: MonCfg, cell: AtomicReference, respack_cell: AtomicReference, refresh: Bool) -> Json !io = {

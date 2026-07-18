@@ -6,7 +6,7 @@ use java "java.lang.System"
 use java "java.lang.Object"
 use java "java.lang.String"
 use java "java.util.concurrent.atomic.AtomicReference"
-use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query, redirect, streaming, header}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, query, redirect, streaming, header}
 use multipart.{Part, boundary_of, parse_multipart, part_named}
 use http.{fetch_stream, ok_stream, close_stream}
 use web/router.{Route, route_get, route_post, tagged}
@@ -29,18 +29,18 @@ use json/render.{render}
 use json/parser.{parse}
 
 fn guarded(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io =
-  match current_user(a, req) {
-    Ok(_u) -> body()
-    Err(e) -> Err(e)
+  {
+    let _u = current_user(a, req)?
+    body()
   }
 
 # preview/download bytes are fetched by a browser <img>/download link that cannot
 # set an Authorization header, so these two accept a `?token=` fallback (only
 # these — matches FastAPI's get_current_user_flexible).
 fn guarded_flexible(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io =
-  match current_user_flexible(a, req) {
-    Ok(_u) -> body()
-    Err(e) -> Err(e)
+  {
+    let _u = current_user_flexible(a, req)?
+    body()
   }
 
 fn strip_slash(s: String) -> String = fm_split(s)
@@ -306,29 +306,24 @@ fn content_type_of(ct: String) -> String = if ct == "" { "application/octet-stre
 ## imageView2 thumbnail instead of the original (省流量), mirroring serve.py.
 pub fn preview(a: Auth) -> Handler =
   fn(req) =>
-  guarded_flexible(a, req, fn() =>
-      match preview_params(req) {
-        Err(e) -> Err(e)
-        Ok(params) -> {
-          let (w, h, mode) = params
-          let rel = fm_split(qparam(req, "path"))
-          match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
-            Ok(Some(o)) ->
-              match o.key {
-                Some(k) -> {
-                  let suffix = match thumb_fop(o.content_type, o.size, w, h, mode) {
-                    Some(fop) -> "?$fop"
-                    None -> ""
-                  }
-                  Ok(redirect(302, signed(a.qiniu, k, suffix)))
-                }
-                None -> Err(http_error(404, "文件不存在"))
-              }
-            Ok(None) -> Err(http_error(404, "文件不存在"))
-            Err(m) -> Err(http_error(500, m))
+  guarded_flexible(a, req, fn() => {
+    let (w, h, mode) = preview_params(req)?
+    let rel = fm_split(qparam(req, "path"))
+    match as_http(with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)), 500)? {
+      Some(o) ->
+        match o.key {
+          Some(k) -> {
+            let suffix = match thumb_fop(o.content_type, o.size, w, h, mode) {
+              Some(fop) -> "?$fop"
+              None -> ""
+            }
+            Ok(redirect(302, signed(a.qiniu, k, suffix)))
           }
+          None -> Err(http_error(404, "文件不存在"))
         }
-      })
+      None -> Err(http_error(404, "文件不存在"))
+    }
+  })
 
 # w/h are Query(ge=1, le=2000); mode is Query("fit", pattern=^(fit|fill)$).
 fn preview_params(req: Request) -> Result[(Option[Int], Option[Int], String), HttpError] = {

@@ -32,9 +32,9 @@ fn opt_query_int(req: Request, name: String) -> Result[Option[Int], HttpError] =
 
 # guard: run body only if authenticated, else 401
 fn guarded(a: Auth, req: Request, body: fn(String) -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io =
-  match current_user(a, req) {
-    Ok(user) -> body(user)
-    Err(e) -> Err(e)
+  {
+    let user = current_user(a, req)?
+    body(user)
   }
 
 ## GET /api/articles/admin — all articles, optional ?published= filter.

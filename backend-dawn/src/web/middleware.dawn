@@ -55,10 +55,7 @@ pub fn with_cors(origins: String, next: Handler) -> Handler =
     } else if req.method == "OPTIONS" {
       Ok(cors_headers(origin, text(204, "")))
     } else {
-      match next(req) {
-        Ok(r) -> Ok(cors_headers(origin, r))
-        Err(e) -> Err(e)
-      }
+      Ok(cors_headers(origin, next(req)?))
     }
   }
 

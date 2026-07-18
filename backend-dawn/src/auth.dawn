@@ -3,7 +3,7 @@
 # existing passwords keep working; JWTs interoperate with PyJWT (see jwt.dawn).
 use java "java.sql.Connection"
 use java "org.mindrot.jbcrypt.BCrypt"
-use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, header}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, header}
 use web/router.{Route, route_get, route_post}
 use web/server.{parse_form}
 use json/value.{Json}
@@ -110,14 +110,12 @@ fn has_field(m: Map[String, String], k: String) -> Bool =
 ## GET /api/auth/me — the current user (Bearer token).
 pub fn me(a: Auth) -> Handler =
   fn(req) =>
-  match current_user(a, req) {
-    Ok(username) ->
-      match with_db(a.db.path, a.db.ext, fn(c) => user_json(c, username)) {
-        Ok(Some(j)) -> Ok(json_ok(j))
-        Ok(None) -> Err(http_error(401, "无效或过期的凭证"))
-        Err(m) -> Err(http_error(500, m))
-      }
-    Err(e) -> Err(e)
+  {
+    let username = current_user(a, req)?
+    match as_http(with_db(a.db.path, a.db.ext, fn(c) => user_json(c, username)), 500)? {
+      Some(j) -> Ok(json_ok(j))
+      None -> Err(http_error(401, "无效或过期的凭证"))
+    }
   }
 
 ## The authenticated subject, or a 401 HttpError, from the Authorization header
