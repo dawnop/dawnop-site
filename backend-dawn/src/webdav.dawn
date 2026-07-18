@@ -24,7 +24,7 @@ use java "java.util.Date"
 use java "java.util.Locale"
 use java "java.util.TimeZone"
 use java "java.util.concurrent.atomic.AtomicReference"
-use web/types.{Request, Response, HttpError, Handler, http_error, text, raw, binary, redirect, with_header, header}
+use web/types.{Request, Response, HttpError, Handler, http_error, text, raw, binary, streaming, redirect, with_header, header}
 use web/router.{Route, route_method_of, tagged}
 use db.{Db, with_db}
 use auth.{Auth, Qiniu, check_basic}
@@ -34,7 +34,7 @@ use qiniu_sign.{private_url}
 use qiniu_rs.{delete_obj, copy_obj, upload_bytes, upload_file}
 use java "java.io.File"
 use crypto.{sha256_hex, uuid}
-use http.{fetch_bytes, ok_status}
+use http.{fetch_stream, ok_stream, close_stream}
 use ttl.{cache_get, cache_put}
 use export.{url_encode}
 
@@ -222,27 +222,31 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
     match range_of(req, o.size) {
       Some(pair) -> {
         let (start, end) = pair
-        match fetch_bytes(signed_url(a.qiniu, key), [("Accept-Encoding", "identity"), ("Range", "bytes=$start-$end")]) {
+        match fetch_stream(signed_url(a.qiniu, key), [("Accept-Encoding", "identity"), ("Range", "bytes=$start-$end")]) {
           Ok(r) ->
             # a ranged hit is 206, a server that ignored the Range answers 200 —
-            # anything else is an upstream error whose body is not the file
-            if ok_status(r) == false {
+            # anything else is an upstream error whose body is not the file. Streaming
+            # can't measure the returned length, so decide 206-vs-200 by the upstream
+            # status (the interval was already validated against the trusted o.size).
+            if ok_stream(r) == false {
+              close_stream(r.stream)
               Err(http_error(502, "qiniu ${r.status}"))
-            } else if byte_len(r.bytes) == end - start + 1 {
-              Ok(add_headers(binary(206, mime, r.bytes), [("Accept-Ranges", "bytes"), ("Content-Range", "bytes $start-$end/${o.size}"), ("Last-Modified", lastmod), ("ETag", etag)]))
+            } else if r.status == 206 {
+              Ok(add_headers(streaming(206, mime, r.stream), [("Accept-Ranges", "bytes"), ("Content-Range", "bytes $start-$end/${o.size}"), ("Last-Modified", lastmod), ("ETag", etag)]))
             } else {
-              Ok(add_headers(binary(200, mime, r.bytes), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
+              Ok(add_headers(streaming(200, mime, r.stream), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
             }
           Err(m) -> Err(http_error(502, m))
         }
       }
       None ->
-        match fetch_bytes(signed_url(a.qiniu, key), [("Accept-Encoding", "identity")]) {
+        match fetch_stream(signed_url(a.qiniu, key), [("Accept-Encoding", "identity")]) {
           Ok(r) ->
-            if ok_status(r) == false {
+            if ok_stream(r) == false {
+              close_stream(r.stream)
               Err(http_error(502, "qiniu ${r.status}"))
             } else {
-              Ok(add_headers(binary(200, mime, r.bytes), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
+              Ok(add_headers(streaming(200, mime, r.stream), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
             }
           Err(m) -> Err(http_error(502, m))
         }

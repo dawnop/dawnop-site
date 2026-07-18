@@ -195,7 +195,7 @@ test "Method route dispatches an arbitrary verb" {
 }
 
 fn dummy(req: Request) -> Result[Response, HttpError] !io =
-  Ok(Response { status: 200, content_type: "text/plain", headers: [], body: "", bin: None })
+  Ok(Response { status: 200, content_type: "text/plain", headers: [], body: "", bin: None, stream: None })
 
 test "dispatch: found, 404, and 405 are distinguished" {
   let routes = [route_get("/a/{id}", dummy), route_post("/run", dummy)]

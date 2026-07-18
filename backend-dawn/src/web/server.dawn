@@ -13,8 +13,9 @@ use java "java.lang.String"
 use java "java.util.Iterator"
 use java "java.io.File"
 use java "java.io.FileOutputStream"
-use web/types.{Request, Response, HttpError, Handler, Middleware, RouteMeta, http_error, error_response}
+use web/types.{Request, Response, HttpError, Handler, Middleware, RouteMeta, http_error, error_response, streaming}
 use web/router.{Route, Dispatch, Found, NoPath, WrongMethod, dispatch, route_meta}
+use http.{close_stream, fetch_bytes, fetch_stream}
 
 # Read the whole request body once as Bytes (spec §9.5.1), plus its UTF-8 decode
 # for the common text/JSON/form handlers. Binary handlers (multipart upload,
@@ -34,18 +35,30 @@ fn write_response(ex: HttpExchange, r: Response) -> Unit !io = {
   set_extra_headers(headers, r.headers)
   ex.sendResponseHeaders(r.status, 0)
   let out = ex.getResponseBody()!
-  match r.bin {
-    Some(bytes) -> {
-      # binary body: write the raw Bytes verbatim (Bytes -> Java byte[] param)
-      out.write(bytes)
-      out.flush()
+  match r.stream {
+    # streaming body: pump the upstream InputStream straight to the socket, 8KB at a
+    # time — constant memory, first byte out immediately. transferTo can throw if the
+    # client disconnects mid-download; catch_panic is our finally (Dawn has no
+    # try/finally), so the upstream stream is still closed and the HttpClient
+    # connection frees. close failure is non-fatal (close_stream swallows it).
+    Some(s) -> {
+      let _ = catch_panic(fn() => s.transferTo(out))
+      close_stream(s)
     }
-    None -> {
-      let writer = OutputStreamWriter.new(out, "UTF-8")
-      writer.write(r.body)
-      writer.flush()
-      writer.close()
-    }
+    None ->
+      match r.bin {
+        Some(bytes) -> {
+          # binary body: write the raw Bytes verbatim (Bytes -> Java byte[] param)
+          out.write(bytes)
+          out.flush()
+        }
+        None -> {
+          let writer = OutputStreamWriter.new(out, "UTF-8")
+          writer.write(r.body)
+          writer.flush()
+          writer.close()
+        }
+      }
   }
   out.close()
   ex.close()
@@ -243,4 +256,40 @@ test "form bodies parse, with + as space" {
   let f = parse_form("username=admin&password=a+b+c")
   assert map_get(f, "username") == Some("admin")
   assert map_get(f, "password") == Some("a b c")
+}
+
+test "write_response pumps an upstream stream to the client byte-exact (>8KB, multi-chunk)" {
+  # The full realistic path: upstream HTTP -> fetch_stream (ofInputStream + cast) ->
+  # streaming() -> write_response's stream branch -> transferTo pumps the InputStream to
+  # the socket -> close. Identical to production, only the upstream is a loopback server
+  # instead of qiniu. 12000 bytes forces transferTo's 8KB buffer across more than one chunk.
+  let payload = utf8(join(map(range(0, 1200), fn(i) => "0123456789"), ""))
+  # upstream: serves the payload
+  let up = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
+  up.createContext("/", fn(ex) => {
+    ex.sendResponseHeaders(200, byte_len(payload))
+    let os = ex.getResponseBody()!
+    os.write(payload)
+    os.close()
+  })
+  up.start()
+  let upurl = "http://127.0.0.1:${up.getAddress()!.getPort()}/"
+  # download: proxies upstream as a live stream through write_response's stream branch
+  let dn = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
+  dn.createContext("/", fn(ex) =>
+    match fetch_stream(upurl, []) {
+      Ok(r) -> write_response(ex, streaming(r.status, "application/octet-stream", r.stream))
+      Err(m) -> panic("upstream fetch failed: $m")
+    })
+  dn.start()
+  match fetch_bytes("http://127.0.0.1:${dn.getAddress()!.getPort()}/", []) {
+    Ok(r) -> {
+      assert r.status == 200
+      assert byte_len(r.bytes) == 12000
+      assert r.bytes == payload
+    }
+    Err(m) -> panic("download failed: $m")
+  }
+  up.stop(0)
+  dn.stop(0)
 }

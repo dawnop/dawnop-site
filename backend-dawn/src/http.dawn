@@ -9,6 +9,7 @@ use java "java.net.http.HttpRequest.Builder"
 use java "java.net.http.HttpRequest.BodyPublisher"
 use java "java.net.http.HttpRequest.BodyPublishers"
 use java "java.net.http.HttpResponse.BodyHandlers"
+use java "java.io.InputStream"
 use java "java.time.Duration"
 use java "java.lang.String"
 use java "com.sun.net.httpserver.HttpServer"
@@ -22,10 +23,16 @@ pub type HttpResp = { status: Int, body: String }
 # content with a 200 (see webdav.serve_file).
 pub type BytesResp = { status: Int, bytes: Bytes }
 
+# The streaming counterpart of BytesResp: the body is a live InputStream, not a
+# materialized Bytes. Carries only status + stream — the upstream Content-Range /
+# mime aren't threaded through; the handler recomputes them from trusted local data
+# (the object's own size / content_type). See docs/streaming-response-design.md §4.1.
+pub type StreamResp = { status: Int, stream: InputStream }
+
 ## A binary GET: the body comes back as first-class Bytes (spec §9.5.1). Ok on 2xx,
 ## Err otherwise. For the fm content proxy (fetch bytes from qiniu, stream out).
-## resp.body() is an erased-generic Object that is a byte[] at runtime — as_bytes
-## reclaims it.
+## resp.body() is an erased-generic Object that is a byte[] at runtime — cast
+## reclaims it (T = Bytes, from the BytesResp.bytes field type).
 pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[BytesResp, String] !io =
   java_try(fn() => {
     let uri = URI.create(url)!
@@ -34,13 +41,45 @@ pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[Bytes
     let nobody: BodyPublisher = BodyPublishers.noBody()!
     let req = withHeaders.method("GET", nobody)!.build()!
     let resp = shared_client().send(req, BodyHandlers.ofByteArray()!)!
-    BytesResp { status: resp.statusCode(), bytes: as_bytes(resp.body()!) }
+    BytesResp { status: resp.statusCode(), bytes: cast(resp.body()!) }
   })
 
 ## True for a 2xx. Callers proxying bytes must check: an upstream error body is
 ## still bytes, and serving it as the file's content (what happens when the status
 ## is dropped) hands the user a JSON error where a file should be.
 pub fn ok_status(r: BytesResp) -> Bool = r.status >= 200 && r.status < 300
+
+## A streaming GET: the body comes back as a live InputStream via ofInputStream —
+## NOT buffered into memory. Ok on transport success (the status, incl. non-2xx, is
+## carried for the caller to decide, like fetch_bytes). For the fm content proxy and
+## WebDAV serve_file, so a large download costs a fixed transferTo buffer, not 1x the
+## object. body() is an erased-generic Object; cast reclaims it as InputStream (T from
+## the StreamResp.stream field type). The stream is unconsumed here — reading it later
+## pumps bytes; it MUST be closed (transferTo to EOF, or close_stream) or the
+## HttpClient connection leaks.
+pub fn fetch_stream(url: String, headers: List[(String, String)]) -> Result[StreamResp, String] !io =
+  java_try(fn() => {
+    let uri = URI.create(url)!
+    let base = HttpRequest.newBuilder()!.uri(uri)!
+    let withHeaders = add_headers(base, headers, 0)
+    let nobody: BodyPublisher = BodyPublishers.noBody()!
+    let req = withHeaders.method("GET", nobody)!.build()!
+    let resp = shared_client().send(req, BodyHandlers.ofInputStream()!)!
+    StreamResp { status: resp.statusCode(), stream: cast(resp.body()!) }
+  })
+
+## True for a 2xx (206 included — a Range hit). Same contract as ok_status: a non-2xx
+## upstream must NOT be streamed as file content; the handler maps it to an error and
+## closes the stream (close_stream) so the connection frees.
+pub fn ok_stream(r: StreamResp) -> Bool = r.status >= 200 && r.status < 300
+
+## Close an upstream stream, swallowing a close failure (non-fatal — the response is
+## already committed, or was never sent). The server calls this after pumping; a
+## handler rejecting a non-2xx upstream calls it before returning Err.
+pub fn close_stream(s: InputStream) -> Unit !io = {
+  let _ = java_try(fn() => s.close())
+  ()
+}
 
 fn shared_client() -> HttpClient !io = {
   let timeout = Duration.ofSeconds(10)!
@@ -160,6 +199,36 @@ test "a non-2xx status is Ok, not Err — the caller decides" {
   let (server, port) = echo_server(404, "nope:")
   match fetch("http://127.0.0.1:$port/", []) {
     Ok(r) -> { assert r.status == 404 }
+    Err(m) -> panic(m)
+  }
+  server.stop(0)
+}
+
+test "fetch_stream hands back a readable upstream stream" {
+  let (server, port) = echo_server(200, "streamed:")
+  match fetch_stream("http://127.0.0.1:$port/", [("X-Probe", "s")]) {
+    Ok(r) -> {
+      assert r.status == 200
+      assert ok_stream(r)
+      # the body is a live stream, not materialized up front; drain it here
+      let bytes = r.stream.readAllBytes()!
+      close_stream(r.stream)
+      assert decode(bytes, "UTF-8") == "streamed:s"
+    }
+    Err(m) -> panic("fetch_stream failed: $m")
+  }
+  server.stop(0)
+}
+
+test "fetch_stream carries a non-2xx status; ok_stream is false" {
+  let (server, port) = echo_server(404, "nope:")
+  match fetch_stream("http://127.0.0.1:$port/", []) {
+    Ok(r) -> {
+      assert r.status == 404
+      assert ok_stream(r) == false
+      # a rejecting caller closes the stream so the connection frees
+      close_stream(r.stream)
+    }
     Err(m) -> panic(m)
   }
   server.stop(0)
