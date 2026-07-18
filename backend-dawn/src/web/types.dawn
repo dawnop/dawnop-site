@@ -90,6 +90,16 @@ pub fn as_http[T](r: Result[T, String], status: Int) -> Result[T, HttpError] =
     Err(m) -> Err(http_error(status, m))
   }
 
+# Same lift, but the status is chosen from the message. A few repository errors
+# are client errors in disguise (a bad page reference, a duplicate slug) and the
+# only thing that distinguishes them is the text, so those call sites pass a
+# classifier instead of a fixed code.
+pub fn as_http_with[T](r: Result[T, String], f: fn(String) -> HttpError) -> Result[T, HttpError] =
+  match r {
+    Ok(v) -> Ok(v)
+    Err(m) -> Err(f(m))
+  }
+
 # ---- response constructors ----
 
 pub fn text(status: Int, body: String) -> Response =

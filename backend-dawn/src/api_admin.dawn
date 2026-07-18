@@ -2,7 +2,7 @@
 # handler authenticates first via auth.current_user; the request body is JSON
 # (create/update). Writes run on a connection with the FTS extension loaded.
 use java "java.sql.Connection"
-use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, text, raw, with_header, query_int_bounded}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text, raw, with_header, query_int_bounded}
 use export.{export_markdown, url_encode}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json}
@@ -50,23 +50,15 @@ pub fn list_admin(a: Auth) -> Handler =
     }
     let page_id = opt_query_int(req, "page_id")?
     let q = map_get(req.query, "q")
-    match with_db(a.db.path, a.db.ext, fn(c) => repo_article.list_admin(c, pub_filter, page_id, q, page, size)) {
-      Ok(pair) -> {
-        let (total, items) = pair
-        Ok(json_ok(paginated(total, page, size, items)))
-      }
-      Err(m) -> Err(http_error(500, m))
-    }
+    let (total, items) = as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_article.list_admin(c, pub_filter, page_id, q, page, size)), 500)?
+    Ok(json_ok(paginated(total, page, size, items)))
   })
 
 ## GET /api/articles/admin/stats — counts and total views.
 pub fn admin_stats(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn(_u) =>
-      match with_db(a.db.path, a.db.ext, fn(c) => repo_article.stats(c)) {
-        Ok(j) -> Ok(json_ok(j))
-        Err(m) -> Err(http_error(500, m))
-      })
+      Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_article.stats(c)), 500)?)))
 
 ## GET /api/articles/admin/{article_id} — one article (any status).
 pub fn admin_get(a: Auth) -> Handler =
@@ -74,10 +66,9 @@ pub fn admin_get(a: Auth) -> Handler =
   guarded(a, req, fn(_u) =>
       match parse_int(param(req, "article_id")) {
         Some(id) ->
-          match with_db(a.db.path, a.db.ext, fn(c) => repo_article.by_id_admin(c, id)) {
-            Ok(Some(j)) -> Ok(json_ok(j))
-            Ok(None) -> Err(http_error(404, "文章不存在"))
-            Err(m) -> Err(http_error(500, m))
+          match as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_article.by_id_admin(c, id)), 500)? {
+            Some(j) -> Ok(json_ok(j))
+            None -> Err(http_error(404, "文章不存在"))
           }
         None -> Err(http_error(422, "article_id must be an integer"))
       })
@@ -86,31 +77,26 @@ pub fn admin_get(a: Auth) -> Handler =
 pub fn create(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn(_u) =>
-      match body_obj(req.body) {
-        Ok(m) -> {
-          if has(m, "title") == false || trim(str_or(m, "title", "")) == "" {
-            Err(http_error(422, "标题不能为空"))
-          } else if over_len(str_or(m, "title", "")) || over_len(str_or(m, "slug", "")) {
-            Err(http_error(422, "标题或 slug 长度超出 255"))
-          } else {
-            let na = NewArticle {
-              title: trim(str_or(m, "title", "")),
-              slug_hint: str_or(m, "slug", ""),
-              summary: str_or(m, "summary", ""),
-              content: str_or(m, "content", ""),
-              published: bool_or(m, "published", false),
-              auto_title: bool_or(m, "auto_title", false),
-              page_id: opt_int(m, "page_id"),
-              tags: str_list(m, "tags"),
-              created_at: opt_str(m, "created_at"),
-            }
-            match with_db(a.db.path, a.db.ext, fn(c) => create_then_read(c, na)) {
-              Ok(j) -> Ok(json_response(201, j))
-              Err(m2) -> Err(classify(m2))
-            }
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        if has(m, "title") == false || trim(str_or(m, "title", "")) == "" {
+          Err(http_error(422, "标题不能为空"))
+        } else if over_len(str_or(m, "title", "")) || over_len(str_or(m, "slug", "")) {
+          Err(http_error(422, "标题或 slug 长度超出 255"))
+        } else {
+          let na = NewArticle {
+            title: trim(str_or(m, "title", "")),
+            slug_hint: str_or(m, "slug", ""),
+            summary: str_or(m, "summary", ""),
+            content: str_or(m, "content", ""),
+            published: bool_or(m, "published", false),
+            auto_title: bool_or(m, "auto_title", false),
+            page_id: opt_int(m, "page_id"),
+            tags: str_list(m, "tags"),
+            created_at: opt_str(m, "created_at"),
           }
+          Ok(json_response(201, as_http_with(with_db(a.db.path, a.db.ext, fn(c) => create_then_read(c, na)), classify)?))
         }
-        Err(e) -> Err(http_error(422, e))
       })
 
 # title/slug carry Field(max_length=255); an over-length value is a 422 in FastAPI
@@ -130,24 +116,21 @@ pub fn update(a: Auth) -> Handler =
   guarded(a, req, fn(_u) =>
       match parse_int(param(req, "article_id")) {
         Some(id) ->
-          match body_obj(req.body) {
-            Ok(m) -> {
-              # PATCH validation mirrors ArticleUpdate: a present title must be
-              # non-blank (min_length=1 + _clean_title), title/slug ≤255.
-              if has(m, "title") && trim(str_or(m, "title", "")) == "" {
-                Err(http_error(422, "标题不能为空"))
-              } else if over_len(str_or(m, "title", "")) || over_len(str_or(m, "slug", "")) {
-                Err(http_error(422, "标题或 slug 长度超出 255"))
-              } else {
-                let p = patch_of(m)
-                match with_db(a.db.path, a.db.ext, fn(c) => update_then_read(c, id, p)) {
-                  Ok(Some(j)) -> Ok(json_ok(j))
-                  Ok(None) -> Err(http_error(404, "文章不存在"))
-                  Err(m2) -> Err(classify(m2))
-                }
+          {
+            let m = as_http(body_obj(req.body), 422)?
+            # PATCH validation mirrors ArticleUpdate: a present title must be
+            # non-blank (min_length=1 + _clean_title), title/slug ≤255.
+            if has(m, "title") && trim(str_or(m, "title", "")) == "" {
+              Err(http_error(422, "标题不能为空"))
+            } else if over_len(str_or(m, "title", "")) || over_len(str_or(m, "slug", "")) {
+              Err(http_error(422, "标题或 slug 长度超出 255"))
+            } else {
+              let p = patch_of(m)
+              match as_http_with(with_db(a.db.path, a.db.ext, fn(c) => update_then_read(c, id, p)), classify)? {
+                Some(j) -> Ok(json_ok(j))
+                None -> Err(http_error(404, "文章不存在"))
               }
             }
-            Err(e) -> Err(http_error(422, e))
           }
         None -> Err(http_error(422, "article_id must be an integer"))
       })
@@ -176,15 +159,14 @@ pub fn export_md(a: Auth) -> Handler =
   guarded(a, req, fn(_u) =>
       match parse_int(param(req, "article_id")) {
         Some(id) ->
-          match with_db(a.db.path, a.db.ext, fn(c) => export_markdown(c, id)) {
-            Ok(Some(pair)) -> {
+          match as_http(with_db(a.db.path, a.db.ext, fn(c) => export_markdown(c, id)), 500)? {
+            Some(pair) -> {
               let (slug, body) = pair
               Ok(with_header(
                 raw(200, "text/markdown; charset=utf-8", body),
                 "Content-Disposition", "attachment; filename*=UTF-8''${url_encode(slug)}.md"))
             }
-            Ok(None) -> Err(http_error(404, "文章不存在"))
-            Err(m) -> Err(http_error(500, m))
+            None -> Err(http_error(404, "文章不存在"))
           }
         None -> Err(http_error(422, "article_id must be an integer"))
       })
@@ -195,9 +177,9 @@ pub fn remove(a: Auth) -> Handler =
   guarded(a, req, fn(_u) =>
       match parse_int(param(req, "article_id")) {
         Some(id) ->
-          match with_db(a.db.path, a.db.ext, fn(c) => delete_article(c, id)) {
-            Ok(n) -> if n == 0 { Err(http_error(404, "文章不存在")) } else { Ok(text(204, "")) }
-            Err(m) -> Err(http_error(500, m))
+          {
+            let n = as_http(with_db(a.db.path, a.db.ext, fn(c) => delete_article(c, id)), 500)?
+            if n == 0 { Err(http_error(404, "文章不存在")) } else { Ok(text(204, "")) }
           }
         None -> Err(http_error(422, "article_id must be an integer"))
       })

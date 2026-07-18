@@ -6,7 +6,7 @@ use java "java.lang.System"
 use java "java.lang.Object"
 use java "java.lang.String"
 use java "java.util.concurrent.atomic.AtomicReference"
-use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, query, redirect, streaming, header}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, query, redirect, streaming, header}
 use multipart.{Part, boundary_of, parse_multipart, part_named}
 use http.{fetch_stream, ok_stream, close_stream}
 use web/router.{Route, route_get, route_post, tagged}
@@ -53,32 +53,26 @@ pub fn fm_list(a: Auth) -> Handler =
       Some(p) -> p
       None -> ""
     }
-    match with_db(a.db.path, a.db.ext, fn(c) => fs_data(c, fm_split(path))) {
-      Ok(j) -> Ok(json_ok(j))
-      Err(m) -> Err(http_error(500, m))
-    }
+    Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, fn(c) => fs_data(c, fm_split(path))), 500)?))
   })
 
 ## POST /api/fm/create-folder — {path, name}.
 pub fn create_folder(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match body_obj(req.body) {
-        Ok(m) -> {
-          let cur = fm_split(str_or(m, "path", ""))
-          let name = strip_slash(trim(str_or(m, "name", "")))
-          if name == "" {
-            Err(http_error(400, "缺少 name"))
-          } else {
-            let rel = fm_join(cur, name)
-            match with_db(a.db.path, a.db.ext, fn(c) => mk_folder(c, rel, cur)) {
-              Ok(Some(j)) -> Ok(json_ok(j))
-              Ok(None) -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
-              Err(msg) -> Err(http_error(500, msg))
-            }
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        let cur = fm_split(str_or(m, "path", ""))
+        let name = strip_slash(trim(str_or(m, "name", "")))
+        if name == "" {
+          Err(http_error(400, "缺少 name"))
+        } else {
+          let rel = fm_join(cur, name)
+          match as_http(with_db(a.db.path, a.db.ext, fn(c) => mk_folder(c, rel, cur)), 500)? {
+            Some(j) -> Ok(json_ok(j))
+            None -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
           }
         }
-        Err(e) -> Err(http_error(422, e))
       })
 
 fn mk_folder(c: Connection, rel: String, cur: String) -> Result[Option[Json], String] !io = {
@@ -97,23 +91,20 @@ fn mk_folder(c: Connection, rel: String, cur: String) -> Result[Option[Json], St
 pub fn rename(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match body_obj(req.body) {
-        Ok(m) -> {
-          let cur = fm_split(str_or(m, "path", ""))
-          let old = fm_split(str_or(m, "item", ""))
-          let new_name = strip_slash(trim(str_or(m, "name", "")))
-          if old == "" || new_name == "" {
-            Err(http_error(400, "缺少 item / name"))
-          } else {
-            let new_rel = fm_join(parent_rel(old), new_name)
-            match with_db(a.db.path, a.db.ext, fn(c) => do_rename(c, old, new_rel, cur)) {
-              Ok(Some(j)) -> Ok(json_ok(j))
-              Ok(None) -> Err(http_error(409, "已存在同名项：${basename(new_rel)}"))
-              Err(msg) -> Err(http_error(500, msg))
-            }
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        let cur = fm_split(str_or(m, "path", ""))
+        let old = fm_split(str_or(m, "item", ""))
+        let new_name = strip_slash(trim(str_or(m, "name", "")))
+        if old == "" || new_name == "" {
+          Err(http_error(400, "缺少 item / name"))
+        } else {
+          let new_rel = fm_join(parent_rel(old), new_name)
+          match as_http(with_db(a.db.path, a.db.ext, fn(c) => do_rename(c, old, new_rel, cur)), 500)? {
+            Some(j) -> Ok(json_ok(j))
+            None -> Err(http_error(409, "已存在同名项：${basename(new_rel)}"))
           }
         }
-        Err(e) -> Err(http_error(422, e))
       })
 
 fn do_rename(c: Connection, old: String, new_rel: String, cur: String) -> Result[Option[Json], String] !io =
@@ -135,17 +126,12 @@ fn do_rename(c: Connection, old: String, new_rel: String, cur: String) -> Result
 pub fn move(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match body_obj(req.body) {
-        Ok(m) -> {
-          let cur = fm_split(str_or(m, "path", ""))
-          let dest = fm_split(str_or(m, "destination", ""))
-          let sources = str_list(m, "sources")
-          match with_db(a.db.path, a.db.ext, fn(c) => do_move(c, sources, dest, cur, 0)) {
-            Ok(j) -> Ok(json_ok(j))
-            Err(msg) -> Err(if contains(msg, "已存在") { http_error(409, msg) } else { http_error(500, msg) })
-          }
-        }
-        Err(e) -> Err(http_error(422, e))
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        let cur = fm_split(str_or(m, "path", ""))
+        let dest = fm_split(str_or(m, "destination", ""))
+        let sources = str_list(m, "sources")
+        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, fn(c) => do_move(c, sources, dest, cur, 0)), conflict_or(500))?))
       })
 
 fn do_move(c: Connection, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
@@ -191,14 +177,13 @@ pub fn sign(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() => {
     let rel = fm_split(qparam(req, "path"))
-    match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
-      Ok(Some(o)) ->
+    match as_http(with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)), 500)? {
+      Some(o) ->
         match o.key {
           Some(k) -> Ok(json_ok(obj([("url", jstr(signed(a.qiniu, k, "")))])))
           None -> Err(http_error(404, "文件不存在"))
         }
-      Ok(None) -> Err(http_error(404, "文件不存在"))
-      Err(m) -> Err(http_error(500, m))
+      None -> Err(http_error(404, "文件不存在"))
     }
   })
 
@@ -209,9 +194,9 @@ pub fn sign(a: Auth) -> Handler =
 pub fn stats(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReference) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match with_db(a.db.path, a.db.ext, fn(c) => stats_db(c)) {
-        Ok(triple) -> {
-          let (used_local, files, dirs) = triple
+      {
+        let (used_local, files, dirs) = as_http(with_db(a.db.path, a.db.ext, fn(c) => stats_db(c)), 500)?
+        {
           let remote = remote_space(a, space_cell)
           let remote_n = int_of(remote)
           let used = if used_local > remote_n { used_local } else { remote_n }
@@ -224,7 +209,6 @@ pub fn stats(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReference
             ("quota", jint(quota_bytes(a, respack_cell))),
           ])))
         }
-        Err(m) -> Err(http_error(500, m))
       })
 
 # qiniu bucket space through a 600s TTL cell: 7-day series, last non-zero point;
@@ -273,31 +257,32 @@ pub fn content(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() => {
     let rel = fm_split(qparam(req, "path"))
-    match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
-      Ok(Some(o)) ->
+    match as_http(with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)), 500)? {
+      Some(o) ->
         match o.key {
           Some(k) -> {
             let url = signed(a.qiniu, k, "")
-            match fetch_stream(url, []) {
-              # a non-2xx body is qiniu's error, not the file — serving it would
-              # hand the browser a JSON error under the file's content type. Close
-              # the stream (don't leak the connection) and map to an error.
-              Ok(r) ->
-                if ok_stream(r) == false {
-                  close_stream(r.stream)
-                  Err(http_error(502, "qiniu ${r.status}"))
-                } else {
-                  Ok(streaming(200, content_type_of(o.content_type), r.stream))
-                }
-              Err(m) -> Err(http_error(502, m))
+            let r = as_http(fetch_stream(url, []), 502)?
+            # a non-2xx body is qiniu's error, not the file — serving it would
+            # hand the browser a JSON error under the file's content type. Close
+            # the stream (don't leak the connection) and map to an error.
+            if ok_stream(r) == false {
+              close_stream(r.stream)
+              Err(http_error(502, "qiniu ${r.status}"))
+            } else {
+              Ok(streaming(200, content_type_of(o.content_type), r.stream))
             }
           }
           None -> Err(http_error(404, "文件不存在"))
         }
-      Ok(None) -> Err(http_error(404, "文件不存在"))
-      Err(m) -> Err(http_error(500, m))
+      None -> Err(http_error(404, "文件不存在"))
     }
   })
+
+# a name collision is a 409; everything else takes the caller's code (500 for a
+# database failure, 502 when the object store is the one that failed)
+fn conflict_or(other: Int) -> fn(String) -> HttpError =
+  fn(msg) => if contains(msg, "已存在") { http_error(409, msg) } else { http_error(other, msg) }
 
 fn content_type_of(ct: String) -> String = if ct == "" { "application/octet-stream" } else { ct }
 
@@ -329,7 +314,7 @@ pub fn preview(a: Auth) -> Handler =
 fn preview_params(req: Request) -> Result[(Option[Int], Option[Int], String), HttpError] = {
   let w = bounded_opt(req, "w", 1, 2000)?
   let h = bounded_opt(req, "h", 1, 2000)?
-  let mode = match query(req, "mode") { Some(mm) -> mm  None -> "fit" }
+  let mode = match query(req, "mode") { Some(mm) -> mm None -> "fit" }
   if mode != "fit" && mode != "fill" {
     Err(http_error(422, "mode 只能是 fit 或 fill"))
   } else {
@@ -354,12 +339,12 @@ fn thumb_fop(content_type: String, size: Int, w: Option[Int], h: Option[Int], mo
     _ ->
       if thumbable(content_type) == false {
         None
-      } else if size <= 51200 {  # 50 * 1024
+      } else if size <= 51200 { # 50 * 1024
         None
       } else {
-        let code = if mode == "fill" { "1" } else { "2" }  # 1=裁剪铺满, 2=等比缩放
-        let ww = match w { Some(n) -> "/w/$n"  None -> "" }
-        let hh = match h { Some(n) -> "/h/$n"  None -> "" }
+        let code = if mode == "fill" { "1" } else { "2" } # 1=裁剪铺满, 2=等比缩放
+        let ww = match w { Some(n) -> "/w/$n" None -> "" }
+        let hh = match h { Some(n) -> "/h/$n" None -> "" }
         Some("imageView2/$code$ww$hh/format/webp/q/82")
       }
   }
@@ -367,7 +352,7 @@ fn thumb_fop(content_type: String, size: Int, w: Option[Int], h: Option[Int], mo
 # the raster formats seven-niu imageView2 can process (svg etc. excluded)
 fn thumbable(ct: String) -> Bool =
   ct == "image/jpeg" || ct == "image/png" || ct == "image/webp" || ct == "image/gif" ||
-    ct == "image/bmp" || ct == "image/x-ms-bmp" || ct == "image/tiff"
+  ct == "image/bmp" || ct == "image/x-ms-bmp" || ct == "image/tiff"
 
 ## GET /api/fm/download?path= — 302 to the signed URL with an attachment name.
 pub fn download(a: Auth) -> Handler =
@@ -378,14 +363,13 @@ pub fn download(a: Auth) -> Handler =
   })
 
 fn redirect_to_named(a: Auth, rel: String) -> Result[Response, HttpError] !io =
-  match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
-    Ok(Some(o)) ->
+  match as_http(with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)), 500)? {
+    Some(o) ->
       match o.key {
         Some(k) -> Ok(redirect(302, signed(a.qiniu, k, "?attname=${url_q(basename(rel))}")))
         None -> Err(http_error(404, "文件不存在"))
       }
-    Ok(None) -> Err(http_error(404, "文件不存在"))
-    Err(m) -> Err(http_error(500, m))
+    None -> Err(http_error(404, "文件不存在"))
   }
 
 fn url_q(s: String) -> String = pct_encode(s)
@@ -398,33 +382,28 @@ fn url_q(s: String) -> String = pct_encode(s)
 ## the filename. Mirrors app/api/fm/uploads.py.
 pub fn upload_token_ep(a: Auth) -> Handler =
   fn(req) =>
-  guarded(a, req, fn() =>
-      match body_obj(req.body) {
-        Ok(m) -> {
-          let target = fm_split(str_or(m, "path", ""))
-          let name = sanitize_name(str_or(m, "name", ""))
-          let rel = fm_join(target, name)
-          let e = ext(name)
-          let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
-          let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_secs() + a.qiniu.expires)
-          match with_db(a.db.path, a.db.ext, fn(c) => ledger(c, key, rel)) {
-            Ok(_x) -> Ok(json_ok(obj([
-              ("token", jstr(token)),
-              ("key", jstr(key)),
-              ("path", jstr(full(rel))),
-              # known divergence, not an oversight: FastAPI resolves the bucket's
-              # regional host via api.qiniu.com/v4/query and falls back to this
-              # default. Harmless while no client reads up_host (qiniu-js resolves
-              # the region itself) and production works on the default region. It
-              # becomes a real bug if the bucket moves off the default region, or
-              # if some future client honours this field.
-              ("up_host", jstr("https://upload.qiniup.com")),
-            ])))
-            Err(msg) -> Err(http_error(500, msg))
-          }
-        }
-        Err(e) -> Err(http_error(422, e))
-      })
+  guarded(a, req, fn() => {
+    let m = as_http(body_obj(req.body), 422)?
+    let target = fm_split(str_or(m, "path", ""))
+    let name = sanitize_name(str_or(m, "name", ""))
+    let rel = fm_join(target, name)
+    let e = ext(name)
+    let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
+    let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_secs() + a.qiniu.expires)
+    let _x = as_http(with_db(a.db.path, a.db.ext, fn(c) => ledger(c, key, rel)), 500)?
+    Ok(json_ok(obj([
+      ("token", jstr(token)),
+      ("key", jstr(key)),
+      ("path", jstr(full(rel))),
+      # known divergence, not an oversight: FastAPI resolves the bucket's
+      # regional host via api.qiniu.com/v4/query and falls back to this
+      # default. Harmless while no client reads up_host (qiniu-js resolves
+      # the region itself) and production works on the default region. It
+      # becomes a real bug if the bucket moves off the default region, or
+      # if some future client honours this field.
+      ("up_host", jstr("https://upload.qiniup.com")),
+    ])))
+  })
 
 fn uuid_hex() -> String !io = join(split(uuid(), "-"), "")
 
@@ -442,21 +421,13 @@ fn qparam(req: Request, name: String) -> String =
 pub fn delete(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match body_obj(req.body) {
-        Ok(m) -> {
-          let cur = fm_split(str_or(m, "path", ""))
-          let items = item_paths(m)
-          match with_db(a.db.path, a.db.ext, fn(c) => do_delete(a.qiniu, c, items, 0, [])) {
-            Ok(deleted) -> {
-              match with_db(a.db.path, a.db.ext, fn(c) => fs_data(c, cur)) {
-                Ok(base) -> Ok(json_ok(merge_deleted(base, deleted)))
-                Err(m2) -> Err(http_error(500, m2))
-              }
-            }
-            Err(msg) -> Err(http_error(502, msg))
-          }
-        }
-        Err(e) -> Err(http_error(422, e))
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        let cur = fm_split(str_or(m, "path", ""))
+        let items = item_paths(m)
+        let deleted = as_http(with_db(a.db.path, a.db.ext, fn(c) => do_delete(a.qiniu, c, items, 0, [])), 502)?
+        let base = as_http(with_db(a.db.path, a.db.ext, fn(c) => fs_data(c, cur)), 500)?
+        Ok(json_ok(merge_deleted(base, deleted)))
       })
 
 # items is [{path: "qiniu://..."}]; extract the split rel paths
@@ -516,22 +487,19 @@ fn merge_deleted(base: Json, deleted: List[Json]) -> Json =
 pub fn create_file(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match body_obj(req.body) {
-        Ok(m) -> {
-          let cur = fm_split(str_or(m, "path", ""))
-          let name = strip_slash(trim(str_or(m, "name", "")))
-          if name == "" {
-            Err(http_error(400, "缺少 name"))
-          } else {
-            let rel = fm_join(cur, name)
-            match do_create_file(a, rel, cur) {
-              Ok(Some(j)) -> Ok(json_ok(j))
-              Ok(None) -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
-              Err(msg) -> Err(http_error(502, msg))
-            }
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        let cur = fm_split(str_or(m, "path", ""))
+        let name = strip_slash(trim(str_or(m, "name", "")))
+        if name == "" {
+          Err(http_error(400, "缺少 name"))
+        } else {
+          let rel = fm_join(cur, name)
+          match as_http(do_create_file(a, rel, cur), 502)? {
+            Some(j) -> Ok(json_ok(j))
+            None -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
           }
         }
-        Err(e) -> Err(http_error(422, e))
       })
 
 fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json], String] !io = {
@@ -559,20 +527,15 @@ fn create_file_db(c: Connection, rel: String, key: String, mime: String, cur: St
 pub fn save(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match body_obj(req.body) {
-        Ok(m) -> {
-          let rel = fm_split(str_or(m, "path", ""))
-          let content = str_or(m, "content", "")
-          if rel == "" {
-            Err(http_error(400, "缺少 path"))
-          } else {
-            match do_save(a, rel, content) {
-              Ok(j) -> Ok(json_ok(j))
-              Err(msg) -> Err(http_error(502, msg))
-            }
-          }
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        let rel = fm_split(str_or(m, "path", ""))
+        let content = str_or(m, "content", "")
+        if rel == "" {
+          Err(http_error(400, "缺少 path"))
+        } else {
+          Ok(json_ok(as_http(do_save(a, rel, content), 502)?))
         }
-        Err(e) -> Err(http_error(422, e))
       })
 
 fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !io = {
@@ -651,17 +614,12 @@ fn guess_mime(rel: String) -> String =
 pub fn copy(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match body_obj(req.body) {
-        Ok(m) -> {
-          let cur = fm_split(str_or(m, "path", ""))
-          let dest = fm_split(str_or(m, "destination", ""))
-          let sources = str_list(m, "sources")
-          match with_db(a.db.path, a.db.ext, fn(c) => do_copy(a.qiniu, c, sources, dest, cur, 0)) {
-            Ok(j) -> Ok(json_ok(j))
-            Err(msg) -> Err(if contains(msg, "已存在") { http_error(409, msg) } else { http_error(502, msg) })
-          }
-        }
-        Err(e) -> Err(http_error(422, e))
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        let cur = fm_split(str_or(m, "path", ""))
+        let dest = fm_split(str_or(m, "destination", ""))
+        let sources = str_list(m, "sources")
+        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, fn(c) => do_copy(a.qiniu, c, sources, dest, cur, 0)), conflict_or(502))?))
       })
 
 fn do_copy(q: Qiniu, c: Connection, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
@@ -716,28 +674,20 @@ fn copy_rows(q: Qiniu, c: Connection, rows: List[FileRow], src: String, new_rel:
 pub fn register(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match body_obj(req.body) {
-        Ok(m) -> {
-          let rel = fm_split(str_or(m, "path", ""))
-          let key = str_or(m, "key", "")
-          if rel == "" || key == "" {
-            Err(http_error(400, "缺少 path / key"))
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        let rel = fm_split(str_or(m, "path", ""))
+        let key = str_or(m, "key", "")
+        if rel == "" || key == "" {
+          Err(http_error(400, "缺少 path / key"))
+        } else {
+          let r = as_http(stat(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key), 502)?
+          if r.status == 200 {
+            Ok(json_ok(as_http(register_row(a, rel, key, r.body, opt_int(m, "size"), str_or(m, "content_type", "")), 500)?))
           } else {
-            match stat(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key) {
-              Ok(r) ->
-                if r.status == 200 {
-                  match register_row(a, rel, key, r.body, opt_int(m, "size"), str_or(m, "content_type", "")) {
-                    Ok(j) -> Ok(json_ok(j))
-                    Err(msg) -> Err(http_error(500, msg))
-                  }
-                } else {
-                  Err(http_error(400, "对象未在七牛找到，注册被拒"))
-                }
-              Err(msg) -> Err(http_error(502, msg))
-            }
+            Err(http_error(400, "对象未在七牛找到，注册被拒"))
           }
         }
-        Err(e) -> Err(http_error(422, e))
       })
 
 fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint: Option[Int], ct_hint: String) -> Result[Json, String] !io = {
@@ -768,7 +718,7 @@ fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint:
 fn reg_size(stat_body: String, hint: Option[Int]) -> Int !io = {
   let fs = stat_int(stat_body, "fsize")
   if fs != 0 { fs } else {
-    match hint { Some(n) -> n  None -> 0 }
+    match hint { Some(n) -> n None -> 0 }
   }
 }
 
@@ -826,10 +776,7 @@ pub fn fm_search(a: Auth) -> Handler =
     let base = fm_split(qparam(req, "path"))
     let needle = to_lower(trim(qparam(req, "filter")))
     let deep = qparam(req, "deep") != ""
-    match with_db(a.db.path, a.db.ext, fn(c) => search_files(c, base, needle, deep)) {
-      Ok(j) -> Ok(json_ok(j))
-      Err(m) -> Err(http_error(500, m))
-    }
+    Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, fn(c) => search_files(c, base, needle, deep)), 500)?))
   })
 
 ## The fm routes (protected). Static paths precede any captures. The two TTL
@@ -872,10 +819,7 @@ fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpErro
   let rel = fm_join(target, name)
   let mime = if fp.content_type != "" { fp.content_type } else { upload_mime(name) }
   let size = byte_len(fp.content)
-  match run_upload(a, rel, fp.content, mime, size) {
-    Ok(j) -> Ok(json_ok(j))
-    Err(m) -> Err(http_error(502, m))
-  }
+  Ok(json_ok(as_http(run_upload(a, rel, fp.content, mime, size), 502)?))
 }
 
 fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int) -> Result[Json, String] !io = {

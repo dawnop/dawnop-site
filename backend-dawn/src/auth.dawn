@@ -86,26 +86,25 @@ pub fn login(a: Auth) -> Handler =
     if has_field(form, "username") == false || has_field(form, "password") == false {
       Err(http_error(422, "username 和 password 必填"))
     } else {
-    let username = get_or_blank(form, "username")
-    let password = get_or_blank(form, "password")
-    match with_db(a.db.path, a.db.ext, fn(c) => hash_of(c, username)) {
-      Ok(Some(hashed)) ->
-        if verify_password(password, hashed) {
-          Ok(json_ok(obj([
-            ("access_token", jstr(sign(a.secret, username, a.expire_min))),
-            ("token_type", jstr("bearer")),
-          ])))
-        } else {
-          Err(http_error(401, "用户名或密码错误"))
-        }
-      Ok(None) -> Err(http_error(401, "用户名或密码错误"))
-      Err(m) -> Err(http_error(500, m))
-    }
+      let username = get_or_blank(form, "username")
+      let password = get_or_blank(form, "password")
+      match as_http(with_db(a.db.path, a.db.ext, fn(c) => hash_of(c, username)), 500)? {
+        Some(hashed) ->
+          if verify_password(password, hashed) {
+            Ok(json_ok(obj([
+              ("access_token", jstr(sign(a.secret, username, a.expire_min))),
+              ("token_type", jstr("bearer")),
+            ])))
+          } else {
+            Err(http_error(401, "用户名或密码错误"))
+          }
+        None -> Err(http_error(401, "用户名或密码错误"))
+      }
     }
   }
 
 fn has_field(m: Map[String, String], k: String) -> Bool =
-  match map_get(m, k) { Some(_v) -> true  None -> false }
+  match map_get(m, k) { Some(_v) -> true None -> false }
 
 ## GET /api/auth/me — the current user (Bearer token).
 pub fn me(a: Auth) -> Handler =
@@ -131,7 +130,7 @@ pub fn current_user(a: Auth, req: Request) -> Result[String, HttpError] !io =
 ## Authorization header (fm preview & download), matching get_current_user_flexible.
 pub fn current_user_flexible(a: Auth, req: Request) -> Result[String, HttpError] !io =
   auth_with(a, match header_token(req) {
-    "" -> match query_token(req) { Some(t) -> t  None -> "" }
+    "" -> match query_token(req) { Some(t) -> t None -> "" }
     t -> t
   })
 

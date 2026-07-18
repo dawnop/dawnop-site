@@ -24,7 +24,7 @@ use java "java.util.Date"
 use java "java.util.Locale"
 use java "java.util.TimeZone"
 use java "java.util.concurrent.atomic.AtomicReference"
-use web/types.{Request, Response, HttpError, Handler, http_error, text, raw, binary, streaming, redirect, with_header, header}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, text, raw, binary, streaming, redirect, with_header, header}
 use web/router.{Route, route_method_of, tagged}
 use db.{Db, with_db}
 use auth.{Auth, Qiniu, check_basic}
@@ -118,12 +118,12 @@ fn response_xml(prefix: String, rel: String, name: String, is_dir: Bool, size: I
       "<D:getcontentlength>$size</D:getcontentlength><D:getcontenttype>${xml_escape(m)}</D:getcontenttype>$etag_xml"
     }
   "<D:response><D:href>${xml_escape(href(prefix, rel, is_dir))}</D:href>" ++
-  "<D:propstat><D:prop>" ++
-  "<D:displayname>${xml_escape(name)}</D:displayname>" ++
-  "<D:resourcetype>$typ</D:resourcetype>" ++
-  "<D:getlastmodified>${http_date(mtime)}</D:getlastmodified>" ++
-  "<D:creationdate>${iso_date(ctime)}</D:creationdate>" ++
-  "$extra</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>"
+    "<D:propstat><D:prop>" ++
+    "<D:displayname>${xml_escape(name)}</D:displayname>" ++
+    "<D:resourcetype>$typ</D:resourcetype>" ++
+    "<D:getlastmodified>${http_date(mtime)}</D:getlastmodified>" ++
+    "<D:creationdate>${iso_date(ctime)}</D:creationdate>" ++
+    "$extra</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>"
 }
 
 # A row's <D:response>. FileRow has no created_at column, so creationdate reuses
@@ -142,10 +142,9 @@ fn kids_xml(prefix: String, rows: List[FileRow]) -> String !io =
 fn propfind(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io = {
   let prefix = dav_prefix(req)
   let depth = header_or(req, "depth", "1")
-  match with_db(a.db.path, a.db.ext, fn(c) => propfind_body(c, prefix, rel, depth)) {
-    Ok(Some(body)) -> Ok(raw(207, "application/xml; charset=\"utf-8\"", body))
-    Ok(None) -> Err(http_error(404, "资源不存在"))
-    Err(m) -> Err(http_error(500, m))
+  match as_http(with_db(a.db.path, a.db.ext, fn(c) => propfind_body(c, prefix, rel, depth)), 500)? {
+    Some(body) -> Ok(raw(207, "application/xml; charset=\"utf-8\"", body))
+    None -> Err(http_error(404, "资源不存在"))
   }
 }
 
@@ -182,9 +181,9 @@ fn get_or_head(a: Auth, req: Request, rel: String, head: Bool) -> Result[Respons
   if rel == "" {
     Err(http_error(405, "不能下载目录"))
   } else {
-    match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
-      Ok(None) -> Err(http_error(404, "资源不存在"))
-      Ok(Some(o)) ->
+    match as_http(with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)), 500)? {
+      None -> Err(http_error(404, "资源不存在"))
+      Some(o) ->
         if o.is_dir {
           Err(http_error(405, "不能下载目录"))
         } else {
@@ -193,7 +192,6 @@ fn get_or_head(a: Auth, req: Request, rel: String, head: Bool) -> Result[Respons
             Some(k) -> serve_file(a, req, o, k, head)
           }
         }
-      Err(m) -> Err(http_error(500, m))
     }
   }
 
@@ -222,33 +220,31 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
     match range_of(req, o.size) {
       Some(pair) -> {
         let (start, end) = pair
-        match fetch_stream(signed_url(a.qiniu, key), [("Accept-Encoding", "identity"), ("Range", "bytes=$start-$end")]) {
-          Ok(r) ->
-            # a ranged hit is 206, a server that ignored the Range answers 200 —
-            # anything else is an upstream error whose body is not the file. Streaming
-            # can't measure the returned length, so decide 206-vs-200 by the upstream
-            # status (the interval was already validated against the trusted o.size).
-            if ok_stream(r) == false {
-              close_stream(r.stream)
-              Err(http_error(502, "qiniu ${r.status}"))
-            } else if r.status == 206 {
-              Ok(add_headers(streaming(206, mime, r.stream), [("Accept-Ranges", "bytes"), ("Content-Range", "bytes $start-$end/${o.size}"), ("Last-Modified", lastmod), ("ETag", etag)]))
-            } else {
-              Ok(add_headers(streaming(200, mime, r.stream), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
-            }
-          Err(m) -> Err(http_error(502, m))
+        {
+          let r = as_http(fetch_stream(signed_url(a.qiniu, key), [("Accept-Encoding", "identity"), ("Range", "bytes=$start-$end")]), 502)?
+          # a ranged hit is 206, a server that ignored the Range answers 200 —
+          # anything else is an upstream error whose body is not the file. Streaming
+          # can't measure the returned length, so decide 206-vs-200 by the upstream
+          # status (the interval was already validated against the trusted o.size).
+          if ok_stream(r) == false {
+            close_stream(r.stream)
+            Err(http_error(502, "qiniu ${r.status}"))
+          } else if r.status == 206 {
+            Ok(add_headers(streaming(206, mime, r.stream), [("Accept-Ranges", "bytes"), ("Content-Range", "bytes $start-$end/${o.size}"), ("Last-Modified", lastmod), ("ETag", etag)]))
+          } else {
+            Ok(add_headers(streaming(200, mime, r.stream), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
+          }
         }
       }
       None ->
-        match fetch_stream(signed_url(a.qiniu, key), [("Accept-Encoding", "identity")]) {
-          Ok(r) ->
-            if ok_stream(r) == false {
-              close_stream(r.stream)
-              Err(http_error(502, "qiniu ${r.status}"))
-            } else {
-              Ok(add_headers(streaming(200, mime, r.stream), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
-            }
-          Err(m) -> Err(http_error(502, m))
+        {
+          let r = as_http(fetch_stream(signed_url(a.qiniu, key), [("Accept-Encoding", "identity")]), 502)?
+          if ok_stream(r) == false {
+            close_stream(r.stream)
+            Err(http_error(502, "qiniu ${r.status}"))
+          } else {
+            Ok(add_headers(streaming(200, mime, r.stream), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
+          }
         }
     }
   }
@@ -288,7 +284,7 @@ fn range_pair(a: String, b: String, total: Int) -> Option[(Int, Int)] =
         if s >= total || s < 0 {
           None
         } else {
-          let e = if b == "" { total - 1 } else { match parse_int(b) { Some(x) -> if x > total - 1 { total - 1 } else { x }  None -> total - 1 } }
+          let e = if b == "" { total - 1 } else { match parse_int(b) { Some(x) -> if x > total - 1 { total - 1 } else { x } None -> total - 1 } }
           if e < s { None } else { Some((s, e)) }
         }
     }
@@ -362,18 +358,18 @@ fn put(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io =
   if rel == "" {
     Err(http_error(405, "不能写入根"))
   } else {
-    match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
-      Ok(Some(o)) -> if o.is_dir { Err(http_error(405, "目标是目录")) } else { put_do(a, req, rel, Some(o)) }
-      Ok(None) -> put_do(a, req, rel, None)
-      Err(m) -> Err(http_error(500, m))
+    match as_http(with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)), 500)? {
+      Some(o) -> if o.is_dir { Err(http_error(405, "目标是目录")) } else { put_do(a, req, rel, Some(o)) }
+      None -> put_do(a, req, rel, None)
     }
   }
 
 fn put_do(a: Auth, req: Request, rel: String, existing: Option[FileRow]) -> Result[Response, HttpError] !io =
-  match parent_exists(a, rel) {
-    Err(m) -> Err(http_error(500, m))
-    Ok(false) -> Err(http_error(409, "父目录不存在"))
-    Ok(true) -> {
+  {
+    let ok = as_http(parent_exists(a, rel), 500)?
+    if ok == false {
+      Err(http_error(409, "父目录不存在"))
+    } else {
       let mime = guess_mime(basename(rel))
       let e = ext(basename(rel))
       let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
@@ -381,27 +377,22 @@ fn put_do(a: Auth, req: Request, rel: String, existing: Option[FileRow]) -> Resu
       # upload it straight from there: constant memory, whatever the size.
       match req.body_file {
         None -> Err(http_error(500, "请求体未落盘"))
-        Some(path) -> match file_size(path) {
-          Err(m) -> Err(http_error(500, m))
-          Ok(size) ->
-            match upload_file(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, path, mime, now_secs() + a.qiniu.expires) {
-              Ok(_) -> put_commit(a, rel, key, mime, size, existing)
-              Err(m) -> Err(http_error(502, m))
-            }
+        Some(path) -> {
+          let size = as_http(file_size(path), 500)?
+          let _u = as_http(upload_file(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, path, mime, now_secs() + a.qiniu.expires), 502)?
+          put_commit(a, rel, key, mime, size, existing)
         }
       }
     }
   }
 
 fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int, existing: Option[FileRow]) -> Result[Response, HttpError] !io =
-  match with_db(a.db.path, a.db.ext, fn(c) => insert_file(c, rel, key, mime, size)) {
-    Err(m) -> Err(http_error(500, m))
-    Ok(_) -> {
-      let _d = delete_superseded(a.qiniu, existing, key)
-      match existing {
-        Some(_) -> Ok(text(204, ""))
-        None -> Ok(text(201, ""))
-      }
+  {
+    let _i = as_http(with_db(a.db.path, a.db.ext, fn(c) => insert_file(c, rel, key, mime, size)), 500)?
+    let _d = delete_superseded(a.qiniu, existing, key)
+    match existing {
+      Some(_) -> Ok(text(204, ""))
+      None -> Ok(text(201, ""))
     }
   }
 
@@ -421,23 +412,18 @@ fn del(a: Auth, rel: String) -> Result[Response, HttpError] !io =
   if rel == "" {
     Err(http_error(405, "不能删除根"))
   } else {
-    match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
-      Ok(None) -> Err(http_error(404, "资源不存在"))
-      Ok(Some(_)) -> purge(a, rel)
-      Err(m) -> Err(http_error(500, m))
+    match as_http(with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)), 500)? {
+      None -> Err(http_error(404, "资源不存在"))
+      Some(_) -> purge(a, rel)
     }
   }
 
 fn purge(a: Auth, rel: String) -> Result[Response, HttpError] !io =
-  match with_db(a.db.path, a.db.ext, fn(c) => subtree_rows(c, rel)) {
-    Err(m) -> Err(http_error(500, m))
-    Ok(rows) -> {
-      let _q = del_qiniu(a.qiniu, rows, 0)
-      match with_db(a.db.path, a.db.ext, fn(c) => del_rows(c, rows, 0)) {
-        Ok(_) -> Ok(text(204, ""))
-        Err(m) -> Err(http_error(500, m))
-      }
-    }
+  {
+    let rows = as_http(with_db(a.db.path, a.db.ext, fn(c) => subtree_rows(c, rel)), 500)?
+    let _q = del_qiniu(a.qiniu, rows, 0)
+    let _d = as_http(with_db(a.db.path, a.db.ext, fn(c) => del_rows(c, rows, 0)), 500)?
+    Ok(text(204, ""))
   }
 
 fn del_qiniu(q: Qiniu, rows: List[FileRow], i: Int) -> Int !io =
@@ -462,19 +448,17 @@ fn mkcol(a: Auth, rel: String) -> Result[Response, HttpError] !io =
   if rel == "" {
     Err(http_error(405, "根已存在"))
   } else {
-    match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
-      Ok(Some(_)) -> Err(http_error(405, "已存在同名项"))
-      Ok(None) ->
-        match parent_exists(a, rel) {
-          Err(m) -> Err(http_error(500, m))
-          Ok(false) -> Err(http_error(409, "父目录不存在"))
-          Ok(true) ->
-            match with_db(a.db.path, a.db.ext, fn(c) => insert_folder(c, rel)) {
-              Ok(_) -> Ok(text(201, ""))
-              Err(m) -> Err(http_error(500, m))
-            }
+    match as_http(with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)), 500)? {
+      Some(_) -> Err(http_error(405, "已存在同名项"))
+      None -> {
+        let ok = as_http(parent_exists(a, rel), 500)?
+        if ok == false {
+          Err(http_error(409, "父目录不存在"))
+        } else {
+          let _i = as_http(with_db(a.db.path, a.db.ext, fn(c) => insert_folder(c, rel)), 500)?
+          Ok(text(201, ""))
         }
-      Err(m) -> Err(http_error(500, m))
+      }
     }
   }
 
@@ -504,10 +488,9 @@ fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Res
   if rel == "" {
     Err(http_error(405, "不能操作根"))
   } else {
-    match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)) {
-      Ok(None) -> Err(http_error(404, "源不存在"))
-      Err(m) -> Err(http_error(500, m))
-      Ok(Some(_)) ->
+    match as_http(with_db(a.db.path, a.db.ext, fn(c) => get_row(c, rel)), 500)? {
+      None -> Err(http_error(404, "源不存在"))
+      Some(_) ->
         match dest_rel(req) {
           None -> Err(http_error(400, "缺少 Destination"))
           Some(dst) ->
@@ -523,21 +506,19 @@ fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Res
   }
 
 fn mc_check_dst(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) -> Result[Response, HttpError] !io =
-  match with_db(a.db.path, a.db.ext, fn(c) => get_row(c, dst)) {
-    Err(m) -> Err(http_error(500, m))
-    Ok(dst_existing) -> {
-      let overwrite = to_upper(header_or(req, "overwrite", "T")) != "F"
-      match dst_existing {
-        Some(_) -> if overwrite == false { Err(http_error(412, "目标已存在")) } else { mc_purge_then(a, rel, dst, is_move, true) }
-        None -> mc_require_parent(a, rel, dst, is_move, false)
-      }
+  {
+    let dst_existing = as_http(with_db(a.db.path, a.db.ext, fn(c) => get_row(c, dst)), 500)?
+    let overwrite = to_upper(header_or(req, "overwrite", "T")) != "F"
+    match dst_existing {
+      Some(_) -> if overwrite == false { Err(http_error(412, "目标已存在")) } else { mc_purge_then(a, rel, dst, is_move, true) }
+      None -> mc_require_parent(a, rel, dst, is_move, false)
     }
   }
 
 fn mc_purge_then(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =
-  match purge_silent(a, dst) {
-    Err(m) -> Err(http_error(500, m))
-    Ok(_) -> mc_require_parent(a, rel, dst, is_move, dst_existed)
+  {
+    let _p = as_http(purge_silent(a, dst), 500)?
+    mc_require_parent(a, rel, dst, is_move, dst_existed)
   }
 
 # delete the dst subtree (rows + qiniu) without producing a Response
@@ -550,10 +531,9 @@ fn purge_silent(a: Auth, rel: String) -> Result[Int, String] !io =
   }
 
 fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =
-  match parent_exists(a, dst) {
-    Err(m) -> Err(http_error(500, m))
-    Ok(false) -> Err(http_error(409, "父目录不存在"))
-    Ok(true) -> mc_apply(a, rel, dst, is_move, dst_existed)
+  {
+    let ok = as_http(parent_exists(a, dst), 500)?
+    if ok == false { Err(http_error(409, "父目录不存在")) } else { mc_apply(a, rel, dst, is_move, dst_existed) }
   }
 
 fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io = {
@@ -677,29 +657,29 @@ fn verify_cache(a: Auth, cell: AtomicReference, user: String, pass: String, key:
 
 fn dav_handler(a: Auth, cell: AtomicReference, method: String) -> Handler =
   fn(req) =>
-    if method == "OPTIONS" {
-      Ok(options_response())
-    } else {
-      match dav_auth(a, cell, req) {
-        Some(resp) -> Ok(resp)
-        None -> {
-          let rel = dav_rel(req)
-          match method {
-            "PROPFIND" -> propfind(a, req, rel)
-            "HEAD" -> get_or_head(a, req, rel, true)
-            "GET" -> get_or_head(a, req, rel, false)
-            "PUT" -> put(a, req, rel)
-            "DELETE" -> del(a, rel)
-            "MKCOL" -> mkcol(a, rel)
-            "MOVE" -> move_or_copy(a, req, rel, true)
-            "COPY" -> move_or_copy(a, req, rel, false)
-            "LOCK" -> Ok(lock_response(req, rel))
-            "UNLOCK" -> Ok(text(204, ""))
-            _ -> Err(http_error(405, "method not allowed"))
-          }
+  if method == "OPTIONS" {
+    Ok(options_response())
+  } else {
+    match dav_auth(a, cell, req) {
+      Some(resp) -> Ok(resp)
+      None -> {
+        let rel = dav_rel(req)
+        match method {
+          "PROPFIND" -> propfind(a, req, rel)
+          "HEAD" -> get_or_head(a, req, rel, true)
+          "GET" -> get_or_head(a, req, rel, false)
+          "PUT" -> put(a, req, rel)
+          "DELETE" -> del(a, rel)
+          "MKCOL" -> mkcol(a, rel)
+          "MOVE" -> move_or_copy(a, req, rel, true)
+          "COPY" -> move_or_copy(a, req, rel, false)
+          "LOCK" -> Ok(lock_response(req, rel))
+          "UNLOCK" -> Ok(text(204, ""))
+          _ -> Err(http_error(405, "method not allowed"))
         }
       }
     }
+  }
 
 ## All WebDAV routes under /dav/{rest*} (the tail matches /dav and any depth).
 pub fn dav_routes(a: Auth, cell: AtomicReference) -> List[Route] = {

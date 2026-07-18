@@ -1,7 +1,7 @@
 # Protected admin handlers, part 2 (M6 knife 9): settings, tag admin ops, page
 # admin CRUD. Same guard/JSON-body pattern as api_admin.
 use java "java.sql.Connection"
-use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, text}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json, JArr, JInt, JNum, JNull}
 use jsonx.{obj, jstr, jint}
@@ -41,22 +41,15 @@ fn classify_400(m: String) -> HttpError = http_error(400, m)
 pub fn get_settings(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match with_db(a.db.path, a.db.ext, fn(c) => repo_settings.read_all(c, a.storage_quota)) {
-        Ok(j) -> Ok(json_ok(j))
-        Err(m) -> Err(http_error(500, m))
-      })
+      Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_settings.read_all(c, a.storage_quota)), 500)?)))
 
 ## PUT /api/settings — validate & upsert known integer keys, return merged.
 pub fn put_settings(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match body_obj(req.body) {
-        Ok(m) ->
-          match with_db(a.db.path, a.db.ext, fn(c) => write_settings(c, m, a.storage_quota)) {
-            Ok(j) -> Ok(json_ok(j))
-            Err(msg) -> Err(classify_400(msg))
-          }
-        Err(e) -> Err(http_error(422, e))
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, fn(c) => write_settings(c, m, a.storage_quota)), classify_400)?))
       })
 
 fn write_settings(c: Connection, m: Map[String, Json], storage_quota: Int) -> Result[Json, String] !io = {
@@ -97,7 +90,7 @@ fn write_all_settings(c: Connection, keys: List[String], m: Map[String, Json], i
     Ok(true)
   } else {
     let key = keys[i]
-    let v = match strict_int(m, key) { Some(n) -> n  None -> 0 }
+    let v = match strict_int(m, key) { Some(n) -> n None -> 0 }
     let _p = repo_settings.put_one(c, key, v)?
     write_all_settings(c, keys, m, i + 1)
   }
@@ -117,10 +110,7 @@ fn strict_int(m: Map[String, Json], key: String) -> Option[Int] =
 pub fn tags_admin(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match with_db(a.db.path, a.db.ext, fn(c) => repo_tag.list_admin(c)) {
-        Ok(items) -> Ok(json_ok(JArr(items)))
-        Err(m) -> Err(http_error(500, m))
-      })
+      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_tag.list_admin(c)), 500)?))))
 
 ## PUT /api/tags/{tag_id} — rename (slug regenerates).
 pub fn tag_rename(a: Auth) -> Handler =
@@ -128,20 +118,18 @@ pub fn tag_rename(a: Auth) -> Handler =
   guarded(a, req, fn() =>
       match param_int(req, "tag_id") {
         Some(id) ->
-          match body_obj(req.body) {
-            Ok(m) ->
-              # TagUpdate.name is a required str: absent or explicit null → 422
-              # (a present blank string is the handler's own 400, below).
-              match opt_str(m, "name") {
-                None -> Err(http_error(422, "name 不能为空"))
-                Some(nm) ->
-                  match with_db(a.db.path, a.db.ext, fn(c) => rename_then_read(c, id, nm)) {
-                    Ok(Some(j)) -> Ok(json_ok(j))
-                    Ok(None) -> Err(http_error(404, "标签不存在"))
-                    Err(msg) -> Err(classify_400(msg))
-                  }
-              }
-            Err(e) -> Err(http_error(422, e))
+          {
+            let m = as_http(body_obj(req.body), 422)?
+            # TagUpdate.name is a required str: absent or explicit null → 422
+            # (a present blank string is the handler's own 400, below).
+            match opt_str(m, "name") {
+              None -> Err(http_error(422, "name 不能为空"))
+              Some(nm) ->
+                match as_http_with(with_db(a.db.path, a.db.ext, fn(c) => rename_then_read(c, id, nm)), classify_400)? {
+                  Some(j) -> Ok(json_ok(j))
+                  None -> Err(http_error(404, "标签不存在"))
+                }
+            }
           }
         None -> Err(http_error(422, "tag_id must be an integer"))
       })
@@ -160,25 +148,22 @@ fn rename_then_read(c: Connection, id: Int, name: String) -> Result[Option[Json]
 pub fn tag_merge(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match body_obj(req.body) {
-        Ok(m) -> {
-          let sid = int_field(m, "source_id")
-          let tid = int_field(m, "target_id")
-          match (sid, tid) {
-            (Some(s), Some(t)) ->
-              if s == t {
-                Err(http_error(400, "不能与自身合并"))
-              } else {
-                match with_db(a.db.path, a.db.ext, fn(c) => merge_then_read(c, s, t)) {
-                  Ok(Some(j)) -> Ok(json_ok(j))
-                  Ok(None) -> Err(http_error(404, "源标签或目标标签不存在"))
-                  Err(msg) -> Err(http_error(500, msg))
-                }
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        let sid = int_field(m, "source_id")
+        let tid = int_field(m, "target_id")
+        match (sid, tid) {
+          (Some(s), Some(t)) ->
+            if s == t {
+              Err(http_error(400, "不能与自身合并"))
+            } else {
+              match as_http(with_db(a.db.path, a.db.ext, fn(c) => merge_then_read(c, s, t)), 500)? {
+                Some(j) -> Ok(json_ok(j))
+                None -> Err(http_error(404, "源标签或目标标签不存在"))
               }
-            _ -> Err(http_error(422, "source_id 和 target_id 必填"))
-          }
+            }
+          _ -> Err(http_error(422, "source_id 和 target_id 必填"))
         }
-        Err(e) -> Err(http_error(422, e))
       })
 
 fn merge_then_read(c: Connection, s: Int, t: Int) -> Result[Option[Json], String] !io = {
@@ -196,10 +181,7 @@ fn merge_then_read(c: Connection, s: Int, t: Int) -> Result[Option[Json], String
 pub fn tag_cleanup(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match with_db(a.db.path, a.db.ext, fn(c) => cleanup_tags(c)) {
-        Ok(n) -> Ok(json_ok(obj([("deleted", jint(n))])))
-        Err(m) -> Err(http_error(500, m))
-      })
+      Ok(json_ok(obj([("deleted", jint(as_http(with_db(a.db.path, a.db.ext, fn(c) => cleanup_tags(c)), 500)?))]))))
 
 ## DELETE /api/tags/{tag_id} — 204.
 pub fn tag_delete(a: Auth) -> Handler =
@@ -207,9 +189,9 @@ pub fn tag_delete(a: Auth) -> Handler =
   guarded(a, req, fn() =>
       match param_int(req, "tag_id") {
         Some(id) ->
-          match with_db(a.db.path, a.db.ext, fn(c) => delete_tag(c, id)) {
-            Ok(n) -> if n == 0 { Err(http_error(404, "标签不存在")) } else { Ok(text(204, "")) }
-            Err(m) -> Err(http_error(500, m))
+          {
+            let n = as_http(with_db(a.db.path, a.db.ext, fn(c) => delete_tag(c, id)), 500)?
+            if n == 0 { Err(http_error(404, "标签不存在")) } else { Ok(text(204, "")) }
           }
         None -> Err(http_error(422, "tag_id must be an integer"))
       })
@@ -220,44 +202,37 @@ pub fn tag_delete(a: Auth) -> Handler =
 pub fn pages_admin(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match with_db(a.db.path, a.db.ext, fn(c) => repo_page.list_admin(c)) {
-        Ok(items) -> Ok(json_ok(JArr(items)))
-        Err(m) -> Err(http_error(500, m))
-      })
+      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_page.list_admin(c)), 500)?))))
 
 ## POST /api/pages — create; returns the created page (201).
 pub fn page_create(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match body_obj(req.body) {
-        Ok(m) ->
-          if trim(str_or(m, "title", "")) == "" {
-            Err(http_error(422, "标题不能为空"))
-          } else if page_over_len(str_or(m, "title", "")) || page_over_len(str_or(m, "slug", "")) {
-            Err(http_error(422, "标题或 slug 长度超出 255"))
-          } else if bad_page_type(str_or(m, "type", "content")) {
-            Err(http_error(422, "type 只能是 content 或 article_list"))
-          } else {
-            let np = NewPage {
-              title: trim(str_or(m, "title", "")),
-              slug_hint: str_or(m, "slug", ""),
-              kind: str_or(m, "type", "content"),
-              description: str_or(m, "description", ""),
-              content: str_or(m, "content", ""),
-              auto_title: bool_or(m, "auto_title", false),
-              # FastAPI PageCreate.nav_visible defaults True (a page created without
-              # the field shows in the nav bar)
-              nav_visible: bool_or(m, "nav_visible", true),
-              nav_order: match int_field(m, "nav_order") { Some(n) -> n
-                None -> 0 },
-              created_at: opt_str(m, "created_at"),
-            }
-            match with_db(a.db.path, a.db.ext, fn(c) => page_create_read(c, np)) {
-              Ok(j) -> Ok(json_response(201, j))
-              Err(msg) -> Err(http_error(500, msg))
-            }
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        if trim(str_or(m, "title", "")) == "" {
+          Err(http_error(422, "标题不能为空"))
+        } else if page_over_len(str_or(m, "title", "")) || page_over_len(str_or(m, "slug", "")) {
+          Err(http_error(422, "标题或 slug 长度超出 255"))
+        } else if bad_page_type(str_or(m, "type", "content")) {
+          Err(http_error(422, "type 只能是 content 或 article_list"))
+        } else {
+          let np = NewPage {
+            title: trim(str_or(m, "title", "")),
+            slug_hint: str_or(m, "slug", ""),
+            kind: str_or(m, "type", "content"),
+            description: str_or(m, "description", ""),
+            content: str_or(m, "content", ""),
+            auto_title: bool_or(m, "auto_title", false),
+            # FastAPI PageCreate.nav_visible defaults True (a page created without
+            # the field shows in the nav bar)
+            nav_visible: bool_or(m, "nav_visible", true),
+            nav_order: match int_field(m, "nav_order") { Some(n) -> n
+              None -> 0 },
+            created_at: opt_str(m, "created_at"),
           }
-        Err(e) -> Err(http_error(422, e))
+          Ok(json_response(201, as_http(with_db(a.db.path, a.db.ext, fn(c) => page_create_read(c, np)), 500)?))
+        }
       })
 
 # title/slug carry Field(max_length=255)
@@ -287,24 +262,22 @@ pub fn page_update(a: Auth) -> Handler =
   guarded(a, req, fn() =>
       match param_int(req, "page_id") {
         Some(id) ->
-          match body_obj(req.body) {
-            Ok(m) ->
-              # PageUpdate validation: present title non-blank, title/slug ≤255,
-              # present type must be a valid Literal (checked before the builtin filter)
-              if has(m, "title") && trim(str_or(m, "title", "")) == "" {
-                Err(http_error(422, "标题不能为空"))
-              } else if page_over_len(str_or(m, "title", "")) || page_over_len(str_or(m, "slug", "")) {
-                Err(http_error(422, "标题或 slug 长度超出 255"))
-              } else if has(m, "type") && bad_page_type(str_or(m, "type", "content")) {
-                Err(http_error(422, "type 只能是 content 或 article_list"))
-              } else {
-                match with_db(a.db.path, a.db.ext, fn(c) => page_update_read(c, id, m)) {
-                  Ok(Some(j)) -> Ok(json_ok(j))
-                  Ok(None) -> Err(http_error(404, "页面不存在"))
-                  Err(msg) -> Err(http_error(500, msg))
-                }
+          {
+            let m = as_http(body_obj(req.body), 422)?
+            # PageUpdate validation: present title non-blank, title/slug ≤255,
+            # present type must be a valid Literal (checked before the builtin filter)
+            if has(m, "title") && trim(str_or(m, "title", "")) == "" {
+              Err(http_error(422, "标题不能为空"))
+            } else if page_over_len(str_or(m, "title", "")) || page_over_len(str_or(m, "slug", "")) {
+              Err(http_error(422, "标题或 slug 长度超出 255"))
+            } else if has(m, "type") && bad_page_type(str_or(m, "type", "content")) {
+              Err(http_error(422, "type 只能是 content 或 article_list"))
+            } else {
+              match as_http(with_db(a.db.path, a.db.ext, fn(c) => page_update_read(c, id, m)), 500)? {
+                Some(j) -> Ok(json_ok(j))
+                None -> Err(http_error(404, "页面不存在"))
               }
-            Err(e) -> Err(http_error(422, e))
+            }
           }
         None -> Err(http_error(422, "page_id must be an integer"))
       })
@@ -324,7 +297,7 @@ fn page_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Opti
       let _de = if builtin == false && has(m, "description") { set_page_str(c, id, "description", str_or(m, "description", ""))? } else { 0 }
       let _co = if builtin == false && has(m, "content") { set_page_str(c, id, "content", str_or(m, "content", ""))? } else { 0 }
       let _au = if builtin == false && has(m, "auto_title") { set_page_int(c, id, "auto_title", bool_int(bool_or(m, "auto_title", false)))? } else { 0 }
-      let _ca = if builtin == false { match opt_str(m, "created_at") { Some(s) -> set_page_created(c, id, s)?  None -> 0 } } else { 0 }
+      let _ca = if builtin == false { match opt_str(m, "created_at") { Some(s) -> set_page_created(c, id, s)? None -> 0 } } else { 0 }
       let _sl = if builtin == false && has(m, "slug") { regen_page_slug(c, id, slug_base(c, id, m)?)? } else { 0 }
       let _u = touch_page(c, id)?
       repo_page.by_id_admin(c, id)
@@ -356,11 +329,10 @@ pub fn page_delete(a: Auth) -> Handler =
   guarded(a, req, fn() =>
       match param_int(req, "page_id") {
         Some(id) ->
-          match with_db(a.db.path, a.db.ext, fn(c) => page_delete_guarded(c, id)) {
-            Ok(0) -> Err(http_error(404, "页面不存在"))
-            Ok(1) -> Ok(text(204, ""))
-            Ok(_o) -> Err(http_error(400, "内置页面不可删除，可在导航中隐藏"))
-            Err(m) -> Err(http_error(500, m))
+          match as_http(with_db(a.db.path, a.db.ext, fn(c) => page_delete_guarded(c, id)), 500)? {
+            0 -> Err(http_error(404, "页面不存在"))
+            1 -> Ok(text(204, ""))
+            _o -> Err(http_error(400, "内置页面不可删除，可在导航中隐藏"))
           }
         None -> Err(http_error(422, "page_id must be an integer"))
       })
@@ -382,19 +354,14 @@ fn page_delete_guarded(c: Connection, id: Int) -> Result[Int, String] !io =
 pub fn page_reorder(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match body_obj(req.body) {
-        Ok(m) ->
-          # ReorderRequest.ids is a required list[int]: absent / non-array / any
-          # non-integer element is a 422 in FastAPI (not a silently-empty reorder).
-          match strict_int_list(m, "ids") {
-            None -> Err(http_error(422, "ids 必须是整数数组"))
-            Some(ids) ->
-              match with_db(a.db.path, a.db.ext, fn(c) => reorder_read(c, ids)) {
-                Ok(items) -> Ok(json_ok(JArr(items)))
-                Err(msg) -> Err(http_error(500, msg))
-              }
-          }
-        Err(e) -> Err(http_error(422, e))
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        # ReorderRequest.ids is a required list[int]: absent / non-array / any
+        # non-integer element is a 422 in FastAPI (not a silently-empty reorder).
+        match strict_int_list(m, "ids") {
+          None -> Err(http_error(422, "ids 必须是整数数组"))
+          Some(ids) -> Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, fn(c) => reorder_read(c, ids)), 500)?)))
+        }
       })
 
 # a present JSON array whose every element is an integer → Some(list); absent,
@@ -428,17 +395,15 @@ fn reorder_read(c: Connection, ids: List[Int]) -> Result[List[Json], String] !io
 pub fn viz_list(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match with_db(a.db.path, a.db.ext, fn(c) => list_all(c)) {
-        Ok(items) -> Ok(json_ok(JArr(items)))
-        Err(m) -> Err(http_error(500, m))
-      })
+      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, fn(c) => list_all(c)), 500)?))))
 
 ## POST /api/viz — create (201). slug format + uniqueness + source required.
 pub fn viz_create(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() =>
-      match body_obj(req.body) {
-        Ok(m) -> {
+      {
+        let m = as_http(body_obj(req.body), 422)?
+        {
           # _clean_slug lowercases+trims before the regex; slug carries max_length=255.
           let slug = to_lower(trim(str_or(m, "slug", "")))
           let source = str_or(m, "source", "")
@@ -455,14 +420,12 @@ pub fn viz_create(a: Auth) -> Handler =
               slug: slug, name: str_or(m, "name", ""), source: source,
               compiled: str_or(m, "compiled", ""), style: str_or(m, "style", ""),
             }
-            match with_db(a.db.path, a.db.ext, fn(c) => viz_create_read(c, nv)) {
-              Ok(Some(j)) -> Ok(json_response(201, j))
-              Ok(None) -> Err(http_error(409, "标识 $slug 已存在"))
-              Err(msg) -> Err(http_error(500, msg))
+            match as_http(with_db(a.db.path, a.db.ext, fn(c) => viz_create_read(c, nv)), 500)? {
+              Some(j) -> Ok(json_response(201, j))
+              None -> Err(http_error(409, "标识 $slug 已存在"))
             }
           }
         }
-        Err(e) -> Err(http_error(422, e))
       })
 
 fn viz_create_read(c: Connection, nv: NewViz) -> Result[Option[Json], String] !io = {
@@ -481,17 +444,19 @@ pub fn viz_update(a: Auth) -> Handler =
   guarded(a, req, fn() =>
       match param_int(req, "viz_id") {
         Some(id) ->
-          match body_obj(req.body) {
-            Ok(m) ->
-              match with_db(a.db.path, a.db.ext, fn(c) => viz_update_read(c, id, m)) {
-                Ok(Some(j)) -> Ok(json_ok(j))
-                Ok(None) -> Err(http_error(404, "组件不存在"))
-                Err(msg) -> Err(if contains(msg, "已存在") { http_error(409, msg) } else { http_error(422, msg) })
-              }
-            Err(e) -> Err(http_error(422, e))
+          {
+            let m = as_http(body_obj(req.body), 422)?
+            match as_http_with(with_db(a.db.path, a.db.ext, fn(c) => viz_update_read(c, id, m)), classify_viz)? {
+              Some(j) -> Ok(json_ok(j))
+              None -> Err(http_error(404, "组件不存在"))
+            }
           }
         None -> Err(http_error(422, "viz_id must be an integer"))
       })
+
+# a slug collision is a 409, every other update failure a 422 (validation)
+fn classify_viz(msg: String) -> HttpError =
+  if contains(msg, "已存在") { http_error(409, msg) } else { http_error(422, msg) }
 
 fn viz_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Option[Json], String] !io = {
   let ex = viz_exists(c, id)?
@@ -501,11 +466,11 @@ fn viz_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Optio
     # PATCH semantics: a present, non-null field is applied; an explicit null is
     # skipped (FastAPI's exclude_unset + `if value is not None`), NOT written as ""
     # — writing "" here was silent data loss.
-    let _sl = match opt_str(m, "slug") { Some(s) -> update_viz_slug(c, id, s)?  None -> 0 }
-    let _na = match opt_str(m, "name") { Some(s) -> set_viz_str(c, id, "name", s)?  None -> 0 }
-    let _so = match opt_str(m, "source") { Some(s) -> set_viz_source(c, id, s)?  None -> 0 }
-    let _co = match opt_str(m, "compiled") { Some(s) -> set_viz_str(c, id, "compiled", s)?  None -> 0 }
-    let _st = match opt_str(m, "style") { Some(s) -> set_viz_str(c, id, "style", s)?  None -> 0 }
+    let _sl = match opt_str(m, "slug") { Some(s) -> update_viz_slug(c, id, s)? None -> 0 }
+    let _na = match opt_str(m, "name") { Some(s) -> set_viz_str(c, id, "name", s)? None -> 0 }
+    let _so = match opt_str(m, "source") { Some(s) -> set_viz_source(c, id, s)? None -> 0 }
+    let _co = match opt_str(m, "compiled") { Some(s) -> set_viz_str(c, id, "compiled", s)? None -> 0 }
+    let _st = match opt_str(m, "style") { Some(s) -> set_viz_str(c, id, "style", s)? None -> 0 }
     let _t = touch_viz(c, id)?
     by_id(c, id)
   }
@@ -534,9 +499,9 @@ pub fn viz_delete(a: Auth) -> Handler =
   guarded(a, req, fn() =>
       match param_int(req, "viz_id") {
         Some(id) ->
-          match with_db(a.db.path, a.db.ext, fn(c) => delete_viz(c, id)) {
-            Ok(n) -> if n == 0 { Err(http_error(404, "组件不存在")) } else { Ok(text(204, "")) }
-            Err(m) -> Err(http_error(500, m))
+          {
+            let n = as_http(with_db(a.db.path, a.db.ext, fn(c) => delete_viz(c, id)), 500)?
+            if n == 0 { Err(http_error(404, "组件不存在")) } else { Ok(text(204, "")) }
           }
         None -> Err(http_error(422, "viz_id must be an integer"))
       })
