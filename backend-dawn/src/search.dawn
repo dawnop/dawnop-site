@@ -64,6 +64,18 @@ fn ci_eq(a: List[Int], b: List[Int]) -> Bool = to_lower(from_code_points(a)) == 
 fn slice(xs: List[Int], from: Int, to: Int) -> List[Int] = map(range(from, to), fn(i) => xs[i])
 
 # ---- markdown → plain text (rough, for the excerpt window) ----
+#
+# Positions in this section are std cursors, not code-point indices. That choice
+# is what makes the section linear: `substring`/`index_of` count code points, so
+# each call rescans from the start of the string, and a pass that calls them
+# once per markdown construct over a whole article is quadratic. A cursor is
+# already a position, so every step costs the same wherever it lands.
+#
+# Cursors are opaque, with one sound piece of arithmetic, named `past` below:
+# a match of a literal ends exactly one literal-width past where it began.
+
+# the cursor just past an occurrence of `lit` that was found at `at`
+fn past(at: Int, lit: String) -> Int = at + cursor_end(lit)
 
 pub fn strip_md(s: String) -> String = {
   let a = drop_between(s, "```", "```", " ")
@@ -76,10 +88,13 @@ pub fn strip_md(s: String) -> String = {
 
 # replace each open..close (inclusive) span with `repl`
 fn drop_between(s: String, open: String, close: String, repl: String) -> String =
-  match index_of_from(s, open, 0) {
+  match index_of_from(s, open, cursor_start(s)) {
     Some(i) ->
-      match index_of_from(s, close, i + str_len(open)) {
-        Some(j) -> substring(s, 0, i) ++ repl ++ drop_between(substring(s, j + str_len(close), str_len(s)), open, close, repl)
+      match index_of_from(s, close, past(i, open)) {
+        Some(j) -> {
+          let rest = cursor_slice(s, past(j, close), cursor_end(s))
+          cursor_slice(s, cursor_start(s), i) ++ repl ++ drop_between(rest, open, close, repl)
+        }
         None -> s
       }
     None -> s
@@ -87,33 +102,38 @@ fn drop_between(s: String, open: String, close: String, repl: String) -> String 
 
 # ![...](...) -> space
 fn drop_images(s: String) -> String =
-  match index_of_from(s, "![", 0) {
+  match index_of_from(s, "![", cursor_start(s)) {
     Some(i) ->
       match paren_end(s, i) {
-        Some(after) -> substring(s, 0, i) ++ " " ++ drop_images(substring(s, after, str_len(s)))
-        None -> substring(s, 0, i + 2) ++ drop_images(substring(s, i + 2, str_len(s)))
+        Some(after) ->
+          cursor_slice(s, cursor_start(s), i) ++ " " ++ drop_images(cursor_slice(s, after, cursor_end(s)))
+        None ->
+          cursor_slice(s, cursor_start(s), past(i, "![")) ++ drop_images(cursor_slice(s, past(i, "!["), cursor_end(s)))
       }
     None -> s
   }
 
 # [text](...) -> text
 fn drop_links(s: String) -> String =
-  match index_of_from(s, "[", 0) {
+  match index_of_from(s, "[", cursor_start(s)) {
     Some(i) ->
       match link_text(s, i) {
-        Some((txt, after)) -> substring(s, 0, i) ++ txt ++ drop_links(substring(s, after, str_len(s)))
-        None -> substring(s, 0, i + 1) ++ drop_links(substring(s, i + 1, str_len(s)))
+        Some((txt, after)) ->
+          cursor_slice(s, cursor_start(s), i) ++ txt ++ drop_links(cursor_slice(s, after, cursor_end(s)))
+        None ->
+          cursor_slice(s, cursor_start(s), past(i, "[")) ++ drop_links(cursor_slice(s, past(i, "["), cursor_end(s)))
       }
     None -> s
   }
 
-# at "[" position i: expect [txt](url); return (txt, index-after-`)`)
+# at a "[" cursor i: expect [txt](url); return (txt, cursor-after-`)`)
+# cursor_char reports -1 past the end, so the "(" test also covers "] is last"
 fn link_text(s: String, i: Int) -> Option[(String, Int)] =
   match index_of_from(s, "]", i) {
     Some(rb) ->
-      if rb + 1 < str_len(s) && substring(s, rb + 1, rb + 2) == "(" {
-        match index_of_from(s, ")", rb + 2) {
-          Some(rp) -> Some((substring(s, i + 1, rb), rp + 1))
+      if cursor_char(s, past(rb, "]")) == '(' {
+        match index_of_from(s, ")", past(past(rb, "]"), "(")) {
+          Some(rp) -> Some((cursor_slice(s, past(i, "["), rb), past(rp, ")")))
           None -> None
         }
       } else {
@@ -122,18 +142,10 @@ fn link_text(s: String, i: Int) -> Option[(String, Int)] =
     None -> None
   }
 
-# from a "![" at i: find the closing ")" of the following (...) ; return index after
+# from a "![" at i: find the closing ")" of the following (...) ; return cursor after
 fn paren_end(s: String, i: Int) -> Option[Int] =
-  match index_of_from(s, "]", i) {
-    Some(rb) ->
-      if rb + 1 < str_len(s) && substring(s, rb + 1, rb + 2) == "(" {
-        match index_of_from(s, ")", rb + 2) {
-          Some(rp) -> Some(rp + 1)
-          None -> None
-        }
-      } else {
-        None
-      }
+  match link_text(s, i) {
+    Some((_, after)) -> Some(after)
     None -> None
   }
 
@@ -145,52 +157,37 @@ fn is_md_sym(c: Int) -> Bool =
   c == 35 || c == 62 || c == 42 || c == 95 || c == 126 || c == 96 # # > * _ ~ `
 
 # collapse runs of ASCII whitespace to a single space, trim ends
-fn collapse_ws(s: String) -> String = trim(collapse(code_points(s), 0, false, ""))
+#
+# Accumulates code points and converts once at the end. Building the String with
+# `++` instead would copy the whole accumulator on every character — linear work
+# per character, quadratic over the article.
+fn collapse_ws(s: String) -> String = trim(from_code_points(collapse(code_points(s), 0, false, [])))
 
-fn collapse(cps: List[Int], i: Int, last_ws: Bool, acc: String) -> String =
+fn collapse(cps: List[Int], i: Int, last_ws: Bool, acc: List[Int]) -> List[Int] =
   if i >= len(cps) {
     acc
   } else {
     let c = cps[i]
     if is_ws(c) {
-      if last_ws { collapse(cps, i + 1, true, acc) } else { collapse(cps, i + 1, true, acc ++ " ") }
+      if last_ws { collapse(cps, i + 1, true, acc) } else { collapse(cps, i + 1, true, acc ++ [32]) }
     } else {
-      collapse(cps, i + 1, false, acc ++ from_code_points([c]))
+      collapse(cps, i + 1, false, acc ++ [c])
     }
   }
 
 fn is_ws(c: Int) -> Bool = c == 32 || c == 9 || c == 10 || c == 13 || c == 12
 
-# index of `needle` in `s` at or after `from`, by code-point index
-fn index_of_from(s: String, needle: String, from: Int) -> Option[Int] = {
-  let cps = code_points(s)
-  let ncps = code_points(needle)
-  find_at(cps, ncps, from)
-}
+# `index_of_from` used to be hand-rolled here, over `code_points(s)` — it
+# re-materialized the whole article on every call, then scanned it in Dawn. It is
+# now std's cursor-based one, which is the same search the JVM does on the string
+# itself. That this file needed the function at all is why std grew it.
 
-fn find_at(cps: List[Int], ncps: List[Int], i: Int) -> Option[Int] =
-  if i + len(ncps) > len(cps) {
-    None
-  } else if eq_at(cps, ncps, i) {
-    Some(i)
-  } else {
-    find_at(cps, ncps, i + 1)
-  }
+# walk `n` characters forward / back from a cursor, stopping at the ends
+fn fwd(s: String, c: Int, n: Int) -> Int =
+  if n <= 0 || cursor_done(s, c) { c } else { fwd(s, cursor_next(s, c), n - 1) }
 
-# Written as a recursion rather than a fold over a range: `find_at` calls this at
-# every candidate position, and the fold version allocated a range list each time
-# and — because `&&` inside a fold does not short-circuit the iteration — compared
-# the whole needle even after the first mismatch. Measured 2.3x on a 20KB article.
-fn eq_at(cps: List[Int], ncps: List[Int], i: Int) -> Bool = eq_from(cps, ncps, i, 0)
-
-fn eq_from(cps: List[Int], ncps: List[Int], i: Int, k: Int) -> Bool =
-  if k == len(ncps) {
-    true
-  } else if cps[i + k] == ncps[k] {
-    eq_from(cps, ncps, i, k + 1)
-  } else {
-    false
-  }
+fn back(s: String, c: Int, n: Int) -> Int =
+  if n <= 0 || c <= cursor_start(s) { c } else { back(s, cursor_prev(s, c), n - 1) }
 
 # ---- highlight builders ----
 
@@ -199,37 +196,37 @@ pub fn title_html(title: String, terms: List[String]) -> String = mark(html_esca
 ## Excerpt: a ~150-char window around the first matching term, highlighted.
 pub fn excerpt_html(content: String, summary: String, terms: List[String]) -> String = {
   let stripped = strip_md(content)
-  let base = if str_len(stripped) > 0 { stripped } else { summary }
-  if str_len(base) == 0 {
+  let base = if stripped != "" { stripped } else { summary }
+  if base == "" {
     ""
   } else {
-    let bcps = code_points(base)
+    # `pos` is a cursor into `low`, used against `base`. Sound as long as
+    # lowercasing does not change the width of what precedes the match — true
+    # for the scripts this site publishes, and the same assumption the code-point
+    # version made before it.
     let low = to_lower(base)
-    let pos = first_term_pos(low, terms, 0 - 1)
+    let pos = first_term_pos(low, terms)
     let width = 150
+    let head = cursor_start(base)
     if pos == 0 - 1 {
-      let seg = from_code_points(slice(bcps, 0, min2(width, len(bcps))))
-      mark(html_escape(seg), terms) ++ (if len(bcps) > width { "…" } else { "" })
+      let e = fwd(base, head, width)
+      mark(html_escape(cursor_slice(base, head, e)), terms) ++ (if cursor_done(base, e) { "" } else { "…" })
     } else {
-      let start = max2(0, pos - width / 3)
-      let end = min2(len(bcps), start + width)
-      let seg = from_code_points(slice(bcps, start, end))
-      let pre = if start > 0 { "…" } else { "" }
-      let suf = if end < len(bcps) { "…" } else { "" }
-      pre ++ mark(html_escape(seg), terms) ++ suf
+      let start = back(base, pos, width / 3)
+      let e = fwd(base, start, width)
+      let pre = if start > head { "…" } else { "" }
+      let suf = if cursor_done(base, e) { "" } else { "…" }
+      pre ++ mark(html_escape(cursor_slice(base, start, e)), terms) ++ suf
     }
   }
 }
 
-fn first_term_pos(low: String, terms: List[String], best: Int) -> Int =
+fn first_term_pos(low: String, terms: List[String]) -> Int =
   fold(terms, 0 - 1, fn(acc, t) =>
-      match index_of_from(low, to_lower(t), 0) {
+      match index_of_from(low, to_lower(t), cursor_start(low)) {
         Some(i) -> if acc == 0 - 1 || i < acc { i } else { acc }
         None -> acc
       })
-
-fn min2(a: Int, b: Int) -> Int = if a < b { a } else { b }
-fn max2(a: Int, b: Int) -> Int = if a > b { a } else { b }
 
 # ---- query (SQLite FTS, ranking delegated) ----
 
