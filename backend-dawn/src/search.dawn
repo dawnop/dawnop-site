@@ -71,11 +71,8 @@ fn slice(xs: List[Int], from: Int, to: Int) -> List[Int] = map(range(from, to), 
 # once per markdown construct over a whole article is quadratic. A cursor is
 # already a position, so every step costs the same wherever it lands.
 #
-# Cursors are opaque, with one sound piece of arithmetic, named `past` below:
-# a match of a literal ends exactly one literal-width past where it began.
-
-# the cursor just past an occurrence of `lit` that was found at `at`
-fn past(at: Int, lit: String) -> Int = at + cursor_end(lit)
+# Cursors are opaque; stepping past a matched literal is std's `cursor_skip`,
+# the one sanctioned advance-by-a-known-width.
 
 pub fn strip_md(s: String) -> String = {
   let a = drop_between(s, "```", "```", " ")
@@ -90,9 +87,9 @@ pub fn strip_md(s: String) -> String = {
 fn drop_between(s: String, open: String, close: String, repl: String) -> String =
   match index_of_from(s, open, cursor_start(s)) {
     Some(i) ->
-      match index_of_from(s, close, past(i, open)) {
+      match index_of_from(s, close, cursor_skip(s, i, open)) {
         Some(j) -> {
-          let rest = cursor_slice(s, past(j, close), cursor_end(s))
+          let rest = cursor_slice(s, cursor_skip(s, j, close), cursor_end(s))
           cursor_slice(s, cursor_start(s), i) ++ repl ++ drop_between(rest, open, close, repl)
         }
         None -> s
@@ -108,7 +105,7 @@ fn drop_images(s: String) -> String =
         Some(after) ->
           cursor_slice(s, cursor_start(s), i) ++ " " ++ drop_images(cursor_slice(s, after, cursor_end(s)))
         None ->
-          cursor_slice(s, cursor_start(s), past(i, "![")) ++ drop_images(cursor_slice(s, past(i, "!["), cursor_end(s)))
+          cursor_slice(s, cursor_start(s), cursor_skip(s, i, "![")) ++ drop_images(cursor_slice(s, cursor_skip(s, i, "!["), cursor_end(s)))
       }
     None -> s
   }
@@ -121,19 +118,19 @@ fn drop_links(s: String) -> String =
         Some((txt, after)) ->
           cursor_slice(s, cursor_start(s), i) ++ txt ++ drop_links(cursor_slice(s, after, cursor_end(s)))
         None ->
-          cursor_slice(s, cursor_start(s), past(i, "[")) ++ drop_links(cursor_slice(s, past(i, "["), cursor_end(s)))
+          cursor_slice(s, cursor_start(s), cursor_skip(s, i, "[")) ++ drop_links(cursor_slice(s, cursor_skip(s, i, "["), cursor_end(s)))
       }
     None -> s
   }
 
 # at a "[" cursor i: expect [txt](url); return (txt, cursor-after-`)`)
 # cursor_char reports -1 past the end, so the "(" test also covers "] is last"
-fn link_text(s: String, i: Int) -> Option[(String, Int)] =
+fn link_text(s: String, i: Cursor) -> Option[(String, Cursor)] =
   match index_of_from(s, "]", i) {
     Some(rb) ->
-      if cursor_char(s, past(rb, "]")) == '(' {
-        match index_of_from(s, ")", past(past(rb, "]"), "(")) {
-          Some(rp) -> Some((cursor_slice(s, past(i, "["), rb), past(rp, ")")))
+      if cursor_char(s, cursor_skip(s, rb, "]")) == '(' {
+        match index_of_from(s, ")", cursor_skip(s, cursor_skip(s, rb, "]"), "(")) {
+          Some(rp) -> Some((cursor_slice(s, cursor_skip(s, i, "["), rb), cursor_skip(s, rp, ")")))
           None -> None
         }
       } else {
@@ -143,7 +140,7 @@ fn link_text(s: String, i: Int) -> Option[(String, Int)] =
   }
 
 # from a "![" at i: find the closing ")" of the following (...) ; return cursor after
-fn paren_end(s: String, i: Int) -> Option[Int] =
+fn paren_end(s: String, i: Cursor) -> Option[Cursor] =
   match link_text(s, i) {
     Some((_, after)) -> Some(after)
     None -> None
@@ -183,10 +180,10 @@ fn is_ws(c: Int) -> Bool = c == 32 || c == 9 || c == 10 || c == 13 || c == 12
 # itself. That this file needed the function at all is why std grew it.
 
 # walk `n` characters forward / back from a cursor, stopping at the ends
-fn fwd(s: String, c: Int, n: Int) -> Int =
+fn fwd(s: String, c: Cursor, n: Int) -> Cursor =
   if n <= 0 || cursor_done(s, c) { c } else { fwd(s, cursor_next(s, c), n - 1) }
 
-fn back(s: String, c: Int, n: Int) -> Int =
+fn back(s: String, c: Cursor, n: Int) -> Cursor =
   if n <= 0 || c <= cursor_start(s) { c } else { back(s, cursor_prev(s, c), n - 1) }
 
 # ---- highlight builders ----
@@ -205,28 +202,35 @@ pub fn excerpt_html(content: String, summary: String, terms: List[String]) -> St
     # for the scripts this site publishes, and the same assumption the code-point
     # version made before it.
     let low = to_lower(base)
-    let pos = first_term_pos(low, terms)
     let width = 150
     let head = cursor_start(base)
-    if pos == 0 - 1 {
-      let e = fwd(base, head, width)
-      mark(html_escape(cursor_slice(base, head, e)), terms) ++ (if cursor_done(base, e) { "" } else { "…" })
-    } else {
-      let start = back(base, pos, width / 3)
-      let e = fwd(base, start, width)
-      let pre = if start > head { "…" } else { "" }
-      let suf = if cursor_done(base, e) { "" } else { "…" }
-      pre ++ mark(html_escape(cursor_slice(base, start, e)), terms) ++ suf
+    match first_term_pos(low, terms) {
+      None -> {
+        let e = fwd(base, head, width)
+        mark(html_escape(cursor_slice(base, head, e)), terms) ++ (if cursor_done(base, e) { "" } else { "…" })
+      }
+      Some(pos) -> {
+        let start = back(base, pos, width / 3)
+        let e = fwd(base, start, width)
+        let pre = if start > head { "…" } else { "" }
+        let suf = if cursor_done(base, e) { "" } else { "…" }
+        pre ++ mark(html_escape(cursor_slice(base, start, e)), terms) ++ suf
+      }
     }
   }
 }
 
-fn first_term_pos(low: String, terms: List[String]) -> Int =
-  fold(terms, 0 - 1, fn(acc, t) =>
+fn first_term_pos(low: String, terms: List[String]) -> Option[Cursor] = {
+  let seed: Option[Cursor] = None
+  fold(terms, seed, fn(acc, t) =>
       match index_of_from(low, to_lower(t), cursor_start(low)) {
-        Some(i) -> if acc == 0 - 1 || i < acc { i } else { acc }
+        Some(i) -> match acc {
+          None -> Some(i)
+          Some(a) -> if i < a { Some(i) } else { acc }
+        }
         None -> acc
       })
+}
 
 # ---- query (SQLite FTS, ranking delegated) ----
 
