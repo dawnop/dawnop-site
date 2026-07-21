@@ -2,6 +2,9 @@
 # manager REST endpoints, authenticated with QBox management tokens (qiniu_sign).
 # Pure Dawn over the http client — the official SDK drags okhttp+gson, so this
 # hand-rolls the three verbs fm needs.
+use std/str
+use std/bytes
+use std/map
 use java "java.net.http.HttpRequest.BodyPublisher"
 use java "java.net.http.HttpRequest.BodyPublishers"
 use java "java.io.File"
@@ -36,7 +39,7 @@ pub fn space_used(ak: String, sk: String, bucket: String, begin: String, end: St
 fn last_data(body: String) -> Int !io =
   match parse(body) {
     Ok(JObj(m)) ->
-      match map_get(m, "datas") {
+      match map.get(m, "datas") {
         Some(JArr(xs)) -> last_int(xs)
         _ -> 0
       }
@@ -56,7 +59,7 @@ const BOUNDARY: String = "----DawnFmBoundary7MA4YWxkTrZu0gW"
 ## Upload TEXT content to a key via qiniu's multipart form API (save/create-file).
 ## `deadline` is the upload-token expiry (unix seconds).
 pub fn upload_text(ak: String, sk: String, bucket: String, key: String, content: String, mime: String, deadline: Int) -> Result[Unit, String] !io =
-  upload_bytes(ak, sk, bucket, key, utf8(content), mime, deadline)
+  upload_bytes(ak, sk, bucket, key, bytes.utf8(content), mime, deadline)
 
 ## Upload BINARY content to a key via qiniu's multipart form API. `content` is the
 ## exact file Bytes; the multipart body is assembled as Bytes (ASCII framing +
@@ -87,7 +90,7 @@ fn ok_status(r: HttpResp, what: String) -> Result[Unit, String] =
   if r.status == 200 { Ok(()) } else { Err("$what: qiniu ${r.status} ${r.body}") }
 
 fn multipart(token: String, key: String, content: Bytes, mime: String) -> Bytes =
-  utf8(mp_head(token, key, mime)) ++ content ++ utf8(mp_tail())
+  bytes.utf8(mp_head(token, key, mime)) ++ content ++ bytes.utf8(mp_tail())
 
 # The multipart framing around the file part, split out so the streaming upload
 # can put a file between the two without ever concatenating it into one buffer.
@@ -121,9 +124,9 @@ pub fn upload_file(ak: String, sk: String, bucket: String, key: String, path: St
 # head ++ <the file, streamed off disk> ++ tail, as one publisher
 fn multipart_streaming(head: String, src: String, tail: String) -> Result[BodyPublisher, String] !io =
   match java_try(fn() => {
-    let h = BodyPublishers.ofByteArray(utf8(head))!
+    let h = BodyPublishers.ofByteArray(bytes.utf8(head))!
     let f = BodyPublishers.ofFile(File.new(src).toPath()!)!
-    let t = BodyPublishers.ofByteArray(utf8(tail))!
+    let t = BodyPublishers.ofByteArray(bytes.utf8(tail))!
     BodyPublishers.concat(h, f, t)!
   }) {
     Err(m) -> Err("upload_file: $m")
@@ -166,7 +169,7 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
   let payload = join(map(range(0, 2000), fn(i) => "0123456789"), "")
   let src = File.createTempFile("dawn-test-src-", ".bin")!
   let out = FileOutputStream.new(src)
-  out.write(utf8(payload))
+  out.write(bytes.utf8(payload))
   out.close()
   let src_path = src.getPath()!
 
@@ -178,7 +181,7 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
     let buf = ByteArrayOutputStream.new()
     let _n = ex.getRequestBody()!.transferTo(buf)
     let got = buf.toByteArray()!
-    ex.sendResponseHeaders(200, byte_len(got))
+    ex.sendResponseHeaders(200, bytes.len(got))
     let os = ex.getResponseBody()!
     os.write(got)
     os.close()
@@ -195,7 +198,7 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
         assert r.status == 200
         # byte-exact: the framing sits either side of the file's bytes, untouched
         assert r.body == "HEAD:" ++ payload ++ ":TAIL"
-        assert str_len(r.body) == 5 + 20000 + 5
+        assert str.len(r.body) == 5 + 20000 + 5
       }
     }
   }
@@ -214,9 +217,9 @@ test "a refused qiniu call is an Err, not Ok(false)" {
     Ok(_) -> panic("a 401 must not be Ok")
     Err(m) -> {
       # the status and qiniu's own message survive into the error
-      assert contains(m, "upload")
-      assert contains(m, "401")
-      assert contains(m, "bad token")
+      assert str.contains(m, "upload")
+      assert str.contains(m, "401")
+      assert str.contains(m, "bad token")
     }
   }
 }

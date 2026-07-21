@@ -2,16 +2,17 @@
 # every run of non-word characters with a single dash, strip dashes/underscores
 # from the ends, empty → "article". "Word" is Unicode letter-or-digit or '_'
 # (Python's \w under re.UNICODE — so accented letters and CJK are kept).
+use std/str
 use java "java.lang.Character"
 
 fn is_word(cp: Int) -> Bool !io = Character.isLetterOrDigit(cp) || cp == 95
 
 ## Slugify a title. Deterministic; does not touch the database.
 pub fn slugify(text: String) -> String !io = {
-  let cps = code_points(to_lower(trim(text)))
+  let cps = code_points(str.to_lower(str.trim(text)))
   let out = collapse(cps, 0, [], false)
   let stripped = strip_edges(out)
-  if str_len(stripped) == 0 { "article" } else { stripped }
+  if str.len(stripped) == 0 { "article" } else { stripped }
 }
 
 # fold code points, turning non-word runs into single dashes (45 = '-')

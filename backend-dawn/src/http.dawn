@@ -2,6 +2,8 @@
 # register's stat check, monitor probes. Pure Dawn over java.net.http. Network
 # failures land in Err via java_try; a non-2xx status is still Ok (the caller
 # inspects .status) — only transport errors are failures here.
+use std/str
+use std/bytes
 use java "java.net.URI"
 use java "java.net.http.HttpClient"
 use java "java.net.http.HttpRequest"
@@ -151,8 +153,8 @@ fn echo_server(status: Int, body: String) -> (HttpServer, Int) !io = {
   server.createContext("/", fn(ex) => {
     # reflect the request headers back so a test can assert what was sent
     let probe = unwrap_or(ex.getRequestHeaders()!.getFirst("X-Probe"), "-")
-    let payload = utf8(body ++ probe)
-    ex.sendResponseHeaders(status, byte_len(payload))
+    let payload = bytes.utf8(body ++ probe)
+    ex.sendResponseHeaders(status, bytes.len(payload))
     let os = ex.getResponseBody()!
     os.write(payload)
     os.close()
@@ -166,7 +168,7 @@ test "GET returns the status and body the server sent" {
   match fetch("http://127.0.0.1:$port/api/health", []) {
     Ok(r) -> {
       assert r.status == 200
-      assert contains(r.body, "ok")
+      assert str.contains(r.body, "ok")
     }
     Err(m) -> panic("fetch failed: $m")
   }
@@ -177,7 +179,7 @@ test "a bad host is an Err, not a crash" {
   # .invalid is reserved by RFC 2606 and never resolves — no live host involved
   match fetch("https://no-such-host.invalid/", []) {
     Ok(_) -> { assert false }
-    Err(m) -> { assert str_len(m) > 0 }
+    Err(m) -> { assert str.len(m) > 0 }
   }
 }
 
@@ -211,9 +213,9 @@ test "fetch_stream hands back a readable upstream stream" {
       assert r.status == 200
       assert ok_stream(r)
       # the body is a live stream, not materialized up front; drain it here
-      let bytes = r.stream.readAllBytes()!
+      let raw = r.stream.readAllBytes()!
       close_stream(r.stream)
-      assert decode(bytes, "UTF-8") == "streamed:s"
+      assert bytes.decode(raw, "UTF-8") == "streamed:s"
     }
     Err(m) -> panic("fetch_stream failed: $m")
   }

@@ -2,6 +2,8 @@
 #   fn(handler) -> handler
 # composed by serve_app with the first element outermost. No registry, no
 # annotations — wrapping a function is the whole mechanism.
+use std/str
+use std/list
 use java "java.lang.System"
 use web/types.{Request, Response, HttpError, Handler, with_header, text, header}
 
@@ -25,7 +27,7 @@ pub fn with_logging(next: Handler) -> Handler =
 # carry no route, hence no tags — false.
 fn route_has_tag(req: Request, tag: String) -> Bool =
   match req.route {
-    Some(m) -> find(m.tags, fn(t) => t == tag) != None
+    Some(m) -> list.find(m.tags, fn(t) => t == tag) != None
     None -> false
   }
 
@@ -34,7 +36,7 @@ fn route_has_tag(req: Request, tag: String) -> Bool =
 # (client_max_body_size) instead — they opt out with the "raw-body" tag.
 pub fn with_body_limit(limit: Int, next: Handler) -> Handler =
   fn(req) =>
-  if route_has_tag(req, "raw-body") == false && str_len(req.body) > limit {
+  if route_has_tag(req, "raw-body") == false && str.len(req.body) > limit {
     Err(HttpError { status: 413, message: "request body exceeds $limit bytes" })
   } else {
     next(req)
@@ -59,7 +61,7 @@ pub fn with_cors(origins: String, next: Handler) -> Handler =
     }
   }
 
-fn cors_list(csv: String) -> List[String] = filter(map(split(csv, ","), trim), fn(s) => s != "")
+fn cors_list(csv: String) -> List[String] = filter(map(str.split(csv, ","), fn(s) => str.trim(s)), fn(s) => s != "")
 
 # echo the request Origin when allow-listed, else fall back to the first configured
 # origin (a non-matching Allow-Origin is blocked by the browser, same as FastAPI
@@ -67,7 +69,7 @@ fn cors_list(csv: String) -> List[String] = filter(map(split(csv, ","), trim), f
 fn pick_origin(req: Request, allowed: List[String]) -> String = {
   let first = if len(allowed) == 0 { "" } else { allowed[0] }
   match header(req, "origin") {
-    Some(o) -> if find(allowed, fn(x) => x == o) != None { o } else { first }
+    Some(o) -> if list.find(allowed, fn(x) => x == o) != None { o } else { first }
     None -> first
   }
 }

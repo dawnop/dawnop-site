@@ -2,6 +2,8 @@
 # FTS5 query FastAPI runs (simple_query + bm25), so order and totals match
 # exactly — Dawn only reimplements the server-side highlight HTML (escape +
 # <mark> wrapping + a markdown-stripped excerpt window).
+use std/str
+use std/cursor
 use java "java.sql.Connection"
 use sql.{SqlV, PInt, PStr, Cell, ColInt, ColStr, query, str_at, int_at}
 use json/value.{Json, JArr}
@@ -18,7 +20,7 @@ pub fn html_escape(s: String) -> String = {
   replace(e, "'", "&#x27;")
 }
 
-fn replace(s: String, from: String, to: String) -> String = join(split(s, from), to)
+fn replace(s: String, from: String, to: String) -> String = join(str.split(s, from), to)
 
 # normalize tab/newline/CR to spaces so a whitespace-run split matches Python's
 # str.split() (which splits on any whitespace, not only U+0020)
@@ -59,7 +61,7 @@ fn first_match(cps: List[Int], terms: List[String], i: Int, ti: Int) -> Option[I
     }
   }
 
-fn ci_eq(a: List[Int], b: List[Int]) -> Bool = to_lower(from_code_points(a)) == to_lower(from_code_points(b))
+fn ci_eq(a: List[Int], b: List[Int]) -> Bool = str.to_lower(from_code_points(a)) == str.to_lower(from_code_points(b))
 
 fn slice(xs: List[Int], from: Int, to: Int) -> List[Int] = map(range(from, to), fn(i) => xs[i])
 
@@ -85,12 +87,12 @@ pub fn strip_md(s: String) -> String = {
 
 # replace each open..close (inclusive) span with `repl`
 fn drop_between(s: String, open: String, close: String, repl: String) -> String =
-  match index_of_from(s, open, cursor_start(s)) {
+  match cursor.find(s, open, cursor.start(s)) {
     Some(i) ->
-      match index_of_from(s, close, cursor_skip(s, i, open)) {
+      match cursor.find(s, close, cursor.skip(s, i, open)) {
         Some(j) -> {
-          let rest = cursor_slice(s, cursor_skip(s, j, close), cursor_end(s))
-          cursor_slice(s, cursor_start(s), i) ++ repl ++ drop_between(rest, open, close, repl)
+          let rest = cursor.slice(s, cursor.skip(s, j, close), cursor.end(s))
+          cursor.slice(s, cursor.start(s), i) ++ repl ++ drop_between(rest, open, close, repl)
         }
         None -> s
       }
@@ -99,26 +101,26 @@ fn drop_between(s: String, open: String, close: String, repl: String) -> String 
 
 # ![...](...) -> space
 fn drop_images(s: String) -> String =
-  match index_of_from(s, "![", cursor_start(s)) {
+  match cursor.find(s, "![", cursor.start(s)) {
     Some(i) ->
       match paren_end(s, i) {
         Some(after) ->
-          cursor_slice(s, cursor_start(s), i) ++ " " ++ drop_images(cursor_slice(s, after, cursor_end(s)))
+          cursor.slice(s, cursor.start(s), i) ++ " " ++ drop_images(cursor.slice(s, after, cursor.end(s)))
         None ->
-          cursor_slice(s, cursor_start(s), cursor_skip(s, i, "![")) ++ drop_images(cursor_slice(s, cursor_skip(s, i, "!["), cursor_end(s)))
+          cursor.slice(s, cursor.start(s), cursor.skip(s, i, "![")) ++ drop_images(cursor.slice(s, cursor.skip(s, i, "!["), cursor.end(s)))
       }
     None -> s
   }
 
 # [text](...) -> text
 fn drop_links(s: String) -> String =
-  match index_of_from(s, "[", cursor_start(s)) {
+  match cursor.find(s, "[", cursor.start(s)) {
     Some(i) ->
       match link_text(s, i) {
         Some((txt, after)) ->
-          cursor_slice(s, cursor_start(s), i) ++ txt ++ drop_links(cursor_slice(s, after, cursor_end(s)))
+          cursor.slice(s, cursor.start(s), i) ++ txt ++ drop_links(cursor.slice(s, after, cursor.end(s)))
         None ->
-          cursor_slice(s, cursor_start(s), cursor_skip(s, i, "[")) ++ drop_links(cursor_slice(s, cursor_skip(s, i, "["), cursor_end(s)))
+          cursor.slice(s, cursor.start(s), cursor.skip(s, i, "[")) ++ drop_links(cursor.slice(s, cursor.skip(s, i, "["), cursor.end(s)))
       }
     None -> s
   }
@@ -126,11 +128,11 @@ fn drop_links(s: String) -> String =
 # at a "[" cursor i: expect [txt](url); return (txt, cursor-after-`)`)
 # cursor_char reports -1 past the end, so the "(" test also covers "] is last"
 fn link_text(s: String, i: Cursor) -> Option[(String, Cursor)] =
-  match index_of_from(s, "]", i) {
+  match cursor.find(s, "]", i) {
     Some(rb) ->
-      if cursor_char(s, cursor_skip(s, rb, "]")) == '(' {
-        match index_of_from(s, ")", cursor_skip(s, cursor_skip(s, rb, "]"), "(")) {
-          Some(rp) -> Some((cursor_slice(s, cursor_skip(s, i, "["), rb), cursor_skip(s, rp, ")")))
+      if cursor.char(s, cursor.skip(s, rb, "]")) == '(' {
+        match cursor.find(s, ")", cursor.skip(s, cursor.skip(s, rb, "]"), "(")) {
+          Some(rp) -> Some((cursor.slice(s, cursor.skip(s, i, "["), rb), cursor.skip(s, rp, ")")))
           None -> None
         }
       } else {
@@ -158,7 +160,7 @@ fn is_md_sym(c: Int) -> Bool =
 # Accumulates code points and converts once at the end. Building the String with
 # `++` instead would copy the whole accumulator on every character — linear work
 # per character, quadratic over the article.
-fn collapse_ws(s: String) -> String = trim(from_code_points(collapse(code_points(s), 0, false, [])))
+fn collapse_ws(s: String) -> String = str.trim(from_code_points(collapse(code_points(s), 0, false, [])))
 
 fn collapse(cps: List[Int], i: Int, last_ws: Bool, acc: List[Int]) -> List[Int] =
   if i >= len(cps) {
@@ -181,10 +183,10 @@ fn is_ws(c: Int) -> Bool = c == 32 || c == 9 || c == 10 || c == 13 || c == 12
 
 # walk `n` characters forward / back from a cursor, stopping at the ends
 fn fwd(s: String, c: Cursor, n: Int) -> Cursor =
-  if n <= 0 || cursor_done(s, c) { c } else { fwd(s, cursor_next(s, c), n - 1) }
+  if n <= 0 || cursor.done(s, c) { c } else { fwd(s, cursor.next(s, c), n - 1) }
 
 fn back(s: String, c: Cursor, n: Int) -> Cursor =
-  if n <= 0 || c <= cursor_start(s) { c } else { back(s, cursor_prev(s, c), n - 1) }
+  if n <= 0 || c <= cursor.start(s) { c } else { back(s, cursor.prev(s, c), n - 1) }
 
 # ---- highlight builders ----
 
@@ -201,20 +203,20 @@ pub fn excerpt_html(content: String, summary: String, terms: List[String]) -> St
     # lowercasing does not change the width of what precedes the match — true
     # for the scripts this site publishes, and the same assumption the code-point
     # version made before it.
-    let low = to_lower(base)
+    let low = str.to_lower(base)
     let width = 150
-    let head = cursor_start(base)
+    let head = cursor.start(base)
     match first_term_pos(low, terms) {
       None -> {
         let e = fwd(base, head, width)
-        mark(html_escape(cursor_slice(base, head, e)), terms) ++ (if cursor_done(base, e) { "" } else { "…" })
+        mark(html_escape(cursor.slice(base, head, e)), terms) ++ (if cursor.done(base, e) { "" } else { "…" })
       }
       Some(pos) -> {
         let start = back(base, pos, width / 3)
         let e = fwd(base, start, width)
         let pre = if start > head { "…" } else { "" }
-        let suf = if cursor_done(base, e) { "" } else { "…" }
-        pre ++ mark(html_escape(cursor_slice(base, start, e)), terms) ++ suf
+        let suf = if cursor.done(base, e) { "" } else { "…" }
+        pre ++ mark(html_escape(cursor.slice(base, start, e)), terms) ++ suf
       }
     }
   }
@@ -223,7 +225,7 @@ pub fn excerpt_html(content: String, summary: String, terms: List[String]) -> St
 fn first_term_pos(low: String, terms: List[String]) -> Option[Cursor] = {
   let seed: Option[Cursor] = None
   fold(terms, seed, fn(acc, t) =>
-      match index_of_from(low, to_lower(t), cursor_start(low)) {
+      match cursor.find(low, str.to_lower(t), cursor.start(low)) {
         Some(i) -> match acc {
           None -> Some(i)
           Some(a) -> if i < a { Some(i) } else { acc }
@@ -237,10 +239,10 @@ fn first_term_pos(low: String, terms: List[String]) -> Option[Cursor] = {
 ## Search published articles. Returns the full response JSON. Uses the simple
 ## FTS tokenizer (production/local); falls back to LIKE via java_try on FTS error.
 pub fn search_published(c: Connection, q: String, page: Int, size: Int) -> Result[Json, String] !io = {
-  let query_str = trim(q)
+  let query_str = str.trim(q)
   # highlight terms split on ANY whitespace run (Python's str.split()), not just
   # the space char — a tab/newline-separated query still highlights each term
-  let terms = filter(split(ws_to_space(query_str), " "), fn(t) => t != "")
+  let terms = filter(str.split(ws_to_space(query_str), " "), fn(t) => t != "")
   if len(terms) == 0 {
     Ok(empty_result(page, size, query_str))
   } else {

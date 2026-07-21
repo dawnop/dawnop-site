@@ -2,6 +2,8 @@
 # driver jar rides on --cp (lib/sqlite-jdbc-*.jar). Expected SQL failures
 # (bad statement, constraint) come back as Err via java_try; connection-level
 # failures (cannot open, driver missing) panic — they are deploy bugs.
+use std/str
+use std/map
 use java "java.sql.Connection"
 use java "java.sql.DriverManager"
 use java "java.sql.PreparedStatement"
@@ -102,7 +104,7 @@ pub fn query(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Resul
 fn names_of(rs: ResultSet) -> Map[String, Int] !io = {
   let md = rs.getMetaData()!
   let n = md.getColumnCount()
-  map_from(map(range(0, n), fn(i) => (md.getColumnLabel(i + 1)!, i)))
+  map.from(map(range(0, n), fn(i) => (md.getColumnLabel(i + 1)!, i)))
 }
 
 ## Like `query`, but each row carries its column names for read-by-name access
@@ -209,9 +211,9 @@ pub fn opt_int_at(row: List[Cell], i: Int) -> Option[Int] =
 # hence panic — same stance as a positional type mismatch above.
 
 fn col_idx(r: Row, name: String) -> Int =
-  match map_get(r.names, name) {
+  match map.get(r.names, name) {
     Some(i) -> i
-    None -> panic("no such column: $name (have ${to_string(map_keys(r.names))})")
+    None -> panic("no such column: $name (have ${to_string(map.keys(r.names))})")
   }
 
 pub fn col_int(r: Row, name: String) -> Int = int_at(r.cells, col_idx(r, name))
@@ -279,7 +281,7 @@ test "an SQL error is an Err, not a crash" {
   let c = open("jdbc:sqlite::memory:")
   match query(c, "select * from missing_table", [], []) {
     Ok(_) -> { assert false }
-    Err(m) -> { assert contains(m, "SQL") }
+    Err(m) -> { assert str.contains(m, "SQL") }
   }
 }
 
@@ -313,6 +315,6 @@ test "unique constraint violation is an expected Err" {
   assert exec(c, "insert into t values ('a')", []) == Ok(1)
   match exec(c, "insert into t values ('a')", []) {
     Ok(_) -> { assert false }
-    Err(m) -> { assert contains(m, "UNIQUE") }
+    Err(m) -> { assert str.contains(m, "UNIQUE") }
   }
 }

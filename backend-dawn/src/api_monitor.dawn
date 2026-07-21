@@ -1,6 +1,7 @@
 # Monitor endpoint (M6 knife 12), protected. Aggregates the four blocks; the
 # third-party pair (lighthouse + qiniu) memoizes in a 120s TTL cell like the
 # FastAPI TTLCache, `?refresh=1` busts it. server/vault stay live every call.
+use std/map
 use java "java.lang.System"
 use java "java.util.concurrent.atomic.AtomicReference"
 use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query}
@@ -83,7 +84,7 @@ fn with_quota(a: Auth, qn: Json) -> Json !io =
           Err(_m) -> a.storage_quota
         }
         match qn {
-          JObj(m) -> JObj(map_insert(m, "quota", JInt(gb * 1024 * 1024 * 1024)))
+          JObj(m) -> JObj(map.insert(m, "quota", JInt(gb * 1024 * 1024 * 1024)))
           _ -> qn
         }
       } else {

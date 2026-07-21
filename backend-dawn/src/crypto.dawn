@@ -1,6 +1,8 @@
 # Crypto primitives for auth/qiniu/JWT (M6 knife 3). Pure Dawn over JDK
 # algorithms — no third-party jars. Strings cross to bytes via `utf8`, digests
 # come back as first-class Bytes and pass straight to Java byte[] params (§9.5.1).
+use std/str
+use std/bytes
 use java "java.security.MessageDigest"
 use java "java.util.Base64"
 use java "java.util.HexFormat"
@@ -11,52 +13,52 @@ use java "javax.crypto.spec.SecretKeySpec"
 ## SHA-256 of a UTF-8 string, lowercase hex.
 pub fn sha256_hex(s: String) -> String !io = {
   let md = MessageDigest.getInstance("SHA-256")!
-  let digest = md.digest(utf8(s))!
+  let digest = md.digest(bytes.utf8(s))!
   HexFormat.of()!.formatHex(digest)!
 }
 
 fn hmac(algo: String, key: String) -> Mac !io = {
   let mac = Mac.getInstance(algo).expect("mac $algo")
-  mac.init(SecretKeySpec.new(utf8(key), algo))
+  mac.init(SecretKeySpec.new(bytes.utf8(key), algo))
   mac
 }
 
 ## HMAC-SHA256, lowercase hex (Tencent Cloud style digests).
 pub fn hmac_sha256_hex(key: String, msg: String) -> String !io = {
-  let sig = hmac("HmacSHA256", key).doFinal(utf8(msg))!
+  let sig = hmac("HmacSHA256", key).doFinal(bytes.utf8(msg))!
   HexFormat.of()!.formatHex(sig)!
 }
 
 ## HMAC-SHA256, URL-safe base64 without padding (JWT HS256 signatures).
 pub fn hmac_sha256_b64url_nopad(key: String, msg: String) -> String !io = {
-  let sig = hmac("HmacSHA256", key).doFinal(utf8(msg))!
+  let sig = hmac("HmacSHA256", key).doFinal(bytes.utf8(msg))!
   Base64.getUrlEncoder()!.withoutPadding()!.encodeToString(sig)!
 }
 
 ## HMAC-SHA1, URL-safe base64 with padding (qiniu signatures).
 pub fn hmac_sha1_b64url(key: String, msg: String) -> String !io = {
-  let sig = hmac("HmacSHA1", key).doFinal(utf8(msg))!
+  let sig = hmac("HmacSHA1", key).doFinal(bytes.utf8(msg))!
   Base64.getUrlEncoder()!.encodeToString(sig)!
 }
 
 ## URL-safe base64 of a UTF-8 string, with padding (qiniu policy blobs).
 pub fn b64url_encode(s: String) -> String !io =
-  Base64.getUrlEncoder()!.encodeToString(utf8(s))!
+  Base64.getUrlEncoder()!.encodeToString(bytes.utf8(s))!
 
 ## URL-safe base64 without padding (JWT segments).
 pub fn b64url_encode_nopad(s: String) -> String !io =
-  Base64.getUrlEncoder()!.withoutPadding()!.encodeToString(utf8(s))!
+  Base64.getUrlEncoder()!.withoutPadding()!.encodeToString(bytes.utf8(s))!
 
 ## Decode URL-safe base64 (padding optional) back to a UTF-8 string.
 pub fn b64url_decode(s: String) -> Result[String, String] !io =
   java_try(fn() => {
     # the JDK URL decoder rejects missing padding; JWT segments come unpadded
-    let bytes = Base64.getUrlDecoder()!.decode(pad4(s))!
-    decode(bytes, "UTF-8")
+    let raw = Base64.getUrlDecoder()!.decode(pad4(s))!
+    bytes.decode(raw, "UTF-8")
   })
 
 fn pad4(s: String) -> String =
-  match str_len(s) - str_len(s) / 4 * 4 {
+  match str.len(s) - str.len(s) / 4 * 4 {
     0 -> s
     2 -> s ++ "=="
     3 -> s ++ "="
@@ -65,7 +67,7 @@ fn pad4(s: String) -> String =
 
 ## Constant-time equality of two strings (signature comparison).
 pub fn eq_const(a: String, b: String) -> Bool !io =
-  MessageDigest.isEqual(utf8(a), utf8(b))
+  MessageDigest.isEqual(bytes.utf8(a), bytes.utf8(b))
 
 ## A random 36-char UUID string (upload ids, opaque keys).
 pub fn uuid() -> String !io =
@@ -92,7 +94,7 @@ test "base64url round-trips, unpadded and multibyte" {
   assert b64url_decode(nopad) == Ok("ab")
   match b64url_decode("!!!!") {
     Ok(_) -> { assert false }
-    Err(m) -> { assert contains(m, "Exception") }
+    Err(m) -> { assert str.contains(m, "Exception") }
   }
 }
 
@@ -103,6 +105,6 @@ test "constant-time equality" {
 
 test "uuid shape" {
   let u = uuid()
-  assert str_len(u) == 36
+  assert str.len(u) == 36
   assert u != uuid()
 }

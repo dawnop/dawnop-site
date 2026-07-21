@@ -1,6 +1,7 @@
 # File-manager path helpers (M6 knife 11), mirroring app/api/fm/paths.py. The
 # storage prefix is "qiniu"; relative paths have no leading/trailing slash and
 # the root is the empty string.
+use std/str
 use java "java.time.LocalDateTime"
 use java "java.time.ZoneId"
 use java "java.time.format.DateTimeFormatter"
@@ -12,22 +13,22 @@ pub fn fm_split(p: String) -> String =
   if p == "" {
     ""
   } else {
-    let after = match index_of(p, "://") {
-      Some(i) -> substring(p, i + 3, str_len(p))
+    let after = match str.index_of(p, "://") {
+      Some(i) -> str.substring(p, i + 3, str.len(p))
       None -> p
     }
-    strip_slashes(trim(after))
+    strip_slashes(str.trim(after))
   }
 
 fn strip_slashes(s: String) -> String = strip_trailing_slash(strip_leading_slash(s))
-fn strip_leading_slash(s: String) -> String = if starts_with(s, "/") { strip_leading_slash(substring(s, 1, str_len(s))) } else { s }
-fn strip_trailing_slash(s: String) -> String = if ends_with(s, "/") && str_len(s) > 0 { strip_trailing_slash(substring(s, 0, str_len(s) - 1)) } else { s }
+fn strip_leading_slash(s: String) -> String = if str.starts_with(s, "/") { strip_leading_slash(str.substring(s, 1, str.len(s))) } else { s }
+fn strip_trailing_slash(s: String) -> String = if str.ends_with(s, "/") && str.len(s) > 0 { strip_trailing_slash(str.substring(s, 0, str.len(s) - 1)) } else { s }
 
 pub fn full(rel: String) -> String = if rel == "" { "$STORAGE://" } else { "$STORAGE://$rel" }
 
 pub fn parent_rel(rel: String) -> String =
-  match last_index_of(rel, "/") {
-    Some(i) -> substring(rel, 0, i)
+  match str.last_index_of(rel, "/") {
+    Some(i) -> str.substring(rel, 0, i)
     None -> ""
   }
 
@@ -35,8 +36,8 @@ pub fn basename(rel: String) -> String =
   if rel == "" {
     ""
   } else {
-    match last_index_of(rel, "/") {
-      Some(i) -> substring(rel, i + 1, str_len(rel))
+    match str.last_index_of(rel, "/") {
+      Some(i) -> str.substring(rel, i + 1, str.len(rel))
       None -> rel
     }
   }
@@ -44,15 +45,15 @@ pub fn basename(rel: String) -> String =
 pub fn fm_join(parent: String, name: String) -> String = if parent == "" { name } else { "$parent/$name" }
 
 pub fn ext(name: String) -> String =
-  match last_index_of(name, ".") {
-    Some(i) -> if i > 0 { substring(name, i + 1, str_len(name)) } else { "" }
+  match str.last_index_of(name, ".") {
+    Some(i) -> if i > 0 { str.substring(name, i + 1, str.len(name)) } else { "" }
     None -> ""
   }
 
 ## Unix seconds for a SQLite DATETIME, interpreted in the system-local zone —
 ## matches Python's naive `datetime.timestamp()`.
 pub fn ts(s: String) -> Int !io = {
-  let core = if str_len(s) >= 19 { substring(s, 0, 19) } else { s }
+  let core = if str.len(s) >= 19 { str.substring(s, 0, 19) } else { s }
   let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")!
   let ldt = LocalDateTime.parse(core, fmt)!
   ldt.atZone(ZoneId.systemDefault()!)!.toEpochSecond()

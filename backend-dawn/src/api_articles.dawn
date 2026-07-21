@@ -1,6 +1,8 @@
 # Protected admin handlers (M6 knife 9): article CRUD, admin list, stats. Every
 # handler authenticates first via auth.current_user; the request body is JSON
 # (create/update). Writes run on a connection with the FTS extension loaded.
+use std/str
+use std/map
 use java "java.sql.Connection"
 use web/types.{Request, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text, raw, with_header, query_int_bounded}
 use export.{export_markdown, url_encode}
@@ -14,7 +16,7 @@ use repo_article
 use repo_write.{NewArticle, ArticlePatch, create_article, update_article, delete_article}
 
 fn param(req: Request, name: String) -> String =
-  match map_get(req.params, name) {
+  match map.get(req.params, name) {
     Some(v) -> v
     None -> ""
   }
@@ -22,7 +24,7 @@ fn param(req: Request, name: String) -> String =
 # An optional integer query param: absent → None, present-and-numeric → Some,
 # present-but-non-integer → 422 (matches FastAPI's `int | None` Query coercion).
 fn opt_query_int(req: Request, name: String) -> Result[Option[Int], HttpError] =
-  match map_get(req.query, name) {
+  match map.get(req.query, name) {
     None -> Ok(None)
     Some(s) -> match parse_int(s) {
       Some(n) -> Ok(Some(n))
@@ -36,13 +38,13 @@ pub fn list_admin(a: Auth) -> Handler =
   guarded_user(a, req, fn(_u) => {
     let page = query_int_bounded(req, "page", 1, 1, -1)?
     let size = query_int_bounded(req, "size", 10, 1, 100)?
-    let pub_filter: Option[Bool] = match map_get(req.query, "published") {
+    let pub_filter: Option[Bool] = match map.get(req.query, "published") {
       Some("true") -> Some(true)
       Some("false") -> Some(false)
       _ -> None
     }
     let page_id = opt_query_int(req, "page_id")?
-    let q = map_get(req.query, "q")
+    let q = map.get(req.query, "q")
     let (total, items) = as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_article.list_admin(c, pub_filter, page_id, q, page, size)), 500)?
     Ok(json_ok(paginated(total, page, size, items)))
   })
@@ -72,13 +74,13 @@ pub fn create(a: Auth) -> Handler =
   guarded_user(a, req, fn(_u) =>
       {
         let m = as_http(body_obj(req.body), 422)?
-        if has(m, "title") == false || trim(str_or(m, "title", "")) == "" {
+        if has(m, "title") == false || str.trim(str_or(m, "title", "")) == "" {
           Err(http_error(422, "标题不能为空"))
         } else if over_len(str_or(m, "title", "")) || over_len(str_or(m, "slug", "")) {
           Err(http_error(422, "标题或 slug 长度超出 255"))
         } else {
           let na = NewArticle {
-            title: trim(str_or(m, "title", "")),
+            title: str.trim(str_or(m, "title", "")),
             slug_hint: str_or(m, "slug", ""),
             summary: str_or(m, "summary", ""),
             content: str_or(m, "content", ""),
@@ -93,7 +95,7 @@ pub fn create(a: Auth) -> Handler =
       })
 
 # title/slug carry Field(max_length=255); an over-length value is a 422 in FastAPI
-fn over_len(s: String) -> Bool = str_len(s) > 255
+fn over_len(s: String) -> Bool = str.len(s) > 255
 
 fn create_then_read(c: Connection, na: NewArticle) -> Result[Json, String] !io = {
   let id = create_article(c, na)?
@@ -113,7 +115,7 @@ pub fn update(a: Auth) -> Handler =
             let m = as_http(body_obj(req.body), 422)?
             # PATCH validation mirrors ArticleUpdate: a present title must be
             # non-blank (min_length=1 + _clean_title), title/slug ≤255.
-            if has(m, "title") && trim(str_or(m, "title", "")) == "" {
+            if has(m, "title") && str.trim(str_or(m, "title", "")) == "" {
               Err(http_error(422, "标题不能为空"))
             } else if over_len(str_or(m, "title", "")) || over_len(str_or(m, "slug", "")) {
               Err(http_error(422, "标题或 slug 长度超出 255"))
@@ -130,7 +132,7 @@ pub fn update(a: Auth) -> Handler =
 
 fn patch_of(m: Map[String, Json]) -> ArticlePatch =
   ArticlePatch {
-    has_title: has(m, "title"), title: trim(str_or(m, "title", "")),
+    has_title: has(m, "title"), title: str.trim(str_or(m, "title", "")),
     has_slug: has(m, "slug"), slug: str_or(m, "slug", ""),
     has_summary: has(m, "summary"), summary: str_or(m, "summary", ""),
     has_content: has(m, "content"), content: str_or(m, "content", ""),
@@ -179,7 +181,7 @@ pub fn remove(a: Auth) -> Handler =
 
 # page_id validation failures are 400, everything else 500
 fn classify(m: String) -> HttpError =
-  if contains(m, "所属页面") { http_error(400, m) } else { http_error(500, m) }
+  if str.contains(m, "所属页面") { http_error(400, m) } else { http_error(500, m) }
 
 ## The admin article routes (protected). Static admin paths precede /{id}.
 pub fn routes(a: Auth) -> List[Route] =

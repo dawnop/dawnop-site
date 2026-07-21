@@ -3,6 +3,9 @@
 # — the Ok branch is a rendered response, the Err branch is mapped to an HTTP
 # status by the server (JSON body {"error": message}). No exceptions anywhere:
 # panics are bugs, expected failures travel in Result.
+use std/str
+use std/bytes
+use std/map
 use json/value.{Json, JStr, JObj}
 use json/render.{render}
 use java "java.io.InputStream"
@@ -116,8 +119,8 @@ pub fn raw(status: Int, content_type: String, body: String) -> Response =
   Response { status: status, content_type: content_type, headers: [], body: body, bin: None, stream: None }
 
 # A binary body: raw Bytes written verbatim (fm content proxy).
-pub fn binary(status: Int, content_type: String, bytes: Bytes) -> Response =
-  Response { status: status, content_type: content_type, headers: [], body: "", bin: Some(bytes), stream: None }
+pub fn binary(status: Int, content_type: String, raw: Bytes) -> Response =
+  Response { status: status, content_type: content_type, headers: [], body: "", bin: Some(raw), stream: None }
 
 # A streaming body: a live InputStream pumped to the socket in constant memory
 # (fm content proxy / WebDAV serve_file for large media). v1 uses chunked framing,
@@ -142,14 +145,14 @@ pub fn attachment(content_type: String, filename: String, body: String) -> Respo
 # backend-dawn divergence (M6): the key is "detail" to match FastAPI's error
 # body {"detail": ...}, which the frontend reads as error.response.data.detail.
 pub fn error_response(e: HttpError) -> Response =
-  json_response(e.status, JObj(map_from([("detail", JStr(e.message))])))
+  json_response(e.status, JObj(map.from([("detail", JStr(e.message))])))
 
 # ---- request accessors ----
 
 # A path parameter captured by a `{name}` pattern segment. Missing means the
 # route table and the handler disagree — a programming error, hence 500.
 pub fn param(req: Request, name: String) -> Result[String, HttpError] =
-  match map_get(req.params, name) {
+  match map.get(req.params, name) {
     Some(v) -> Ok(v)
     None -> Err(http_error(500, "missing path parameter: $name"))
   }
@@ -166,12 +169,12 @@ pub fn param_int(req: Request, name: String) -> Result[Int, HttpError] = {
 # own 422 ("tag_id must be an integer") need the failure back as data, not as a
 # ready-made HttpError. `param_int` above is the version that picks the message.
 pub fn opt_param_int(req: Request, name: String) -> Option[Int] =
-  match map_get(req.params, name) {
+  match map.get(req.params, name) {
     Some(v) -> parse_int(v)
     None -> None
   }
 
-pub fn query(req: Request, name: String) -> Option[String] = map_get(req.query, name)
+pub fn query(req: Request, name: String) -> Option[String] = map.get(req.query, name)
 
 # Strict pagination reader matching FastAPI's Query(ge=lo, le=hi): an absent
 # param yields the default; a present one that is non-integer or out of [lo, hi]
@@ -179,7 +182,7 @@ pub fn query(req: Request, name: String) -> Option[String] = map_get(req.query, 
 # FastAPI error handler joins loc and msg with a fullwidth colon). hi < 0 means
 # no upper bound (FastAPI's `page` is ge=1 with no le).
 pub fn query_int_bounded(req: Request, name: String, default: Int, lo: Int, hi: Int) -> Result[Int, HttpError] =
-  match map_get(req.query, name) {
+  match map.get(req.query, name) {
     None -> Ok(default)
     Some(s) ->
       match parse_int(s) {
@@ -198,14 +201,14 @@ pub fn query_int_bounded(req: Request, name: String, default: Int, lo: Int, hi: 
 # A request header, looked up case-insensitively (the name is lowercased here;
 # the server lowercases keys when building the map).
 pub fn header(req: Request, name: String) -> Option[String] =
-  map_get(req.headers, to_lower(name))
+  map.get(req.headers, str.to_lower(name))
 
 test "param reads captures and flags missing ones" {
-  let h: Map[String, String] = map_empty()
-  let q: Map[String, String] = map_empty()
+  let h: Map[String, String] = map.empty()
+  let q: Map[String, String] = map.empty()
   let req = Request {
     method: "GET", path: "/a/42",
-    params: map_from([("id", "42")]), query: q, headers: h, body: "", raw: utf8(""), body_file: None,
+    params: map.from([("id", "42")]), query: q, headers: h, body: "", raw: bytes.utf8(""), body_file: None,
     route: None,
   }
   assert param(req, "id") == Ok("42")
@@ -217,40 +220,40 @@ test "param reads captures and flags missing ones" {
 }
 
 test "query_int_bounded: absent uses default, out-of-range and non-int are 422" {
-  let h: Map[String, String] = map_empty()
+  let h: Map[String, String] = map.empty()
   let mk = fn(q: Map[String, String]) => Request {
-    method: "GET", path: "/a", params: map_empty(), query: q, headers: h, body: "", raw: utf8(""), body_file: None,
+    method: "GET", path: "/a", params: map.empty(), query: q, headers: h, body: "", raw: bytes.utf8(""), body_file: None,
     route: None,
   }
   # absent -> default
-  assert query_int_bounded(mk(map_empty()), "page", 1, 1, -1) == Ok(1)
+  assert query_int_bounded(mk(map.empty()), "page", 1, 1, -1) == Ok(1)
   # in range
-  assert query_int_bounded(mk(map_from([("size", "20")])), "size", 10, 1, 100) == Ok(20)
+  assert query_int_bounded(mk(map.from([("size", "20")])), "size", 10, 1, 100) == Ok(20)
   # below min -> 422
-  match query_int_bounded(mk(map_from([("page", "0")])), "page", 1, 1, -1) {
+  match query_int_bounded(mk(map.from([("page", "0")])), "page", 1, 1, -1) {
     Err(e) -> { assert e.status == 422 }
     Ok(_) -> { assert false }
   }
   # above max -> 422
-  match query_int_bounded(mk(map_from([("size", "999")])), "size", 10, 1, 50) {
+  match query_int_bounded(mk(map.from([("size", "999")])), "size", 10, 1, 50) {
     Err(e) -> { assert e.status == 422 }
     Ok(_) -> { assert false }
   }
   # non-integer -> 422
-  match query_int_bounded(mk(map_from([("page", "abc")])), "page", 1, 1, -1) {
+  match query_int_bounded(mk(map.from([("page", "abc")])), "page", 1, 1, -1) {
     Err(e) -> { assert e.status == 422 }
     Ok(_) -> { assert false }
   }
   # no upper bound (hi < 0): a huge page is fine
-  assert query_int_bounded(mk(map_from([("page", "99999")])), "page", 1, 1, -1) == Ok(99999)
+  assert query_int_bounded(mk(map.from([("page", "99999")])), "page", 1, 1, -1) == Ok(99999)
 }
 
 test "param_int rejects non-numbers as a client error" {
-  let h: Map[String, String] = map_empty()
-  let q: Map[String, String] = map_empty()
+  let h: Map[String, String] = map.empty()
+  let q: Map[String, String] = map.empty()
   let req = Request {
     method: "GET", path: "/a/x",
-    params: map_from([("id", "x")]), query: q, headers: h, body: "", raw: utf8(""), body_file: None,
+    params: map.from([("id", "x")]), query: q, headers: h, body: "", raw: bytes.utf8(""), body_file: None,
     route: None,
   }
   match param_int(req, "id") {
@@ -261,9 +264,9 @@ test "param_int rejects non-numbers as a client error" {
 
 test "header lookup is case-insensitive" {
   let req = Request {
-    method: "GET", path: "/", params: map_empty(), query: map_empty(),
-    headers: map_from([("authorization", "Bearer xyz"), ("content-type", "application/json")]),
-    body: "", raw: utf8(""), body_file: None,
+    method: "GET", path: "/", params: map.empty(), query: map.empty(),
+    headers: map.from([("authorization", "Bearer xyz"), ("content-type", "application/json")]),
+    body: "", raw: bytes.utf8(""), body_file: None,
     route: None,
   }
   assert header(req, "Authorization") == Some("Bearer xyz")

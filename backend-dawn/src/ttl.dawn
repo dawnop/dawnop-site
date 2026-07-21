@@ -3,6 +3,7 @@
 # backend's TTLCache does. The cell is an AtomicReference[String] holding
 # "epoch|payload"; Dawn has no global mutable state, so main creates cells and
 # threads them into the route closures.
+use std/str
 use java "java.util.concurrent.atomic.AtomicReference"
 use java "java.lang.System"
 use java "java.lang.String"
@@ -15,7 +16,7 @@ pub fn cache_get(cell: AtomicReference, ttl_s: Int) -> Option[String] !io = {
   if s == "" {
     None
   } else {
-    let parts = split(s, "|")
+    let parts = str.split(s, "|")
     match parse_int(parts[0]) {
       Some(ts) ->
         if now_s() - ts < ttl_s {

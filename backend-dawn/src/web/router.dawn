@@ -6,6 +6,8 @@
 # just a different string. `tags` are opaque labels a route carries for
 # middleware to read (see `tagged`); patterns are literal segments plus `{name}`
 # captures, matched segment-exact.
+use std/str
+use std/map
 use web/types.{Request, Response, HttpError, Handler, RouteMeta}
 
 pub type Route = {
@@ -53,19 +55,19 @@ pub type Dispatch =
   | NoPath
   | WrongMethod
 
-fn segs(p: String) -> List[String] = filter(split(p, "/"), fn(s) => s != "")
+fn segs(p: String) -> List[String] = filter(str.split(p, "/"), fn(s) => s != "")
 
 fn is_capture(seg: String) -> Bool =
-  starts_with(seg, "{") && ends_with(seg, "}") && str_len(seg) > 2
+  str.starts_with(seg, "{") && str.ends_with(seg, "}") && str.len(seg) > 2
 
-fn capture_name(seg: String) -> String = substring(seg, 1, str_len(seg) - 1)
+fn capture_name(seg: String) -> String = str.substring(seg, 1, str.len(seg) - 1)
 
 # A tail capture `{name*}` matches the rest of the path (zero or more segments),
 # joined by "/". Only meaningful as the last pattern segment (WebDAV /dav/{rest*}).
 fn is_tail(seg: String) -> Bool =
-  starts_with(seg, "{") && ends_with(seg, "*}") && str_len(seg) > 3
+  str.starts_with(seg, "{") && str.ends_with(seg, "*}") && str.len(seg) > 3
 
-fn tail_name(seg: String) -> String = substring(seg, 1, str_len(seg) - 2)
+fn tail_name(seg: String) -> String = str.substring(seg, 1, str.len(seg) - 2)
 
 # Match one pattern against one path; Some(captures) on success. A trailing
 # `{name*}` captures all remaining segments (possibly empty) as one joined value.
@@ -147,7 +149,7 @@ fn dispatch_from(routes: List[Route], method: String, path: String, i: Int, path
       None -> dispatch_from(routes, method, path, i + 1, path_seen)
       Some(caps) ->
         if r.method == method {
-          Found(r, map_from(caps))
+          Found(r, map.from(caps))
         } else {
           dispatch_from(routes, method, path, i + 1, true)
         }
@@ -185,7 +187,7 @@ test "tail capture matches zero or more remaining segments" {
 test "Method route dispatches an arbitrary verb" {
   let routes = [route_method_of("PROPFIND", "/dav/{rest*}", dummy)]
   match dispatch(routes, "PROPFIND", "/dav/a/b") {
-    Found(_, params) -> { assert map_get(params, "rest") == Some("a/b") }
+    Found(_, params) -> { assert map.get(params, "rest") == Some("a/b") }
     _ -> { assert false }
   }
   match dispatch(routes, "GET", "/dav/a/b") {
@@ -200,7 +202,7 @@ fn dummy(req: Request) -> Result[Response, HttpError] !io =
 test "dispatch: found, 404, and 405 are distinguished" {
   let routes = [route_get("/a/{id}", dummy), route_post("/run", dummy)]
   match dispatch(routes, "GET", "/a/7") {
-    Found(_, params) -> { assert map_get(params, "id") == Some("7") }
+    Found(_, params) -> { assert map.get(params, "id") == Some("7") }
     _ -> { assert false }
   }
   match dispatch(routes, "GET", "/nope") {

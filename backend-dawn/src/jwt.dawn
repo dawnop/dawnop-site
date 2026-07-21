@@ -2,6 +2,8 @@
 # ({sub, exp}). Dawn-issued tokens verify under PyJWT and vice versa — the
 # signature covers the exact "header.payload" string, so byte layout need not
 # match, only the algorithm and secret.
+use std/str
+use std/map
 use java "java.lang.System"
 use crypto.{hmac_sha256_b64url_nopad, b64url_encode_nopad, b64url_decode, eq_const}
 use json/value.{Json, JObj, JNum, JInt, JStr}
@@ -23,7 +25,7 @@ pub fn sign(secret: String, sub: String, exp_minutes: Int) -> String !io = {
 
 ## Verify a token's signature and expiry; Ok carries the subject.
 pub fn verify(secret: String, token: String) -> Result[String, String] !io = {
-  let parts = split(token, ".")
+  let parts = str.split(token, ".")
   if len(parts) != 3 {
     Err("malformed token")
   } else {
@@ -44,13 +46,13 @@ fn claims_of(payload_json: String) -> Result[String, String] !io = {
     JObj(m) -> {
       # exp is an integer unix time; PyJWT emits it without a fraction, so it
       # parses as JInt now (JNum kept for any float-encoded producer)
-      let exp_ok: Result[Bool, String] = match map_get(m, "exp") {
+      let exp_ok: Result[Bool, String] = match map.get(m, "exp") {
         Some(JInt(t)) -> if now_secs() < t { Ok(true) } else { Err("token expired") }
         Some(JNum(t)) -> if to_float(now_secs()) < t { Ok(true) } else { Err("token expired") }
         _ -> Err("no exp claim")
       }
       let _e = exp_ok?
-      let sub: Result[String, String] = match map_get(m, "sub") {
+      let sub: Result[String, String] = match map.get(m, "sub") {
         Some(JStr(s)) -> Ok(s)
         _ -> Err("no sub claim")
       }

@@ -1,6 +1,8 @@
 # Authentication (M6 knife 7): login (jBCrypt verify + JWT issue) and /me
 # (JWT verify). bcrypt hashes are read as-is from the shared users table, so
 # existing passwords keep working; JWTs interoperate with PyJWT (see jwt.dawn).
+use std/str
+use std/map
 use java "java.sql.Connection"
 use java "org.mindrot.jbcrypt.BCrypt"
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, header}
@@ -35,8 +37,8 @@ pub type Qiniu = { ak: String, sk: String, bucket: String, domain: String, expir
 # FastAPI's verify_password does, so it becomes a 401 not a 500.
 fn verify_password(plain: String, hashed: String) -> Bool !io = {
   let normalized =
-    if starts_with(hashed, "$2b$") || starts_with(hashed, "$2y$") {
-      "$2a$" ++ substring(hashed, 4, str_len(hashed))
+    if str.starts_with(hashed, "$2b$") || str.starts_with(hashed, "$2y$") {
+      "$2a$" ++ str.substring(hashed, 4, str.len(hashed))
     } else {
       hashed
     }
@@ -104,7 +106,7 @@ pub fn login(a: Auth) -> Handler =
   }
 
 fn has_field(m: Map[String, String], k: String) -> Bool =
-  match map_get(m, k) { Some(_v) -> true None -> false }
+  match map.get(m, k) { Some(_v) -> true None -> false }
 
 ## GET /api/auth/me — the current user (Bearer token).
 pub fn me(a: Auth) -> Handler =
@@ -163,7 +165,7 @@ pub fn guarded_flexible(a: Auth, req: Request, body: fn() -> Result[Response, Ht
 
 fn header_token(req: Request) -> String =
   match header(req, "authorization") {
-    Some(h) -> if starts_with(h, "Bearer ") { substring(h, 7, str_len(h)) } else { h }
+    Some(h) -> if str.starts_with(h, "Bearer ") { str.substring(h, 7, str.len(h)) } else { h }
     None -> ""
   }
 
@@ -177,7 +179,7 @@ fn auth_with(a: Auth, tok: String) -> Result[String, HttpError] !io =
     }
   }
 
-fn query_token(req: Request) -> Option[String] = map_get(req.query, "token")
+fn query_token(req: Request) -> Option[String] = map.get(req.query, "token")
 
 ## Whether the request carries a valid token (optional auth). Used by endpoints
 ## that behave differently for logged-in admins (e.g. draft preview).
@@ -188,7 +190,7 @@ pub fn is_authed(a: Auth, req: Request) -> Bool !io =
   }
 
 fn get_or_blank(m: Map[String, String], k: String) -> String =
-  match map_get(m, k) {
+  match map.get(m, k) {
     Some(v) -> v
     None -> ""
   }

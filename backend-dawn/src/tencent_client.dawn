@@ -2,6 +2,7 @@
 # TC3-HMAC-SHA256 canonical request / string-to-sign / Authorization and POSTs
 # via the http client. Signing is tencent_sign (byte-for-byte vs the reference);
 # every call is read-only (DescribeInstances*, GetMonitorData) — safe.
+use std/str
 use java "java.lang.System"
 use java "java.time.Instant"
 use java "java.time.LocalDate"
@@ -21,7 +22,7 @@ pub fn call(secret_id: String, secret_key: String, service: String, action: Stri
   let date = utc_date(ts)
   let ct = "application/json; charset=utf-8"
 
-  let canonical_headers = "content-type:$ct\nhost:$host\nx-tc-action:${to_lower(action)}\n"
+  let canonical_headers = "content-type:$ct\nhost:$host\nx-tc-action:${str.to_lower(action)}\n"
   let signed_headers = "content-type;host;x-tc-action"
   let payload_hash = sha256_hex(payload)
   let canonical_request = "POST\n/\n\n$canonical_headers\n$signed_headers\n$payload_hash"

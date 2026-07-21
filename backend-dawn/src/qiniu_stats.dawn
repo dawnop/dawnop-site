@@ -4,6 +4,8 @@
 # respack balances on the (undocumented, observed) billing-api. All requests
 # sign with QiniuMacAuth (qiniu_mac); JSON POSTs include the body in the
 # signature. Endpoints use http:// like the Python client (scheme is unsigned).
+use std/str
+use std/map
 use java "java.time.LocalDateTime"
 use java "java.time.ZoneId"
 use java "java.time.ZonedDateTime"
@@ -120,10 +122,10 @@ fn day_epoch(s: String) -> Int !io = {
 fn leaf_arrays(data: Json) -> List[List[Json]] = {
   let none: List[List[Json]] = []
   match data {
-    JObj(doms) -> fold(map_entries(doms), none, fn(acc: List[List[Json]], de) => {
+    JObj(doms) -> fold(map.entries(doms), none, fn(acc: List[List[Json]], de) => {
       let (_dom, regions) = de
       match regions {
-        JObj(rm) -> acc ++ fold(map_entries(rm), none, fn(acc2: List[List[Json]], re) => {
+        JObj(rm) -> acc ++ fold(map.entries(rm), none, fn(acc2: List[List[Json]], re) => {
           let (_r, arr) = re
           match arr {
             JArr(xs) -> acc2 ++ [xs]
@@ -146,7 +148,7 @@ pub fn respack_summary(ak: String, sk: String) -> Result[Json, String] !io = {
   let listing = mac_json(ak, sk, "GET", API_HOST, "/billing-api/v1/respack/list", "")?
   let active = filter(arr_items(field(listing, "data")), fn(d) => int_of(field(d, "status")) == 2)
 
-  let cdn_items = filter(active, fn(d) => contains(str_or_empty(field(d, "respack_name")), "流量"))
+  let cdn_items = filter(active, fn(d) => str.contains(str_or_empty(field(d, "respack_name")), "流量"))
   let cdn = if len(cdn_items) == 0 {
     JNull
   } else {
@@ -162,9 +164,9 @@ pub fn respack_summary(ak: String, sk: String) -> Result[Json, String] !io = {
     ])
   }
 
-  let store_items = filter(active, fn(d) => contains(str_or_empty(field(d, "respack_name")), "存储"))
+  let store_items = filter(active, fn(d) => str.contains(str_or_empty(field(d, "respack_name")), "存储"))
   let overview = mac_json(ak, sk, "GET", API_HOST, "/billing-api/v1/respack/month-overview", "")?
-  let store_ov = filter(arr_items(field(overview, "data")), fn(o) => contains(str_or_empty(field(o, "item_name")), "存储"))
+  let store_ov = filter(arr_items(field(overview, "data")), fn(o) => str.contains(str_or_empty(field(o, "item_name")), "存储"))
   let storage = if len(store_ov) == 0 {
     JNull
   } else {
@@ -196,7 +198,7 @@ fn min_str(xs: List[String]) -> Json = {
 pub fn field(j: Json, key: String) -> Json =
   match j {
     JObj(m) ->
-      match map_get(m, key) {
+      match map.get(m, key) {
         Some(v) -> v
         None -> JNull
       }

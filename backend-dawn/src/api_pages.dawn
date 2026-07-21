@@ -1,6 +1,8 @@
 # Page admin (M6 knife 9, split out of api_admin2 2026-07-19): CRUD plus nav
 # reordering. Builtin pages accept only the nav fields — slug/type/content are
 # routing and render roots the FastAPI builtin filter strips.
+use std/str
+use std/map
 use java "java.sql.Connection"
 use web/types.{Handler, http_error, as_http, opt_param_int, json_ok, json_response, text}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
@@ -23,7 +25,7 @@ pub fn page_create(a: Auth) -> Handler =
   guarded(a, req, fn() =>
       {
         let m = as_http(body_obj(req.body), 422)?
-        if trim(str_or(m, "title", "")) == "" {
+        if str.trim(str_or(m, "title", "")) == "" {
           Err(http_error(422, "标题不能为空"))
         } else if page_over_len(str_or(m, "title", "")) || page_over_len(str_or(m, "slug", "")) {
           Err(http_error(422, "标题或 slug 长度超出 255"))
@@ -31,7 +33,7 @@ pub fn page_create(a: Auth) -> Handler =
           Err(http_error(422, "type 只能是 content 或 article_list"))
         } else {
           let np = NewPage {
-            title: trim(str_or(m, "title", "")),
+            title: str.trim(str_or(m, "title", "")),
             slug_hint: str_or(m, "slug", ""),
             kind: str_or(m, "type", "content"),
             description: str_or(m, "description", ""),
@@ -49,14 +51,14 @@ pub fn page_create(a: Auth) -> Handler =
       })
 
 # title/slug carry Field(max_length=255)
-fn page_over_len(s: String) -> Bool = str_len(s) > 255
+fn page_over_len(s: String) -> Bool = str.len(s) > 255
 
 # type is Literal["content","article_list"]; anything else (incl. "builtin") is a 422
 fn bad_page_type(t: String) -> Bool = t != "content" && t != "article_list"
 
 # a key present with an explicit JSON null — a non-optional str field rejects it (422)
 fn present_null(m: Map[String, Json], key: String) -> Bool =
-  match map_get(m, key) {
+  match map.get(m, key) {
     Some(JNull) -> true
     _ -> false
   }
@@ -79,7 +81,7 @@ pub fn page_update(a: Auth) -> Handler =
             let m = as_http(body_obj(req.body), 422)?
             # PageUpdate validation: present title non-blank, title/slug ≤255,
             # present type must be a valid Literal (checked before the builtin filter)
-            if has(m, "title") && trim(str_or(m, "title", "")) == "" {
+            if has(m, "title") && str.trim(str_or(m, "title", "")) == "" {
               Err(http_error(422, "标题不能为空"))
             } else if page_over_len(str_or(m, "title", "")) || page_over_len(str_or(m, "slug", "")) {
               Err(http_error(422, "标题或 slug 长度超出 255"))
@@ -103,7 +105,7 @@ fn page_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Opti
       # builtin pages accept only title/nav_visible/nav_order (slug/type/description/
       # content/auto_title/created_at are routing/render roots FastAPI's builtin
       # filter strips); non-builtin pages accept the full editable set.
-      let _t = if has(m, "title") { set_page_str(c, id, "title", trim(str_or(m, "title", "")))? } else { 0 }
+      let _t = if has(m, "title") { set_page_str(c, id, "title", str.trim(str_or(m, "title", "")))? } else { 0 }
       let _nv = if has(m, "nav_visible") { set_page_int(c, id, "nav_visible", bool_int(bool_or(m, "nav_visible", false)))? } else { 0 }
       let _no = if has(m, "nav_order") { set_page_int(c, id, "nav_order", nav_order_of(m))? } else { 0 }
       let _ty = if builtin == false && has(m, "type") { set_page_str(c, id, "type", str_or(m, "type", "content"))? } else { 0 }
@@ -122,7 +124,7 @@ fn slug_base(c: Connection, id: Int, m: Map[String, Json]) -> Result[String, Str
   if s != "" {
     Ok(s)
   } else if has(m, "title") {
-    Ok(trim(str_or(m, "title", "")))
+    Ok(str.trim(str_or(m, "title", "")))
   } else {
     page_title(c, id)
   }
@@ -180,7 +182,7 @@ pub fn page_reorder(a: Auth) -> Handler =
 # a present JSON array whose every element is an integer → Some(list); absent,
 # non-array, or any non-int element → None (→ 422). Empty array is valid (Some []).
 fn strict_int_list(m: Map[String, Json], key: String) -> Option[List[Int]] =
-  match map_get(m, key) {
+  match map.get(m, key) {
     Some(JArr(xs)) -> all_ints(xs, [])
     _ -> None
   }

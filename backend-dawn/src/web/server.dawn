@@ -2,6 +2,10 @@
 # per request, a single root context that parses the exchange into a Request,
 # routes it, and writes the Response back. nginx terminates TLS and everything
 # hard in front — this only speaks HTTP/1.1.
+use std/str
+use std/bytes
+use std/list
+use std/map
 use java "com.sun.net.httpserver.HttpServer"
 use java "com.sun.net.httpserver.HttpExchange"
 use java "com.sun.net.httpserver.Headers"
@@ -23,8 +27,8 @@ use http.{close_stream, fetch_bytes, fetch_stream}
 # detour — a single decode, not two.
 fn read_body(ex: HttpExchange) -> (String, Bytes) !io = {
   let stream = ex.getRequestBody()!
-  let bytes = stream.readAllBytes()!
-  (decode(bytes, "UTF-8"), bytes)
+  let raw = stream.readAllBytes()!
+  (bytes.decode(raw, "UTF-8"), raw)
 }
 
 # Write a response. Length 0 selects chunked transfer encoding, so we never
@@ -47,9 +51,9 @@ fn write_response(ex: HttpExchange, r: Response) -> Unit !io = {
     }
     None ->
       match r.bin {
-        Some(bytes) -> {
+        Some(raw) -> {
           # binary body: write the raw Bytes verbatim (Bytes -> Java byte[] param)
-          out.write(bytes)
+          out.write(raw)
           out.flush()
         }
         None -> {
@@ -77,14 +81,14 @@ fn set_extra_headers(headers: Headers, hs: List[(String, String)]) -> Unit !io =
 fn read_headers(ex: HttpExchange) -> Map[String, String] !io = {
   let headers = ex.getRequestHeaders()!
   let it = headers.keySet()!.iterator()!
-  collect_headers(headers, it, map_empty())
+  collect_headers(headers, it, map.empty())
 }
 
 fn collect_headers(headers: Headers, it: Iterator, acc: Map[String, String]) -> Map[String, String] !io =
   if it.hasNext() {
     let name = String.valueOf(it.next()!)!
     let v = headers.getFirst(name)!
-    collect_headers(headers, it, map_insert(acc, to_lower(name), v))
+    collect_headers(headers, it, map.insert(acc, str.to_lower(name), v))
   } else {
     acc
   }
@@ -93,8 +97,8 @@ fn collect_headers(headers: Headers, it: Iterator, acc: Map[String, String]) -> 
 # already percent-decoded; a value may itself contain '=', so only the first
 # one splits.
 pub fn parse_query(q: String) -> List[(String, String)] =
-  map(filter(split(q, "&"), fn(pair) => pair != ""), fn(pair) => {
-    let parts = split(pair, "=")
+  map(filter(str.split(q, "&"), fn(pair) => pair != ""), fn(pair) => {
+    let parts = str.split(pair, "=")
     (parts[0], join(tail(parts), "="))
   })
 
@@ -102,12 +106,12 @@ pub fn parse_query(q: String) -> List[(String, String)] =
 # query string but '+' also means space; percent-decoding is the caller's if
 # needed (login/form fields here are ASCII).
 pub fn parse_form(body: String) -> Map[String, String] =
-  map_from(map(parse_query(body), fn(kv) => {
+  map.from(map(parse_query(body), fn(kv) => {
     let (k, v) = kv
     (k, replace_plus(v))
   }))
 
-fn replace_plus(s: String) -> String = join(split(s, "+"), " ")
+fn replace_plus(s: String) -> String = join(str.split(s, "+"), " ")
 
 fn tail(xs: List[String]) -> List[String] =
   map(range(1, len(xs)), fn(i) => xs[i])
@@ -117,11 +121,11 @@ fn rev[T](xs: List[T]) -> List[T] =
 
 fn build_request(ex: HttpExchange, meta: Option[RouteMeta]) -> Request !io = {
   let uri = ex.getRequestURI()!
-  let no_query: Map[String, String] = map_from([])
+  let no_query: Map[String, String] = map.from([])
   # Query params follow form-urlencoded semantics ('+' means space), matching
   # Starlette/FastAPI; URI.getQuery() percent-decodes %XX but leaves '+' literal.
   let q = match uri.getQuery() {
-    Some(s) -> map_from(map(parse_query(s), fn(kv) => {
+    Some(s) -> map.from(map(parse_query(s), fn(kv) => {
       let (k, v) = kv
       (k, replace_plus(v))
     }))
@@ -130,7 +134,7 @@ fn build_request(ex: HttpExchange, meta: Option[RouteMeta]) -> Request !io = {
   # A "stream-body" route never sees the body in memory: it goes to a temp file
   # and the handler gets the path. Everything else reads as before.
   let streaming = meta_has_tag(meta, "stream-body")
-  let (body, raw) = if streaming { ("", utf8("")) } else { read_body(ex) }
+  let (body, raw) = if streaming { ("", bytes.utf8("")) } else { read_body(ex) }
   let bf: Option[String] = if streaming { Some(spill_body(ex)) } else { None }
   Request {
     method: ex.getRequestMethod()!,
@@ -167,7 +171,7 @@ fn delete_quietly(path: String) -> Unit !io = {
 
 fn meta_has_tag(meta: Option[RouteMeta], tag: String) -> Bool =
   match meta {
-    Some(m) -> find(m.tags, fn(t) => t == tag) != None
+    Some(m) -> list.find(m.tags, fn(t) => t == tag) != None
     None -> false
   }
 
@@ -254,8 +258,8 @@ test "query strings parse, including empty and embedded =" {
 
 test "form bodies parse, with + as space" {
   let f = parse_form("username=admin&password=a+b+c")
-  assert map_get(f, "username") == Some("admin")
-  assert map_get(f, "password") == Some("a b c")
+  assert map.get(f, "username") == Some("admin")
+  assert map.get(f, "password") == Some("a b c")
 }
 
 test "write_response pumps an upstream stream to the client byte-exact (>8KB, multi-chunk)" {
@@ -263,11 +267,11 @@ test "write_response pumps an upstream stream to the client byte-exact (>8KB, mu
   # streaming() -> write_response's stream branch -> transferTo pumps the InputStream to
   # the socket -> close. Identical to production, only the upstream is a loopback server
   # instead of qiniu. 12000 bytes forces transferTo's 8KB buffer across more than one chunk.
-  let payload = utf8(join(map(range(0, 1200), fn(i) => "0123456789"), ""))
+  let payload = bytes.utf8(join(map(range(0, 1200), fn(i) => "0123456789"), ""))
   # upstream: serves the payload
   let up = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
   up.createContext("/", fn(ex) => {
-    ex.sendResponseHeaders(200, byte_len(payload))
+    ex.sendResponseHeaders(200, bytes.len(payload))
     let os = ex.getResponseBody()!
     os.write(payload)
     os.close()
@@ -285,7 +289,7 @@ test "write_response pumps an upstream stream to the client byte-exact (>8KB, mu
   match fetch_bytes("http://127.0.0.1:${dn.getAddress()!.getPort()}/", []) {
     Ok(r) -> {
       assert r.status == 200
-      assert byte_len(r.bytes) == 12000
+      assert bytes.len(r.bytes) == 12000
       assert r.bytes == payload
     }
     Err(m) -> panic("download failed: $m")

@@ -1,6 +1,8 @@
 # Markdown export (M6 knife 9): reproduce app/api/articles.py's frontmatter and
 # file body. Symmetric with the frontend's parseFrontmatter, so export→new-post
 # round-trips (auto_title articles omit the title line — the H1 carries it).
+use std/str
+use std/bytes
 use java "java.sql.Connection"
 use sql.{PInt, ColInt, ColStr, query, str_at, int_at, bool_at}
 
@@ -10,15 +12,15 @@ use sql.{PInt, ColInt, ColStr, query, str_at, int_at, bool_at}
 ## encodes `*`→%2A, and emits %20 for space — byte-for-byte with the FastAPI
 ## side (Content-Disposition filename*, fm download attname, WebDAV href).
 pub fn pct_encode(s: String) -> String = {
-  let b = utf8(s)
-  pct_loop(b, 0, byte_len(b), "")
+  let b = bytes.utf8(s)
+  pct_loop(b, 0, bytes.len(b), "")
 }
 
 fn pct_loop(b: Bytes, i: Int, n: Int, acc: String) -> String =
   if i >= n {
     acc
   } else {
-    let c = byte_at(b, i)
+    let c = bytes.at(b, i)
     let piece = if pct_unreserved(c) { from_code_points([c]) } else { "%${hex2(c)}" }
     pct_loop(b, i + 1, n, acc ++ piece)
   }
@@ -46,7 +48,7 @@ test "pct_encode matches Python urllib quote byte-for-byte" {
 ## : # [ ] { } > | * & ! % @ ` " ' newline; else bare. (matches _yaml_scalar)
 pub fn yaml_scalar(s: String) -> String =
   if needs_quote(s) {
-    "\"" ++ join(split(join(split(s, "\\"), "\\\\"), "\""), "\\\"") ++ "\""
+    "\"" ++ join(str.split(join(str.split(s, "\\"), "\\\\"), "\""), "\\\"") ++ "\""
   } else {
     s
   }

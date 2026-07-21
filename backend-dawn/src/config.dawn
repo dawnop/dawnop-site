@@ -1,6 +1,9 @@
 # Configuration from a .env file (M6 knife 6). Same file the FastAPI backend
 # reads (KEY=VALUE per line, # comments, optional quotes). Loaded once at
 # startup; a missing required key panics before the server binds.
+use std/str
+use std/io
+use std/map
 use java "java.lang.System"
 
 pub type Config = { values: Map[String, String] }
@@ -8,35 +11,35 @@ pub type Config = { values: Map[String, String] }
 ## Load .env from a path. Missing file yields an empty config (env vars can
 ## still supply values through `get_env`).
 pub fn load(path: String) -> Config !io =
-  match read_file(path) {
+  match io.read_file(path) {
     Ok(text) -> Config { values: parse_env(text) }
-    Err(_) -> Config { values: map_empty() }
+    Err(_) -> Config { values: map.empty() }
   }
 
 fn parse_env(text: String) -> Map[String, String] =
-  fold(split(text, "\n"), map_empty(), fn(acc, raw) => {
-    let line = trim(raw)
-    if line == "" || starts_with(line, "#") || contains(line, "=") == false {
+  fold(str.split(text, "\n"), map.empty(), fn(acc, raw) => {
+    let line = str.trim(raw)
+    if line == "" || str.starts_with(line, "#") || str.contains(line, "=") == false {
       acc
     } else {
-      let key = trim(before(line, "="))
-      let val = unquote(trim(after(line, "=")))
-      map_insert(acc, key, val)
+      let key = str.trim(before(line, "="))
+      let val = unquote(str.trim(after(line, "=")))
+      map.insert(acc, key, val)
     }
   })
 
-fn before(s: String, sep: String) -> String = split(s, sep)[0]
+fn before(s: String, sep: String) -> String = str.split(s, sep)[0]
 
 fn after(s: String, sep: String) -> String = {
-  let parts = split(s, sep)
+  let parts = str.split(s, sep)
   join(drop1(parts), sep)
 }
 
 fn drop1(xs: List[String]) -> List[String] = map(range(1, len(xs)), fn(i) => xs[i])
 
 fn unquote(s: String) -> String =
-  if str_len(s) >= 2 && ((starts_with(s, "\"") && ends_with(s, "\"")) || (starts_with(s, "'") && ends_with(s, "'"))) {
-    substring(s, 1, str_len(s) - 1)
+  if str.len(s) >= 2 && ((str.starts_with(s, "\"") && str.ends_with(s, "\"")) || (str.starts_with(s, "'") && str.ends_with(s, "'"))) {
+    str.substring(s, 1, str.len(s) - 1)
   } else {
     s
   }
@@ -47,7 +50,7 @@ fn unquote(s: String) -> String =
 pub fn lookup(cfg: Config, key: String) -> Option[String] !io =
   match System.getenv(key) {
     Some(v) -> Some(v)
-    None -> map_get(cfg.values, key)
+    None -> map.get(cfg.values, key)
   }
 
 ## A required value; panics at startup when absent (fail fast, not per request).
@@ -68,14 +71,14 @@ test "parse env: comments, quotes, spacing, embedded =" {
   let c = Config {
     values: parse_env("# comment\nA=1\n B = two words \nURL=\"jdbc:sqlite:/x?y=1\"\nEMPTY=\n"),
   }
-  assert map_get(c.values, "A") == Some("1")
-  assert map_get(c.values, "B") == Some("two words")
-  assert map_get(c.values, "URL") == Some("jdbc:sqlite:/x?y=1")
-  assert map_get(c.values, "EMPTY") == Some("")
+  assert map.get(c.values, "A") == Some("1")
+  assert map.get(c.values, "B") == Some("two words")
+  assert map.get(c.values, "URL") == Some("jdbc:sqlite:/x?y=1")
+  assert map.get(c.values, "EMPTY") == Some("")
 }
 
 test "get_or falls back" {
-  let c = Config { values: map_from([("X", "set")]) }
+  let c = Config { values: map.from([("X", "set")]) }
   assert get_or(c, "X", "def") == "set"
   assert get_or(c, "Y", "def") == "def"
 }

@@ -1,6 +1,7 @@
 # Visualization-component admin (M6 knife 9, split out of api_admin2 2026-07-19).
 # Components are Vue SFCs compiled in the browser; the backend only stores the
 # source, the compiled output and the style, keyed by a slug.
+use std/str
 use java "java.sql.Connection"
 use web/types.{HttpError, Handler, http_error, as_http, as_http_with, opt_param_int, json_ok, json_response, text}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
@@ -24,15 +25,15 @@ pub fn viz_create(a: Auth) -> Handler =
         let m = as_http(body_obj(req.body), 422)?
         {
           # _clean_slug lowercases+trims before the regex; slug carries max_length=255.
-          let slug = to_lower(trim(str_or(m, "slug", "")))
+          let slug = str.to_lower(str.trim(str_or(m, "slug", "")))
           let source = str_or(m, "source", "")
           if present_null(m, "name") || present_null(m, "compiled") || present_null(m, "style") || present_null(m, "source") {
             Err(http_error(422, "字段不能为 null"))
-          } else if str_len(str_or(m, "slug", "")) > 255 {
+          } else if str.len(str_or(m, "slug", "")) > 255 {
             Err(http_error(422, "slug 长度超出 255"))
           } else if valid_slug(slug) == false {
             Err(http_error(422, "slug 格式非法"))
-          } else if trim(source) == "" {
+          } else if str.trim(source) == "" {
             Err(http_error(422, "source 不能为空"))
           } else {
             let nv = NewViz {
@@ -75,7 +76,7 @@ pub fn viz_update(a: Auth) -> Handler =
 
 # a slug collision is a 409, every other update failure a 422 (validation)
 fn classify_viz(msg: String) -> HttpError =
-  if contains(msg, "已存在") { http_error(409, msg) } else { http_error(422, msg) }
+  if str.contains(msg, "已存在") { http_error(409, msg) } else { http_error(422, msg) }
 
 fn viz_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Option[Json], String] !io = {
   let ex = viz_exists(c, id)?
@@ -97,8 +98,8 @@ fn viz_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Optio
 
 fn update_viz_slug(c: Connection, id: Int, raw: String) -> Result[Int, String] !io = {
   # _clean_slug lowercases+trims before validating; VizUpdate.slug is max_length=255
-  let slug = to_lower(trim(raw))
-  if str_len(raw) > 255 {
+  let slug = str.to_lower(str.trim(raw))
+  if str.len(raw) > 255 {
     Err("slug 长度超出 255")
   } else if valid_slug(slug) == false {
     Err("slug 格式非法")
@@ -110,7 +111,7 @@ fn update_viz_slug(c: Connection, id: Int, raw: String) -> Result[Int, String] !
 
 # _clean_source: a present source must be non-blank (422), else stored verbatim
 fn set_viz_source(c: Connection, id: Int, s: String) -> Result[Int, String] !io =
-  if trim(s) == "" { Err("组件源码不能为空") } else { set_viz_str(c, id, "source", s) }
+  if str.trim(s) == "" { Err("组件源码不能为空") } else { set_viz_str(c, id, "source", s) }
 
 ## DELETE /api/viz/{viz_id} — 204.
 pub fn viz_delete(a: Auth) -> Handler =

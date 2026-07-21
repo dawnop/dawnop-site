@@ -1,5 +1,6 @@
 # Page and tag write model (M6 knife 9): create/update/delete/reorder pages,
 # rename/merge/cleanup/delete tags. Mirrors app/api/pages.py and tags.py.
+use std/str
 use java "java.sql.Connection"
 use sql.{SqlV, PInt, PStr, PNull, ColInt, ColStr, Cell, query, exec, last_id, int_at, str_at}
 use slugify.{slugify}
@@ -7,7 +8,7 @@ use repo_write.{unique_slug}
 
 fn bool_int(b: Bool) -> Int = if b { 1 } else { 0 }
 
-fn clip(s: String, n: Int) -> String = if str_len(s) > n { substring(s, 0, n) } else { s }
+fn clip(s: String, n: Int) -> String = if str.len(s) > n { str.substring(s, 0, n) } else { s }
 
 # ---- pages ----
 
@@ -117,11 +118,11 @@ pub fn tag_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
 
 ## Rename a tag, regenerating slug. Err on empty name or a duplicate name.
 pub fn rename_tag(c: Connection, id: Int, raw: String) -> Result[Bool, String] !io = {
-  let name = clip(trim(raw), 64)
+  let name = clip(str.trim(raw), 64)
   if name == "" {
     Err("标签名不能为空")
   } else {
-    let dup = query(c, "select name from tags where lower(name) = ? and id != ?", [PStr(to_lower(name)), PInt(id)], [ColStr])?
+    let dup = query(c, "select name from tags where lower(name) = ? and id != ?", [PStr(str.to_lower(name)), PInt(id)], [ColStr])?
     match get(dup, 0) {
       Some(r) -> Err("已存在同名标签「${str_at(r, 0)}」，如需归并请用合并功能")
       None -> {

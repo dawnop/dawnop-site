@@ -1,6 +1,7 @@
 # Global settings admin (M6 knife 9, split out of api_admin2 2026-07-19).
 # GET returns the DEFAULTS-merged table; PUT validates every key before writing
 # any of them, so an invalid key persists nothing.
+use std/map
 use java "java.sql.Connection"
 use web/types.{Handler, as_http, json_ok}
 use web/router.{Route, route_get, route_put}
@@ -26,7 +27,7 @@ pub fn put_settings(a: Auth) -> Handler =
       })
 
 fn write_settings(c: Connection, m: Map[String, Json], storage_quota: Int) -> Result[Json, String] !io = {
-  let _w = apply_settings(c, map_keys(m), m, 0)?
+  let _w = apply_settings(c, map.keys(m), m, 0)?
   repo_settings.read_all(c, storage_quota)
 }
 
@@ -72,7 +73,7 @@ fn write_all_settings(c: Connection, keys: List[String], m: Map[String, Json], i
 # null, or absent → None, so FastAPI's `isinstance(v,int) and not isinstance(v,bool)`
 # rejection (a float is a 400, not silently truncated) is reproduced.
 fn strict_int(m: Map[String, Json], key: String) -> Option[Int] =
-  match map_get(m, key) {
+  match map.get(m, key) {
     Some(JInt(n)) -> Some(n)
     _ -> None
   }

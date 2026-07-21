@@ -1,5 +1,6 @@
 # Viz component model (M6 knife 10): CRUD for the embedded Vue components that
 # ```viz fences mount. slug must match ^[a-z0-9]+(-[a-z0-9]+)*$; source required.
+use std/str
 use java "java.sql.Connection"
 use sql.{PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, last_id, int_at, str_at}
 use json/value.{Json}
@@ -8,11 +9,11 @@ use jsonx.{obj, jint, jstr, jdatetime}
 ## slug: lowercase alnum segments joined by single dashes, no leading/trailing/
 ## double dash. Empty is invalid.
 pub fn valid_slug(s: String) -> Bool =
-  str_len(s) > 0 && no_edge_dash(s) && only_slug_chars(s) && no_double_dash(s)
+  str.len(s) > 0 && no_edge_dash(s) && only_slug_chars(s) && no_double_dash(s)
 
-fn no_edge_dash(s: String) -> Bool = starts_with(s, "-") == false && ends_with(s, "-") == false
+fn no_edge_dash(s: String) -> Bool = str.starts_with(s, "-") == false && str.ends_with(s, "-") == false
 
-fn no_double_dash(s: String) -> Bool = contains(s, "--") == false
+fn no_double_dash(s: String) -> Bool = str.contains(s, "--") == false
 
 fn only_slug_chars(s: String) -> Bool =
   fold(code_points(s), true, fn(acc, c) => acc && is_slug_char(c))

@@ -1,6 +1,7 @@
 # Public read handlers (M6 knife 6/8). Handlers close over the db path and open
 # a connection per request via with_db. Errors map to the FastAPI JSON shape
 # {"detail": ...} through the web framework's Err branch.
+use std/map
 use java "java.sql.Connection"
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, json_response, query, query_int_bounded}
 use web/router.{Route, route_get}
@@ -62,7 +63,7 @@ fn fetch_detail(c: Connection, slug: String, authed: Bool) -> Result[Option[Json
   }
 
 fn map_get_or(m: Map[String, String], k: String, fallback: String) -> String =
-  match map_get(m, k) {
+  match map.get(m, k) {
     Some(v) -> v
     None -> fallback
   }

@@ -2,6 +2,8 @@
 # four independent, fault-tolerant blocks — local server (/proc, psutil
 # semantics), Tencent Lighthouse (TC3), qiniu (kodo series + CDN + respack),
 # Vaultwarden probe. A failing item lands in its own *_error field, never 500s.
+use std/str
+use std/io
 use java "java.lang.System"
 use java "java.lang.Runtime"
 use java "java.lang.Thread"
@@ -36,7 +38,7 @@ pub fn server_block() -> Json !io = {
     ("used", jint(dtotal - dfree)),
     ("percent", JNum(pct(dtotal - dfree, dtotal))),
   ])
-  match read_file("/proc/stat") {
+  match io.read_file("/proc/stat") {
     Ok(_probe) -> obj([
       ("cpu_percent", JNum(cpu_percent())),
       ("cpu_count", jint(procs)),
@@ -88,9 +90,9 @@ fn cpu_percent() -> Float !io = {
 
 # (busy, total) jiffies from the aggregate cpu line; idle = idle + iowait
 fn cpu_sample() -> (Int, Int) !io =
-  match read_file("/proc/stat") {
+  match io.read_file("/proc/stat") {
     Ok(text) -> {
-      let fs = fields_of(split(text, "\n")[0])
+      let fs = fields_of(str.split(text, "\n")[0])
       let upto = if len(fs) < 9 { len(fs) } else { 9 }
       let total = fold(range(1, upto), 0, fn(acc, i) => acc + parse_or0(fs[i]))
       let idle = if len(fs) > 5 { parse_or0(fs[4]) + parse_or0(fs[5]) } else { 0 }
@@ -100,7 +102,7 @@ fn cpu_sample() -> (Int, Int) !io =
   }
 
 fn loadavg() -> Json !io =
-  match read_file("/proc/loadavg") {
+  match io.read_file("/proc/loadavg") {
     Ok(text) -> {
       let fs = fields_of(text)
       JArr(map(range(0, 3), fn(i) =>
@@ -114,7 +116,7 @@ fn loadavg() -> Json !io =
 
 # MemTotal/MemAvailable in kB; used/percent match psutil (total - available)
 fn meminfo() -> Json !io =
-  match read_file("/proc/meminfo") {
+  match io.read_file("/proc/meminfo") {
     Ok(text) -> {
       let total = meminfo_kb(text, "MemTotal") * 1024
       let avail = meminfo_kb(text, "MemAvailable") * 1024
@@ -128,8 +130,8 @@ fn meminfo() -> Json !io =
   }
 
 fn meminfo_kb(text: String, key: String) -> Int =
-  fold(split(text, "\n"), 0, fn(acc, line) =>
-    if starts_with(line, "$key:") {
+  fold(str.split(text, "\n"), 0, fn(acc, line) =>
+    if str.starts_with(line, "$key:") {
       let fs = fields_of(line)
       if len(fs) > 1 { parse_or0(fs[1]) } else { acc }
     } else {
@@ -138,12 +140,12 @@ fn meminfo_kb(text: String, key: String) -> Int =
 
 # cumulative bytes over every interface (psutil net_io_counters aggregates all)
 fn net_totals() -> Json !io =
-  match read_file("/proc/net/dev") {
+  match io.read_file("/proc/net/dev") {
     Ok(text) -> {
-      let (sent, recv) = fold(split(text, "\n"), (0, 0), fn(acc: (Int, Int), line) =>
-        if contains(line, ":") {
+      let (sent, recv) = fold(str.split(text, "\n"), (0, 0), fn(acc: (Int, Int), line) =>
+        if str.contains(line, ":") {
           let (s, r) = acc
-          let parts = split(line, ":")
+          let parts = str.split(line, ":")
           let fs = fields_of(join(rest1(parts), ":"))
           if len(fs) > 8 {
             (s + parse_or0(fs[8]), r + parse_or0(fs[0]))
@@ -161,7 +163,7 @@ fn net_totals() -> Json !io =
 fn rest1(xs: List[String]) -> List[String] = map(range(1, len(xs)), fn(i) => xs[i])
 
 fn uptime_s() -> Int !io =
-  match read_file("/proc/uptime") {
+  match io.read_file("/proc/uptime") {
     Ok(text) ->
       match parse_float(fields_of(text)[0]) {
         Some(x) -> to_int(x)
@@ -170,7 +172,7 @@ fn uptime_s() -> Int !io =
     Err(_m) -> 0
   }
 
-fn fields_of(line: String) -> List[String] = filter(split(line, " "), fn(s) => s != "")
+fn fields_of(line: String) -> List[String] = filter(str.split(line, " "), fn(s) => s != "")
 
 fn parse_or0(s: String) -> Int =
   match parse_int(s) {
@@ -385,8 +387,8 @@ pub fn respack_cached(a: Auth, cell: AtomicReference) -> Result[Json, String] !i
 # ---- vault: alive probe + version ----
 
 pub fn vault_block(alive_url: String, public_url: String) -> Json !io = {
-  let base = if ends_with(alive_url, "/alive") {
-    substring(alive_url, 0, str_len(alive_url) - 6)
+  let base = if str.ends_with(alive_url, "/alive") {
+    str.substring(alive_url, 0, str.len(alive_url) - 6)
   } else {
     alive_url
   }

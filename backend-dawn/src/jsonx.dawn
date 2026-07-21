@@ -1,9 +1,11 @@
 # JSON building helpers over the vendored json/value (M6 knife 6). Terser object
 # construction plus Option → JNull/value, matching the FastAPI wire shapes.
+use std/str
+use std/map
 use json/value.{Json, JNull, JBool, JInt, JStr, JArr, JObj}
 
 ## Build an object from ordered (key, value) pairs.
-pub fn obj(pairs: List[(String, Json)]) -> Json = JObj(map_from(pairs))
+pub fn obj(pairs: List[(String, Json)]) -> Json = JObj(map.from(pairs))
 
 ## An Int as JSON (renders without a decimal point).
 pub fn jint(n: Int) -> Json = JInt(n)
@@ -28,10 +30,10 @@ pub fn jopt_str(o: Option[String]) -> Json =
 ## (a non-zero fraction is kept as stored).
 pub fn jdatetime(s: String) -> Json = JStr(iso_datetime(s))
 
-fn iso_datetime(s: String) -> String = join(split(drop_zero_frac(s), " "), "T")
+fn iso_datetime(s: String) -> String = join(str.split(drop_zero_frac(s), " "), "T")
 
 fn drop_zero_frac(s: String) -> String =
-  match split(s, ".") {
+  match str.split(s, ".") {
     [whole, frac] -> if all_zero(frac) { whole } else { s }
     _ -> s
   }

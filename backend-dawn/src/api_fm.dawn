@@ -1,6 +1,9 @@
 # File-manager handlers (M6 knife 11), pure-metadata subset: list, create-folder,
 # rename, move. These never touch qiniu (rename/move only rewrite paths); the
 # qiniu-mutating endpoints (upload/delete/copy/save) are added separately.
+use std/str
+use std/bytes
+use std/map
 use java "java.sql.Connection"
 use java "java.lang.System"
 use java "java.lang.Object"
@@ -48,7 +51,7 @@ pub fn create_folder(a: Auth) -> Handler =
       {
         let m = as_http(body_obj(req.body), 422)?
         let cur = fm_split(str_or(m, "path", ""))
-        let name = strip_slash(trim(str_or(m, "name", "")))
+        let name = strip_slash(str.trim(str_or(m, "name", "")))
         if name == "" {
           Err(http_error(400, "缺少 name"))
         } else {
@@ -80,7 +83,7 @@ pub fn rename(a: Auth) -> Handler =
         let m = as_http(body_obj(req.body), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let old = fm_split(str_or(m, "item", ""))
-        let new_name = strip_slash(trim(str_or(m, "name", "")))
+        let new_name = strip_slash(str.trim(str_or(m, "name", "")))
         if old == "" || new_name == "" {
           Err(http_error(400, "缺少 item / name"))
         } else {
@@ -128,7 +131,7 @@ fn do_move(c: Connection, sources: List[String], dest: String, cur: String, i: I
       do_move(c, sources, dest, cur, i + 1)
     } else {
       let new_rel = fm_join(dest, basename(src))
-      if new_rel == src || starts_with(new_rel, "$src/") {
+      if new_rel == src || str.starts_with(new_rel, "$src/") {
         do_move(c, sources, dest, cur, i + 1)
       } else {
         let t = taken(c, new_rel)?
@@ -155,7 +158,7 @@ fn signed(q: Qiniu, key: String, suffix: String) -> String !io = {
 }
 
 fn strip_trailing_slash(s: String) -> String =
-  if ends_with(s, "/") && str_len(s) > 0 { strip_trailing_slash(substring(s, 0, str_len(s) - 1)) } else { s }
+  if str.ends_with(s, "/") && str.len(s) > 0 { strip_trailing_slash(str.substring(s, 0, str.len(s) - 1)) } else { s }
 
 ## GET /api/fm/sign?path= — a signed URL for direct fetch (text preview).
 pub fn sign(a: Auth) -> Handler =
@@ -267,7 +270,7 @@ pub fn content(a: Auth) -> Handler =
 # a name collision is a 409; everything else takes the caller's code (500 for a
 # database failure, 502 when the object store is the one that failed)
 fn conflict_or(other: Int) -> fn(String) -> HttpError =
-  fn(msg) => if contains(msg, "已存在") { http_error(409, msg) } else { http_error(other, msg) }
+  fn(msg) => if str.contains(msg, "已存在") { http_error(409, msg) } else { http_error(other, msg) }
 
 fn content_type_of(ct: String) -> String = if ct == "" { "application/octet-stream" } else { ct }
 
@@ -390,7 +393,7 @@ pub fn upload_token_ep(a: Auth) -> Handler =
     ])))
   })
 
-fn uuid_hex() -> String !io = join(split(uuid(), "-"), "")
+fn uuid_hex() -> String !io = join(str.split(uuid(), "-"), "")
 
 fn ledger(c: Connection, key: String, rel: String) -> Result[Int, String] !io =
   ledger_insert(c, key, full(rel))
@@ -417,11 +420,11 @@ pub fn delete(a: Auth) -> Handler =
 
 # items is [{path: "qiniu://..."}]; extract the split rel paths
 fn item_paths(m: Map[String, Json]) -> List[String] =
-  match map_get(m, "items") {
+  match map.get(m, "items") {
     Some(JArr(xs)) -> fold(xs, [], fn(acc, j) =>
         match j {
           JObj(im) ->
-            match map_get(im, "path") {
+            match map.get(im, "path") {
               Some(JStr(p)) -> acc ++ [fm_split(p)]
               _ -> acc
             }
@@ -464,7 +467,7 @@ fn delete_rows(q: Qiniu, c: Connection, rows: List[FileRow], i: Int, acc: List[J
 
 fn merge_deleted(base: Json, deleted: List[Json]) -> Json =
   match base {
-    JObj(bm) -> JObj(map_insert(bm, "deleted", JArr(deleted)))
+    JObj(bm) -> JObj(map.insert(bm, "deleted", JArr(deleted)))
     _ -> base
   }
 
@@ -475,7 +478,7 @@ pub fn create_file(a: Auth) -> Handler =
       {
         let m = as_http(body_obj(req.body), 422)?
         let cur = fm_split(str_or(m, "path", ""))
-        let name = strip_slash(trim(str_or(m, "name", "")))
+        let name = strip_slash(str.trim(str_or(m, "name", "")))
         if name == "" {
           Err(http_error(400, "缺少 name"))
         } else {
@@ -532,7 +535,7 @@ fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !io = 
   }
   let new_key = save_key(rel)
   let _up = upload_text(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, new_key, content, mime, now_secs() + a.qiniu.expires)?
-  let _db = with_db(a.db.path, a.db.ext, fn(c) => save_db(c, rel, new_key, mime, str_len(content)))?
+  let _db = with_db(a.db.path, a.db.ext, fn(c) => save_db(c, rel, new_key, mime, str.len(content)))?
   # best-effort delete of the superseded object (ignore failure)
   let _del: Result[Unit, String] = match old_key {
     Some(k) -> if k != new_key { delete_obj(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, k) } else { Ok(()) }
@@ -616,7 +619,7 @@ fn do_copy(q: Qiniu, c: Connection, sources: List[String], dest: String, cur: St
       do_copy(q, c, sources, dest, cur, i + 1)
     } else {
       let new_rel = fm_join(dest, basename(src))
-      if starts_with(new_rel, "$src/") {
+      if str.starts_with(new_rel, "$src/") {
         do_copy(q, c, sources, dest, cur, i + 1)
       } else {
         let t = taken(c, new_rel)?
@@ -637,7 +640,7 @@ fn copy_rows(q: Qiniu, c: Connection, rows: List[FileRow], src: String, new_rel:
     Ok(0)
   } else {
     let o = rows[i]
-    let dst_path = new_rel ++ substring(o.path, str_len(src), str_len(o.path))
+    let dst_path = new_rel ++ str.substring(o.path, str.len(src), str.len(o.path))
     let _one = if o.is_dir {
       insert_folder(c, dst_path)?
     } else {
@@ -736,7 +739,7 @@ fn overwrite_gc(a: Auth, existing: Option[FileRow], new_key: String) -> Bool !io
 fn stat_int(body: String, key: String) -> Int !io =
   match parse(body) {
     Ok(JObj(m)) ->
-      match map_get(m, key) {
+      match map.get(m, key) {
         Some(JInt(n)) -> n
         Some(JNum(x)) -> to_int(x)
         _ -> 0
@@ -747,7 +750,7 @@ fn stat_int(body: String, key: String) -> Int !io =
 fn stat_str(body: String, key: String) -> String !io =
   match parse(body) {
     Ok(JObj(m)) ->
-      match map_get(m, key) {
+      match map.get(m, key) {
         Some(JStr(s)) -> s
         _ -> ""
       }
@@ -759,7 +762,7 @@ pub fn fm_search(a: Auth) -> Handler =
   fn(req) =>
   guarded(a, req, fn() => {
     let base = fm_split(qparam(req, "path"))
-    let needle = to_lower(trim(qparam(req, "filter")))
+    let needle = str.to_lower(str.trim(qparam(req, "filter")))
     let deep = qparam(req, "deep") != ""
     Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, fn(c) => search_files(c, base, needle, deep)), 500)?))
   })
@@ -793,7 +796,7 @@ pub fn upload(a: Auth) -> Handler =
 # the `path` form field (target directory), decoded from the part's Bytes as UTF-8
 fn upload_path_field(parts: List[Part]) -> String !io =
   match part_named(parts, "path") {
-    Some(pp) -> decode(pp.content, "UTF-8")
+    Some(pp) -> bytes.decode(pp.content, "UTF-8")
     None -> ""
   }
 
@@ -803,7 +806,7 @@ fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpErro
   let name = sanitize_name(fp.filename)
   let rel = fm_join(target, name)
   let mime = if fp.content_type != "" { fp.content_type } else { upload_mime(name) }
-  let size = byte_len(fp.content)
+  let size = bytes.len(fp.content)
   Ok(json_ok(as_http(run_upload(a, rel, fp.content, mime, size), 502)?))
 }
 
@@ -839,11 +842,11 @@ fn upsert_upload(c: Connection, rel: String, key: String, mime: String, size: In
 # to slashes, then strip leading/trailing slashes (internal ones survive).
 fn sanitize_name(n: String) -> String = {
   let base = if n == "" { "file" } else { n }
-  strip_slashes(join(split(base, "\\"), "/"))
+  strip_slashes(join(str.split(base, "\\"), "/"))
 }
 
 fn strip_slashes(s: String) -> String = {
-  let segs = split(s, "/")
+  let segs = str.split(s, "/")
   let lo = first_nonempty(segs, 0)
   let hi = last_nonempty(segs, len(segs) - 1)
   if lo > hi { "" } else { join(map(range(lo, hi + 1), fn(i) => segs[i]), "/") }

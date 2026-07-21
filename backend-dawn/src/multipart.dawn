@@ -4,6 +4,10 @@
 # raw Bytes, and only the ASCII header block is decoded to a string for field
 # extraction. CRLF is spelled from_code_points([13,10]); Dawn has no \r escape.
 
+use std/str
+use std/bytes
+use std/list
+
 pub type Part = {
   name: String,        # form field name (Content-Disposition name=)
   filename: String,    # "" for a plain field; the client filename for a file part
@@ -12,19 +16,19 @@ pub type Part = {
 }
 
 fn crlf() -> String = from_code_points([13, 10])
-fn crlf_b() -> Bytes = utf8(from_code_points([13, 10]))
-fn crlf2_b() -> Bytes = utf8(from_code_points([13, 10, 13, 10]))
+fn crlf_b() -> Bytes = bytes.utf8(from_code_points([13, 10]))
+fn crlf2_b() -> Bytes = bytes.utf8(from_code_points([13, 10, 13, 10]))
 
-fn drop1(xs: List[String]) -> List[String] = drop(xs, 1)
+fn drop1(xs: List[String]) -> List[String] = list.drop(xs, 1)
 
 ## The substring after the first occurrence of `sep`; None if `sep` is absent.
 fn after(s: String, sep: String) -> Option[String] = {
-  let ps = split(s, sep)
+  let ps = str.split(s, sep)
   if len(ps) >= 2 { Some(join(drop1(ps), sep)) } else { None }
 }
 
 ## The substring before the first occurrence of `sep` (the whole string if absent).
-fn before(s: String, sep: String) -> String = split(s, sep)[0]
+fn before(s: String, sep: String) -> String = str.split(s, sep)[0]
 
 ## The text between a `pre` marker and the next `post`, if both are present.
 fn between(s: String, pre: String, post: String) -> Option[String] =
@@ -42,7 +46,7 @@ pub fn boundary_of(content_type: String) -> Option[String] =
   }
 
 fn unquote(s: String) -> String = {
-  let t = trim(s)
+  let t = str.trim(s)
   match between(t, "\"", "\"") {
     Some(inner) -> inner
     None -> t
@@ -69,31 +73,31 @@ fn part_ctype(headers: String) -> String =
 fn bsplit(b: Bytes, sep: Bytes) -> List[Bytes] = bsplit_from(b, sep, 0, [])
 
 fn bsplit_from(b: Bytes, sep: Bytes, from: Int, acc: List[Bytes]) -> List[Bytes] =
-  match byte_index_of(b, sep, from) {
-    None -> acc ++ [byte_slice(b, from, byte_len(b))]
-    Some(i) -> bsplit_from(b, sep, i + byte_len(sep), acc ++ [byte_slice(b, from, i)])
+  match bytes.index_of(b, sep, from) {
+    None -> acc ++ [bytes.slice(b, from, bytes.len(b))]
+    Some(i) -> bsplit_from(b, sep, i + bytes.len(sep), acc ++ [bytes.slice(b, from, i)])
   }
 
 ## Drop a single trailing CRLF (the one before the next boundary) without touching
 ## the content's own bytes.
 fn strip_trailing_crlf(b: Bytes) -> Bytes = {
-  let n = byte_len(b)
-  if n >= 2 && byte_slice(b, n - 2, n) == crlf_b() { byte_slice(b, 0, n - 2) } else { b }
+  let n = bytes.len(b)
+  if n >= 2 && bytes.slice(b, n - 2, n) == crlf_b() { bytes.slice(b, 0, n - 2) } else { b }
 }
 
 ## Parse one chunk (the bytes between two `--boundary` delimiters) into a Part.
 ## The preamble and the closing epilogue ("--" + CRLF) do not start with CRLF /
 ## lack a name and return None. Headers are ASCII (decoded); content stays Bytes.
 fn parse_part(chunk: Bytes) -> Option[Part] =
-  if byte_len(chunk) < 2 || byte_slice(chunk, 0, 2) != crlf_b() {
+  if bytes.len(chunk) < 2 || bytes.slice(chunk, 0, 2) != crlf_b() {
     None
   } else {
-    let body = byte_slice(chunk, 2, byte_len(chunk))   # strip the leading CRLF
-    match byte_index_of(body, crlf2_b(), 0) {          # headers | content on CRLFCRLF
+    let body = bytes.slice(chunk, 2, bytes.len(chunk))   # strip the leading CRLF
+    match bytes.index_of(body, crlf2_b(), 0) {          # headers | content on CRLFCRLF
       None -> None
       Some(hi) -> {
-        let headers = decode(byte_slice(body, 0, hi), "UTF-8")
-        let content = strip_trailing_crlf(byte_slice(body, hi + 4, byte_len(body)))
+        let headers = bytes.decode(bytes.slice(body, 0, hi), "UTF-8")
+        let content = strip_trailing_crlf(bytes.slice(body, hi + 4, bytes.len(body)))
         match disp_name(headers) {
           None -> None
           Some(name) -> Some(Part {
@@ -109,7 +113,7 @@ fn parse_part(chunk: Bytes) -> Option[Part] =
 
 ## Parse a multipart body (raw Bytes) into its parts, given the boundary.
 pub fn parse_multipart(body: Bytes, boundary: String) -> List[Part] = {
-  let delim = utf8("--" ++ boundary)
+  let delim = bytes.utf8("--" ++ boundary)
   fold(bsplit(body, delim), [], fn(acc, ch) =>
     match parse_part(ch) {
       Some(p) -> acc ++ [p]
@@ -134,11 +138,11 @@ test "parse a two-field multipart body (a text field and a file)" {
     "--$b$nl" ++
     "Content-Disposition: form-data; name=\"file\"; filename=\"a.txt\"${nl}Content-Type: text/plain${nl}${nl}hello$nl" ++
     "--$b--$nl"
-  let parts = parse_multipart(utf8(body), b)
+  let parts = parse_multipart(bytes.utf8(body), b)
   assert len(parts) == 2
   match part_named(parts, "path") {
     Some(p) -> {
-      assert decode(p.content, "UTF-8") == "qiniu://pics"
+      assert bytes.decode(p.content, "UTF-8") == "qiniu://pics"
       assert p.filename == ""
     }
     None -> { assert false }
@@ -146,7 +150,7 @@ test "parse a two-field multipart body (a text field and a file)" {
   match part_named(parts, "file") {
     Some(p) -> {
       assert p.filename == "a.txt"
-      assert decode(p.content, "UTF-8") == "hello"
+      assert bytes.decode(p.content, "UTF-8") == "hello"
     }
     None -> { assert false }
   }
@@ -166,8 +170,8 @@ test "file content with embedded CRLF is preserved, only the trailing one droppe
     "--$b$nl" ++
     "Content-Disposition: form-data; name=\"file\"; filename=\"f\"${nl}${nl}$payload$nl" ++
     "--$b--$nl"
-  match part_named(parse_multipart(utf8(body), b), "file") {
-    Some(p) -> { assert decode(p.content, "UTF-8") == payload }
+  match part_named(parse_multipart(bytes.utf8(body), b), "file") {
+    Some(p) -> { assert bytes.decode(p.content, "UTF-8") == payload }
     None -> { assert false }
   }
 }

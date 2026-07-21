@@ -2,6 +2,7 @@
 # (find-or-create), page reference validation, and article create/update/delete.
 # All writes need the connection to have the FTS `simple` extension loaded
 # (the article_fts triggers use it) — db.connect handles that.
+use std/str
 use java "java.sql.Connection"
 use sql.{SqlV, PInt, PStr, PNull, Col, ColInt, ColStr, Cell, open, query, exec, scalar_int, last_id, int_at, str_at}
 use slugify.{slugify}
@@ -46,8 +47,8 @@ fn resolve_loop(c: Connection, names: List[String], i: Int, seen: List[String], 
   if i == len(names) || len(acc) >= 20 {
     Ok(acc)
   } else {
-    let name = clip(trim(names[i]), 64)
-    let key = to_lower(name)
+    let name = clip(str.trim(names[i]), 64)
+    let key = str.to_lower(name)
     if name == "" || member(seen, key) {
       resolve_loop(c, names, i + 1, seen, acc)
     } else {
@@ -221,7 +222,7 @@ pub fn article_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
 
 fn bool_int(b: Bool) -> Int = if b { 1 } else { 0 }
 
-fn clip(s: String, n: Int) -> String = if str_len(s) > n { substring(s, 0, n) } else { s }
+fn clip(s: String, n: Int) -> String = if str.len(s) > n { str.substring(s, 0, n) } else { s }
 
 fn member(xs: List[String], x: String) -> Bool =
   fold(xs, false, fn(acc, y) => acc || y == x)

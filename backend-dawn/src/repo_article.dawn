@@ -2,6 +2,7 @@
 # row → JSON shaping that must match the FastAPI contract byte-for-byte in
 # structure. Word count is computed here (CJK chars + [A-Za-z0-9]+ runs), same
 # as the Python model's `word_count` property.
+use std/str
 use java "java.sql.Connection"
 use sql.{SqlV, PInt, PStr, Col, ColInt, ColStr, Row, query, query_rows, exec, int_at, col_int, col_str, col_bool, col_opt_int, col_opt_str}
 use json/value.{Json, JArr}
@@ -150,7 +151,7 @@ pub fn list_admin(c: Connection, pub_filter: Option[Bool], page_id: Option[Int],
 # trim `q`; an absent or blank filter means "no title filter" (matches FastAPI's `if q and q.strip()`)
 fn q_filter(q: Option[String]) -> Option[String] =
   match q {
-    Some(s) -> if trim(s) == "" { None } else { Some(trim(s)) }
+    Some(s) -> if str.trim(s) == "" { None } else { Some(str.trim(s)) }
     None -> None
   }
 

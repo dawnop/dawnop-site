@@ -13,6 +13,9 @@
 # through memory, with Range passthrough (forwards the client Range to qiniu,
 # relays 206 + Content-Range) — and clients that follow redirects skip the proxy
 # entirely (302 straight to qiniu), so only webdavfs/mini-redirector pay it.
+use std/str
+use std/bytes
+use std/map
 use java "java.sql.Connection"
 use java "java.lang.String"
 use java "java.lang.System"
@@ -48,20 +51,20 @@ fn now_secs() -> Int !io = System.currentTimeMillis() / 1000
 fn header_or(req: Request, name: String, dflt: String) -> String =
   match header(req, name) { Some(v) -> v None -> dflt }
 
-fn path_segs(rel: String) -> List[String] = filter(split(rel, "/"), fn(s) => s != "")
+fn path_segs(rel: String) -> List[String] = filter(str.split(rel, "/"), fn(s) => s != "")
 
 # Python str.strip("/") — remove leading and trailing slashes, keep internal.
 fn strip_slashes(s: String) -> String = join(path_segs(s), "/")
 
-fn uuid_hex() -> String !io = join(split(uuid(), "-"), "")
+fn uuid_hex() -> String !io = join(str.split(uuid(), "-"), "")
 
-fn contains_ci(hay: String, needle: String) -> Bool = contains(to_lower(hay), needle)
+fn contains_ci(hay: String, needle: String) -> Bool = str.contains(str.to_lower(hay), needle)
 
 # XML text escaping (& < >), matching xml.sax.saxutils.escape; & must go first.
 fn xml_escape(s: String) -> String = {
-  let a = join(split(s, "&"), "&amp;")
-  let b = join(split(a, "<"), "&lt;")
-  join(split(b, ">"), "&gt;")
+  let a = join(str.split(s, "&"), "&amp;")
+  let b = join(str.split(a, "<"), "&lt;")
+  join(str.split(b, ">"), "&gt;")
 }
 
 # ---- dates (HTTP RFC1123 and ISO8601, both GMT) ----
@@ -89,7 +92,7 @@ fn dav_prefix(req: Request) -> String = {
 }
 
 fn dav_rel(req: Request) -> String =
-  match map_get(req.params, "rest") { Some(r) -> strip_slashes(r) None -> "" }
+  match map.get(req.params, "rest") { Some(r) -> strip_slashes(r) None -> "" }
 
 fn href(prefix: String, rel: String, is_dir: Bool) -> String !io = {
   let path = join(map(path_segs(rel), url_encode), "/")
@@ -99,7 +102,7 @@ fn href(prefix: String, rel: String, is_dir: Bool) -> String !io = {
     } else {
       "$prefix/$path"
     }
-  if is_dir && ends_with(base, "/") == false { base ++ "/" } else { base }
+  if is_dir && str.ends_with(base, "/") == false { base ++ "/" } else { base }
 }
 
 # ---- PROPFIND XML ----
@@ -173,7 +176,7 @@ fn follows_redirect(req: Request) -> Bool = {
 }
 
 fn signed_url(q: Qiniu, key: String) -> String !io = {
-  let domain = if ends_with(q.domain, "/") { substring(q.domain, 0, str_len(q.domain) - 1) } else { q.domain }
+  let domain = if str.ends_with(q.domain, "/") { str.substring(q.domain, 0, str.len(q.domain) - 1) } else { q.domain }
   private_url(q.ak, q.sk, "$domain/$key", now_secs() + q.expires)
 }
 
@@ -207,7 +210,7 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
     # which fetch_bytes (which does not inspect the status) would hand back as the
     # file's content. Serve the empty body ourselves, ahead of the redirect branch
     # so 302-following clients don't hit the same thing at qiniu.
-    Ok(add_headers(binary(200, mime, utf8("")),
+    Ok(add_headers(binary(200, mime, bytes.utf8("")),
       [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
   } else if follows_redirect(req) {
     # redirect-following clients get 302 direct to qiniu, which serves Range itself
@@ -257,14 +260,14 @@ fn range_of(req: Request, total: Int) -> Option[(Int, Int)] =
   match header(req, "range") {
     None -> None
     Some(rng) ->
-      if starts_with(rng, "bytes=") == false || total <= 0 {
+      if str.starts_with(rng, "bytes=") == false || total <= 0 {
         None
       } else {
-        let spec = substring(rng, 6, str_len(rng))
-        if contains(spec, ",") {
+        let spec = str.substring(rng, 6, str.len(rng))
+        if str.contains(spec, ",") {
           None
         } else {
-          let parts = split(spec, "-")
+          let parts = str.split(spec, "-")
           if len(parts) != 2 { None } else { range_pair(parts[0], parts[1], total) }
         }
       }
@@ -474,10 +477,10 @@ fn dest_rel(req: Request) -> Option[String] !io =
     Some(d) -> {
       let path = uri_path(d)
       let prefix = dav_prefix(req)
-      let stripped = if prefix != "" && starts_with(path, prefix) { substring(path, str_len(prefix), str_len(path)) } else { path }
+      let stripped = if prefix != "" && str.starts_with(path, prefix) { str.substring(path, str.len(prefix), str.len(path)) } else { path }
       # single percent-decode like Python's unquote: %XX resolves, a literal '+'
       # stays '+' (URLDecoder would turn it into a space), so protect '+' as %2B first
-      let decoded = URLDecoder.decode(join(split(stripped, "+"), "%2B"), "UTF-8")!
+      let decoded = URLDecoder.decode(join(str.split(stripped, "+"), "%2B"), "UTF-8")!
       Some(strip_slashes(decoded))
     }
   }
@@ -496,7 +499,7 @@ fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Res
           Some(dst) ->
             if dst == "" {
               Err(http_error(400, "非法目标"))
-            } else if dst == rel || starts_with(dst, rel ++ "/") {
+            } else if dst == rel || str.starts_with(dst, rel ++ "/") {
               Err(http_error(409, "不能移动/复制到自身或子目录"))
             } else {
               mc_check_dst(a, req, rel, dst, is_move)
@@ -508,7 +511,7 @@ fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Res
 fn mc_check_dst(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) -> Result[Response, HttpError] !io =
   {
     let dst_existing = as_http(with_db(a.db.path, a.db.ext, fn(c) => get_row(c, dst)), 500)?
-    let overwrite = to_upper(header_or(req, "overwrite", "T")) != "F"
+    let overwrite = str.to_upper(header_or(req, "overwrite", "T")) != "F"
     match dst_existing {
       Some(_) -> if overwrite == false { Err(http_error(412, "目标已存在")) } else { mc_purge_then(a, rel, dst, is_move, true) }
       None -> mc_require_parent(a, rel, dst, is_move, false)
@@ -544,7 +547,7 @@ fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool)
       copy_subtree(a, rel, dst)
     }
   match outcome {
-    Err(m) -> if contains(m, "七牛") { Err(http_error(502, m)) } else { Err(http_error(500, m)) }
+    Err(m) -> if str.contains(m, "七牛") { Err(http_error(502, m)) } else { Err(http_error(500, m)) }
     Ok(_) -> if dst_existed { Ok(text(204, "")) } else { Ok(text(201, "")) }
   }
 }
@@ -558,7 +561,7 @@ fn copy_subtree(a: Auth, rel: String, dst: String) -> Result[Int, String] !io =
 fn copy_rows(a: Auth, rel: String, dst: String, rows: List[FileRow], i: Int) -> Result[Int, String] !io =
   if i >= len(rows) { Ok(0) } else {
     let o = rows[i]
-    let dst_path = dst ++ substring(o.path, str_len(rel), str_len(o.path))
+    let dst_path = dst ++ str.substring(o.path, str.len(rel), str.len(o.path))
     let _step =
       if o.is_dir {
         with_db(a.db.path, a.db.ext, fn(c) => insert_folder(c, dst_path))?
@@ -611,14 +614,14 @@ fn dav_auth(a: Auth, cell: AtomicReference, req: Request) -> Option[Response] !i
   match header(req, "authorization") {
     None -> Some(unauthorized())
     Some(h) ->
-      if starts_with(h, "Basic ") == false {
+      if str.starts_with(h, "Basic ") == false {
         Some(unauthorized())
       } else {
         # malformed base64 is a 401, not a 500 (FastAPI wraps b64decode in try/except)
-        match b64_decode_try(substring(h, 6, str_len(h))) {
+        match b64_decode_try(str.substring(h, 6, str.len(h))) {
           Err(_e) -> Some(unauthorized())
           Ok(raw_cred) -> {
-            let parts = split(raw_cred, ":")
+            let parts = str.split(raw_cred, ":")
             if len(parts) < 2 {
               Some(unauthorized())
             } else {
@@ -638,7 +641,7 @@ fn dav_auth(a: Auth, cell: AtomicReference, req: Request) -> Option[Response] !i
 fn drop_first(xs: List[String]) -> List[String] = map(range(1, len(xs)), fn(i) => xs[i])
 
 fn b64_decode(s: String) -> String !io =
-  decode(Base64.getDecoder()!.decode(s)!, "UTF-8")
+  bytes.decode(Base64.getDecoder()!.decode(s)!, "UTF-8")
 
 # base64-decode that turns malformed input into an Err instead of a panic
 fn b64_decode_try(s: String) -> Result[String, String] !io =

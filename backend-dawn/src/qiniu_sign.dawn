@@ -2,6 +2,7 @@
 # module — reproduces the official qiniu SDK's HMAC-SHA1 signatures so fm can
 # mint upload tokens, private download URLs, and management tokens without the
 # SDK (which drags okhttp+gson). Cross-checked against the Python qiniu.Auth.
+use std/str
 use crypto.{hmac_sha1_b64url, b64url_encode}
 
 ## The EncodedEntryURI for a management op: base64url(bucket:key), with padding.
@@ -43,7 +44,7 @@ pub fn upload_token(ak: String, sk: String, bucket: String, key: String, deadlin
 ## A private download URL: append ?e=<deadline>, sign the whole thing, append
 ## &token=ak:sign. `base_url` is the full https URL (with any imageView2 fop).
 pub fn private_url(ak: String, sk: String, base_url: String, deadline: Int) -> String !io = {
-  let sep = if contains(base_url, "?") { "&" } else { "?" }
+  let sep = if str.contains(base_url, "?") { "&" } else { "?" }
   let signed_url = "$base_url${sep}e=$deadline"
   let sign = hmac_sha1_b64url(sk, signed_url)
   "$signed_url&token=$ak:$sign"
