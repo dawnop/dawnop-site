@@ -65,8 +65,8 @@ dawnop-site/
 │   │   ├── http.dawn           # 出站 HTTP 客户端（七牛/腾讯管理 API、register stat、探针）
 │   │   ├── qiniu_*.dawn tencent_*.dawn  # 对象存储：签名 / rs 操作 / 用量统计
 │   │   ├── jsonx.dawn jsonread.dawn      # 应用层 JSON：构造 wire 形状 / 读请求体字段
-│   │   ├── json/               # vendored JSON 库：value / lexer / parser / render（整数保真 JInt）
-│   │   └── web/                # vendored web 框架：types / router / server / middleware
+│   │   # json 与 web 已不再 vendored：dawn.toml 的 [deps.json]/[deps.web] 指向
+│   │   # dawn-lang 仓库 tag 归档（url + hash + subdir），实体在 dawn-lang/packages/
 │   ├── dawn.toml               # [java-deps]（sqlite-jdbc / jbcrypt，coursier 解析）
 │   ├── build.sh                # 按 .dawn-version 取编译器 → dawn test → dawn build（生成 lib/）
 │   ├── scripts/contract_*.py   # 与 FastAPI 的只读/边界/WebDAV 对拍

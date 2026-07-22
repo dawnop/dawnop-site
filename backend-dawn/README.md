@@ -38,9 +38,9 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `crypto.dawn` — sha256 / hmac-sha1 / hmac-sha256 / base64url / uuid（auth、七牛、JWT、腾讯共用）。
 - `http.dawn` — java.net.http 出站客户端：`fetch/post/post_form` + `fetch_bytes`（二进制体，G6）。
 - `jsonx.dawn` / `jsonread.dawn` — JSON 构造（`obj/jint/jstr/jopt_*`）/ 请求体读取（`opt_int/str_or/str_list`）。
-- `json/`（vendored）— `value`/`lexer`/`parser`/`render`；解析器对整数字面量产 `JInt`（保真、免 round-trip 变 `x.0`）。
+- `json` — **dawn-lang 的 `packages/json`**（`[deps.json]` url+hash 依赖，vendored 副本已删）；游标版解析器，整数字面量产 `JInt`（保真、免 round-trip 变 `x.0`）。
 - `config.dawn` — .env 读取，env 优先（对齐 pydantic-settings 精度）。
-- `web/`（vendored）— `server`（HttpServer + G6 二进制响应体）/`router`/`types`/`middleware`（logging/cors/body-limit）。
+- `web` — **dawn-lang 的 `packages/web`**（`[deps.web]` url+hash 依赖，vendored 副本已删）：`server`（HttpServer + G6 二进制响应体 + 流式）/`router`（tags/任意动词）/`types`/`middleware`（logging/cors/body-limit）。
 
 **鉴权（刀 7）**
 - `auth.dawn` — `Auth`/`Qiniu` 配置类型、`current_user`（Bearer + `?token=`）、login/me；jBCrypt 校验（`$2b$→$2a$` 归一）。

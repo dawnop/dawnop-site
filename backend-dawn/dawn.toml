@@ -8,3 +8,20 @@ name = "backend_dawn"
 [java-deps]
 sqlite = "org.xerial:sqlite-jdbc:3.36.0.3"
 bcrypt = "org.mindrot:jbcrypt:0.4"
+
+# Dawn source packages: the web framework and JSON library live in the dawn-lang
+# repo (packages/), pinned to the same tag as the compiler. One archive serves
+# both (subdir), and web's internal "../json" path dep resolves inside it. The
+# hash is the d1 tree hash of the unpacked archive; a local fetch needs
+# https_proxy for GitHub (same as deploy.sh).
+[deps.web]
+url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.7.0.zip"
+version = "1.0.0"
+hash = "d1:779fad571ee2683386ddadac634b348247f079eab15680b8eb5cee7e68783e46"
+subdir = "packages/web"
+
+[deps.json]
+url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.7.0.zip"
+version = "1.0.0"
+hash = "d1:779fad571ee2683386ddadac634b348247f079eab15680b8eb5cee7e68783e46"
+subdir = "packages/json"
