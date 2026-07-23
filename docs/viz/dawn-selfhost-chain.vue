@@ -206,7 +206,7 @@ const cur = computed(() => nodes[sel.value])
   border: 1px solid #e4e8ec;
   border-radius: 9px;
   padding: 12px 14px;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, 'Cascadia Mono', monospace;
   font-size: 0.8rem;
   line-height: 1.65;
   overflow-x: auto;
