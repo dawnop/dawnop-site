@@ -443,7 +443,7 @@ const bitLo = computed(() => st.value.shift)
   font-size: 11px;
   font-weight: 600;
   fill: #5c6370;
-  font-family: monospace;
+  font-family: Consolas, 'Cascadia Mono', monospace;
 }
 .fate {
   text-anchor: middle;

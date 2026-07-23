@@ -205,7 +205,7 @@ const analysis = computed(() => {
   border: 1px solid #e4e8ec;
   border-radius: 9px;
   padding: 10px 14px;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, 'Cascadia Mono', monospace;
   font-size: 0.85rem;
   line-height: 1.9;
 }
@@ -264,7 +264,7 @@ const analysis = computed(() => {
   margin-top: 10px;
   border-radius: 9px;
   padding: 10px 14px;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, 'Cascadia Mono', monospace;
   font-size: 0.83rem;
   line-height: 1.7;
 }

@@ -214,6 +214,8 @@ async function save() {
                 font:
                   12px/1.5 ui-monospace,
                   Menlo,
+                  Consolas,
+                  'Cascadia Mono',
                   monospace;
                 white-space: pre;
               "

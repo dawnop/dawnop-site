@@ -1096,7 +1096,7 @@ const {
   font-size: 12px;
   line-height: 1.6;
   color: var(--el-text-color-regular);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Cascadia Mono', monospace;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -1137,7 +1137,7 @@ const {
   width: 100%;
 }
 .fm-modal-edit :deep(.el-textarea__inner) {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Cascadia Mono', monospace;
   font-size: 13px;
   line-height: 1.7;
   max-height: 72vh;
@@ -1154,7 +1154,7 @@ const {
   font-size: 13px;
   line-height: 1.7;
   color: var(--el-text-color-regular);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Cascadia Mono', monospace;
   white-space: pre-wrap;
   word-break: break-word;
 }

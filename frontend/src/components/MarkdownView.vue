@@ -259,7 +259,7 @@ onBeforeUnmount(() => islands.unmountAll())
   border-color: var(--accent);
 }
 .markdown-body :deep(code) {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Cascadia Mono', monospace;
   font-size: 0.9em;
 }
 .markdown-body :deep(:not(pre) > code) {

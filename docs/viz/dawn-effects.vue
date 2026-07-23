@@ -97,7 +97,7 @@ const verdict = computed(() => {
   color: #1f2328;
 }
 .mono {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, 'Cascadia Mono', monospace;
 }
 .sig-box {
   background: #eef4ff;

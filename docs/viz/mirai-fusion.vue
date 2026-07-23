@@ -231,7 +231,7 @@ function setMode(m) {
   font-size: 11px;
   font-weight: 600;
   fill: #cf7736;
-  font-family: 'SFMono-Regular', Menlo, monospace;
+  font-family: 'SFMono-Regular', Menlo, Consolas, 'Cascadia Mono', monospace;
 }
 .onchip {
   stroke: #52a127;
@@ -274,7 +274,7 @@ function setMode(m) {
   font-size: 13px;
   font-weight: 600;
   fill: #3c4149;
-  font-family: 'SFMono-Regular', Menlo, monospace;
+  font-family: 'SFMono-Regular', Menlo, Consolas, 'Cascadia Mono', monospace;
 }
 .op-title.active {
   fill: #1677ff;
@@ -330,7 +330,7 @@ function setMode(m) {
   color: #1677ff;
 }
 .note-body code {
-  font-family: 'SFMono-Regular', Menlo, monospace;
+  font-family: 'SFMono-Regular', Menlo, Consolas, 'Cascadia Mono', monospace;
   background: #f0f2f5;
   border-radius: 4px;
   padding: 1px 5px;
