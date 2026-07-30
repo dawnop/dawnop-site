@@ -42,7 +42,7 @@ fn verify_password(plain: String, hashed: String) -> Bool !io = {
     } else {
       hashed
     }
-  match java_try(fn() => BCrypt.checkpw(plain, normalized)) {
+  match catch_fault(fn() => BCrypt.checkpw(plain, normalized)) {
     Ok(b) -> b
     Err(_) -> false
   }

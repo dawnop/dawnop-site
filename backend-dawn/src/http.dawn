@@ -1,6 +1,6 @@
 # Minimal HTTP client (M6 knife 4) for outbound calls: qiniu management REST,
 # register's stat check, monitor probes. Pure Dawn over java.net.http. Network
-# failures land in Err via java_try; a non-2xx status is still Ok (the caller
+# failures land in Err via catch_fault; a non-2xx status is still Ok (the caller
 # inspects .status) — only transport errors are failures here.
 use std/str
 use std/bytes
@@ -36,7 +36,7 @@ pub type StreamResp = { status: Int, stream: InputStream }
 ## resp.body() is an erased-generic Object that is a byte[] at runtime — cast
 ## reclaims it (T = Bytes, from the BytesResp.bytes field type).
 pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[BytesResp, String] !io =
-  java_try(fn() => {
+  catch_fault(fn() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)
@@ -60,7 +60,7 @@ pub fn ok_status(r: BytesResp) -> Bool = r.status >= 200 && r.status < 300
 ## pumps bytes; it MUST be closed (transferTo to EOF, or close_stream) or the
 ## HttpClient connection leaks.
 pub fn fetch_stream(url: String, headers: List[(String, String)]) -> Result[StreamResp, String] !io =
-  java_try(fn() => {
+  catch_fault(fn() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)
@@ -79,7 +79,7 @@ pub fn ok_stream(r: StreamResp) -> Bool = r.status >= 200 && r.status < 300
 ## already committed, or was never sent). The server calls this after pumping; a
 ## handler rejecting a non-2xx upstream calls it before returning Err.
 pub fn close_stream(s: InputStream) -> Unit !io = {
-  let _ = java_try(fn() => s.close())
+  let _ = catch_fault(fn() => s.close())
   ()
 }
 
@@ -100,7 +100,7 @@ fn add_headers(b: Builder, hs: List[(String, String)], i: Int) -> Builder !io =
   }
 
 fn send(method: String, url: String, headers: List[(String, String)], body: Option[String]) -> Result[HttpResp, String] !io =
-  java_try(fn() => {
+  catch_fault(fn() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)
@@ -132,7 +132,7 @@ pub fn post_bytes(url: String, headers: List[(String, String)], body: Bytes) -> 
 ## part is read from disk in chunks and never sits in the heap. ofByteArray keeps
 ## the in-memory path for small bodies.
 pub fn post_publisher(url: String, headers: List[(String, String)], publisher: BodyPublisher) -> Result[HttpResp, String] !io =
-  java_try(fn() => {
+  catch_fault(fn() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)

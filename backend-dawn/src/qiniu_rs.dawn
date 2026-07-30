@@ -123,7 +123,7 @@ pub fn upload_file(ak: String, sk: String, bucket: String, key: String, path: St
 
 # head ++ <the file, streamed off disk> ++ tail, as one publisher
 fn multipart_streaming(head: String, src: String, tail: String) -> Result[BodyPublisher, String] !io =
-  match java_try(fn() => {
+  match catch_fault(fn() => {
     let h = BodyPublishers.ofByteArray(bytes.utf8(head))!
     let f = BodyPublishers.ofFile(File.new(src).toPath()!)!
     let t = BodyPublishers.ofByteArray(bytes.utf8(tail))!
@@ -211,7 +211,10 @@ test "a refused qiniu call is an Err, not Ok(false)" {
   # The regression this pins: these operations used to end in `Ok(r.status == 200)`,
   # so a 401 came back as Ok(false). Every caller discarded the Bool, so
   # /api/fm/create-file recorded a FileObject for an object qiniu never accepted.
-  assert ok_status(HttpResp { status: 200, body: "{}" }, "upload") == Ok(())
+  match ok_status(HttpResp { status: 200, body: "{}" }, "upload") {
+    Ok(_) -> ()
+    Err(m) -> panic("a 200 must be Ok, got $m")
+  }
 
   match ok_status(HttpResp { status: 401, body: "{\"error\":\"bad token\"}" }, "upload") {
     Ok(_) -> panic("a 401 must not be Ok")

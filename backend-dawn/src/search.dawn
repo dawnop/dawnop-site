@@ -127,7 +127,7 @@ fn drop_links(s: String) -> String =
 
 # at a "[" cursor i: expect [txt](url); return (txt, cursor-after-`)`)
 # cursor_char reports -1 past the end, so the "(" test also covers "] is last"
-fn link_text(s: String, i: Cursor) -> Option[(String, Cursor)] =
+fn link_text(s: String, i: cursor.Cursor) -> Option[(String, cursor.Cursor)] =
   match cursor.find(s, "]", i) {
     Some(rb) ->
       if cursor.char(s, cursor.skip(s, rb, "]")) == '(' {
@@ -142,7 +142,7 @@ fn link_text(s: String, i: Cursor) -> Option[(String, Cursor)] =
   }
 
 # from a "![" at i: find the closing ")" of the following (...) ; return cursor after
-fn paren_end(s: String, i: Cursor) -> Option[Cursor] =
+fn paren_end(s: String, i: cursor.Cursor) -> Option[cursor.Cursor] =
   match link_text(s, i) {
     Some((_, after)) -> Some(after)
     None -> None
@@ -181,12 +181,10 @@ fn is_ws(c: Int) -> Bool = c == 32 || c == 9 || c == 10 || c == 13 || c == 12
 # now std's cursor-based one, which is the same search the JVM does on the string
 # itself. That this file needed the function at all is why std grew it.
 
-# walk `n` characters forward / back from a cursor, stopping at the ends
-fn fwd(s: String, c: Cursor, n: Int) -> Cursor =
+# walk `n` characters forward from a cursor, stopping at the end
+# (walking back is std's `cursor.back`, which this file's copy predated)
+fn fwd(s: String, c: cursor.Cursor, n: Int) -> cursor.Cursor =
   if n <= 0 || cursor.done(s, c) { c } else { fwd(s, cursor.next(s, c), n - 1) }
-
-fn back(s: String, c: Cursor, n: Int) -> Cursor =
-  if n <= 0 || c <= cursor.start(s) { c } else { back(s, cursor.prev(s, c), n - 1) }
 
 # ---- highlight builders ----
 
@@ -212,7 +210,7 @@ pub fn excerpt_html(content: String, summary: String, terms: List[String]) -> St
         mark(html_escape(cursor.slice(base, head, e)), terms) ++ (if cursor.done(base, e) { "" } else { "…" })
       }
       Some(pos) -> {
-        let start = back(base, pos, width / 3)
+        let start = cursor.back(base, pos, width / 3)
         let e = fwd(base, start, width)
         let pre = if start > head { "…" } else { "" }
         let suf = if cursor.done(base, e) { "" } else { "…" }
@@ -222,8 +220,8 @@ pub fn excerpt_html(content: String, summary: String, terms: List[String]) -> St
   }
 }
 
-fn first_term_pos(low: String, terms: List[String]) -> Option[Cursor] = {
-  let seed: Option[Cursor] = None
+fn first_term_pos(low: String, terms: List[String]) -> Option[cursor.Cursor] = {
+  let seed: Option[cursor.Cursor] = None
   fold(terms, seed, fn(acc, t) =>
       match cursor.find(low, str.to_lower(t), cursor.start(low)) {
         Some(i) -> match acc {
@@ -237,7 +235,7 @@ fn first_term_pos(low: String, terms: List[String]) -> Option[Cursor] = {
 # ---- query (SQLite FTS, ranking delegated) ----
 
 ## Search published articles. Returns the full response JSON. Uses the simple
-## FTS tokenizer (production/local); falls back to LIKE via java_try on FTS error.
+## FTS tokenizer (production/local); falls back to LIKE via catch_fault on FTS error.
 pub fn search_published(c: Connection, q: String, page: Int, size: Int) -> Result[Json, String] !io = {
   let query_str = str.trim(q)
   # highlight terms split on ANY whitespace run (Python's str.split()), not just

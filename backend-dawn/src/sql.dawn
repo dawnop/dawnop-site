@@ -1,6 +1,6 @@
 # Thin JDBC wrapper for SQLite (M6 knife 2b). Pure Dawn over java.sql — the
 # driver jar rides on --cp (lib/sqlite-jdbc-*.jar). Expected SQL failures
-# (bad statement, constraint) come back as Err via java_try; connection-level
+# (bad statement, constraint) come back as Err via catch_fault; connection-level
 # failures (cannot open, driver missing) panic — they are deploy bugs.
 use std/str
 use std/map
@@ -90,7 +90,7 @@ fn rows_of(rs: ResultSet, cols: List[Col]) -> List[List[Cell]] !io =
 ## Run a select; `cols` declares the select list's types in order.
 ## Rows are fully materialized and the statement is closed before returning.
 pub fn query(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[List[Cell]], String] !io =
-  java_try(fn() => {
+  catch_fault(fn() => {
     let st = c.prepareStatement(q)!
     bind(st, ps)
     let rs = st.executeQuery()!
@@ -111,7 +111,7 @@ fn names_of(rs: ResultSet) -> Map[String, Int] !io = {
 ## (`row.col_int("id")`, `row.col_opt_str("summary")`, ...). `cols` still declares
 ## the select list's types in order; the names come from the driver's metadata.
 pub fn query_rows(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[Row], String] !io =
-  java_try(fn() => {
+  catch_fault(fn() => {
     let st = c.prepareStatement(q)!
     bind(st, ps)
     let rs = st.executeQuery()!
@@ -123,7 +123,7 @@ pub fn query_rows(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> 
 
 ## Run an insert/update/delete/DDL; Ok carries the affected row count.
 pub fn exec(c: Connection, q: String, ps: List[SqlV]) -> Result[Int, String] !io =
-  java_try(fn() => {
+  catch_fault(fn() => {
     let st = c.prepareStatement(q)!
     bind(st, ps)
     let n = st.executeUpdate()
