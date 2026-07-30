@@ -9,7 +9,7 @@
 # cannot come from a compiler mismatch.
 #
 # .dawn-version accepts:
-#   v0.1.0   a released tag — downloads that release's dawn.jar (cached under .dawn/)
+#   v0.1.0   a released tag — downloads that release's compiler jar (cached under .dawn/)
 #   main     the escape hatch — clones dawn-lang and builds it, for when you are
 #            changing the language and the backend together and there is no tag yet.
 #            Reproducibility is gone while this is set; do not commit it for long.
@@ -69,17 +69,30 @@ JAR="$CACHE/$VERSION/dawn.jar"
 SHIM="$CACHE/$VERSION/dawn"
 
 if [ ! -f "$JAR" ]; then
-  URL="https://github.com/$REPO/releases/download/$VERSION/dawn.jar"
   echo "fetching dawn $VERSION" >&2
   mkdir -p "$(dirname "$JAR")"
-  # to .part first: an interrupted download must not leave a truncated jar that
-  # every later run then treats as cached and fails on in some unrelated way.
-  curl -fsSL --retry 3 -o "$JAR.part" "$URL" || {
-    echo "!!! could not download $URL" >&2
-    echo "    is $VERSION released? see https://github.com/$REPO/releases" >&2
+  # The release asset was renamed when the compiler became self-hosted: v0.8.0 and
+  # up publish dawn-selfhost.jar, everything before it published dawn.jar. Try both
+  # so any released tag stays a usable pin — the point of .dawn-version is that
+  # checking out an old commit reproduces it, and that dies if only today's naming
+  # resolves. Cached as dawn.jar either way; the shim and the probe below do not
+  # care which name it arrived under.
+  ok=""
+  for asset in dawn-selfhost.jar dawn.jar; do
+    URL="https://github.com/$REPO/releases/download/$VERSION/$asset"
+    # to .part first: an interrupted download must not leave a truncated jar that
+    # every later run then treats as cached and fails on in some unrelated way.
+    if curl -fsSL --retry 3 -o "$JAR.part" "$URL"; then
+      ok="$asset"
+      break
+    fi
     rm -f "$JAR.part"
+  done
+  if [ -z "$ok" ]; then
+    echo "!!! could not download dawn-selfhost.jar or dawn.jar for $VERSION" >&2
+    echo "    is $VERSION released? see https://github.com/$REPO/releases" >&2
     exit 1
-  }
+  fi
   mv "$JAR.part" "$JAR"
 fi
 
