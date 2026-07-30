@@ -43,7 +43,7 @@ scripts/        fetch-dawn.sh（按 .dawn-version 解析工具链）
 ### 后端（Dawn，生产用的这套）
 
 ```bash
-./backend-dawn/build.sh          # 按 .dawn-version 取编译器 → 跑 60 个测试 → 打 jar
+./backend-dawn/build.sh          # 按 .dawn-version 取编译器 → 跑内联测试 → 打 jar
 java -jar backend-dawn/backend-dawn.jar
 ```
 
@@ -61,7 +61,7 @@ cp .env.example .env                                # 填入七牛密钥、JWT s
 python scripts/seed_admin.py                        # 初始化管理员账号
 python scripts/fetch_simple_ext.py                  # 可选：中文分词扩展（缺失则搜索降级为 trigram/LIKE）
 uvicorn app.main:app --reload                       # http://127.0.0.1:8000  文档 /docs
-pytest                                              # 120 个测试
+pytest                                              # 全量
 ```
 
 ### 前端

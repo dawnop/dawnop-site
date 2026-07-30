@@ -251,7 +251,7 @@ dawnop-site/
 
 ```bash
 # ---- 后端：Dawn（生产用的这套）----
-./backend-dawn/build.sh                 # 取编译器 → 60 个测试 → 打 jar（+ lib/）
+./backend-dawn/build.sh                 # 取编译器 → 跑内联测试 → 打 jar（+ lib/）
 java -jar backend-dawn/backend-dawn.jar # 跑起来（lib/ 须在 jar 旁边）
 
 # 编译器版本由 .dawn-version 钉住，scripts/fetch-dawn.sh 自动下载并缓存到 .dawn/。
@@ -265,7 +265,7 @@ pip install -r requirements-dev.txt     # 生产只装 requirements.txt
 python scripts/seed_admin.py            # 初始化管理员
 python scripts/fetch_simple_ext.py      # 中文分词扩展（不入库；本机/服务器连不上 GitHub 时手动 scp）
 uvicorn app.main:app --reload           # http://127.0.0.1:8000, 文档 /docs
-pytest                                  # 120 个测试
+pytest                                  # 全量
 pytest tests/test_articles.py::test_x   # 单个测试
 
 # ---- 前端 ----
@@ -289,8 +289,8 @@ python backend-dawn/scripts/contract_webdav.py  # WebDAV 全周期
 
 规范尽量落在 CI 与配置里，而不是文档里——文档会过期，CI 不会。
 
-- **CI**（`.github/workflows/ci.yml`，push main + PR 触发）：Dawn 后端 60 测试 + 打 jar 传
-  artifact、FastAPI 120 测试（**钉 Python 3.10**，对齐生产）、前端 lint/format/build、
+- **CI**（`.github/workflows/ci.yml`，push main + PR 触发）：Dawn 后端测试 + 打 jar 传
+  artifact、FastAPI 测试（**钉 Python 3.10**，对齐生产）、前端 lint/format/build、
   ruff check + format。任一红都别合。
 - **本地 hook（每台开发机装一次）**：`git config core.hooksPath .githooks`（`.githooks/` 已入库）。
   三个 hook 都是把 CI 的红灯提前、省一次往返，临时跳过 `git commit/push --no-verify`：
