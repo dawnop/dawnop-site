@@ -132,12 +132,12 @@ pub fn list_published(c: Connection, tag: Option[String], page: Int, size: Int) 
 pub fn list_admin(c: Connection, pub_filter: Option[Bool], page_id: Option[Int], q: Option[String], page: Int, size: Int) -> Result[(Int, List[Json]), String] !io = {
   let offset = (page - 1) * size
   # build the WHERE conditions and their bound params in lockstep
-  let c0: List[String] = match pub_filter { Some(true) -> ["a.published = 1"]  Some(false) -> ["a.published = 0"]  None -> [] }
-  let c1 = match page_id { Some(_x) -> c0 ++ ["a.page_id = ?"]  None -> c0 }
-  let c2 = match q_filter(q) { Some(_s) -> c1 ++ ["a.title like ?"]  None -> c1 }
+  let c0: List[String] = match pub_filter { Some(true) -> ["a.published = 1"] Some(false) -> ["a.published = 0"] None -> [] }
+  let c1 = match page_id { Some(_x) -> c0 ++ ["a.page_id = ?"] None -> c0 }
+  let c2 = match q_filter(q) { Some(_s) -> c1 ++ ["a.title like ?"] None -> c1 }
   let where = if len(c2) == 0 { "" } else { "where ${join(c2, " and ")}" }
-  let p0: List[SqlV] = match page_id { Some(id) -> [PInt(id)]  None -> [] }
-  let params: List[SqlV] = match q_filter(q) { Some(s) -> p0 ++ [PStr("%$s%")]  None -> p0 }
+  let p0: List[SqlV] = match page_id { Some(id) -> [PInt(id)] None -> [] }
+  let params: List[SqlV] = match q_filter(q) { Some(s) -> p0 ++ [PStr("%$s%")] None -> p0 }
   let cnt = query(c, "select count(*) from articles a $where", params, [ColInt])?
   let total = match get(cnt, 0) {
     Some(r) -> int_at(r, 0)

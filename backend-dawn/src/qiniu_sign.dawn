@@ -72,7 +72,7 @@ test "signatures match the qiniu SDK byte-for-byte" {
     "Qiniu AKtest:4tea02U1hxRrkWbTP1pUcrBOqmo="
   # cross-checked against qiniu.QiniuMacAuth("AKtest","SKtest").token_of_request
   assert qiniu_mac("AKtest", "SKtest", "POST", "/v2/tune/flux", "fusion.qiniuapi.com", "application/json",
-      "{\"domains\":\"a.com;b.com\",\"startDate\":\"2026-06-14\",\"endDate\":\"2026-07-14\",\"granularity\":\"day\"}") ==
+    "{\"domains\":\"a.com;b.com\",\"startDate\":\"2026-06-14\",\"endDate\":\"2026-07-14\",\"granularity\":\"day\"}") ==
     "Qiniu AKtest:716FuHT8Wo0muPljCsrV9uNPuxE="
   assert qiniu_mac("AKtest", "SKtest", "GET", "/domain?limit=100", "api.qiniu.com", "application/json", "") ==
     "Qiniu AKtest:NkIHWnHFAVdnaXMKYl-2OE1foYk="

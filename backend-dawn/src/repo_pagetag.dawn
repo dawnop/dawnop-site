@@ -29,8 +29,8 @@ pub type NewPage = {
 pub fn create_page(c: Connection, p: NewPage) -> Result[Int, String] !io = {
   let base = if p.slug_hint == "" { p.title } else { p.slug_hint }
   let slug = unique_slug(c, "pages", base, None)?
-  let created_expr = match p.created_at { Some(_x) -> "datetime(?)"  None -> "datetime('now')" }
-  let created_params: List[SqlV] = match p.created_at { Some(s) -> [PStr(s)]  None -> [] }
+  let created_expr = match p.created_at { Some(_x) -> "datetime(?)" None -> "datetime('now')" }
+  let created_params: List[SqlV] = match p.created_at { Some(s) -> [PStr(s)] None -> [] }
   let _i = exec(c,
     "insert into pages (title, slug, type, description, content, nav_visible, nav_order, auto_title, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, $created_expr, datetime('now'))",
     [PStr(p.title), PStr(slug), PStr(p.kind), PStr(p.description), PStr(p.content), PInt(bool_int(p.nav_visible)), PInt(p.nav_order), PInt(bool_int(p.auto_title))] ++ created_params)?

@@ -27,12 +27,12 @@ fn pct_loop(b: Bytes, i: Int, n: Int, acc: String) -> String =
 
 fn pct_unreserved(c: Int) -> Bool =
   (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) ||
-    c == 45 || c == 46 || c == 95 || c == 126  # - . _ ~
+  c == 45 || c == 46 || c == 95 || c == 126 # - . _ ~
 
 fn hex2(c: Int) -> String = "${hex1(c / 16)}${hex1(c % 16)}"
 
 fn hex1(n: Int) -> String =
-  if n < 10 { from_code_points([48 + n]) } else { from_code_points([55 + n]) }  # 0-9, A-F
+  if n < 10 { from_code_points([48 + n]) } else { from_code_points([55 + n]) } # 0-9, A-F
 
 ## Backwards-compatible alias; url_encode now uses the RFC-3986 encoder above.
 pub fn url_encode(s: String) -> String = pct_encode(s)

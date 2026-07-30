@@ -9,10 +9,10 @@ use std/bytes
 use std/list
 
 pub type Part = {
-  name: String,        # form field name (Content-Disposition name=)
-  filename: String,    # "" for a plain field; the client filename for a file part
-  content_type: String,# the part's declared Content-Type ("" if none)
-  content: Bytes,      # the part's raw bytes
+  name: String, # form field name (Content-Disposition name=)
+  filename: String, # "" for a plain field; the client filename for a file part
+  content_type: String, # the part's declared Content-Type ("" if none)
+  content: Bytes, # the part's raw bytes
 }
 
 fn crlf() -> String = from_code_points([13, 10])
@@ -92,8 +92,8 @@ fn parse_part(chunk: Bytes) -> Option[Part] =
   if bytes.len(chunk) < 2 || bytes.slice(chunk, 0, 2) != crlf_b() {
     None
   } else {
-    let body = bytes.slice(chunk, 2, bytes.len(chunk))   # strip the leading CRLF
-    match bytes.index_of(body, crlf2_b(), 0) {          # headers | content on CRLFCRLF
+    let body = bytes.slice(chunk, 2, bytes.len(chunk)) # strip the leading CRLF
+    match bytes.index_of(body, crlf2_b(), 0) { # headers | content on CRLFCRLF
       None -> None
       Some(hi) -> {
         let headers = bytes.decode(bytes.slice(body, 0, hi), "UTF-8")
@@ -115,19 +115,19 @@ fn parse_part(chunk: Bytes) -> Option[Part] =
 pub fn parse_multipart(body: Bytes, boundary: String) -> List[Part] = {
   let delim = bytes.utf8("--" ++ boundary)
   fold(bsplit(body, delim), [], fn(acc, ch) =>
-    match parse_part(ch) {
-      Some(p) -> acc ++ [p]
-      None -> acc
-    })
+      match parse_part(ch) {
+        Some(p) -> acc ++ [p]
+        None -> acc
+      })
 }
 
 ## Find a part by form field name (first match).
 pub fn part_named(parts: List[Part], name: String) -> Option[Part] =
   fold(parts, None, fn(acc, p) =>
-    match acc {
-      Some(_) -> acc
-      None -> if p.name == name { Some(p) } else { None }
-    })
+      match acc {
+        Some(_) -> acc
+        None -> if p.name == name { Some(p) } else { None }
+      })
 
 test "parse a two-field multipart body (a text field and a file)" {
   let nl = from_code_points([13, 10])
@@ -165,7 +165,7 @@ test "boundary_of parses and unquotes" {
 test "file content with embedded CRLF is preserved, only the trailing one dropped" {
   let nl = from_code_points([13, 10])
   let b = "BB"
-  let payload = "line1${nl}line2"    # an internal CRLF that must survive
+  let payload = "line1${nl}line2" # an internal CRLF that must survive
   let body =
     "--$b$nl" ++
     "Content-Disposition: form-data; name=\"file\"; filename=\"f\"${nl}${nl}$payload$nl" ++

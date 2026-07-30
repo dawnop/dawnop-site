@@ -107,7 +107,7 @@ pub fn cdn_tune(ak: String, sk: String, kind: String, days: Int, domains: List[S
     let time_strs = str_list(field(j, "time"))
     let zeros = map(time_strs, fn(_t) => 0)
     let totals = fold(leaf_arrays(field(j, "data")), zeros, fn(acc: List[Int], arr) =>
-      map(range(0, len(acc)), fn(i) => acc[i] + int_of(at(arr, i))))
+        map(range(0, len(acc)), fn(i) => acc[i] + int_of(at(arr, i))))
     Ok((map(time_strs, day_epoch), totals))
   }
 
@@ -187,10 +187,10 @@ fn sum_amount(items: List[Json], key: String) -> Float =
 fn min_str(xs: List[String]) -> Json = {
   let present = filter(xs, fn(s) => s != "")
   fold(present, JNull, fn(acc, s) =>
-    match acc {
-      JStr(cur) -> if s < cur { JStr(s) } else { acc }
-      _ -> JStr(s)
-    })
+      match acc {
+        JStr(cur) -> if s < cur { JStr(s) } else { acc }
+        _ -> JStr(s)
+      })
 }
 
 # ---- json coercion helpers (billing numbers arrive as ints, floats or strings) ----

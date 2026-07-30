@@ -131,30 +131,30 @@ fn meminfo() -> Json !io =
 
 fn meminfo_kb(text: String, key: String) -> Int =
   fold(str.split(text, "\n"), 0, fn(acc, line) =>
-    if str.starts_with(line, "$key:") {
-      let fs = fields_of(line)
-      if len(fs) > 1 { parse_or0(fs[1]) } else { acc }
-    } else {
-      acc
-    })
+      if str.starts_with(line, "$key:") {
+        let fs = fields_of(line)
+        if len(fs) > 1 { parse_or0(fs[1]) } else { acc }
+      } else {
+        acc
+      })
 
 # cumulative bytes over every interface (psutil net_io_counters aggregates all)
 fn net_totals() -> Json !io =
   match io.read_file("/proc/net/dev") {
     Ok(text) -> {
       let (sent, recv) = fold(str.split(text, "\n"), (0, 0), fn(acc: (Int, Int), line) =>
-        if str.contains(line, ":") {
-          let (s, r) = acc
-          let parts = str.split(line, ":")
-          let fs = fields_of(join(rest1(parts), ":"))
-          if len(fs) > 8 {
-            (s + parse_or0(fs[8]), r + parse_or0(fs[0]))
+          if str.contains(line, ":") {
+            let (s, r) = acc
+            let parts = str.split(line, ":")
+            let fs = fields_of(join(rest1(parts), ":"))
+            if len(fs) > 8 {
+              (s + parse_or0(fs[8]), r + parse_or0(fs[0]))
+            } else {
+              acc
+            }
           } else {
             acc
-          }
-        } else {
-          acc
-        })
+          })
       obj([("sent", jint(sent)), ("recv", jint(recv))])
     }
     Err(_m) -> obj([("sent", jint(0)), ("recv", jint(0))])

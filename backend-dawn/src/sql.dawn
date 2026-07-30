@@ -250,7 +250,7 @@ test "query_rows reads cells by column name (order-independent)" {
   assert exec(c, "insert into t values (?, ?, ?, ?)", [PInt(2), PStr("yo"), PStr("s"), PInt(0)]) == Ok(1)
   # select list order deliberately differs from table order — names still resolve
   match query_rows(c, "select views, id, summary, title from t order by id",
-      [], [ColInt, ColInt, ColStr, ColStr]) {
+    [], [ColInt, ColInt, ColStr, ColStr]) {
     Ok(rows) -> {
       assert len(rows) == 2
       assert rows[0].col_int("id") == 1
