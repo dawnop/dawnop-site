@@ -3,6 +3,7 @@
 # come back as first-class Bytes and pass straight to Java byte[] params (§9.5.1).
 use std/str
 use std/bytes
+use ferr.{fe_text}
 use java "java.security.MessageDigest"
 use java "java.util.Base64"
 use java "java.util.HexFormat"
@@ -51,11 +52,14 @@ pub fn b64url_encode_nopad(s: String) -> String !io =
 
 ## Decode URL-safe base64 (padding optional) back to a UTF-8 string.
 pub fn b64url_decode(s: String) -> Result[String, String] !io =
-  catch_fault(fn() => {
+  match catch_fault(fn() => {
     # the JDK URL decoder rejects missing padding; JWT segments come unpadded
     let raw = Base64.getUrlDecoder()!.decode(pad4(s))!
     bytes.decode(raw, "UTF-8")
-  })
+  }) {
+    Ok(v) -> Ok(v)
+    Err(e) -> Err(fe_text(e))
+  }
 
 fn pad4(s: String) -> String =
   match str.len(s) - str.len(s) / 4 * 4 {

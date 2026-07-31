@@ -16,6 +16,7 @@
 use std/str
 use std/bytes
 use std/map
+use ferr.{fe_text}
 use java "java.sql.Connection"
 use java "java.lang.String"
 use java "java.lang.System"
@@ -355,7 +356,10 @@ fn guess_mime(name: String) -> String =
 # Size of the spilled body. The Content-Length header would be a client's claim;
 # the file on disk is what we actually received and are about to upload.
 fn file_size(path: String) -> Result[Int, String] !io =
-  catch_fault(fn() => File.new(path).length())
+  match catch_fault(fn() => File.new(path).length()) {
+    Ok(v) -> Ok(v)
+    Err(e) -> Err(fe_text(e))
+  }
 
 fn put(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io =
   if rel == "" {
@@ -645,7 +649,10 @@ fn b64_decode(s: String) -> String !io =
 
 # base64-decode that turns malformed input into an Err instead of a panic
 fn b64_decode_try(s: String) -> Result[String, String] !io =
-  catch_fault(fn() => b64_decode(s))
+  match catch_fault(fn() => b64_decode(s)) {
+    Ok(v) -> Ok(v)
+    Err(e) -> Err(fe_text(e))
+  }
 
 fn verify_cache(a: Auth, cell: AtomicReference, user: String, pass: String, key: String) -> Option[Response] !io =
   match with_db(a.db.path, a.db.ext, fn(c) => check_basic(c, user, pass)) {
