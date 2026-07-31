@@ -34,6 +34,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 **基础设施（预备刀 1–5）**
 - `sql.dawn` — SQLite JDBC 薄包装：`SqlV/Col/Cell` ADT、`query/exec/with_tx`、类型化取值。
+- `ferr.dawn` — `ForeignError` → 旧版 `Throwable.toString()` 文本（`fe_text`）：v0.33.0+ 的
+  `catch_fault`/`cast` 返回结构化 `ForeignError`，各屏障模块经它转回 `Result[T, String]`，错误文案与升级前逐字节一致。
 - `db.dawn` — 每请求一连接（`with_db`）：WAL + `load_extension(libsimple)`。
 - `crypto.dawn` — sha256 / hmac-sha1 / hmac-sha256 / base64url / uuid（auth、七牛、JWT、腾讯共用）。
 - `http.dawn` — java.net.http 出站客户端：`fetch/post/post_form` + `fetch_bytes`（二进制体，G6）。

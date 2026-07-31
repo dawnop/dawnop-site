@@ -17,13 +17,13 @@ bcrypt = "org.mindrot:jbcrypt:0.4"
 # new tag. Tag archives fetch straight from GitHub with no proxy; it is deploy.sh's
 # CI-artifact download that needs one.
 [deps.web]
-url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.31.0.zip"
+url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.36.0.zip"
 version = "1.0.0"
-hash = "d1:95acd12ab913beaf147ca53bceca4efedc01d0cdd050b8fc5a7c5ad171dd93f3"
+hash = "d1:42639868ebb2e2882b768341d7521d8bf2ac1cf774dfc1d21061d5ee48f1a540"
 subdir = "packages/web"
 
 [deps.json]
-url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.31.0.zip"
+url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.36.0.zip"
 version = "1.0.0"
-hash = "d1:95acd12ab913beaf147ca53bceca4efedc01d0cdd050b8fc5a7c5ad171dd93f3"
+hash = "d1:42639868ebb2e2882b768341d7521d8bf2ac1cf774dfc1d21061d5ee48f1a540"
 subdir = "packages/json"

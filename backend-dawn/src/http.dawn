@@ -4,6 +4,7 @@
 # inspects .status) — only transport errors are failures here.
 use std/str
 use std/bytes
+use ferr.{fe_text}
 use java "java.net.URI"
 use java "java.net.http.HttpClient"
 use java "java.net.http.HttpRequest"
@@ -34,17 +35,27 @@ pub type StreamResp = { status: Int, stream: InputStream }
 ## A binary GET: the body comes back as first-class Bytes (spec §9.5.1). Ok on 2xx,
 ## Err otherwise. For the fm content proxy (fetch bytes from qiniu, stream out).
 ## resp.body() is an erased-generic Object that is a byte[] at runtime — cast
-## reclaims it (T = Bytes, from the BytesResp.bytes field type).
-pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[BytesResp, String] !io =
-  catch_fault(fn() => {
+## reclaims it (Result since v0.33.0; a mismatch was a ClassCastException that
+## catch_fault turned into Err, so it still maps to this function's Err).
+pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[BytesResp, String] !io = {
+  let r: Result[Result[BytesResp, String], ForeignError] = catch_fault(fn() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)
     let nobody: BodyPublisher = BodyPublishers.noBody()!
     let req = withHeaders.method("GET", nobody)!.build()!
     let resp = shared_client().send(req, BodyHandlers.ofByteArray()!)!
-    BytesResp { status: resp.statusCode(), bytes: cast(resp.body()!) }
+    let got: Result[Bytes, ForeignError] = cast(resp.body()!)
+    match got {
+      Ok(b) -> Ok(BytesResp { status: resp.statusCode(), bytes: b })
+      Err(e) -> Err(fe_text(e))
+    }
   })
+  match r {
+    Ok(inner) -> inner
+    Err(e) -> Err(fe_text(e))
+  }
+}
 
 ## True for a 2xx. Callers proxying bytes must check: an upstream error body is
 ## still bytes, and serving it as the file's content (what happens when the status
@@ -59,16 +70,25 @@ pub fn ok_status(r: BytesResp) -> Bool = r.status >= 200 && r.status < 300
 ## the StreamResp.stream field type). The stream is unconsumed here — reading it later
 ## pumps bytes; it MUST be closed (transferTo to EOF, or close_stream) or the
 ## HttpClient connection leaks.
-pub fn fetch_stream(url: String, headers: List[(String, String)]) -> Result[StreamResp, String] !io =
-  catch_fault(fn() => {
+pub fn fetch_stream(url: String, headers: List[(String, String)]) -> Result[StreamResp, String] !io = {
+  let r: Result[Result[StreamResp, String], ForeignError] = catch_fault(fn() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)
     let nobody: BodyPublisher = BodyPublishers.noBody()!
     let req = withHeaders.method("GET", nobody)!.build()!
     let resp = shared_client().send(req, BodyHandlers.ofInputStream()!)!
-    StreamResp { status: resp.statusCode(), stream: cast(resp.body()!) }
+    let got: Result[InputStream, ForeignError] = cast(resp.body()!)
+    match got {
+      Ok(s) -> Ok(StreamResp { status: resp.statusCode(), stream: s })
+      Err(e) -> Err(fe_text(e))
+    }
   })
+  match r {
+    Ok(inner) -> inner
+    Err(e) -> Err(fe_text(e))
+  }
+}
 
 ## True for a 2xx (206 included — a Range hit). Same contract as ok_status: a non-2xx
 ## upstream must NOT be streamed as file content; the handler maps it to an error and
@@ -100,7 +120,7 @@ fn add_headers(b: Builder, hs: List[(String, String)], i: Int) -> Builder !io =
   }
 
 fn send(method: String, url: String, headers: List[(String, String)], body: Option[String]) -> Result[HttpResp, String] !io =
-  catch_fault(fn() => {
+  match catch_fault(fn() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)
@@ -111,7 +131,10 @@ fn send(method: String, url: String, headers: List[(String, String)], body: Opti
     let req = withHeaders.method(method, publisher)!.build()!
     let resp = shared_client().send(req, BodyHandlers.ofString()!)!
     HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! }
-  })
+  }) {
+    Ok(v) -> Ok(v)
+    Err(e) -> Err(fe_text(e))
+  }
 
 pub fn fetch(url: String, headers: List[(String, String)]) -> Result[HttpResp, String] !io =
   send("GET", url, headers, None)
@@ -132,14 +155,17 @@ pub fn post_bytes(url: String, headers: List[(String, String)], body: Bytes) -> 
 ## part is read from disk in chunks and never sits in the heap. ofByteArray keeps
 ## the in-memory path for small bodies.
 pub fn post_publisher(url: String, headers: List[(String, String)], publisher: BodyPublisher) -> Result[HttpResp, String] !io =
-  catch_fault(fn() => {
+  match catch_fault(fn() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)
     let req = withHeaders.method("POST", publisher)!.build()!
     let resp = shared_client().send(req, BodyHandlers.ofString()!)!
     HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! }
-  })
+  }) {
+    Ok(v) -> Ok(v)
+    Err(e) -> Err(fe_text(e))
+  }
 
 # ---- tests ----
 #

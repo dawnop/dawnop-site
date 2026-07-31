@@ -13,6 +13,7 @@ use java "java.io.FileOutputStream"
 use java "java.io.ByteArrayOutputStream"
 use java "com.sun.net.httpserver.HttpServer"
 use java "java.net.InetSocketAddress"
+use ferr.{fe_text}
 use http.{HttpResp, post, post_bytes, post_publisher, fetch}
 use qiniu_sign.{entry_uri, entry_token, management_token, upload_token, qiniu_mac_token}
 use json/value.{Json, JObj, JArr, JNum, JInt}
@@ -129,7 +130,7 @@ fn multipart_streaming(head: String, src: String, tail: String) -> Result[BodyPu
     let t = BodyPublishers.ofByteArray(bytes.utf8(tail))!
     BodyPublishers.concat(h, f, t)!
   }) {
-    Err(m) -> Err("upload_file: $m")
+    Err(e) -> Err("upload_file: ${fe_text(e)}")
     Ok(p) -> Ok(p)
   }
 
