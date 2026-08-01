@@ -93,10 +93,10 @@ fn reorder_loop(c: Connection, ids: List[Int], i: Int) -> Result[Int, String] !i
   }
 
 fn dedup_ints(xs: List[Int]) -> List[Int] =
-  fold(xs, [], fn(acc, x) => if int_member(acc, x) { acc } else { acc ++ [x] })
+  fold(xs, [], (acc, x) => if int_member(acc, x) { acc } else { acc ++ [x] })
 
 fn int_member(xs: List[Int], x: Int) -> Bool =
-  fold(xs, false, fn(acc, y) => acc || y == x)
+  fold(xs, false, (acc, y) => acc || y == x)
 
 # ---- tags ----
 

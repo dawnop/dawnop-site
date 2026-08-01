@@ -57,7 +57,7 @@ pub fn str_list(m: Map[String, Json], key: String) -> List[String] =
   }
 
 fn filter_map_str(xs: List[Json]) -> List[String] =
-  fold(xs, [], fn(acc, j) =>
+  fold(xs, [], (acc, j) =>
       match j {
         JStr(s) -> acc ++ [s]
         _ -> acc

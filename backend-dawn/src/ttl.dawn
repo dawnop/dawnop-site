@@ -36,7 +36,7 @@ pub fn cache_put(cell: AtomicReference, payload: String) -> Unit !io =
 
 fn now_s() -> Int !io = System.currentTimeMillis() / 1000
 
-fn rest(xs: List[String]) -> List[String] = map(range(1, len(xs)), fn(i) => xs[i])
+fn rest(xs: List[String]) -> List[String] = map(range(1, len(xs)), (i) => xs[i])
 
 test "cache: put then get within ttl, miss when empty" {
   let cell = new_cell()

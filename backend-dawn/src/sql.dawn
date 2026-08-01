@@ -83,7 +83,7 @@ fn cell_of(rs: ResultSet, col: Col, i: Int) -> Cell !io =
   }
 
 fn row_of(rs: ResultSet, cols: List[Col]) -> List[Cell] !io =
-  map(range(0, len(cols)), fn(i) => cell_of(rs, cols[i], i + 1))
+  map(range(0, len(cols)), (i) => cell_of(rs, cols[i], i + 1))
 
 fn rows_of(rs: ResultSet, cols: List[Col]) -> List[List[Cell]] !io =
   if rs.next() { [row_of(rs, cols)] ++ rows_of(rs, cols) } else { [] }
@@ -91,7 +91,7 @@ fn rows_of(rs: ResultSet, cols: List[Col]) -> List[List[Cell]] !io =
 ## Run a select; `cols` declares the select list's types in order.
 ## Rows are fully materialized and the statement is closed before returning.
 pub fn query(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[List[Cell]], String] !io =
-  match catch_fault(fn() => {
+  match catch_fault(() => {
     let st = c.prepareStatement(q)!
     bind(st, ps)
     let rs = st.executeQuery()!
@@ -108,19 +108,19 @@ pub fn query(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Resul
 fn names_of(rs: ResultSet) -> Map[String, Int] !io = {
   let md = rs.getMetaData()!
   let n = md.getColumnCount()
-  map.from(map(range(0, n), fn(i) => (md.getColumnLabel(i + 1)!, i)))
+  map.from(map(range(0, n), (i) => (md.getColumnLabel(i + 1)!, i)))
 }
 
 ## Like `query`, but each row carries its column names for read-by-name access
 ## (`row.col_int("id")`, `row.col_opt_str("summary")`, ...). `cols` still declares
 ## the select list's types in order; the names come from the driver's metadata.
 pub fn query_rows(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[Row], String] !io =
-  match catch_fault(fn() => {
+  match catch_fault(() => {
     let st = c.prepareStatement(q)!
     bind(st, ps)
     let rs = st.executeQuery()!
     let names = names_of(rs)
-    let rows = map(rows_of(rs, cols), fn(cells) => Row { cells: cells, names: names })
+    let rows = map(rows_of(rs, cols), (cells) => Row { cells: cells, names: names })
     st.close()
     rows
   }) {
@@ -130,7 +130,7 @@ pub fn query_rows(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> 
 
 ## Run an insert/update/delete/DDL; Ok carries the affected row count.
 pub fn exec(c: Connection, q: String, ps: List[SqlV]) -> Result[Int, String] !io =
-  match catch_fault(fn() => {
+  match catch_fault(() => {
     let st = c.prepareStatement(q)!
     bind(st, ps)
     let n = st.executeUpdate()
@@ -306,12 +306,12 @@ test "scalar_int and last_id" {
 test "with_tx commits on Ok and rolls back on Err" {
   let c = open("jdbc:sqlite::memory:")
   assert exec(c, "create table t (v integer)", []) == Ok(0)
-  let ok: Result[Bool, String] = with_tx(c, fn() => {
+  let ok: Result[Bool, String] = with_tx(c, () => {
     let _n = exec(c, "insert into t values (1)", [])?
     Ok(true)
   })
   assert ok == Ok(true)
-  let failed: Result[Bool, String] = with_tx(c, fn() => {
+  let failed: Result[Bool, String] = with_tx(c, () => {
     let _n = exec(c, "insert into t values (2)", [])?
     Err("abort")
   })

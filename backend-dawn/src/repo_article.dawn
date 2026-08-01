@@ -41,7 +41,7 @@ pub fn tags_json(c: Connection, article_id: Int) -> Result[List[Json], String] !
   let rows = query_rows(c,
     "select t.id, t.name, t.slug from tags t join article_tags at on at.tag_id = t.id where at.article_id = ? order by t.name",
     [PInt(article_id)], [ColInt, ColStr, ColStr])?
-  Ok(map(rows, fn(r) => obj([
+  Ok(map(rows, (r) => obj([
     ("id", jint(r.col_int("id"))),
     ("name", jstr(r.col_str("name"))),
     ("slug", jstr(r.col_str("slug"))),

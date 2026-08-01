@@ -31,7 +31,7 @@ fn ws_to_space(s: String) -> String =
 ## Wrap each occurrence of an (escaped) term in <mark>. Operates on already-
 ## escaped text with escaped terms, left-to-right, case-insensitive.
 pub fn mark(escaped: String, terms: List[String]) -> String = {
-  let esc_terms = filter(map(terms, html_escape), fn(t) => t != "")
+  let esc_terms = filter(map(terms, html_escape), (t) => t != "")
   if len(esc_terms) == 0 { escaped } else { mark_scan(code_points(escaped), esc_terms, 0, "") }
 }
 
@@ -63,7 +63,7 @@ fn first_match(cps: List[Int], terms: List[String], i: Int, ti: Int) -> Option[I
 
 fn ci_eq(a: List[Int], b: List[Int]) -> Bool = str.to_lower(from_code_points(a)) == str.to_lower(from_code_points(b))
 
-fn slice(xs: List[Int], from: Int, to: Int) -> List[Int] = map(range(from, to), fn(i) => xs[i])
+fn slice(xs: List[Int], from: Int, to: Int) -> List[Int] = map(range(from, to), (i) => xs[i])
 
 # ---- markdown → plain text (rough, for the excerpt window) ----
 #
@@ -150,7 +150,7 @@ fn paren_end(s: String, i: cursor.Cursor) -> Option[cursor.Cursor] =
 
 # drop markdown symbols [#>*_~`] (backtick already gone); replace with space
 fn drop_symbols(s: String) -> String =
-  from_code_points(map(code_points(s), fn(c) => if is_md_sym(c) { 32 } else { c }))
+  from_code_points(map(code_points(s), (c) => if is_md_sym(c) { 32 } else { c }))
 
 fn is_md_sym(c: Int) -> Bool =
   c == 35 || c == 62 || c == 42 || c == 95 || c == 126 || c == 96 # # > * _ ~ `
@@ -222,7 +222,7 @@ pub fn excerpt_html(content: String, summary: String, terms: List[String]) -> St
 
 fn first_term_pos(low: String, terms: List[String]) -> Option[cursor.Cursor] = {
   let seed: Option[cursor.Cursor] = None
-  fold(terms, seed, fn(acc, t) =>
+  fold(terms, seed, (acc, t) =>
       match cursor.find(low, str.to_lower(t), cursor.start(low)) {
         Some(i) -> match acc {
           None -> Some(i)
@@ -240,7 +240,7 @@ pub fn search_published(c: Connection, q: String, page: Int, size: Int) -> Resul
   let query_str = str.trim(q)
   # highlight terms split on ANY whitespace run (Python's str.split()), not just
   # the space char — a tab/newline-separated query still highlights each term
-  let terms = filter(str.split(ws_to_space(query_str), " "), fn(t) => t != "")
+  let terms = filter(str.split(ws_to_space(query_str), " "), (t) => t != "")
   if len(terms) == 0 {
     Ok(empty_result(page, size, query_str))
   } else {
@@ -278,7 +278,7 @@ fn simple_query(c: Connection, q: String, offset: Int, size: Int) -> Result[(Int
   let rows = query(c,
     "select a.id from article_fts join articles a on a.id = article_fts.rowid where article_fts match simple_query(?) and a.published = 1 order by bm25(article_fts, 10.0, 4.0, 1.0) limit ? offset ?",
     [PStr(q), PInt(size), PInt(offset)], [ColInt])?
-  Ok((total, map(rows, fn(r) => int_at(r, 0))))
+  Ok((total, map(rows, (r) => int_at(r, 0))))
 }
 
 # LIKE fallback (single-term subset; matches the common case). Terms ANDed.
@@ -288,7 +288,7 @@ fn like_query(c: Connection, terms: List[String], offset: Int, size: Int) -> Res
   let tot = query(c, "select count(*) from articles where published = 1 and (title like ? or summary like ? or content like ?)", [PStr(pat), PStr(pat), PStr(pat)], [ColInt])?
   let total = first_int(tot)
   let rows = query(c, "select id from articles where published = 1 and (title like ? or summary like ? or content like ?) order by created_at desc limit ? offset ?", [PStr(pat), PStr(pat), PStr(pat), PInt(size), PInt(offset)], [ColInt])?
-  Ok((total, map(rows, fn(r) => int_at(r, 0))))
+  Ok((total, map(rows, (r) => int_at(r, 0))))
 }
 
 fn first_int(rows: List[List[Cell]]) -> Int =

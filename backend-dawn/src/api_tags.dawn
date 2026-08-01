@@ -13,14 +13,14 @@ use repo_pagetag.{tag_exists, rename_tag, merge_tags, cleanup_tags, delete_tag}
 
 ## GET /api/tags/admin — all tags with counts (drafts included).
 pub fn tags_admin(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
-      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_tag.list_admin(c)), 500)?))))
+  (req) =>
+  guarded(a, req, () =>
+      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, (c) => repo_tag.list_admin(c)), 500)?))))
 
 ## PUT /api/tags/{tag_id} — rename (slug regenerates).
 pub fn tag_rename(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
+  (req) =>
+  guarded(a, req, () =>
       match opt_param_int(req, "tag_id") {
         Some(id) ->
           {
@@ -30,7 +30,7 @@ pub fn tag_rename(a: Auth) -> Handler =
             match opt_str(m, "name") {
               None -> Err(http_error(422, "name 不能为空"))
               Some(nm) ->
-                match as_http(with_db(a.db.path, a.db.ext, fn(c) => rename_then_read(c, id, nm)), 400)? {
+                match as_http(with_db(a.db.path, a.db.ext, (c) => rename_then_read(c, id, nm)), 400)? {
                   Some(j) -> Ok(json_ok(j))
                   None -> Err(http_error(404, "标签不存在"))
                 }
@@ -51,8 +51,8 @@ fn rename_then_read(c: Connection, id: Int, name: String) -> Result[Option[Json]
 
 ## POST /api/tags/merge — merge source into target, return target with count.
 pub fn tag_merge(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
+  (req) =>
+  guarded(a, req, () =>
       {
         let m = as_http(body_obj(req.body), 422)?
         let sid = int_field(m, "source_id")
@@ -62,7 +62,7 @@ pub fn tag_merge(a: Auth) -> Handler =
             if s == t {
               Err(http_error(400, "不能与自身合并"))
             } else {
-              match as_http(with_db(a.db.path, a.db.ext, fn(c) => merge_then_read(c, s, t)), 500)? {
+              match as_http(with_db(a.db.path, a.db.ext, (c) => merge_then_read(c, s, t)), 500)? {
                 Some(j) -> Ok(json_ok(j))
                 None -> Err(http_error(404, "源标签或目标标签不存在"))
               }
@@ -84,18 +84,18 @@ fn merge_then_read(c: Connection, s: Int, t: Int) -> Result[Option[Json], String
 
 ## POST /api/tags/cleanup — delete unused tags, return {deleted}.
 pub fn tag_cleanup(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
-      Ok(json_ok(obj([("deleted", jint(as_http(with_db(a.db.path, a.db.ext, fn(c) => cleanup_tags(c)), 500)?))]))))
+  (req) =>
+  guarded(a, req, () =>
+      Ok(json_ok(obj([("deleted", jint(as_http(with_db(a.db.path, a.db.ext, (c) => cleanup_tags(c)), 500)?))]))))
 
 ## DELETE /api/tags/{tag_id} — 204.
 pub fn tag_delete(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
+  (req) =>
+  guarded(a, req, () =>
       match opt_param_int(req, "tag_id") {
         Some(id) ->
           {
-            let n = as_http(with_db(a.db.path, a.db.ext, fn(c) => delete_tag(c, id)), 500)?
+            let n = as_http(with_db(a.db.path, a.db.ext, (c) => delete_tag(c, id)), 500)?
             if n == 0 { Err(http_error(404, "标签不存在")) } else { Ok(text(204, "")) }
           }
         None -> Err(http_error(422, "tag_id must be an integer"))

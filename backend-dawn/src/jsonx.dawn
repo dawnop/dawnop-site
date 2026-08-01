@@ -39,7 +39,7 @@ fn drop_zero_frac(s: String) -> String =
   }
 
 fn all_zero(s: String) -> Bool =
-  fold(code_points(s), true, fn(acc, c) => acc && c == 48)
+  fold(code_points(s), true, (acc, c) => acc && c == 48)
 
 ## Standard paginated envelope: {total, page, size, items}.
 pub fn paginated(total: Int, page: Int, size: Int, items: List[Json]) -> Json =

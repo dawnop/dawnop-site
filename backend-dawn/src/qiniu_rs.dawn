@@ -48,7 +48,7 @@ fn last_data(body: String) -> Int !io =
   }
 
 fn last_int(xs: List[Json]) -> Int =
-  fold(xs, 0, fn(acc, j) =>
+  fold(xs, 0, (acc, j) =>
       match j {
         JInt(n) -> n
         JNum(x) -> to_int(x)
@@ -98,7 +98,7 @@ fn multipart(token: String, key: String, content: Bytes, mime: String) -> Bytes 
 fn mp_head(token: String, key: String, mime: String) -> String = {
   let nl = from_code_points([13, 10]) # CRLF (Dawn has no \r escape)
   let d = "--$BOUNDARY$nl"
-  let field = fn(name: String, value: String) => "${d}Content-Disposition: form-data; name=\"$name\"$nl$nl$value$nl"
+  let field = (name: String, value: String) => "${d}Content-Disposition: form-data; name=\"$name\"$nl$nl$value$nl"
   field("token", token) ++ field("key", key) ++
     "${d}Content-Disposition: form-data; name=\"file\"; filename=\"$key\"${nl}Content-Type: $mime$nl$nl"
 }
@@ -124,7 +124,7 @@ pub fn upload_file(ak: String, sk: String, bucket: String, key: String, path: St
 
 # head ++ <the file, streamed off disk> ++ tail, as one publisher
 fn multipart_streaming(head: String, src: String, tail: String) -> Result[BodyPublisher, String] !io =
-  match catch_fault(fn() => {
+  match catch_fault(() => {
     let h = BodyPublishers.ofByteArray(bytes.utf8(head))!
     let f = BodyPublishers.ofFile(File.new(src).toPath()!)!
     let t = BodyPublishers.ofByteArray(bytes.utf8(tail))!
@@ -167,7 +167,7 @@ pub fn copy_obj(ak: String, sk: String, bucket: String, src_key: String, dst_key
 test "the streaming multipart body goes on the wire byte-exactly, across many chunks" {
   # 20000 bytes: many times over the chunk size ofFile reads with, so the file
   # part really arrives in pieces — the case a single-chunk test would not catch.
-  let payload = join(map(range(0, 2000), fn(i) => "0123456789"), "")
+  let payload = join(map(range(0, 2000), (i) => "0123456789"), "")
   let src = File.createTempFile("dawn-test-src-", ".bin")!
   let out = FileOutputStream.new(src)
   out.write(bytes.utf8(payload))
@@ -178,7 +178,7 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
   # back, so the assertion compares what the publisher actually put on the wire —
   # contentLength alone would not catch a wrong order or a mangled part
   let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
-  server.createContext("/", fn(ex) => {
+  server.createContext("/", (ex) => {
     let buf = ByteArrayOutputStream.new()
     let _n = ex.getRequestBody()!.transferTo(buf)
     let got = buf.toByteArray()!

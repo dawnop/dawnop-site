@@ -13,17 +13,17 @@ use repo_settings
 
 ## GET /api/settings — merged global settings.
 pub fn get_settings(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
-      Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_settings.read_all(c, a.storage_quota)), 500)?)))
+  (req) =>
+  guarded(a, req, () =>
+      Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, (c) => repo_settings.read_all(c, a.storage_quota)), 500)?)))
 
 ## PUT /api/settings — validate & upsert known integer keys, return merged.
 pub fn put_settings(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
+  (req) =>
+  guarded(a, req, () =>
       {
         let m = as_http(body_obj(req.body), 422)?
-        Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, fn(c) => write_settings(c, m, a.storage_quota)), 400)?))
+        Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, (c) => write_settings(c, m, a.storage_quota)), 400)?))
       })
 
 fn write_settings(c: Connection, m: Map[String, Json], storage_quota: Int) -> Result[Json, String] !io = {

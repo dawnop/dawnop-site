@@ -42,7 +42,7 @@ fn verify_password(plain: String, hashed: String) -> Bool !io = {
     } else {
       hashed
     }
-  match catch_fault(fn() => BCrypt.checkpw(plain, normalized)) {
+  match catch_fault(() => BCrypt.checkpw(plain, normalized)) {
     Ok(b) -> b
     Err(_) -> false
   }
@@ -81,7 +81,7 @@ fn user_json(c: Connection, username: String) -> Result[Option[Json], String] !i
 
 ## POST /api/auth/login — OAuth2 password form (username, password) → JWT.
 pub fn login(a: Auth) -> Handler =
-  fn(req) => {
+  (req) => {
     let form = parse_form(req.body)
     # OAuth2PasswordRequestForm requires both fields: an absent username/password
     # is a 422 (a present-but-empty value proceeds to the 401 auth check).
@@ -90,7 +90,7 @@ pub fn login(a: Auth) -> Handler =
     } else {
       let username = get_or_blank(form, "username")
       let password = get_or_blank(form, "password")
-      match as_http(with_db(a.db.path, a.db.ext, fn(c) => hash_of(c, username)), 500)? {
+      match as_http(with_db(a.db.path, a.db.ext, (c) => hash_of(c, username)), 500)? {
         Some(hashed) ->
           if verify_password(password, hashed) {
             Ok(json_ok(obj([
@@ -110,10 +110,10 @@ fn has_field(m: Map[String, String], k: String) -> Bool =
 
 ## GET /api/auth/me — the current user (Bearer token).
 pub fn me(a: Auth) -> Handler =
-  fn(req) =>
+  (req) =>
   {
     let username = current_user(a, req)?
-    match as_http(with_db(a.db.path, a.db.ext, fn(c) => user_json(c, username)), 500)? {
+    match as_http(with_db(a.db.path, a.db.ext, (c) => user_json(c, username)), 500)? {
       Some(j) -> Ok(json_ok(j))
       None -> Err(http_error(401, "无效或过期的凭证"))
     }

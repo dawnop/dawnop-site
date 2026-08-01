@@ -34,8 +34,8 @@ fn opt_query_int(req: Request, name: String) -> Result[Option[Int], HttpError] =
 
 ## GET /api/articles/admin — all articles, optional ?published= filter.
 pub fn list_admin(a: Auth) -> Handler =
-  fn(req) =>
-  guarded_user(a, req, fn(_u) => {
+  (req) =>
+  guarded_user(a, req, (_u) => {
     let page = query_int_bounded(req, "page", 1, 1, -1)?
     let size = query_int_bounded(req, "size", 10, 1, 100)?
     let pub_filter: Option[Bool] = match map.get(req.query, "published") {
@@ -45,23 +45,23 @@ pub fn list_admin(a: Auth) -> Handler =
     }
     let page_id = opt_query_int(req, "page_id")?
     let q = map.get(req.query, "q")
-    let (total, items) = as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_article.list_admin(c, pub_filter, page_id, q, page, size)), 500)?
+    let (total, items) = as_http(with_db(a.db.path, a.db.ext, (c) => repo_article.list_admin(c, pub_filter, page_id, q, page, size)), 500)?
     Ok(json_ok(paginated(total, page, size, items)))
   })
 
 ## GET /api/articles/admin/stats — counts and total views.
 pub fn admin_stats(a: Auth) -> Handler =
-  fn(req) =>
-  guarded_user(a, req, fn(_u) =>
-      Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_article.stats(c)), 500)?)))
+  (req) =>
+  guarded_user(a, req, (_u) =>
+      Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, (c) => repo_article.stats(c)), 500)?)))
 
 ## GET /api/articles/admin/{article_id} — one article (any status).
 pub fn admin_get(a: Auth) -> Handler =
-  fn(req) =>
-  guarded_user(a, req, fn(_u) =>
+  (req) =>
+  guarded_user(a, req, (_u) =>
       match parse_int(param(req, "article_id")) {
         Some(id) ->
-          match as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_article.by_id_admin(c, id)), 500)? {
+          match as_http(with_db(a.db.path, a.db.ext, (c) => repo_article.by_id_admin(c, id)), 500)? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(404, "文章不存在"))
           }
@@ -70,8 +70,8 @@ pub fn admin_get(a: Auth) -> Handler =
 
 ## POST /api/articles — create; returns the created article (201).
 pub fn create(a: Auth) -> Handler =
-  fn(req) =>
-  guarded_user(a, req, fn(_u) =>
+  (req) =>
+  guarded_user(a, req, (_u) =>
       {
         let m = as_http(body_obj(req.body), 422)?
         if has(m, "title") == false || str.trim(str_or(m, "title", "")) == "" {
@@ -90,7 +90,7 @@ pub fn create(a: Auth) -> Handler =
             tags: str_list(m, "tags"),
             created_at: opt_str(m, "created_at"),
           }
-          Ok(json_response(201, as_http_with(with_db(a.db.path, a.db.ext, fn(c) => create_then_read(c, na)), classify)?))
+          Ok(json_response(201, as_http_with(with_db(a.db.path, a.db.ext, (c) => create_then_read(c, na)), classify)?))
         }
       })
 
@@ -107,8 +107,8 @@ fn create_then_read(c: Connection, na: NewArticle) -> Result[Json, String] !io =
 
 ## PUT /api/articles/{article_id} — partial update; returns the updated article.
 pub fn update(a: Auth) -> Handler =
-  fn(req) =>
-  guarded_user(a, req, fn(_u) =>
+  (req) =>
+  guarded_user(a, req, (_u) =>
       match parse_int(param(req, "article_id")) {
         Some(id) ->
           {
@@ -121,7 +121,7 @@ pub fn update(a: Auth) -> Handler =
               Err(http_error(422, "标题或 slug 长度超出 255"))
             } else {
               let p = patch_of(m)
-              match as_http_with(with_db(a.db.path, a.db.ext, fn(c) => update_then_read(c, id, p)), classify)? {
+              match as_http_with(with_db(a.db.path, a.db.ext, (c) => update_then_read(c, id, p)), classify)? {
                 Some(j) -> Ok(json_ok(j))
                 None -> Err(http_error(404, "文章不存在"))
               }
@@ -150,11 +150,11 @@ fn update_then_read(c: Connection, id: Int, p: ArticlePatch) -> Result[Option[Js
 
 ## GET /api/articles/{article_id}/export — Markdown file with YAML frontmatter.
 pub fn export_md(a: Auth) -> Handler =
-  fn(req) =>
-  guarded_user(a, req, fn(_u) =>
+  (req) =>
+  guarded_user(a, req, (_u) =>
       match parse_int(param(req, "article_id")) {
         Some(id) ->
-          match as_http(with_db(a.db.path, a.db.ext, fn(c) => export_markdown(c, id)), 500)? {
+          match as_http(with_db(a.db.path, a.db.ext, (c) => export_markdown(c, id)), 500)? {
             Some(pair) -> {
               let (slug, body) = pair
               Ok(with_header(
@@ -168,12 +168,12 @@ pub fn export_md(a: Auth) -> Handler =
 
 ## DELETE /api/articles/{article_id} — 204 on success.
 pub fn remove(a: Auth) -> Handler =
-  fn(req) =>
-  guarded_user(a, req, fn(_u) =>
+  (req) =>
+  guarded_user(a, req, (_u) =>
       match parse_int(param(req, "article_id")) {
         Some(id) ->
           {
-            let n = as_http(with_db(a.db.path, a.db.ext, fn(c) => delete_article(c, id)), 500)?
+            let n = as_http(with_db(a.db.path, a.db.ext, (c) => delete_article(c, id)), 500)?
             if n == 0 { Err(http_error(404, "文章不存在")) } else { Ok(text(204, "")) }
           }
         None -> Err(http_error(422, "article_id must be an integer"))
