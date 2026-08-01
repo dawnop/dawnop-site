@@ -13,14 +13,14 @@ use repo_viz.{NewViz, valid_slug, slug_free, viz_exists, create_viz, set_viz_str
 
 ## GET /api/viz — all components (admin).
 pub fn viz_list(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
-      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, fn(c) => list_all(c)), 500)?))))
+  (req) =>
+  guarded(a, req, () =>
+      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, (c) => list_all(c)), 500)?))))
 
 ## POST /api/viz — create (201). slug format + uniqueness + source required.
 pub fn viz_create(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
+  (req) =>
+  guarded(a, req, () =>
       {
         let m = as_http(body_obj(req.body), 422)?
         {
@@ -40,7 +40,7 @@ pub fn viz_create(a: Auth) -> Handler =
               slug: slug, name: str_or(m, "name", ""), source: source,
               compiled: str_or(m, "compiled", ""), style: str_or(m, "style", ""),
             }
-            match as_http(with_db(a.db.path, a.db.ext, fn(c) => viz_create_read(c, nv)), 500)? {
+            match as_http(with_db(a.db.path, a.db.ext, (c) => viz_create_read(c, nv)), 500)? {
               Some(j) -> Ok(json_response(201, j))
               None -> Err(http_error(409, "标识 $slug 已存在"))
             }
@@ -60,13 +60,13 @@ fn viz_create_read(c: Connection, nv: NewViz) -> Result[Option[Json], String] !i
 
 ## PUT /api/viz/{viz_id} — partial update.
 pub fn viz_update(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
+  (req) =>
+  guarded(a, req, () =>
       match opt_param_int(req, "viz_id") {
         Some(id) ->
           {
             let m = as_http(body_obj(req.body), 422)?
-            match as_http_with(with_db(a.db.path, a.db.ext, fn(c) => viz_update_read(c, id, m)), classify_viz)? {
+            match as_http_with(with_db(a.db.path, a.db.ext, (c) => viz_update_read(c, id, m)), classify_viz)? {
               Some(j) -> Ok(json_ok(j))
               None -> Err(http_error(404, "组件不存在"))
             }
@@ -115,12 +115,12 @@ fn set_viz_source(c: Connection, id: Int, s: String) -> Result[Int, String] !io 
 
 ## DELETE /api/viz/{viz_id} — 204.
 pub fn viz_delete(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
+  (req) =>
+  guarded(a, req, () =>
       match opt_param_int(req, "viz_id") {
         Some(id) ->
           {
-            let n = as_http(with_db(a.db.path, a.db.ext, fn(c) => delete_viz(c, id)), 500)?
+            let n = as_http(with_db(a.db.path, a.db.ext, (c) => delete_viz(c, id)), 500)?
             if n == 0 { Err(http_error(404, "组件不存在")) } else { Ok(text(204, "")) }
           }
         None -> Err(http_error(422, "viz_id must be an integer"))

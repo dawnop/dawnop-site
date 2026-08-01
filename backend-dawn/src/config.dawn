@@ -17,7 +17,7 @@ pub fn load(path: String) -> Config !io =
   }
 
 fn parse_env(text: String) -> Map[String, String] =
-  fold(str.split(text, "\n"), map.empty(), fn(acc, raw) => {
+  fold(str.split(text, "\n"), map.empty(), (acc, raw) => {
     let line = str.trim(raw)
     if line == "" || str.starts_with(line, "#") || str.contains(line, "=") == false {
       acc
@@ -35,7 +35,7 @@ fn after(s: String, sep: String) -> String = {
   join(drop1(parts), sep)
 }
 
-fn drop1(xs: List[String]) -> List[String] = map(range(1, len(xs)), fn(i) => xs[i])
+fn drop1(xs: List[String]) -> List[String] = map(range(1, len(xs)), (i) => xs[i])
 
 fn unquote(s: String) -> String =
   if str.len(s) >= 2 && ((str.starts_with(s, "\"") && str.ends_with(s, "\"")) || (str.starts_with(s, "'") && str.ends_with(s, "'"))) {

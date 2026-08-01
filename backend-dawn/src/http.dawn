@@ -38,7 +38,7 @@ pub type StreamResp = { status: Int, stream: InputStream }
 ## reclaims it (Result since v0.33.0; a mismatch was a ClassCastException that
 ## catch_fault turned into Err, so it still maps to this function's Err).
 pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[BytesResp, String] !io = {
-  let r: Result[Result[BytesResp, String], ForeignError] = catch_fault(fn() => {
+  let r: Result[Result[BytesResp, String], ForeignError] = catch_fault(() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)
@@ -71,7 +71,7 @@ pub fn ok_status(r: BytesResp) -> Bool = r.status >= 200 && r.status < 300
 ## pumps bytes; it MUST be closed (transferTo to EOF, or close_stream) or the
 ## HttpClient connection leaks.
 pub fn fetch_stream(url: String, headers: List[(String, String)]) -> Result[StreamResp, String] !io = {
-  let r: Result[Result[StreamResp, String], ForeignError] = catch_fault(fn() => {
+  let r: Result[Result[StreamResp, String], ForeignError] = catch_fault(() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)
@@ -99,7 +99,7 @@ pub fn ok_stream(r: StreamResp) -> Bool = r.status >= 200 && r.status < 300
 ## already committed, or was never sent). The server calls this after pumping; a
 ## handler rejecting a non-2xx upstream calls it before returning Err.
 pub fn close_stream(s: InputStream) -> Unit !io = {
-  let _ = catch_fault(fn() => s.close())
+  let _ = catch_fault(() => s.close())
   ()
 }
 
@@ -120,7 +120,7 @@ fn add_headers(b: Builder, hs: List[(String, String)], i: Int) -> Builder !io =
   }
 
 fn send(method: String, url: String, headers: List[(String, String)], body: Option[String]) -> Result[HttpResp, String] !io =
-  match catch_fault(fn() => {
+  match catch_fault(() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)
@@ -155,7 +155,7 @@ pub fn post_bytes(url: String, headers: List[(String, String)], body: Bytes) -> 
 ## part is read from disk in chunks and never sits in the heap. ofByteArray keeps
 ## the in-memory path for small bodies.
 pub fn post_publisher(url: String, headers: List[(String, String)], publisher: BodyPublisher) -> Result[HttpResp, String] !io =
-  match catch_fault(fn() => {
+  match catch_fault(() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)
@@ -176,7 +176,7 @@ pub fn post_publisher(url: String, headers: List[(String, String)], publisher: B
 ## Serve one canned response on an ephemeral port; returns (server, port).
 fn echo_server(status: Int, body: String) -> (HttpServer, Int) !io = {
   let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
-  server.createContext("/", fn(ex) => {
+  server.createContext("/", (ex) => {
     # reflect the request headers back so a test can assert what was sent
     let probe = unwrap_or(ex.getRequestHeaders()!.getFirst("X-Probe"), "-")
     let payload = bytes.utf8(body ++ probe)
@@ -241,7 +241,7 @@ test "fetch_stream hands back a readable upstream stream" {
       # the body is a live stream, not materialized up front; drain it here
       let raw = r.stream.readAllBytes()!
       close_stream(r.stream)
-      assert bytes.decode(raw, "UTF-8") == "streamed:s"
+      assert bytes.decode_utf8(raw) == "streamed:s"
     }
     Err(m) -> panic("fetch_stream failed: $m")
   }

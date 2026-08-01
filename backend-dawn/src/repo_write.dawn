@@ -225,7 +225,7 @@ fn bool_int(b: Bool) -> Int = if b { 1 } else { 0 }
 fn clip(s: String, n: Int) -> String = if str.len(s) > n { str.substring(s, 0, n) } else { s }
 
 fn member(xs: List[String], x: String) -> Bool =
-  fold(xs, false, fn(acc, y) => acc || y == x)
+  fold(xs, false, (acc, y) => acc || y == x)
 
 # tests need --cp lib/sqlite-jdbc; use db.connect for FTS-safe writes
 

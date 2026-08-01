@@ -96,7 +96,7 @@ fn parse_part(chunk: Bytes) -> Option[Part] =
     match bytes.index_of(body, crlf2_b(), 0) { # headers | content on CRLFCRLF
       None -> None
       Some(hi) -> {
-        let headers = bytes.decode(bytes.slice(body, 0, hi), "UTF-8")
+        let headers = bytes.decode_utf8(bytes.slice(body, 0, hi))
         let content = strip_trailing_crlf(bytes.slice(body, hi + 4, bytes.len(body)))
         match disp_name(headers) {
           None -> None
@@ -114,7 +114,7 @@ fn parse_part(chunk: Bytes) -> Option[Part] =
 ## Parse a multipart body (raw Bytes) into its parts, given the boundary.
 pub fn parse_multipart(body: Bytes, boundary: String) -> List[Part] = {
   let delim = bytes.utf8("--" ++ boundary)
-  fold(bsplit(body, delim), [], fn(acc, ch) =>
+  fold(bsplit(body, delim), [], (acc, ch) =>
       match parse_part(ch) {
         Some(p) -> acc ++ [p]
         None -> acc
@@ -123,7 +123,7 @@ pub fn parse_multipart(body: Bytes, boundary: String) -> List[Part] = {
 
 ## Find a part by form field name (first match).
 pub fn part_named(parts: List[Part], name: String) -> Option[Part] =
-  fold(parts, None, fn(acc, p) =>
+  fold(parts, None, (acc, p) =>
       match acc {
         Some(_) -> acc
         None -> if p.name == name { Some(p) } else { None }
@@ -142,7 +142,7 @@ test "parse a two-field multipart body (a text field and a file)" {
   assert len(parts) == 2
   match part_named(parts, "path") {
     Some(p) -> {
-      assert bytes.decode(p.content, "UTF-8") == "qiniu://pics"
+      assert bytes.decode_utf8(p.content) == "qiniu://pics"
       assert p.filename == ""
     }
     None -> { assert false }
@@ -150,7 +150,7 @@ test "parse a two-field multipart body (a text field and a file)" {
   match part_named(parts, "file") {
     Some(p) -> {
       assert p.filename == "a.txt"
-      assert bytes.decode(p.content, "UTF-8") == "hello"
+      assert bytes.decode_utf8(p.content) == "hello"
     }
     None -> { assert false }
   }
@@ -171,7 +171,7 @@ test "file content with embedded CRLF is preserved, only the trailing one droppe
     "Content-Disposition: form-data; name=\"file\"; filename=\"f\"${nl}${nl}$payload$nl" ++
     "--$b--$nl"
   match part_named(parse_multipart(bytes.utf8(body), b), "file") {
-    Some(p) -> { assert bytes.decode(p.content, "UTF-8") == payload }
+    Some(p) -> { assert bytes.decode_utf8(p.content) == payload }
     None -> { assert false }
   }
 }

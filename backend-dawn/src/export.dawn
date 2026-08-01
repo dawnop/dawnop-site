@@ -60,7 +60,7 @@ fn needs_quote(s: String) -> Bool = {
   } else {
     let first = cps[0]
     let last = cps[len(cps) - 1]
-    first == 32 || first == 45 || last == 32 || fold(cps, false, fn(acc, c) => acc || is_special(c))
+    first == 32 || first == 45 || last == 32 || fold(cps, false, (acc, c) => acc || is_special(c))
   }
 }
 
@@ -89,7 +89,7 @@ pub fn export_markdown(c: Connection, id: Int) -> Result[Option[(String, String)
 
 fn tag_names(c: Connection, id: Int) -> Result[List[String], String] !io = {
   let rows = query(c, "select t.name from tags t join article_tags at on at.tag_id = t.id where at.article_id = ? order by t.name", [PInt(id)], [ColStr])?
-  Ok(map(rows, fn(r) => str_at(r, 0)))
+  Ok(map(rows, (r) => str_at(r, 0)))
 }
 
 fn frontmatter(title: String, slug: String, summary: String, published: Bool, auto_title: Bool, tags: List[String]) -> String = {

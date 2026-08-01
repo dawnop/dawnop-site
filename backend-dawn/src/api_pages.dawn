@@ -15,14 +15,14 @@ use repo_pagetag.{NewPage, create_page, page_kind, delete_page, reorder_pages, s
 
 ## GET /api/pages/admin — all pages.
 pub fn pages_admin(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
-      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, fn(c) => repo_page.list_admin(c)), 500)?))))
+  (req) =>
+  guarded(a, req, () =>
+      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, (c) => repo_page.list_admin(c)), 500)?))))
 
 ## POST /api/pages — create; returns the created page (201).
 pub fn page_create(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
+  (req) =>
+  guarded(a, req, () =>
       {
         let m = as_http(body_obj(req.body), 422)?
         if str.trim(str_or(m, "title", "")) == "" {
@@ -46,7 +46,7 @@ pub fn page_create(a: Auth) -> Handler =
               None -> 0 },
             created_at: opt_str(m, "created_at"),
           }
-          Ok(json_response(201, as_http(with_db(a.db.path, a.db.ext, fn(c) => page_create_read(c, np)), 500)?))
+          Ok(json_response(201, as_http(with_db(a.db.path, a.db.ext, (c) => page_create_read(c, np)), 500)?))
         }
       })
 
@@ -73,8 +73,8 @@ fn page_create_read(c: Connection, np: NewPage) -> Result[Json, String] !io = {
 
 ## PUT /api/pages/{page_id} — partial update (builtin pages: only nav fields).
 pub fn page_update(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
+  (req) =>
+  guarded(a, req, () =>
       match opt_param_int(req, "page_id") {
         Some(id) ->
           {
@@ -88,7 +88,7 @@ pub fn page_update(a: Auth) -> Handler =
             } else if has(m, "type") && bad_page_type(str_or(m, "type", "content")) {
               Err(http_error(422, "type 只能是 content 或 article_list"))
             } else {
-              match as_http(with_db(a.db.path, a.db.ext, fn(c) => page_update_read(c, id, m)), 500)? {
+              match as_http(with_db(a.db.path, a.db.ext, (c) => page_update_read(c, id, m)), 500)? {
                 Some(j) -> Ok(json_ok(j))
                 None -> Err(http_error(404, "页面不存在"))
               }
@@ -140,11 +140,11 @@ fn bool_int(b: Bool) -> Int = if b { 1 } else { 0 }
 
 ## DELETE /api/pages/{page_id} — 204 (builtin pages are protected: 400).
 pub fn page_delete(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
+  (req) =>
+  guarded(a, req, () =>
       match opt_param_int(req, "page_id") {
         Some(id) ->
-          match as_http(with_db(a.db.path, a.db.ext, fn(c) => page_delete_guarded(c, id)), 500)? {
+          match as_http(with_db(a.db.path, a.db.ext, (c) => page_delete_guarded(c, id)), 500)? {
             0 -> Err(http_error(404, "页面不存在"))
             1 -> Ok(text(204, ""))
             _o -> Err(http_error(400, "内置页面不可删除，可在导航中隐藏"))
@@ -167,15 +167,15 @@ fn page_delete_guarded(c: Connection, id: Int) -> Result[Int, String] !io =
 
 ## POST /api/pages/reorder — set nav_order by id-list position, return admin list.
 pub fn page_reorder(a: Auth) -> Handler =
-  fn(req) =>
-  guarded(a, req, fn() =>
+  (req) =>
+  guarded(a, req, () =>
       {
         let m = as_http(body_obj(req.body), 422)?
         # ReorderRequest.ids is a required list[int]: absent / non-array / any
         # non-integer element is a 422 in FastAPI (not a silently-empty reorder).
         match strict_int_list(m, "ids") {
           None -> Err(http_error(422, "ids 必须是整数数组"))
-          Some(ids) -> Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, fn(c) => reorder_read(c, ids)), 500)?)))
+          Some(ids) -> Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, (c) => reorder_read(c, ids)), 500)?)))
         }
       })
 
@@ -197,7 +197,7 @@ fn all_ints(xs: List[Json], acc: List[Int]) -> Option[List[Int]] =
     }
   }
 
-fn tail_json(xs: List[Json]) -> List[Json] = map(range(1, len(xs)), fn(i) => xs[i])
+fn tail_json(xs: List[Json]) -> List[Json] = map(range(1, len(xs)), (i) => xs[i])
 
 fn reorder_read(c: Connection, ids: List[Int]) -> Result[List[Json], String] !io = {
   let _r = reorder_pages(c, ids)?

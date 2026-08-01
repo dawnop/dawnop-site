@@ -94,7 +94,7 @@ fn cpu_sample() -> (Int, Int) !io =
     Ok(text) -> {
       let fs = fields_of(str.split(text, "\n")[0])
       let upto = if len(fs) < 9 { len(fs) } else { 9 }
-      let total = fold(range(1, upto), 0, fn(acc, i) => acc + parse_or0(fs[i]))
+      let total = fold(range(1, upto), 0, (acc, i) => acc + parse_or0(fs[i]))
       let idle = if len(fs) > 5 { parse_or0(fs[4]) + parse_or0(fs[5]) } else { 0 }
       (total - idle, total)
     }
@@ -105,7 +105,7 @@ fn loadavg() -> Json !io =
   match io.read_file("/proc/loadavg") {
     Ok(text) -> {
       let fs = fields_of(text)
-      JArr(map(range(0, 3), fn(i) =>
+      JArr(map(range(0, 3), (i) =>
           match parse_float(fs[i]) {
             Some(x) -> JNum(x)
             None -> JNull
@@ -130,7 +130,7 @@ fn meminfo() -> Json !io =
   }
 
 fn meminfo_kb(text: String, key: String) -> Int =
-  fold(str.split(text, "\n"), 0, fn(acc, line) =>
+  fold(str.split(text, "\n"), 0, (acc, line) =>
       if str.starts_with(line, "$key:") {
         let fs = fields_of(line)
         if len(fs) > 1 { parse_or0(fs[1]) } else { acc }
@@ -142,7 +142,7 @@ fn meminfo_kb(text: String, key: String) -> Int =
 fn net_totals() -> Json !io =
   match io.read_file("/proc/net/dev") {
     Ok(text) -> {
-      let (sent, recv) = fold(str.split(text, "\n"), (0, 0), fn(acc: (Int, Int), line) =>
+      let (sent, recv) = fold(str.split(text, "\n"), (0, 0), (acc: (Int, Int), line) =>
           if str.contains(line, ":") {
             let (s, r) = acc
             let parts = str.split(line, ":")
@@ -160,7 +160,7 @@ fn net_totals() -> Json !io =
     Err(_m) -> obj([("sent", jint(0)), ("recv", jint(0))])
   }
 
-fn rest1(xs: List[String]) -> List[String] = map(range(1, len(xs)), fn(i) => xs[i])
+fn rest1(xs: List[String]) -> List[String] = map(range(1, len(xs)), (i) => xs[i])
 
 fn uptime_s() -> Int !io =
   match io.read_file("/proc/uptime") {
@@ -172,7 +172,7 @@ fn uptime_s() -> Int !io =
     Err(_m) -> 0
   }
 
-fn fields_of(line: String) -> List[String] = filter(str.split(line, " "), fn(s) => s != "")
+fn fields_of(line: String) -> List[String] = filter(str.split(line, " "), (s) => s != "")
 
 fn parse_or0(s: String) -> Int =
   match parse_int(s) {
@@ -285,7 +285,7 @@ fn cpu_trend_fetch(id: String, key: String, region: String, instance: String) ->
       let ts = arr_of(field(dp, "Timestamps"))
       let vs = arr_of(field(dp, "Values"))
       let n = if len(ts) < len(vs) { len(ts) } else { len(vs) }
-      Ok(JArr(map(range(0, n), fn(i) => obj([
+      Ok(JArr(map(range(0, n), (i) => obj([
         ("t", JInt(int_of(ts[i]))),
         ("v", vs[i]),
       ]))))
@@ -341,7 +341,7 @@ fn kodo_stats(a: Auth) -> Result[List[(String, Json)], String] !io = {
     ("flow_30d", jint(sum_snd(flow))),
     ("hits_30d", jint(sum_snd(hits))),
     ("space_trend", trend_int(stimes, sdatas)),
-    ("flow_trend", JArr(map(flow, fn(p) => {
+    ("flow_trend", JArr(map(flow, (p) => {
       let (t, v) = p
       obj([("t", jstr(t)), ("v", jint(v))])
     }))),
@@ -349,7 +349,7 @@ fn kodo_stats(a: Auth) -> Result[List[(String, Json)], String] !io = {
 }
 
 fn sum_snd(xs: List[(String, Int)]) -> Int =
-  fold(xs, 0, fn(acc, p) => {
+  fold(xs, 0, (acc, p) => {
     let (_t, v) = p
     acc + v
   })
@@ -358,18 +358,18 @@ fn cdn_stats(a: Auth) -> Result[List[(String, Json)], String] !io = {
   let domains = cdn_domains(a.qiniu.ak, a.qiniu.sk)?
   let (ftimes, fvalues) = cdn_tune(a.qiniu.ak, a.qiniu.sk, "flux", 30, domains)?
   let (_btimes, bvalues) = cdn_tune(a.qiniu.ak, a.qiniu.sk, "bandwidth", 30, domains)?
-  let peak = fold(bvalues, 0, fn(acc, v) => if v > acc { v } else { acc })
+  let peak = fold(bvalues, 0, (acc, v) => if v > acc { v } else { acc })
   Ok([
-    ("cdn_flow_30d", jint(fold(fvalues, 0, fn(acc, v) => acc + v))),
+    ("cdn_flow_30d", jint(fold(fvalues, 0, (acc, v) => acc + v))),
     ("cdn_peak_bps", jint(peak)),
-    ("cdn_domains", JArr(map(domains, fn(d) => JStr(d)))),
+    ("cdn_domains", JArr(map(domains, (d) => JStr(d)))),
     ("cdn_trend", trend_int(ftimes, fvalues)),
   ])
 }
 
 fn trend_int(times: List[Int], values: List[Int]) -> Json = {
   let n = if len(times) < len(values) { len(times) } else { len(values) }
-  JArr(map(range(0, n), fn(i) => obj([("t", jint(times[i])), ("v", jint(values[i]))])))
+  JArr(map(range(0, n), (i) => obj([("t", jint(times[i])), ("v", jint(values[i]))])))
 }
 
 ## respack balances through a 300s TTL cell (the billing API is rate-limited;
