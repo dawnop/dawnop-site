@@ -1,0 +1,38 @@
+# SHA-256 of the compiler jar each `.dawn-version` tag resolves to.
+#
+# 为什么存在：`scripts/fetch-dawn.sh` 从 GitHub Release 下载编译器 jar、永久缓存到
+# `.dawn/<tag>/dawn.jar`、此后只用 `--version` 问它一句就当数。那句问不出「这是不是
+# 当初那个 jar」——首次下载被中间人替换、CDN 返回坏字节、release 资产被重新上传、
+# 或者本地 `.dawn/` 被改写，任何一种都会换掉编译生产后端的那个编译器，而它照样会
+# 自报 `dawn 0.52.0` 通过检查。这份清单是那句检查缺的另一半。
+#
+# 格式：`<sha256>  <tag>`，与 dawn-lang 的 `scripts/seed-checksums.txt` 同形。
+# `fetch-dawn.sh` 在**每次使用前**校验，不只是下载后——缓存目录是可写的。
+#
+# 未列出的 tag 是**硬失败**（不是警告）：`.dawn-version` 与这份清单必须一起改，
+# 否则「忘了记校验和」就退化成「不校验」，那正是这份文件要挡的事。
+# 脚本会把实测 sha256 打出来，照抄一行即可。升钉流程见 CONTRIBUTING.md。
+#
+# 例外两条，都会明确打印：
+#   - `.dawn-version` 写 `main`（现编逃生阀）：没有固定产物可钉，跳过。
+#   - `DAWN_BIN=...` 覆盖：指的就是本地编译器，跳过。
+#
+# **信任边界**：v0.31.0 / v0.44.0 / v0.51.0 / v0.52.0 四条与 dawn-lang 仓
+# `scripts/seed-checksums.txt` 的独立记录一致（那份是 2026-07-25 自 GitHub Release
+# 重新下载所得），v0.51.0 / v0.52.0 另于 2026-08-06 再次自 Release 下载复核。
+# 其余（v0.1.0–v0.7.0，Kotlin 时期的 `dawn.jar`）只有本机 `.dawn/` 缓存这一个来源，
+# 是 trust-on-first-use：它能挡住此后的篡改与损坏，不能证明当初上传的就对应源码。
+# 真正的来源证明要 release 签名 + 可复现构建，那是 dawn-lang 侧的事。
+
+9746acada4a063ff72d44181a7817efa7605a9d59e87f0a88f04874a3e6961a5  v0.1.0
+18da05718b61159ed25efc36e9a9641d141c49d4dd114c2e4abeb8348876da08  v0.2.0
+0072f83f19c3e542d949a6c1a9dab2abbff588f6bb4ed670c71bff15c6bf8c5e  v0.2.1
+ef895308eb99792a0325590fa7191c1f1d1098af1c75baca59c82862f6abf030  v0.3.0
+df7144b3c4dde427f36bc0197fff8fe265d356ec0eb98ba426e3be74dd4080f8  v0.4.0
+7f0838080f81a871c9d473b40e5959d7a2c30262e70ec73a7c75d8b139caaf79  v0.5.0
+f3c900acc778120249ade355406217d78106872f524d000d12e12dcd7dc7855a  v0.5.1
+cd2283fb6d15fa7c481d52b63b5b9979a56fbe8335c9b8ac5bf41dfde92e80bd  v0.7.0
+579475f2d32fab616f9bcc2bfb2e015887e49fdd042edda8cfbbe7ccbff2f494  v0.31.0
+a03a7dc80311c1497ef1f150a6fd98bf605e07c86eae52276f4488c707a59321  v0.44.0
+872e7093e490fdb980a7939fce93caa98ecfd8ab3c2232762d1623e70b5f9cac  v0.51.0
+4abdd098b05ff1b857e2f88ba96bb2982016a3c06e1a14cc7e6cd0d4b7bac13a  v0.52.0

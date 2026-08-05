@@ -37,6 +37,7 @@ deploy/         nginx / systemd / 证书 / vaultwarden
 docs/           设计文档、文章、viz 组件
 scripts/        fetch-dawn.sh（按 .dawn-version 解析工具链）
 .dawn-version   钉住的 Dawn 编译器版本（单一事实源，CI 与本地共用）
+.dawn-version.sha256  每个 tag 的编译器 jar sha256（升钉时同批更新）
 ```
 
 ## 本地开发
@@ -49,8 +50,13 @@ java -jar backend-dawn/backend-dawn.jar
 ```
 
 编译器由 `scripts/fetch-dawn.sh` 按根目录 `.dawn-version` 自动下载并缓存到 `.dawn/`，
-无需本地装 dawn-lang。同时改语言和后端时，把 `.dawn-version` 写成 `main`（克隆现编），
-或 `DAWN_BIN=~/workspace/dawn-lang/bin/dawn ./backend-dawn/build.sh`。
+无需本地装 dawn-lang。下载后与每次缓存命中时都按 `.dawn-version.sha256` 校验——
+`--version` 只能问出 jar 自称是谁，问不出它是不是当初那个。**升钉 = 改 `.dawn-version`
+＋ 在 `.dawn-version.sha256` 补一行**，忘了会直接失败（并把实测 sha256 打出来照抄）。
+
+同时改语言和后端时，把 `.dawn-version` 写成 `main`（克隆现编），
+或 `DAWN_BIN=~/workspace/dawn-lang/bin/dawn ./backend-dawn/build.sh`——两条都跳过校验，
+脚本会明说。
 
 ### 后端（FastAPI，回滚目标）
 

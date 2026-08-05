@@ -51,10 +51,23 @@ jobs:
       # Pinned binary rather than the action: no org-license prompt, and the
       # ruleset version is pinned like every other tool here. --no-git because this
       # job is checkout-only, so the tree is tracked files only (no .venv/node_modules).
+      #
+      # The sha256 is the other half of pinning: a version number is a name, and
+      # the bytes GitHub hands back under that name can be re-uploaded or served
+      # by something that is not GitHub. This runner then executes them. `sha` is
+      # the value from the release's own gitleaks_8.18.4_checksums.txt, written
+      # down here rather than fetched beside the binary — a checksum from the same
+      # place as the file it checks is not a check. Piping curl straight into tar
+      # is why it has to land on disk first: there is no verifying a stream that
+      # has already been extracted.
       - name: no secret values in tracked files
         run: |
           v=8.18.4
-          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz" | tar xz gitleaks
+          sha=ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d
+          curl -fsSL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz"
+          echo "${sha}  gitleaks.tar.gz" | sha256sum -c -
+          tar xzf gitleaks.tar.gz gitleaks
           ./gitleaks detect --no-git --source . --config .gitleaks.toml --redact --exit-code 1
 
       # The deploy and rollback scripts are the least-exercised code in the repo:

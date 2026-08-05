@@ -99,6 +99,7 @@ dawnop-site/
 ├── docs/                       # 设计文档 + articles/ + viz/ 组件源
 ├── scripts/                    # check-no-server-identity.py（守卫）/ fetch-dawn.sh
 ├── .dawn-version               # 钉住 Dawn 编译器版本
+├── .dawn-version.sha256        # 每个 tag 的编译器 jar sha256（与上面同批改，fetch-dawn.sh 强制）
 ├── .gitignore                  # 必含 .env、*.db、node_modules、__pycache__、dist、backend-dawn.jar
 ├── CLAUDE.md  CONTRIBUTING.md  README.md  program.md
 ```
@@ -255,7 +256,9 @@ dawnop-site/
 java -jar backend-dawn/backend-dawn.jar # 跑起来（lib/ 须在 jar 旁边）
 
 # 编译器版本由 .dawn-version 钉住，scripts/fetch-dawn.sh 自动下载并缓存到 .dawn/。
-# 同时改语言和后端时的逃生阀（二选一）：
+# **升钉是两个文件一起改**：.dawn-version 换 tag，.dawn-version.sha256 补该 tag 的
+# sha256（fetch-dawn.sh 每次使用前都验，未记录的 tag 直接失败并把实测值打出来照抄）。
+# 同时改语言和后端时的逃生阀（二选一，都跳过校验并明说）：
 #   echo main > .dawn-version                                  # 克隆 dawn-lang 现编
 #   DAWN_BIN=~/workspace/dawn-lang/bin/dawn ./backend-dawn/build.sh
 
@@ -311,4 +314,7 @@ python3 backend-dawn/scripts/contract_run.py --only read
   3.14 的笔记本上过审。
 - **依赖钉版本**：`requirements.txt`（生产）与 `requirements-dev.txt`（含 ruff，钉死）分离；
   `.dawn-version` 钉编译器；`package-lock.json` 入库并用 `npm ci`。
+- **钉版本 ≠ 钉产物**：版本号只是个名字，从网上取回来的字节可以换。所以下载物另有 sha256——
+  编译器 jar 见 `.dawn-version.sha256`（`fetch-dawn.sh` 下载后与每次缓存命中都验，
+  未记录的 tag 硬失败），gitleaks 二进制的校验和直接钉在 `ci.yml` 里。**升钉 = 两个文件同批改。**
 - **覆盖率只报数不设门槛**：backend ~80%、compiler ~88%。门槛会被防守。
