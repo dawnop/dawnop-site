@@ -40,7 +40,25 @@ ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/deploy.sh <sha>    # �
 ```
 脚本从 CI artifact 取 jar + lib/（**部署的就是 CI 测过的那个构建**），校验 manifest
 Class-Path 齐全，装好后 `systemctl restart dawnop-dawn` 并健康检查；不健康自动回滚到上一个
-构建。需要服务器上有 `/opt/dawnop-dawn/.github-token`（fine-grained PAT，Actions 只读，chmod 600）。
+构建。需要服务器上有 `/opt/dawnop-dawn/.github-token`（fine-grained PAT，Actions 只读，chmod 600）
+和 `/opt/dawnop-dawn/.deploy-proxy`（见下）。
+
+> **不要在调用前加 `https_proxy=` 之类的前缀**——脚本自己处理代理，而那个前缀会坑你，
+> 见下一段。
+
+**关于代理**：artifact 的**字节**不来自 `api.github.com`，它 302 到 Azure blob，而那一段从
+本机直连**慢到不可用**——同一个 10MB artifact 实测：直连 11.7 KB/s（10MB 要 ~15 分钟，还未必
+能跑完），走本机正向代理 290 KB/s（35 秒）。GitHub **API 本身直连是好的**（~1.8s），脚本
+**只代理下载那一次 curl**。代理地址写在 `/opt/dawnop-dawn/.deploy-proxy`（一行 `host:port`，
+不入库——同 `.github-token` 的理由，机器的旁路配置在 `~/workspace/dawnop-ops/`）；文件不在也能
+部署，只是慢，脚本会明说。
+
+> ⚠️ **为什么不能自己 `export http_proxy`**：脚本第 6 步的健康检查是
+> `http://127.0.0.1:8001/api/health`，`http_proxy` 会把它一起收走，代理接下连接然后**挂住**，
+> 40 次重试全超时——于是脚本**把一次完全正常的部署回滚掉**。实测确认：只设 `https_proxy`
+> 不会触发（curl 按 URL scheme 选代理变量，健康检查是 http），设 `http_proxy` 才会。
+> 脚本现在用 `curl --proxy` 只作用于下载那一次，并且**主动 unset 继承来的代理变量**，
+> 所以这个坑现在按不出来了。
 
 **前端**：
 ```bash
@@ -135,6 +153,9 @@ sudo systemctl disable --now dawnop-backend   # uvicorn 退役；回滚脚本会
 
 # 放 GitHub token 供 deploy.sh 拉 artifact
 sudo install -m 600 /dev/stdin /opt/dawnop-dawn/.github-token   # 粘贴 PAT，Ctrl-D
+
+# 代理地址（artifact 下载那一段直连慢到不可用，理由见「一、日常更新」）
+sudo install -m 600 /dev/stdin /opt/dawnop-dawn/.deploy-proxy   # 一行 host:port，Ctrl-D
 
 # 首次部署（脚本装 jar + lib/、restart、健康检查，不健康自动回滚）
 ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/deploy.sh
