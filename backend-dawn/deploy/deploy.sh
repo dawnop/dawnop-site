@@ -187,11 +187,23 @@ else
 fi
 
 echo "==> 5/6 installing and restarting"
-cp -a "$JAR" "$APP/backend-dawn.jar"
+# Beside it, then rename. `cp` onto the live path truncates the running jar in
+# place and refills it over several seconds: for that window the file on disk is
+# neither the old build nor the new one, and anything that opens it — a crash
+# loop restarting the unit, an operator running `java -jar`, the JVM itself
+# lazily reading a class it has not touched yet — reads a half-written archive.
+# `mv` within one directory is a rename(2): every open() gets either the whole
+# old jar or the whole new one, and a reader already holding the old inode keeps
+# reading it intact until it closes. Ownership and mode are set before the
+# rename, so the file is never briefly live with the wrong ones.
+cp -a "$JAR" "$APP/backend-dawn.jar.new"
+chown "$OWNER" "$APP/backend-dawn.jar.new"
+chmod 644 "$APP/backend-dawn.jar.new"
+mv -f "$APP/backend-dawn.jar.new" "$APP/backend-dawn.jar"
 rm -rf "${APP:?}/lib" && cp -a "$SRC/lib" "$APP/lib"
 printf '%s' "$RUN_SHA" > "$APP/.deployed-sha"
-chown -R "$OWNER" "$APP/backend-dawn.jar" "$APP/lib" "$APP/.deployed-sha"
-chmod 644 "$APP/backend-dawn.jar" "$APP/.deployed-sha"
+chown -R "$OWNER" "$APP/lib" "$APP/.deployed-sha"
+chmod 644 "$APP/.deployed-sha"
 chmod 755 "$APP/lib" && chmod 644 "$APP/lib"/*.jar
 # The directory too, not just its contents: write permission on the dir lets you
 # unlink a file you cannot write and drop a replacement in its place, which is
@@ -214,7 +226,13 @@ if [ -z "$ok" ]; then
     exit 1
   fi
   echo "!!! did not come healthy — rolling back to $CURRENT" >&2
-  cp -a "$PREV/backend-dawn.jar" "$APP/backend-dawn.jar"
+  # Same beside-then-rename as the install above, and it matters more here: the
+  # unit is crash-looping, so systemd is reopening this exact path every few
+  # seconds while we write it.
+  cp -a "$PREV/backend-dawn.jar" "$APP/backend-dawn.jar.new"
+  chown "$OWNER" "$APP/backend-dawn.jar.new"
+  chmod 644 "$APP/backend-dawn.jar.new"
+  mv -f "$APP/backend-dawn.jar.new" "$APP/backend-dawn.jar"
   rm -rf "${APP:?}/lib" && cp -a "$PREV/lib" "$APP/lib"
   # "unknown" is not a sha. Recording it would make .deployed-sha lie about what
   # is installed; absent is the honest state, and step 1 already treats a missing
@@ -225,8 +243,7 @@ if [ -z "$ok" ]; then
     printf '%s' "$CURRENT" > "$APP/.deployed-sha"
   fi
   # .deployed-sha is named separately because the branch above may have removed it.
-  chown -R "$OWNER" "$APP/backend-dawn.jar" "$APP/lib"
-  chmod 644 "$APP/backend-dawn.jar"
+  chown -R "$OWNER" "$APP/lib"
   if [ -f "$APP/.deployed-sha" ]; then
     chown "$OWNER" "$APP/.deployed-sha" && chmod 644 "$APP/.deployed-sha"
   fi
@@ -270,4 +287,4 @@ else
   UNDO_SHA="printf %s $CURRENT > $APP/.deployed-sha && chown -R root:root $APP/backend-dawn.jar $APP/lib $APP/.deployed-sha"
 fi
 echo "  previous build kept at $PREV — to undo:"
-echo "    cp -a $PREV/backend-dawn.jar $APP/ && rm -rf $APP/lib && cp -a $PREV/lib $APP/ && $UNDO_SHA && systemctl restart $SERVICE"
+echo "    cp -a $PREV/backend-dawn.jar $APP/backend-dawn.jar.new && mv -f $APP/backend-dawn.jar.new $APP/backend-dawn.jar && rm -rf $APP/lib && cp -a $PREV/lib $APP/ && $UNDO_SHA && systemctl restart $SERVICE"
