@@ -21,7 +21,7 @@ use tencent_client
 use ttl.{cache_get, cache_put, now_s}
 use qiniu_stats.{field, int_of, last_nonzero, kodo_series, flow_series, cdn_domains, cdn_tune, respack_summary}
 use http.{fetch}
-use json/value.{Json, JNull, JBool, JNum, JInt, JStr, JArr, JObj}
+use json/value.{Json, JNull, JNum, JInt, JStr, JArr, JObj}
 use json/render.{render}
 use json/parser.{parse}
 use jsonx.{obj, jint, jstr, jbool}

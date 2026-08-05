@@ -144,12 +144,6 @@ pub fn guarded(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] 
   body()
 }
 
-## For handlers that need the username (article create/update record an author).
-pub fn guarded_user(a: Auth, req: Request, body: fn(String) -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io = {
-  let user = current_user(a, req)?
-  body(user)
-}
-
 ## Accepts `?token=` as well as the header — only for fm preview/download, whose
 ## bytes a browser fetches from an <img>/download link that carries no header.
 pub fn guarded_flexible(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io = {

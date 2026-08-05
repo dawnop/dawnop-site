@@ -6,7 +6,7 @@ use std/str
 use std/map
 use crypto.{hmac_sha256_b64url_nopad, b64url_encode_nopad, b64url_decode, eq_const}
 use ttl.{now_s}
-use json/value.{Json, JObj, JNum, JInt, JStr}
+use json/value.{JObj, JNum, JInt, JStr}
 use json/parser.{parse}
 
 const HEADER_JSON: String = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}"

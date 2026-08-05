@@ -3,7 +3,7 @@
 # {"detail": ...} through the web framework's Err branch.
 use std/map
 use java "java.sql.Connection"
-use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, json_response, query, query_int_bounded_with}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, query, query_int_bounded_with}
 use web/router.{Route, route_get}
 use json/value.{Json, JArr}
 use jsonx.{paginated, detail, obj, jstr, fastapi_errors}

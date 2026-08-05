@@ -10,9 +10,9 @@ use java "java.time.LocalDateTime"
 use java "java.time.ZoneId"
 use java "java.time.ZonedDateTime"
 use java "java.time.format.DateTimeFormatter"
-use http.{HttpResp, fetch, post}
+use http.{fetch, post}
 use qiniu_sign.{qiniu_mac}
-use json/value.{Json, JNull, JBool, JNum, JInt, JStr, JArr, JObj}
+use json/value.{Json, JNull, JNum, JInt, JStr, JArr, JObj}
 use json/render.{render}
 use jsonx.{obj, jstr}
 use json/parser.{parse}

@@ -4,9 +4,9 @@
 use std/str
 use java "java.sql.Connection"
 use sql.{PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
-use json/value.{Json, JNull, JBool, JInt, JStr, JArr, JObj}
-use jsonx.{obj, jint, jstr, jbool}
-use fm_paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts, fm_split}
+use json/value.{Json, JNull, JInt, JStr, JArr}
+use jsonx.{obj, jstr, jbool}
+use fm_paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts}
 
 pub type FileRow = { path: String, is_dir: Bool, key: Option[String], content_type: String, size: Int, updated_at: String }
 
@@ -120,7 +120,7 @@ pub fn taken(c: Connection, rel: String) -> Result[Bool, String] !io = {
 ## Backfill ancestor directory rows for `rel` (not rel itself), idempotently.
 pub fn ensure_dirs(c: Connection, rel: String) -> Result[Int, String] !io = {
   let parent = parent_rel(rel)
-  let parts = filter(str_split(parent, "/"), s => s != "")
+  let parts = filter(str.split(parent, "/"), s => s != "")
   ensure_loop(c, parts, 0, "")
 }
 
@@ -132,8 +132,6 @@ fn ensure_loop(c: Connection, parts: List[String], i: Int, acc: String) -> Resul
     let _u = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, datetime('now'), datetime('now')) on conflict(path) do nothing", [PStr(next)])?
     ensure_loop(c, parts, i + 1, next)
   }
-
-fn str_split(s: String, sep: String) -> List[String] = str.split(s, sep)
 
 ## Insert a folder row.
 pub fn insert_folder(c: Connection, rel: String) -> Result[Int, String] !io =

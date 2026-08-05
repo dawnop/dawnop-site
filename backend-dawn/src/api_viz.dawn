@@ -10,7 +10,7 @@ use db.{with_db}
 use auth.{Auth, guarded}
 use jsonread.{body_obj, opt_str, str_or, present_null}
 use repo_viz.{NewViz, valid_slug, slug_free, viz_exists, create_viz, set_viz_str, touch_viz, delete_viz, list_all, by_id}
-use errkind.{Kind, KConflict, conflict, split_kind}
+use errkind.{KConflict, conflict, split_kind}
 
 ## GET /api/viz — all components (admin).
 pub fn viz_list(a: Auth) -> Handler =

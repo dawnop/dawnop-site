@@ -7,7 +7,7 @@ use json/value.{Json, JArr}
 use jsonx.{obj, jint}
 use db.{with_db}
 use auth.{Auth, guarded}
-use jsonread.{body_obj, opt_str, int_field}
+use jsonread.{body_obj, opt_str, opt_int}
 use repo_tag
 use repo_pagetag.{tag_exists, rename_tag, merge_tags, cleanup_tags, delete_tag}
 
@@ -55,8 +55,8 @@ pub fn tag_merge(a: Auth) -> Handler =
   guarded(a, req, () =>
       {
         let m = as_http(body_obj(req.body), 422)?
-        let sid = int_field(m, "source_id")
-        let tid = int_field(m, "target_id")
+        let sid = opt_int(m, "source_id")
+        let tid = opt_int(m, "target_id")
         match (sid, tid) {
           (Some(s), Some(t)) ->
             if s == t {

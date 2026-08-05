@@ -3,7 +3,7 @@
 # table, everything else is /p/{slug}.
 use java "java.sql.Connection"
 use sql.{PInt, PStr, Col, ColInt, ColStr, Cell, query, int_at, str_at, opt_str_at, bool_at, first_map, first_int}
-use json/value.{Json, JArr}
+use json/value.{Json}
 use jsonx.{obj, jint, jstr, jbool, jopt_str, jdatetime}
 
 ## Frontend path for a page: builtin routes are fixed, others are /p/{slug}.

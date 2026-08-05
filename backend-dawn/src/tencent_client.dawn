@@ -10,7 +10,7 @@ use java "java.time.format.DateTimeFormatter"
 use crypto.{sha256_hex}
 use ttl.{now_s}
 use tencent_sign.{tc3_signature}
-use http.{HttpResp, post}
+use http.{post}
 use json/value.{Json}
 use json/parser.{parse}
 

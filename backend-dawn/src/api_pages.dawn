@@ -11,7 +11,7 @@ use json/value.{Json, JArr, JInt}
 use sql.{bool_int}
 use db.{with_db}
 use auth.{Auth, guarded}
-use jsonread.{body_obj, has, str_or, opt_str, bool_or, int_field}
+use jsonread.{body_obj, has, str_or, opt_str, bool_or, opt_int}
 use repo_page
 use repo_pagetag.{NewPage, create_page, page_kind, delete_page, reorder_pages, set_page_str, set_page_int, set_page_created, touch_page, regen_page_slug, page_title}
 
@@ -44,7 +44,7 @@ pub fn page_create(a: Auth) -> Handler =
             # FastAPI PageCreate.nav_visible defaults True (a page created without
             # the field shows in the nav bar)
             nav_visible: bool_or(m, "nav_visible", true),
-            nav_order: match int_field(m, "nav_order") { Some(n) -> n
+            nav_order: match opt_int(m, "nav_order") { Some(n) -> n
               None -> 0 },
             created_at: opt_str(m, "created_at"),
           }
@@ -59,12 +59,6 @@ fn page_over_len(s: String) -> Bool = str.len(s) > 255
 fn bad_page_type(t: String) -> Bool = t != "content" && t != "article_list"
 
 # a key present with an explicit JSON null — a non-optional str field rejects it (422)
-fn present_null(m: Map[String, Json], key: String) -> Bool =
-  match map.get(m, key) {
-    Some(JNull) -> true
-    _ -> false
-  }
-
 fn page_create_read(c: Connection, np: NewPage) -> Result[Json, String] !io = {
   let id = create_page(c, np)?
   match repo_page.by_id_admin(c, id)? {
@@ -133,7 +127,7 @@ fn slug_base(c: Connection, id: Int, m: Map[String, Json]) -> Result[String, Str
 }
 
 fn nav_order_of(m: Map[String, Json]) -> Int =
-  match int_field(m, "nav_order") {
+  match opt_int(m, "nav_order") {
     Some(n) -> n
     None -> 0
   }
