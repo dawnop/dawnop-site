@@ -1,24 +1,21 @@
 #!/usr/bin/env python3
-"""Boundary / edge-case contract diff between the FastAPI and Dawn backends.
+"""Boundary / edge-case contract: bad input, auth failures, rejected writes.
 
-Fires a battery of *edge* requests (bad pagination, non-existent slugs,
-malformed and injection-ish queries, auth failures, method-not-allowed, and
-write requests that are *guaranteed to be rejected before any mutation*) at
-both backends and diffs the HTTP status + normalized JSON body.
+Fires the edge battery — pagination out of range, non-existent slugs, malformed
+and injection-ish queries, missing/garbage/tampered tokens, method-not-allowed,
+and write requests that must be refused before anything is touched — at ONE
+backend and compares status + body with golden/edge.json.
 
-SAFE AGAINST THE LIVE SHARED STORE: every write case here is engineered to be
-refused by validation/auth *before* the DB row or qiniu object is touched
-(missing/blank title, invalid slug, dangling page_id, non-existent id, no
-token, ...). No case is expected to create/update/delete real data. A case
-that unexpectedly returns 2xx on a write path is flagged loudly.
+Against the pinned fixture (contract_fixture.py) every answer here is
+deterministic, including the three cases that DO create a row: they run against
+a disposable fixture database, and their recorded value drops only the two
+wall-clock stamps SQLite fills in. This script is no longer safe to point at a
+live store, and no longer needs to be — the env fingerprint would reject the
+golden anyway.
 
-Usage (run on the server so both ports are localhost):
-    TOKEN=$(...form login...) python3 contract_edge.py \
-        --dawn http://127.0.0.1:8001 --fast http://127.0.0.1:8000
+Normally driven by contract_run.py. Standalone:
 
-TOKEN is an admin JWT (fetch it in the caller so creds never touch this file).
-Exit code is non-zero if any case is a hard mismatch (different status, or a
-non-message body difference, or an unexpected write success).
+    TOKEN=... python3 contract_edge.py --base http://127.0.0.1:18001 [--record]
 """
 
 import argparse
@@ -29,40 +26,21 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-# Fields whose values are wall-clock / live-metric / view-counter and therefore
-# legitimately differ between two independently-serving backends. Scrubbed
-# recursively before comparing bodies.
-VOLATILE = {
-    "views",
-    "updated_at",
-    "cached_at",
-    "latency_ms",
-    "cpu_percent",
-    "load",
-    "uptime",
-    "mem",
-    "memory",
-    "disk",
-    "net",
-    "used",
-    "used_bytes",
-    "remote_space",
-    "space_used",
-    "generated_at",
-    "now",
-    "timestamp",
-}
+from contract_golden import Golden
+
+# urllib's no_proxy matching is suffix-based and does not exempt 127.0.0.1 from
+# a `no_proxy=127.*` export; go direct.
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+# Nothing is scrubbed globally. The two stamps below are dropped from the three
+# row-creating cases only: SQLite fills created_at/updated_at with the wall
+# clock at insert time, which is the one value in this script that a golden
+# cannot own. Everything else in those responses — the generated id, the
+# slugified slug, published, page_id — is pinned.
+ROW_STAMPS = {"created_at", "updated_at"}
 
 
-def scrub(x):
-    if isinstance(x, dict):
-        return {k: scrub(v) for k, v in x.items() if k not in VOLATILE}
-    if isinstance(x, list):
-        return [scrub(v) for v in x]
-    return x
-
-
-def req(base, method, path, headers=None, body=None, timeout=20):
+def req(base, method, path, headers=None, body=None, timeout=30):
     url = base + path
     data = None
     hdrs = dict(headers or {})
@@ -71,78 +49,19 @@ def req(base, method, path, headers=None, body=None, timeout=20):
         hdrs["Content-Type"] = "application/json"
     r = urllib.request.Request(url, data=data, method=method, headers=hdrs)
     try:
-        with urllib.request.urlopen(r, timeout=timeout) as resp:
+        with OPENER.open(r, timeout=timeout) as resp:
             return resp.status, resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", "replace")
-    except Exception as e:  # noqa: BLE001 - network/other, surface as sentinel
+    except Exception as e:  # noqa: BLE001 - transport failure is a case failure
         return -1, f"__ERR__ {type(e).__name__}: {e}"
 
 
 def as_json(text):
     try:
         return json.loads(text)
-    except Exception:
+    except ValueError:
         return None
-
-
-def is_detail_only(obj):
-    return isinstance(obj, dict) and set(obj.keys()) == {"detail"}
-
-
-def rationalized_reason(name, ds, fs):
-    """The recorded reason if (name, ds, fs) is a known-accepted status pair, else None.
-
-    Matching is on the exact pair, so a case only stays accepted while it keeps
-    diverging in precisely the way that was reviewed.
-    """
-    known = RATIONALIZED_STATUS.get(name)
-    if known and (ds, fs) == (known[0], known[1]):
-        return known[2]
-    return None
-
-
-def form_login(base, user, pw):
-    data = urllib.parse.urlencode({"username": user, "password": pw}).encode()
-    r = urllib.request.Request(base + "/api/auth/login", data=data, method="POST")
-    with urllib.request.urlopen(r, timeout=20) as resp:
-        return json.loads(resp.read())["access_token"]
-
-
-# Cases that create a REAL row on both backends (valid title, slug merely
-# slugified) — they mutate the store and must only run against an isolated
-# sandbox DB (--allow-mutations), never prod. Everything else here is
-# non-mutating: reads, 401s (rejected before logic), validation-rejects (422/400
-# before insert), and PUT/DELETE to a guaranteed-absent id (touches 0 rows).
-MUTATING = {"art.create.badSlug", "art.create.upperSlug", "art.create.dashSlug"}
-
-# Status differences that have been looked at and consciously accepted, keyed by
-# case name -> (dawn_status, fast_status, why). Same class of decision as the
-# error-*message* rationalization below (both sides refuse, the frontend keys on
-# status, neither reaches a user), except the divergence is in the status itself,
-# so the body/message rules can't express it.
-#
-# The pair is pinned, not muted: the registry records one specific known state,
-# and any drift away from it — Dawn tightened to 422, or it starts 500ing —
-# fails the case as a normal STATUS_MISMATCH again. Muting by name would have
-# bought a green run at the price of the next real regression on that route
-# going unnoticed, which is the failure mode this whole script exists to catch.
-RATIONALIZED_STATUS = {
-    name: (
-        404,
-        422,
-        "FastAPI declares path as a required Query -> 422 before the handler; "
-        'Dawn\'s qparam() defaults a missing param to "" and falls through to '
-        "the normal not-found path. Both refuse, no mutation, frontend keys on "
-        "status. Not worth touching production Dawn for.",
-    )
-    for name in (
-        "fm.sign.noPath",
-        "fm.content.noPath",
-        "fm.preview.noPath",
-        "fm.download.noPath",
-    )
-}
 
 
 def build_cases(token, content_page_id):
@@ -161,122 +80,84 @@ def build_cases(token, content_page_id):
     GARBAGE = {"Authorization": "Bearer not.a.jwt"}
     LONGQ = "x" * 500
 
-    # (name, method, path, headers, body, compare)
-    #   compare: "full" (status+scrubbed body) | "status" (status only) | "write"
-    #   "write": like full, but 2xx is treated as an unexpected mutation and flagged.
     C = []
 
-    def add(*a):
-        C.append(a)
+    def add(name, method, path, headers=None, body=None, kind="read"):
+        """kind: read | reject (must not answer 2xx) | create (drops row stamps)"""
+        C.append((name, method, path, headers, body, kind))
 
     # ---- public reads: pagination bounds ----
-    add("articles.ok", "GET", "/api/articles", None, None, "full")
-    add("articles.page0", "GET", "/api/articles?page=0", None, None, "full")
-    add("articles.pageNeg", "GET", "/api/articles?page=-1", None, None, "full")
-    add("articles.pageHuge", "GET", "/api/articles?page=99999", None, None, "full")
-    add("articles.size0", "GET", "/api/articles?size=0", None, None, "full")
-    add("articles.sizeBig", "GET", "/api/articles?size=1000", None, None, "full")
-    add("articles.sizeNeg", "GET", "/api/articles?size=-5", None, None, "full")
-    add("articles.pageNaN", "GET", "/api/articles?page=abc", None, None, "full")
-    add("articles.sizeNaN", "GET", "/api/articles?size=abc", None, None, "full")
+    add("articles.ok", "GET", "/api/articles")
+    add("articles.page0", "GET", "/api/articles?page=0")
+    add("articles.pageNeg", "GET", "/api/articles?page=-1")
+    add("articles.pageHuge", "GET", "/api/articles?page=99999")
+    add("articles.size0", "GET", "/api/articles?size=0")
+    add("articles.sizeBig", "GET", "/api/articles?size=1000")
+    add("articles.sizeNeg", "GET", "/api/articles?size=-5")
+    add("articles.pageNaN", "GET", "/api/articles?page=abc")
+    add("articles.sizeNaN", "GET", "/api/articles?size=abc")
     # ---- public reads: not-found ----
-    add(
-        "articles.slug404",
-        "GET",
-        "/api/articles/zzz-does-not-exist",
-        None,
-        None,
-        "full",
-    )
-    add("pages.slug404", "GET", "/api/pages/zzz-nope", None, None, "full")
-    add("pages.slug404.arts", "GET", "/api/pages/zzz-nope/articles", None, None, "full")
-    add("tags.slug404", "GET", "/api/tags/zzz-nope", None, None, "full")
-    add("viz.slug404", "GET", "/api/viz/zzz-nope", None, None, "full")
-    # ---- list-page article pagination bounds ----
-    add("pageArts.page0", "GET", "/api/pages/blog/articles?page=0", None, None, "full")
-    add(
-        "pageArts.sizeBig",
-        "GET",
-        "/api/pages/blog/articles?size=999",
-        None,
-        None,
-        "full",
-    )
+    add("articles.slug404", "GET", "/api/articles/zzz-does-not-exist")
+    add("pages.slug404", "GET", "/api/pages/zzz-nope")
+    add("pages.slug404.arts", "GET", "/api/pages/zzz-nope/articles")
+    add("tags.slug404", "GET", "/api/tags/zzz-nope")
+    add("viz.slug404", "GET", "/api/viz/zzz-nope")
+    # ---- list-page article pagination bounds (fixture page slug: blog) ----
+    add("pageArts.page0", "GET", "/api/pages/blog/articles?page=0")
+    add("pageArts.sizeBig", "GET", "/api/pages/blog/articles?size=999")
     # ---- search: missing/empty/clamp/injection/cjk/long ----
-    add("search.noQ", "GET", "/api/search", None, None, "full")
-    add("search.emptyQ", "GET", "/api/search?q=", None, None, "full")
-    add("search.sizeClamp", "GET", "/api/search?q=dawn&size=999", None, None, "full")
-    add("search.page0", "GET", "/api/search?q=dawn&page=0", None, None, "full")
+    add("search.noQ", "GET", "/api/search")
+    add("search.emptyQ", "GET", "/api/search?q=")
+    add("search.sizeClamp", "GET", "/api/search?q=dawn&size=999")
+    add("search.page0", "GET", "/api/search?q=dawn&page=0")
     add(
         "search.xss",
         "GET",
         "/api/search?" + urllib.parse.urlencode({"q": "<script>alert(1)</script>"}),
-        None,
-        None,
-        "full",
     )
     add(
         "search.sqli",
         "GET",
         "/api/search?" + urllib.parse.urlencode({"q": "' OR '1'='1"}),
-        None,
-        None,
-        "full",
     )
+    add("search.cjk", "GET", "/api/search?" + urllib.parse.urlencode({"q": "编译器"}))
+    add("search.long", "GET", "/api/search?" + urllib.parse.urlencode({"q": LONGQ}))
     add(
-        "search.cjk",
-        "GET",
-        "/api/search?" + urllib.parse.urlencode({"q": "编译器"}),
-        None,
-        None,
-        "full",
-    )
-    add(
-        "search.long",
-        "GET",
-        "/api/search?" + urllib.parse.urlencode({"q": LONGQ}),
-        None,
-        None,
-        "full",
-    )
-    add(
-        "search.pct",
-        "GET",
-        "/api/search?" + urllib.parse.urlencode({"q": "100% done"}),
-        None,
-        None,
-        "full",
+        "search.pct", "GET", "/api/search?" + urllib.parse.urlencode({"q": "100% done"})
     )
     # ---- routing / method ----
-    add("route.404", "GET", "/api/nope-endpoint", None, None, "full")
-    add("method.health.POST", "POST", "/api/health", None, None, "full")
-    add("method.nav.DELETE", "DELETE", "/api/pages/nav", None, None, "full")
+    add("route.404", "GET", "/api/nope-endpoint")
+    add("method.health.POST", "POST", "/api/health")
+    add("method.nav.DELETE", "DELETE", "/api/pages/nav")
 
     # ---- auth failures ----
-    add("me.noTok", "GET", "/api/auth/me", None, None, "full")
-    add("me.garbage", "GET", "/api/auth/me", GARBAGE, None, "full")
-    add("me.badsig", "GET", "/api/auth/me", BADSIG, None, "full")
-    add("me.ok", "GET", "/api/auth/me", AUTH, None, "full")
-    # (login is application/x-www-form-urlencoded, not JSON; the happy/interop
-    #  path is covered by the auth knife, so no JSON-body login case here.)
-    add("settings.noTok", "GET", "/api/settings", None, None, "full")
-    add("monitor.noTok", "GET", "/api/monitor", None, None, "full")
-    add("articles.admin.noTok", "GET", "/api/articles/admin", None, None, "full")
-    add("pages.admin.noTok", "GET", "/api/pages/admin", None, None, "full")
-    add("tags.admin.noTok", "GET", "/api/tags/admin", None, None, "full")
-    add("viz.list.noTok", "GET", "/api/viz", None, None, "full")
+    add("me.noTok", "GET", "/api/auth/me")
+    add("me.garbage", "GET", "/api/auth/me", GARBAGE)
+    add("me.badsig", "GET", "/api/auth/me", BADSIG)
+    add("me.ok", "GET", "/api/auth/me", AUTH)
+    # (login is form-encoded, not JSON; the happy path is covered by contract_run
+    #  logging in before any of this runs.)
+    add("settings.noTok", "GET", "/api/settings")
+    add("monitor.noTok", "GET", "/api/monitor")
+    add("articles.admin.noTok", "GET", "/api/articles/admin")
+    add("pages.admin.noTok", "GET", "/api/pages/admin")
+    add("tags.admin.noTok", "GET", "/api/tags/admin")
+    add("viz.list.noTok", "GET", "/api/viz")
 
-    # ---- write REJECTION paths (must never mutate) ----
-    add("art.create.noTok", "POST", "/api/articles", None, {"title": "x"}, "write")
-    add("art.create.empty", "POST", "/api/articles", AUTH, {}, "write")
-    add("art.create.blank", "POST", "/api/articles", AUTH, {"title": "   "}, "write")
+    # ---- write REJECTION paths (must never answer 2xx) ----
+    add("art.create.noTok", "POST", "/api/articles", None, {"title": "x"}, "reject")
+    add("art.create.empty", "POST", "/api/articles", AUTH, {}, "reject")
+    add("art.create.blank", "POST", "/api/articles", AUTH, {"title": "   "}, "reject")
+    # These three DO create a row. In the differential era they were skipped by
+    # default (they mutated the shared production store); against a disposable
+    # fixture they are the only cases that pin slugify's answer, so they run.
     add(
         "art.create.badSlug",
         "POST",
         "/api/articles",
         AUTH,
         {"title": "x", "slug": "BAD SLUG"},
-        "write",
+        "create",
     )
     add(
         "art.create.upperSlug",
@@ -284,7 +165,7 @@ def build_cases(token, content_page_id):
         "/api/articles",
         AUTH,
         {"title": "x", "slug": "Upper"},
-        "write",
+        "create",
     )
     add(
         "art.create.dashSlug",
@@ -292,30 +173,34 @@ def build_cases(token, content_page_id):
         "/api/articles",
         AUTH,
         {"title": "x", "slug": "-lead"},
-        "write",
+        "create",
     )
     add(
         "art.create.pageMissing",
         "POST",
         "/api/articles",
         AUTH,
-        {"title": "x", "slug": "bad slug so also rejected", "page_id": 99999999},
-        "write",
+        {"title": "x", "slug": "no-such-page", "page_id": 99999999},
+        "reject",
     )
     add(
-        "art.update.404", "PUT", "/api/articles/99999999", AUTH, {"title": "x"}, "write"
+        "art.update.404",
+        "PUT",
+        "/api/articles/99999999",
+        AUTH,
+        {"title": "x"},
+        "reject",
     )
-    add("art.delete.404", "DELETE", "/api/articles/99999999", AUTH, None, "write")
+    add("art.delete.404", "DELETE", "/api/articles/99999999", AUTH, None, "reject")
     if content_page_id is not None:
-        # page_id points at a content page (not article_list) -> 400; slug also
-        # invalid as a belt-and-suspenders guard so nothing can insert.
+        # page_id points at a content page, not an article_list -> 400
         add(
             "art.create.pageWrongType",
             "POST",
             "/api/articles",
             AUTH,
-            {"title": "x", "slug": "BAD SLUG", "page_id": content_page_id},
-            "write",
+            {"title": "x", "slug": "wrong-page-type", "page_id": content_page_id},
+            "reject",
         )
 
     add(
@@ -324,76 +209,72 @@ def build_cases(token, content_page_id):
         "/api/viz",
         None,
         {"slug": "x", "name": "n", "source": "s"},
-        "write",
+        "reject",
     )
-    add("viz.create.empty", "POST", "/api/viz", AUTH, {}, "write")
+    add("viz.create.empty", "POST", "/api/viz", AUTH, {}, "reject")
     add(
         "viz.create.badSlug",
         "POST",
         "/api/viz",
         AUTH,
         {"slug": "BAD SLUG", "name": "n", "source": "s"},
-        "write",
+        "reject",
     )
-    add("viz.update.404", "PUT", "/api/viz/99999999", AUTH, {"name": "n"}, "write")
-    add("viz.delete.404", "DELETE", "/api/viz/99999999", AUTH, None, "write")
+    add("viz.update.404", "PUT", "/api/viz/99999999", AUTH, {"name": "n"}, "reject")
+    add("viz.delete.404", "DELETE", "/api/viz/99999999", AUTH, None, "reject")
 
-    add("page.create.noTok", "POST", "/api/pages", None, {"title": "x"}, "write")
-    add("page.create.empty", "POST", "/api/pages", AUTH, {}, "write")
-    add("page.update.404", "PUT", "/api/pages/99999999", AUTH, {"title": "x"}, "write")
-    add("page.delete.404", "DELETE", "/api/pages/99999999", AUTH, None, "write")
-    # reorder with only non-existent ids -> no existing row is touched; both
-    # backends return the unchanged admin list. Compared as a plain no-op diff.
+    add("page.create.noTok", "POST", "/api/pages", None, {"title": "x"}, "reject")
+    add("page.create.empty", "POST", "/api/pages", AUTH, {}, "reject")
+    add("page.update.404", "PUT", "/api/pages/99999999", AUTH, {"title": "x"}, "reject")
+    add("page.delete.404", "DELETE", "/api/pages/99999999", AUTH, None, "reject")
+    # reorder with only non-existent ids -> no existing row is touched; the
+    # backend returns the unchanged admin list. Compared as a plain no-op.
     add(
         "page.reorder.ghosts",
         "POST",
         "/api/pages/reorder",
         AUTH,
         {"ids": [99999999, 88888888]},
-        "full",
     )
 
-    add("tag.merge.noTok", "POST", "/api/tags/merge", None, {}, "write")
-    add("tag.cleanup.noTok", "POST", "/api/tags/cleanup", None, {}, "write")
-    add("tag.update.404", "PUT", "/api/tags/99999999", AUTH, {"name": "x"}, "write")
-    add("tag.delete.404", "DELETE", "/api/tags/99999999", AUTH, None, "write")
+    add("tag.merge.noTok", "POST", "/api/tags/merge", None, {}, "reject")
+    add("tag.cleanup.noTok", "POST", "/api/tags/cleanup", None, {}, "reject")
+    add("tag.update.404", "PUT", "/api/tags/99999999", AUTH, {"name": "x"}, "reject")
+    add("tag.delete.404", "DELETE", "/api/tags/99999999", AUTH, None, "reject")
 
-    # ---- fm reads (safe) + fm write rejections ----
-    add("fm.list.noTok", "GET", "/api/fm", None, None, "full")
-    add("fm.list.ok", "GET", "/api/fm?path=qiniu://", AUTH, None, "full")
+    # ---- fm reads (no object storage touched) + fm write rejections ----
+    add("fm.list.noTok", "GET", "/api/fm")
+    add("fm.list.ok", "GET", "/api/fm?path=qiniu://", AUTH)
+    # filter，不是 q——发 q 会被忽略成「列全部」，测不到过滤路径。
     add(
         "fm.search.ok",
         "GET",
-        # filter，不是 q——发 q 会被忽略成「列全部」，测不到过滤路径。
         "/api/fm/search?" + urllib.parse.urlencode({"filter": "x"}),
         AUTH,
-        None,
-        "full",
     )
     add(
         "fm.sign.404",
         "GET",
         "/api/fm/sign?" + urllib.parse.urlencode({"path": "qiniu://zzz-nope.bin"}),
         AUTH,
-        None,
-        "full",
     )
-    # path omitted entirely: the two backends disagree on the status here (see
-    # RATIONALIZED_STATUS). Reads, so safe against the live store.
-    add("fm.sign.noPath", "GET", "/api/fm/sign", AUTH, None, "full")
-    add("fm.content.noPath", "GET", "/api/fm/content", AUTH, None, "full")
-    add("fm.preview.noPath", "GET", "/api/fm/preview", AUTH, None, "full")
-    add("fm.download.noPath", "GET", "/api/fm/download", AUTH, None, "full")
-    add(
-        "fm.stats.ok", "GET", "/api/fm/stats", AUTH, None, "status"
-    )  # live qiniu usage -> status-only
+    # path omitted entirely. Dawn's qparam() defaults a missing param to "" and
+    # falls through to the not-found path (404); FastAPI declares it a required
+    # Query and answers 422 before the handler. The differential harness carried
+    # a written rationale for accepting that pair; the golden simply records the
+    # backend under test, so pointing this script at FastAPI will show these four
+    # as diffs. Both refuse, nothing mutates, the frontend keys on status.
+    add("fm.sign.noPath", "GET", "/api/fm/sign", AUTH)
+    add("fm.content.noPath", "GET", "/api/fm/content", AUTH)
+    add("fm.preview.noPath", "GET", "/api/fm/preview", AUTH)
+    add("fm.download.noPath", "GET", "/api/fm/download", AUTH)
     add(
         "fm.delete.noTok",
         "POST",
         "/api/fm/delete",
         None,
         {"path": "qiniu://x"},
-        "write",
+        "reject",
     )
     add(
         "fm.mkfolder.noTok",
@@ -401,7 +282,7 @@ def build_cases(token, content_page_id):
         "/api/fm/create-folder",
         None,
         {"path": "qiniu://x"},
-        "write",
+        "reject",
     )
     add(
         "fm.uptok.noTok",
@@ -409,139 +290,65 @@ def build_cases(token, content_page_id):
         "/api/fm/upload-token",
         None,
         {"path": "qiniu://x"},
-        "write",
+        "reject",
     )
     return C
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dawn", required=True)
-    ap.add_argument("--fast", required=True)
-    ap.add_argument("--verbose", action="store_true")
-    ap.add_argument(
-        "--allow-mutations",
-        action="store_true",
-        help="run row-creating cases too — ONLY against a sandbox DB, never prod",
-    )
+    ap.add_argument("--base", required=True)
+    ap.add_argument("--record", action="store_true")
     args = ap.parse_args()
+    B = args.base
 
     token = os.environ.get("TOKEN", "").strip()
     if not token:
         print("FATAL: TOKEN env not set (admin JWT required)", file=sys.stderr)
         return 2
 
-    # find a content-type page id (for the wrong-page-type rejection case)
+    g = Golden("edge", record=args.record)
+    if g.fatal:
+        return g.finish()
+
+    # a content-type page id, for the wrong-page-type rejection case
     content_page_id = None
-    st, body = req(
-        args.fast, "GET", "/api/pages/admin", {"Authorization": f"Bearer {token}"}
-    )
+    _, body = req(B, "GET", "/api/pages/admin", {"Authorization": f"Bearer {token}"})
     j = as_json(body)
     if isinstance(j, list):
         for p in j:
-            if p.get("type") == "content" or p.get("kind") == "content":
+            if p.get("type") == "content":
                 content_page_id = p.get("id")
                 break
 
-    cases = build_cases(token, content_page_id)
-
-    tallies = {
-        "EXACT": 0,
-        "SCRUBBED": 0,
-        "ACCEPTED": 0,
-        "RATIONALIZED": 0,
-        "STATUS_MISMATCH": 0,
-        "BODY_MISMATCH": 0,
-        "UNEXPECTED_WRITE": 0,
-        "ERROR": 0,
-    }
-    problems = []
-    skipped = 0
-
-    for name, method, path, headers, body, mode in cases:
-        if name in MUTATING and not args.allow_mutations:
-            skipped += 1
-            continue
-        ds, dt = req(args.dawn, method, path, headers, body)
-        fs, ft = req(args.fast, method, path, headers, body)
-        dj, fj = as_json(dt), as_json(ft)
-
-        if ds == -1 or fs == -1:
-            verdict = "ERROR"
-        elif mode == "status":
-            verdict = "EXACT" if ds == fs else "STATUS_MISMATCH"
+    bad_writes = []
+    for name, method, path, headers, body, kind in build_cases(token, content_page_id):
+        st, text = req(B, method, path, headers, body)
+        parsed = as_json(text)
+        value = {"method": method, "path": path, "status": st}
+        if kind == "create" and isinstance(parsed, dict):
+            value["body"] = {k: v for k, v in parsed.items() if k not in ROW_STAMPS}
         else:
-            if ds != fs:
-                verdict = "STATUS_MISMATCH"
-            elif dt == ft:
-                verdict = "EXACT"
-            elif dj is not None and fj is not None and scrub(dj) == scrub(fj):
-                verdict = "SCRUBBED"
-            elif is_detail_only(dj) and is_detail_only(fj):
-                # same status, both {"detail": ...} but different message -> the
-                # accepted error-message rationalization (frontend keys on status)
-                verdict = "ACCEPTED"
-            else:
-                verdict = "BODY_MISMATCH"
-            # a write path that returned 2xx means it may have mutated: flag hard
-            if mode == "write" and 200 <= (ds if ds > 0 else 0) < 300:
-                verdict = "UNEXPECTED_WRITE"
-            if mode == "write" and 200 <= (fs if fs > 0 else 0) < 300:
-                verdict = "UNEXPECTED_WRITE"
+            value["body"] = parsed if parsed is not None else text
+        g.case(name, value)
+        # A rejection path that answers 2xx is a failure even while recording —
+        # otherwise --record would quietly bake a broken guard into the contract.
+        if kind == "reject" and 200 <= st < 300:
+            bad_writes.append(
+                f"{name}: {method} {path} answered {st} on a rejection path"
+            )
 
-        reason = None
-        if verdict == "STATUS_MISMATCH":
-            reason = rationalized_reason(name, ds, fs)
-            if reason:
-                verdict = "RATIONALIZED"
+    # /api/fm/stats reports live bucket usage from qiniu; with no credentials the
+    # HMAC signer refuses an empty key, and with credentials the number moves.
+    g.skip("fm.stats.ok", "needs QINIU_* credentials (live bucket usage)")
 
-        tallies[verdict] += 1
-        flag = verdict in (
-            "STATUS_MISMATCH",
-            "BODY_MISMATCH",
-            "UNEXPECTED_WRITE",
-            "ERROR",
-        )
-        mark = {
-            "EXACT": "OK ",
-            "SCRUBBED": "OK~",
-            "ACCEPTED": "OK≈",
-            "RATIONALIZED": "OK≈",
-        }.get(verdict, "XX ")
-        line = f"{mark} {verdict:16s} {name:24s} {method:6s} {path[:48]:48s} dawn={ds} fast={fs}"
-        # rationalized cases print unconditionally, with the recorded reason: an
-        # accepted divergence a reader never sees is indistinguishable from one
-        # nobody decided on.
-        if flag or reason or args.verbose:
-            print(line)
-        if reason:
-            print(f"      why: {reason}")
-        if flag:
-            problems.append((name, method, path, ds, dt, fs, ft, verdict))
-
-    print("\n=== tally ===")
-    for k, v in tallies.items():
-        print(f"  {k:18s} {v}")
-    if skipped:
-        print(
-            f"  {'SKIPPED(mut)':18s} {skipped}  (row-creating; run with --allow-mutations on a sandbox)"
-        )
-
-    if problems:
-        print("\n=== problem detail ===")
-        for name, method, path, ds, dt, fs, ft, verdict in problems:
-            print(f"\n[{verdict}] {name}  {method} {path}")
-            print(f"  dawn  {ds}: {dt[:400]}")
-            print(f"  fast  {fs}: {ft[:400]}")
-
-    hard = (
-        tallies["STATUS_MISMATCH"]
-        + tallies["BODY_MISMATCH"]
-        + tallies["UNEXPECTED_WRITE"]
-        + tallies["ERROR"]
-    )
-    print(f"\nhard mismatches: {hard}")
-    return 1 if hard else 0
+    rc = g.finish()
+    if bad_writes:
+        print("\n=== UNEXPECTED WRITE ===")
+        for line in bad_writes:
+            print(f"  {line}")
+        rc = rc or 1
+    return rc
 
 
 if __name__ == "__main__":

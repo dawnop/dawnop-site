@@ -1,52 +1,110 @@
 #!/usr/bin/env python3
-"""WebDAV contract test: Dawn (:8001/dav) vs FastAPI (:8000/dav).
+"""WebDAV contract: the methods that do not need object storage, on a golden.
 
-Both backends share the same SQLite DB + qiniu bucket, so a write on one is
-visible to the other. This harness exploits that for cross-verification:
+What this can and cannot cover — stated up front, because the honest boundary
+is the interesting part of this file:
 
-  * READ methods (OPTIONS, PROPFIND, HEAD, GET) are issued to *both* backends
-    against the same path and diffed (headers / XML structure / bytes).
-  * WRITE methods (PUT, MKCOL, MOVE, COPY, DELETE) are executed on ONE backend,
-    then the *other* is asked to read the result back — proving the two agree
-    on the shared path<->key representation in both directions.
+  covered (metadata lives in SQLite, so the fixture owns the answer)
+      OPTIONS, the Basic-auth challenge, PROPFIND (root/dir/file/404/Depth
+      0+1/non-ASCII/X-Dav-Prefix), HEAD, MKCOL (+ duplicate, + missing parent,
+      + root), MOVE of a file and of a directory (rename only rewrites `path`),
+      the MOVE guards (no Destination / onto self / Overwrite: F), COPY of an
+      empty directory, LOCK/UNLOCK, DELETE of a directory, DELETE of the root.
 
-Everything happens under an isolated `dav-test/` prefix and is cleaned up at
-the end (and defensively at the start), so production files are never touched.
+  NOT covered (the request reaches qiniu, and a contract run has no credentials)
+      GET (fetches bytes), PUT (uploads bytes), COPY of a file (really copies
+      the object), DELETE of a file (deletes the object). All four are named
+      skips, listed in golden/webdav.json and printed by every run. Measured,
+      not assumed: with empty credentials each one panics in the HMAC signer
+      ("Empty key") and answers 500 — a state not worth recording.
 
-Auth is HTTP Basic (admin creds), passed via env so they never touch the file.
+That leaves the PUT->GET byte round trip, which was the differential harness's
+centrepiece, outside CI. It is the one part of this API that cannot be tested
+without a bucket; pretending otherwise by asserting only OPTIONS would be worse
+than saying so.
 
-Usage (on the server, both ports localhost):
-    DAV_USER=... DAV_PASS=... python3 contract_webdav.py \
-        --dawn http://127.0.0.1:8001 --fast http://127.0.0.1:8000
+Normally driven by contract_run.py. Standalone:
+
+    DAV_USER=... DAV_PASS=... python3 contract_webdav.py --base http://127.0.0.1:18001
 """
 
 import argparse
 import base64
-import hashlib
 import os
 import re
 import sys
 import urllib.error
 import urllib.request
 
-PREFIX = "dav-test"  # isolated sandbox subtree
+from contract_golden import Golden
 
-PASS = "\033[32mPASS\033[0m"
-FAIL = "\033[31mFAIL\033[0m"
-INFO = "\033[36m----\033[0m"
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-fails = 0
+# Response headers worth pinning (Date/Server are transport noise).
+KEEP_HEADERS = (
+    "dav",
+    "allow",
+    "content-type",
+    "content-length",
+    "etag",
+    "last-modified",
+    "lock-token",
+    "www-authenticate",
+)
+
+# Two wall-clock sites, both found by recording the file twice and diffing —
+# neither was predicted by reading the code:
+#
+#  1. Rows this script creates (MKCOL/MOVE/COPY under dav-test/) get their
+#     created_at/updated_at from SQLite's CURRENT_TIMESTAMP, so their
+#     <getlastmodified>/<creationdate> move every run. The virtual root is the
+#     same story with no row at all: webdav.dawn stamps it with now().
+#     Timestamps on *fixture* rows stay pinned — that is the distinction the
+#     href test below draws, and it is why the normalization is per-response
+#     rather than a blanket "drop all dates".
+#  2. LOCK mints a fresh uuid per grant (a fake lock; nothing tracks it), in the
+#     body AND in the Lock-Token header.
+#
+# Both are replaced, not deleted: a response that stopped carrying the property
+# still fails.
+_RESPONSE = re.compile(r"<D:response>.*?</D:response>", re.S)
+_HREF = re.compile(r"<D:href>(.*?)</D:href>", re.S)
+_STAMP = re.compile(
+    r"<D:(getlastmodified|creationdate)>[^<]*</D:(?:getlastmodified|creationdate)>"
+)
+_LOCKTOKEN = re.compile(r"opaquelocktoken:[0-9a-fA-F-]+")
+
+PREFIX = "dav-test"  # sandbox subtree for the mutating cases
+
+
+def _run_created(href: str) -> bool:
+    """True for the virtual root and for anything this run created under dav-test/."""
+    h = href.strip()
+    if h in ("/", "/dav/"):
+        return True
+    rel = h[len("/dav/") :] if h.startswith("/dav/") else h.lstrip("/")
+    return rel.split("/", 1)[0] == PREFIX
+
+
+def normalize(text: str) -> str:
+    def per_response(m):
+        block = m.group(0)
+        href = _HREF.search(block)
+        if href and _run_created(href.group(1)):
+            return _STAMP.sub(r"<D:\1>WALL-CLOCK</D:\1>", block)
+        return block
+
+    return _LOCKTOKEN.sub("opaquelocktoken:<uuid>", _RESPONSE.sub(per_response, text))
 
 
 def dav(base, method, path, auth, headers=None, body=None, timeout=30):
-    """One WebDAV request. Returns (status, resp_headers_dict, body_bytes)."""
-    url = base + path
     hdrs = dict(headers or {})
-    hdrs["Authorization"] = "Basic " + base64.b64encode(auth.encode()).decode()
+    if auth is not None:
+        hdrs["Authorization"] = "Basic " + base64.b64encode(auth.encode()).decode()
     data = body if isinstance(body, (bytes, type(None))) else body.encode()
-    r = urllib.request.Request(url, data=data, method=method, headers=hdrs)
+    r = urllib.request.Request(base + path, data=data, method=method, headers=hdrs)
     try:
-        with urllib.request.urlopen(r, timeout=timeout) as resp:
+        with OPENER.open(r, timeout=timeout) as resp:
             return (
                 resp.status,
                 {k.lower(): v for k, v in resp.headers.items()},
@@ -54,232 +112,223 @@ def dav(base, method, path, auth, headers=None, body=None, timeout=30):
             )
     except urllib.error.HTTPError as e:
         return e.code, {k.lower(): v for k, v in (e.headers or {}).items()}, e.read()
+    except Exception as e:  # noqa: BLE001
+        return -1, {}, repr(e).encode()
 
 
-def check(label, cond, detail=""):
-    global fails
-    mark = PASS if cond else FAIL
-    if not cond:
-        fails += 1
-    print(f"  [{mark}] {label}" + (f"  {detail}" if detail and not cond else ""))
-    return cond
+def facts(xml: str) -> dict:
+    """The PROPFIND properties a reader actually checks, pulled out for legible diffs.
 
+    The raw XML is recorded too — this is the readable half of the same fact.
+    """
 
-def hrefs(xml):
-    """Extract <d:href> texts (namespace-agnostic), normalized."""
-    return sorted(
-        re.findall(r"<(?:\w+:)?href>\s*(.*?)\s*</(?:\w+:)?href>", xml, re.I | re.S)
-    )
-
-
-def displaynames(xml):
-    return sorted(
-        re.findall(
-            r"<(?:\w+:)?displayname>\s*(.*?)\s*</(?:\w+:)?displayname>",
-            xml,
-            re.I | re.S,
+    def all_of(tag):
+        return re.findall(
+            rf"<(?:\w+:)?{tag}>\s*(.*?)\s*</(?:\w+:)?{tag}>", xml, re.I | re.S
         )
-    )
 
-
-def cleanup(base, auth):
-    dav(base, "DELETE", f"/dav/{PREFIX}", auth)
-    dav(base, "DELETE", f"/dav/{PREFIX}/", auth)
+    return {
+        "hrefs": all_of("href"),
+        "displaynames": all_of("displayname"),
+        "contentlengths": all_of("getcontentlength"),
+        "contenttypes": all_of("getcontenttype"),
+        "lastmodified": all_of("getlastmodified"),
+        "collections": xml.count("<D:collection/>"),
+        "statuses": sorted(set(all_of("status"))),
+    }
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dawn", required=True)
-    ap.add_argument("--fast", required=True)
+    ap.add_argument("--base", required=True)
+    ap.add_argument("--record", action="store_true")
     args = ap.parse_args()
-    user = os.environ["DAV_USER"]
-    pw = os.environ["DAV_PASS"]
+    B = args.base
+    user, pw = os.environ.get("DAV_USER"), os.environ.get("DAV_PASS")
+    if not user or not pw:
+        print("FATAL: DAV_USER/DAV_PASS not set", file=sys.stderr)
+        return 2
     auth = f"{user}:{pw}"
-    D, F = args.dawn, args.fast
 
-    # defensive pre-clean on both (either could hold a stale sandbox row)
-    cleanup(D, auth)
-    cleanup(F, auth)
+    g = Golden("webdav", record=args.record)
+    if g.fatal:
+        return g.finish()
 
-    print(f"\n{INFO} 1. OPTIONS (read, both) — DAV class + Allow")
-    for name, base in (("dawn", D), ("fast", F)):
-        st, h, _ = dav(base, "OPTIONS", "/dav/", auth)
-        dav_hdr = h.get("dav", "")
-        allow = h.get("allow", "")
-        print(f"    {name}: {st}  DAV='{dav_hdr}'  Allow='{allow}'")
-    stD, hD, _ = dav(D, "OPTIONS", "/dav/", auth)
-    stF, hF, _ = dav(F, "OPTIONS", "/dav/", auth)
-    check("OPTIONS status 200 both", stD == 200 and stF == 200, f"{stD}/{stF}")
-    check(
-        "DAV header advertises class 1,2 (dawn)",
-        "1" in hD.get("dav", "") and "2" in hD.get("dav", ""),
-        hD.get("dav"),
-    )
-    check(
-        "DAV header advertises class 1,2 (fast)",
-        "1" in hF.get("dav", "") and "2" in hF.get("dav", ""),
-        hF.get("dav"),
-    )
+    def case(name, method, path, headers=None, body=None, creds=auth, with_facts=False):
+        st, hd, raw = dav(B, method, path, creds, headers, body)
+        text = normalize(raw.decode("utf-8", "replace"))
+        value = {
+            "method": method,
+            "path": path,
+            "status": st,
+            "headers": {
+                k: _LOCKTOKEN.sub("opaquelocktoken:<uuid>", hd[k])
+                for k in KEEP_HEADERS
+                if k in hd
+            },
+            "body": text,
+        }
+        if with_facts:
+            value["facts"] = facts(text)
+        g.case(name, value)
+        return st, hd
 
-    print(f"\n{INFO} 2. Auth: no creds -> 401 (both)")
-    for name, base in (("dawn", D), ("fast", F)):
-        url = base + "/dav/"
-        r = urllib.request.Request(url, method="PROPFIND", headers={"Depth": "0"})
-        try:
-            with urllib.request.urlopen(r, timeout=10) as resp:
-                st = resp.status
-                wa = resp.headers.get("WWW-Authenticate", "")
-        except urllib.error.HTTPError as e:
-            st = e.code
-            wa = (e.headers or {}).get("WWW-Authenticate", "")
-        check(f"unauth PROPFIND 401 ({name})", st == 401, str(st))
-        check(f"WWW-Authenticate: Basic ({name})", "Basic" in (wa or ""), wa)
-
-    print(f"\n{INFO} 3. MKCOL on Dawn -> both see the dir via PROPFIND")
-    st, _, _ = dav(D, "MKCOL", f"/dav/{PREFIX}", auth)
-    check("MKCOL sandbox 201 (dawn)", st == 201, str(st))
-    st, _, _ = dav(D, "MKCOL", f"/dav/{PREFIX}/sub", auth)
-    check("MKCOL sub 201 (dawn)", st == 201, str(st))
-    # FastAPI must now list the sub dir
-    st, _, body = dav(F, "PROPFIND", f"/dav/{PREFIX}", auth, {"Depth": "1"})
-    hf = hrefs(body.decode("utf-8", "replace"))
-    check("PROPFIND on fast sees dawn-made dir 200", st == 207, str(st))
-    check("fast lists /dav/dav-test/sub", any("sub" in h for h in hf), str(hf))
-
-    print(f"\n{INFO} 4. PUT binary on Dawn -> GET byte-exact on BOTH")
-    # all-byte-values payload to stress the latin-1 round trip
-    payload = bytes(range(256)) * 8  # 2048 bytes, every byte value
-    sha = hashlib.sha256(payload).hexdigest()
-    st, _, _ = dav(
-        D,
-        "PUT",
-        f"/dav/{PREFIX}/blob.bin",
-        auth,
-        {"Content-Type": "application/octet-stream"},
-        payload,
-    )
-    check("PUT blob 201/204 (dawn)", st in (201, 204), str(st))
-    for name, base in (("dawn", D), ("fast", F)):
-        st, h, got = dav(base, "GET", f"/dav/{PREFIX}/blob.bin", auth)
-        ok = st == 200 and hashlib.sha256(got).hexdigest() == sha
-        check(
-            f"GET blob byte-exact ({name})",
-            ok,
-            f"st={st} len={len(got)} sha={hashlib.sha256(got).hexdigest()[:12]} want={sha[:12]}",
-        )
-
-    print(f"\n{INFO} 5. PROPFIND file props parity (dawn vs fast, same path)")
-    stD, _, bD = dav(D, "PROPFIND", f"/dav/{PREFIX}/blob.bin", auth, {"Depth": "0"})
-    stF, _, bF = dav(F, "PROPFIND", f"/dav/{PREFIX}/blob.bin", auth, {"Depth": "0"})
-    xD, xF = bD.decode("utf-8", "replace"), bF.decode("utf-8", "replace")
-    check("PROPFIND file 207 both", stD == 207 and stF == 207, f"{stD}/{stF}")
-    check("hrefs identical", hrefs(xD) == hrefs(xF), f"{hrefs(xD)} vs {hrefs(xF)}")
-    # getcontentlength should both report 2048
-    lenD = re.search(r"getcontentlength>\s*(\d+)", xD)
-    lenF = re.search(r"getcontentlength>\s*(\d+)", xF)
-    check(
-        "getcontentlength both 2048",
-        bool(lenD) and bool(lenF) and lenD.group(1) == "2048" == lenF.group(1),
-        f"{lenD and lenD.group(1)} vs {lenF and lenF.group(1)}",
+    print("\n== OPTIONS / auth challenge ==")
+    case("options.root", "OPTIONS", "/dav/")
+    case("options.file", "OPTIONS", "/dav/docs/notes.txt")
+    case("propfind.unauth", "PROPFIND", "/dav/", {"Depth": "0"}, creds=None)
+    case(
+        "propfind.badpass",
+        "PROPFIND",
+        "/dav/",
+        {"Depth": "0"},
+        creds=f"{user}:wrong-password",
     )
 
-    print(f"\n{INFO} 6. MOVE (rename) on Dawn -> fast sees new, not old")
-    st, _, _ = dav(
-        D,
+    print("\n== PROPFIND (fixture tree) ==")
+    case("propfind.root.d0", "PROPFIND", "/dav/", {"Depth": "0"}, with_facts=True)
+    case("propfind.root.d1", "PROPFIND", "/dav/", {"Depth": "1"}, with_facts=True)
+    case("propfind.dir.d1", "PROPFIND", "/dav/docs", {"Depth": "1"}, with_facts=True)
+    case(
+        "propfind.file.d0",
+        "PROPFIND",
+        "/dav/docs/notes.txt",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    # non-ASCII path: href must come back percent-encoded
+    case(
+        "propfind.unicode",
+        "PROPFIND",
+        "/dav/%E5%9B%BE%E7%89%87",
+        {"Depth": "1"},
+        with_facts=True,
+    )
+    case("propfind.404", "PROPFIND", "/dav/zzz-nope", {"Depth": "0"})
+    # the subdomain vhost sends X-Dav-Prefix: / so hrefs come back as /foo.txt
+    # rather than /dav/foo.txt (otherwise dav.dawnop.com serves /dav/dav/...)
+    case(
+        "propfind.prefix",
+        "PROPFIND",
+        "/dav/",
+        {"Depth": "1", "X-Dav-Prefix": "/"},
+        with_facts=True,
+    )
+
+    print("\n== HEAD (metadata only, no bytes) ==")
+    case("head.file", "HEAD", "/dav/docs/notes.txt")
+    case("head.dir", "HEAD", "/dav/docs")
+    case("head.404", "HEAD", "/dav/zzz-nope.bin")
+
+    print("\n== MKCOL ==")
+    case("mkcol.new", "MKCOL", f"/dav/{PREFIX}")
+    case("mkcol.dup", "MKCOL", f"/dav/{PREFIX}")
+    case("mkcol.sub", "MKCOL", f"/dav/{PREFIX}/sub")
+    case("mkcol.noparent", "MKCOL", "/dav/zzz-missing-parent/child")
+    case("mkcol.root", "MKCOL", "/dav/")
+    case(
+        "propfind.sandbox",
+        "PROPFIND",
+        f"/dav/{PREFIX}",
+        {"Depth": "1"},
+        with_facts=True,
+    )
+
+    print("\n== MOVE (path rewrite only — no object is touched) ==")
+    case("move.nodest", "MOVE", f"/dav/{PREFIX}/sub")
+    case(
+        "move.self", "MOVE", f"/dav/{PREFIX}/sub", {"Destination": f"/dav/{PREFIX}/sub"}
+    )
+    case(
+        "move.intoself",
         "MOVE",
-        f"/dav/{PREFIX}/blob.bin",
-        auth,
-        {"Destination": f"/dav/{PREFIX}/moved.bin"},
+        f"/dav/{PREFIX}",
+        {"Destination": f"/dav/{PREFIX}/deeper"},
     )
-    check("MOVE 201/204 (dawn)", st in (201, 204), str(st))
-    st, _, got = dav(F, "GET", f"/dav/{PREFIX}/moved.bin", auth)
-    check(
-        "fast GET moved.bin 200 + byte-exact",
-        st == 200 and hashlib.sha256(got).hexdigest() == sha,
-        str(st),
+    case("move.404", "MOVE", "/dav/zzz-nope", {"Destination": f"/dav/{PREFIX}/x"})
+    case(
+        "move.dir",
+        "MOVE",
+        f"/dav/{PREFIX}/sub",
+        {"Destination": f"/dav/{PREFIX}/renamed"},
     )
-    st, _, _ = dav(F, "GET", f"/dav/{PREFIX}/blob.bin", auth)
-    check("fast GET old blob.bin 404", st == 404, str(st))
+    case(
+        "move.file",
+        "MOVE",
+        "/dav/docs/notes.txt",
+        {"Destination": f"/dav/{PREFIX}/renamed/notes.txt"},
+    )
+    case("propfind.moved.old", "PROPFIND", "/dav/docs/notes.txt", {"Depth": "0"})
+    case(
+        "propfind.moved.new",
+        "PROPFIND",
+        f"/dav/{PREFIX}/renamed",
+        {"Depth": "1"},
+        with_facts=True,
+    )
+    case(
+        "move.overwriteF",
+        "MOVE",
+        f"/dav/{PREFIX}/renamed",
+        {"Destination": "/dav/docs", "Overwrite": "F"},
+    )
 
-    print(f"\n{INFO} 7. COPY on Dawn -> both see two copies, same bytes")
-    st, _, _ = dav(
-        D,
+    print("\n== COPY (empty collection: nothing to copy in the bucket) ==")
+    case(
+        "copy.emptydir",
         "COPY",
-        f"/dav/{PREFIX}/moved.bin",
-        auth,
-        {"Destination": f"/dav/{PREFIX}/copy.bin"},
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/copied"},
     )
-    check("COPY 201/204 (dawn)", st in (201, 204), str(st))
-    for name, base in (("dawn", D), ("fast", F)):
-        s1, _, g1 = dav(base, "GET", f"/dav/{PREFIX}/moved.bin", auth)
-        s2, _, g2 = dav(base, "GET", f"/dav/{PREFIX}/copy.bin", auth)
-        ok = (
-            s1 == 200
-            and s2 == 200
-            and hashlib.sha256(g1).hexdigest() == sha
-            and hashlib.sha256(g2).hexdigest() == sha
-        )
-        check(f"both copies present + byte-exact ({name})", ok, f"{s1}/{s2}")
+    case(
+        "propfind.copied",
+        "PROPFIND",
+        f"/dav/{PREFIX}/copied",
+        {"Depth": "0"},
+        with_facts=True,
+    )
 
-    print(f"\n{INFO} 8. LOCK/UNLOCK (fake lock) grant on Dawn")
+    print("\n== LOCK / UNLOCK (fake lock: always granted, never tracked) ==")
     lockbody = (
         '<?xml version="1.0"?><d:lockinfo xmlns:d="DAV:">'
         "<d:lockscope><d:exclusive/></d:lockscope>"
         "<d:locktype><d:write/></d:locktype></d:lockinfo>"
     )
-    st, h, body = dav(
-        D,
+    _, hd = case(
+        "lock.grant",
         "LOCK",
-        f"/dav/{PREFIX}/moved.bin",
-        auth,
+        f"/dav/{PREFIX}/renamed",
         {"Content-Type": "application/xml"},
         lockbody,
     )
-    tok = h.get("lock-token", "")
-    check("LOCK 200 (dawn)", st == 200, str(st))
-    check(
-        "Lock-Token issued",
-        "opaquelocktoken" in (tok + body.decode("utf-8", "replace")),
-        tok,
-    )
-    if tok:
-        st, _, _ = dav(
-            D, "UNLOCK", f"/dav/{PREFIX}/moved.bin", auth, {"Lock-Token": tok}
-        )
-        check("UNLOCK 204 (dawn)", st == 204, str(st))
-
-    print(f"\n{INFO} 9. Cross-direction: PUT on FAST -> GET on Dawn")
-    txt = "跨方向验证 cross-check ✓\n".encode()
-    st, _, _ = dav(
-        F,
-        "PUT",
-        f"/dav/{PREFIX}/fromfast.txt",
-        auth,
-        {"Content-Type": "text/plain; charset=utf-8"},
-        txt,
-    )
-    check("PUT fromfast (fast) 201/204", st in (201, 204), str(st))
-    st, _, got = dav(D, "GET", f"/dav/{PREFIX}/fromfast.txt", auth)
-    check(
-        "dawn GET fromfast byte-exact",
-        st == 200 and got == txt,
-        f"st={st} {got[:20]!r}",
+    token = hd.get("lock-token", "")
+    case(
+        "unlock",
+        "UNLOCK",
+        f"/dav/{PREFIX}/renamed",
+        {"Lock-Token": token or "opaquelocktoken:x"},
     )
 
-    print(f"\n{INFO} 10. DELETE recursive on Dawn -> both see gone")
-    st, _, _ = dav(D, "DELETE", f"/dav/{PREFIX}", auth)
-    check("DELETE sandbox 204 (dawn)", st == 204, str(st))
-    for name, base in (("dawn", D), ("fast", F)):
-        st, _, _ = dav(base, "PROPFIND", f"/dav/{PREFIX}", auth, {"Depth": "0"})
-        check(f"sandbox gone 404 ({name})", st == 404, str(st))
+    print("\n== DELETE ==")
+    case("delete.root", "DELETE", "/dav/")
+    case("delete.404", "DELETE", "/dav/zzz-nope")
+    case("delete.dir", "DELETE", f"/dav/{PREFIX}")
+    case("propfind.deleted", "PROPFIND", f"/dav/{PREFIX}", {"Depth": "0"})
 
-    # final defensive cleanup
-    cleanup(D, auth)
-    cleanup(F, auth)
+    # The four that need a bucket. Measured with empty credentials: each panics
+    # in the qiniu HMAC signer and answers 500, so there is nothing here worth
+    # recording — only a note that this is where the coverage stops.
+    g.skip("get.file", "GET streams object bytes — needs QINIU_* credentials")
+    g.skip("put.new", "PUT uploads object bytes — needs QINIU_* credentials")
+    g.skip(
+        "copy.file", "COPY of a file duplicates the object — needs QINIU_* credentials"
+    )
+    g.skip(
+        "delete.file", "DELETE of a file removes the object — needs QINIU_* credentials"
+    )
 
-    print(f"\n=== {'ALL PASS' if fails == 0 else str(fails) + ' FAIL'} ===")
-    sys.exit(1 if fails else 0)
+    return g.finish()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

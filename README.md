@@ -23,8 +23,9 @@
 > **后端跑在 Dawn 上。** 站点最初是 FastAPI + SQLAlchemy 写的；M6 用 strangler-fig 的方式
 > 逐个路由迁到 [dawn-lang](https://github.com/dawnop/dawn-lang)（同作者的自制语言），
 > 2026-07 全量切流，uvicorn 已退役。`backend/` 里的 FastAPI 实现**仍在维护**：它是紧急
-> 回滚目标（`backend-dawn/deploy/rollback-to-fastapi.sh`），也是 `backend-dawn/scripts/contract_*.py`
-> 对拍 Dawn 实现时的参照。两套的测试都在 CI 里跑。
+> 回滚目标（`backend-dawn/deploy/rollback-to-fastapi.sh`）。两套的测试都在 CI 里跑，
+> 另有 `backend-dawn/scripts/contract_*.py`：一套钉住线上 JSON/XML 形状的 golden 契约，
+> 两个后端都可以拿它验（`--base` 指哪个就验哪个）。
 
 ## 目录结构
 

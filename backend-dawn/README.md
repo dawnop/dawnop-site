@@ -4,7 +4,10 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 与 `backend/`（FastAPI，现为冻结的回滚目标 + 契约参照）**共用同一 SQLite 库与七牛空间**；
 迁移期 nginx 按路由灰度切流，**2026-07 已全量切到 Dawn**（uvicorn 退役、只回滚时拉起）。
 `/api` 全部端点已迁移并与 FastAPI 逐字段对拍一致；曾留待 M6.5 的 **WebDAV**（`src/webdav.dawn`）
-与 `POST /api/fm/upload`（multipart 代理上传，`src/multipart.dawn`）**也已落地**，`contract_webdav.py` 全周期对拍通过。
+与 `POST /api/fm/upload`（multipart 代理上传，`src/multipart.dawn`）**也已落地**。
+
+契约由 `scripts/golden/*.json` 钉住（`scripts/contract_run.py`，CI 每次 push 都跑）：
+播种固定 fixture → 起后端 → 151 条响应逐字节比对；6 条需七牛密钥的用例是具名 skip。
 
 ## 依赖与构建
 

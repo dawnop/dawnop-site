@@ -1,0 +1,1675 @@
+{
+ "_note": "Recorded by contract_read.py --record via contract_run.py. Do not hand-edit: re-record and review the diff.",
+ "_env": {
+  "fixture": "7303e1f8fd74dcd4",
+  "tz": "UTC",
+  "search_backend": "like",
+  "qiniu_configured": false
+ },
+ "skipped": {
+  "fm.stats": "needs QINIU_* credentials (live bucket usage)"
+ },
+ "cases": {
+  "health": {
+   "path": "/api/health",
+   "status": 200,
+   "body": {
+    "status": "ok",
+    "app": "dawnop-site"
+   }
+  },
+  "articles.list": {
+   "path": "/api/articles?page=1&size=20",
+   "status": 200,
+   "body": {
+    "total": 9,
+    "page": 1,
+    "size": 20,
+    "items": [
+     {
+      "id": 1,
+      "title": "Dawn 自举：从 Kotlin 到 selfhost",
+      "slug": "dawn-selfhost",
+      "summary": "编译器自己编译自己的那一天。",
+      "published": true,
+      "page_id": 3,
+      "word_count": 48,
+      "views": 0,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 2,
+        "name": "编译器",
+        "slug": "bianyiqi"
+       }
+      ],
+      "created_at": "2026-01-10T08:00:00",
+      "updated_at": "2026-01-10T08:00:00"
+     },
+     {
+      "id": 2,
+      "title": "LaTeX in Markdown",
+      "slug": "latex-in-markdown",
+      "summary": "KaTeX renders $x^2$ inline.",
+      "published": true,
+      "page_id": 3,
+      "word_count": 20,
+      "views": 0,
+      "tags": [
+       {
+        "id": 3,
+        "name": "latex",
+        "slug": "latex"
+       }
+      ],
+      "created_at": "2026-01-09T08:00:00",
+      "updated_at": "2026-01-09T08:00:00"
+     },
+     {
+      "id": 3,
+      "title": "后端重写记",
+      "slug": "backend-rewrite",
+      "summary": "把 FastAPI 后端换成自制语言。",
+      "published": true,
+      "page_id": 3,
+      "word_count": 42,
+      "views": 0,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       }
+      ],
+      "created_at": "2026-01-08T08:00:00",
+      "updated_at": "2026-01-08T08:00:00"
+     },
+     {
+      "id": 4,
+      "title": "Golden tests, a field guide",
+      "slug": "golden-tests",
+      "summary": "Record, then diff.",
+      "published": true,
+      "page_id": 3,
+      "word_count": 60,
+      "views": 0,
+      "tags": [],
+      "created_at": "2026-01-07T08:00:00",
+      "updated_at": "2026-01-07T08:00:00"
+     },
+     {
+      "id": 5,
+      "title": "Unicode 边界：emoji 🌅 与代理对",
+      "slug": "unicode-edges",
+      "summary": "BMP 之外的字符会分叉。",
+      "published": true,
+      "page_id": 5,
+      "word_count": 22,
+      "views": 0,
+      "tags": [
+       {
+        "id": 2,
+        "name": "编译器",
+        "slug": "bianyiqi"
+       }
+      ],
+      "created_at": "2026-01-06T08:00:00",
+      "updated_at": "2026-01-06T08:00:00"
+     },
+     {
+      "id": 6,
+      "title": "Pagination probe",
+      "slug": "pagination-probe",
+      "summary": "Page two must not be empty.",
+      "published": true,
+      "page_id": 3,
+      "word_count": 1,
+      "views": 0,
+      "tags": [],
+      "created_at": "2026-01-05T08:00:00",
+      "updated_at": "2026-01-05T08:00:00"
+     },
+     {
+      "id": 8,
+      "title": "Empty body",
+      "slug": "empty-body",
+      "summary": "Only a summary here.",
+      "published": true,
+      "page_id": null,
+      "word_count": 0,
+      "views": 0,
+      "tags": [],
+      "created_at": "2026-01-03T08:00:00",
+      "updated_at": "2026-01-03T08:00:00"
+     },
+     {
+      "id": 9,
+      "title": "Markdown zoo",
+      "slug": "markdown-zoo",
+      "summary": "结构大杂烩。",
+      "published": true,
+      "page_id": 5,
+      "word_count": 70,
+      "views": 0,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 3,
+        "name": "latex",
+        "slug": "latex"
+       }
+      ],
+      "created_at": "2026-01-02T08:00:00",
+      "updated_at": "2026-01-02T08:00:00"
+     },
+     {
+      "id": 10,
+      "title": "Zzz last",
+      "slug": "zzz-last",
+      "summary": "Sorted last by design.",
+      "published": true,
+      "page_id": null,
+      "word_count": 3,
+      "views": 0,
+      "tags": [],
+      "created_at": "2026-01-01T08:00:00",
+      "updated_at": "2026-01-01T08:00:00"
+     }
+    ]
+   }
+  },
+  "articles.p2": {
+   "path": "/api/articles?page=2&size=5",
+   "status": 200,
+   "body": {
+    "total": 9,
+    "page": 2,
+    "size": 5,
+    "items": [
+     {
+      "id": 6,
+      "title": "Pagination probe",
+      "slug": "pagination-probe",
+      "summary": "Page two must not be empty.",
+      "published": true,
+      "page_id": 3,
+      "word_count": 1,
+      "views": 0,
+      "tags": [],
+      "created_at": "2026-01-05T08:00:00",
+      "updated_at": "2026-01-05T08:00:00"
+     },
+     {
+      "id": 8,
+      "title": "Empty body",
+      "slug": "empty-body",
+      "summary": "Only a summary here.",
+      "published": true,
+      "page_id": null,
+      "word_count": 0,
+      "views": 0,
+      "tags": [],
+      "created_at": "2026-01-03T08:00:00",
+      "updated_at": "2026-01-03T08:00:00"
+     },
+     {
+      "id": 9,
+      "title": "Markdown zoo",
+      "slug": "markdown-zoo",
+      "summary": "结构大杂烩。",
+      "published": true,
+      "page_id": 5,
+      "word_count": 70,
+      "views": 0,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 3,
+        "name": "latex",
+        "slug": "latex"
+       }
+      ],
+      "created_at": "2026-01-02T08:00:00",
+      "updated_at": "2026-01-02T08:00:00"
+     },
+     {
+      "id": 10,
+      "title": "Zzz last",
+      "slug": "zzz-last",
+      "summary": "Sorted last by design.",
+      "published": true,
+      "page_id": null,
+      "word_count": 3,
+      "views": 0,
+      "tags": [],
+      "created_at": "2026-01-01T08:00:00",
+      "updated_at": "2026-01-01T08:00:00"
+     }
+    ]
+   }
+  },
+  "articles.tag": {
+   "path": "/api/articles?page=1&size=10&tag=dawn",
+   "status": 200,
+   "body": {
+    "total": 3,
+    "page": 1,
+    "size": 10,
+    "items": [
+     {
+      "id": 1,
+      "title": "Dawn 自举：从 Kotlin 到 selfhost",
+      "slug": "dawn-selfhost",
+      "summary": "编译器自己编译自己的那一天。",
+      "published": true,
+      "page_id": 3,
+      "word_count": 48,
+      "views": 0,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 2,
+        "name": "编译器",
+        "slug": "bianyiqi"
+       }
+      ],
+      "created_at": "2026-01-10T08:00:00",
+      "updated_at": "2026-01-10T08:00:00"
+     },
+     {
+      "id": 3,
+      "title": "后端重写记",
+      "slug": "backend-rewrite",
+      "summary": "把 FastAPI 后端换成自制语言。",
+      "published": true,
+      "page_id": 3,
+      "word_count": 42,
+      "views": 0,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       }
+      ],
+      "created_at": "2026-01-08T08:00:00",
+      "updated_at": "2026-01-08T08:00:00"
+     },
+     {
+      "id": 9,
+      "title": "Markdown zoo",
+      "slug": "markdown-zoo",
+      "summary": "结构大杂烩。",
+      "published": true,
+      "page_id": 5,
+      "word_count": 70,
+      "views": 0,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 3,
+        "name": "latex",
+        "slug": "latex"
+       }
+      ],
+      "created_at": "2026-01-02T08:00:00",
+      "updated_at": "2026-01-02T08:00:00"
+     }
+    ]
+   }
+  },
+  "pages.nav": {
+   "path": "/api/pages/nav",
+   "status": 200,
+   "body": [
+    {
+     "id": 1,
+     "title": "首页",
+     "slug": "home",
+     "type": "builtin",
+     "path": "/",
+     "nav_order": -1000
+    },
+    {
+     "id": 3,
+     "title": "博客",
+     "slug": "blog",
+     "type": "article_list",
+     "path": "/p/blog",
+     "nav_order": 10
+    },
+    {
+     "id": 4,
+     "title": "关于",
+     "slug": "about",
+     "type": "content",
+     "path": "/p/about",
+     "nav_order": 20
+    }
+   ]
+  },
+  "tags.list": {
+   "path": "/api/tags",
+   "status": 200,
+   "body": [
+    {
+     "id": 1,
+     "name": "dawn",
+     "slug": "dawn",
+     "count": 3
+    },
+    {
+     "id": 3,
+     "name": "latex",
+     "slug": "latex",
+     "count": 2
+    },
+    {
+     "id": 2,
+     "name": "编译器",
+     "slug": "bianyiqi",
+     "count": 2
+    }
+   ]
+  },
+  "search[dawn]": {
+   "path": "/api/search?q=dawn&size=10",
+   "status": 200,
+   "body": {
+    "total": 2,
+    "page": 1,
+    "size": 10,
+    "query": "dawn",
+    "items": [
+     {
+      "id": 1,
+      "title": "Dawn 自举：从 Kotlin 到 selfhost",
+      "slug": "dawn-selfhost",
+      "created_at": "2026-01-10T08:00:00",
+      "word_count": 48,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 2,
+        "name": "编译器",
+        "slug": "bianyiqi"
+       }
+      ],
+      "title_html": "<mark>Dawn</mark> 自举：从 Kotlin 到 selfhost",
+      "excerpt_html": "<mark>Dawn</mark> 的自举分三步走：先用 Kotlin 写出编译器，再用 <mark>Dawn</mark> 重写一遍，最后让 <mark>Dawn</mark> 版编译自己。 每一代产物都要和上一代逐字节对拍。"
+     },
+     {
+      "id": 9,
+      "title": "Markdown zoo",
+      "slug": "markdown-zoo",
+      "created_at": "2026-01-02T08:00:00",
+      "word_count": 70,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 3,
+        "name": "latex",
+        "slug": "latex"
+       }
+      ],
+      "title_html": "Markdown zoo",
+      "excerpt_html": "…满了 markdown 结构，用来钉住摘要的 strip md 窗口： 行内代码 、图片 、 链接 <mark>dawn</mark>-lang 和 引用。 LaTeX 行内公式 $a^2 + b^2 = c^2$ 也在这里。"
+     }
+    ]
+   }
+  },
+  "search[后端]": {
+   "path": "/api/search?q=%E5%90%8E%E7%AB%AF&size=10",
+   "status": 200,
+   "body": {
+    "total": 1,
+    "page": 1,
+    "size": 10,
+    "query": "后端",
+    "items": [
+     {
+      "id": 3,
+      "title": "后端重写记",
+      "slug": "backend-rewrite",
+      "created_at": "2026-01-08T08:00:00",
+      "word_count": 42,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       }
+      ],
+      "title_html": "<mark>后端</mark>重写记",
+      "excerpt_html": "<mark>后端</mark>重写不是重写语言，是重写信任。每条路由迁移后都要和旧<mark>后端</mark>对拍，直到 100 条用例全绿才敢切流。"
+     }
+    ]
+   }
+  },
+  "search[latex]": {
+   "path": "/api/search?q=latex&size=10",
+   "status": 200,
+   "body": {
+    "total": 2,
+    "page": 1,
+    "size": 10,
+    "query": "latex",
+    "items": [
+     {
+      "id": 2,
+      "title": "LaTeX in Markdown",
+      "slug": "latex-in-markdown",
+      "created_at": "2026-01-09T08:00:00",
+      "word_count": 20,
+      "tags": [
+       {
+        "id": 3,
+        "name": "latex",
+        "slug": "latex"
+       }
+      ],
+      "title_html": "<mark>LaTeX</mark> in Markdown",
+      "excerpt_html": "<mark>LaTeX</mark> inside markdown needs a plugin. We use KaTeX, not MathJax: $$\\int 0^1 x^2 \\,dx = \\frac{1}{3}$$"
+     },
+     {
+      "id": 9,
+      "title": "Markdown zoo",
+      "slug": "markdown-zoo",
+      "created_at": "2026-01-02T08:00:00",
+      "word_count": 70,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 3,
+        "name": "latex",
+        "slug": "latex"
+       }
+      ],
+      "title_html": "Markdown zoo",
+      "excerpt_html": "…来钉住摘要的 strip md 窗口： 行内代码 、图片 、 链接 dawn-lang 和 引用。 <mark>LaTeX</mark> 行内公式 $a^2 + b^2 = c^2$ 也在这里。"
+     }
+    ]
+   }
+  },
+  "search[zzz-no-such-term]": {
+   "path": "/api/search?q=zzz-no-such-term&size=10",
+   "status": 200,
+   "body": {
+    "total": 0,
+    "page": 1,
+    "size": 10,
+    "query": "zzz-no-such-term",
+    "items": []
+   }
+  },
+  "search[a]": {
+   "path": "/api/search?q=a&size=10",
+   "status": 200,
+   "body": {
+    "total": 9,
+    "page": 1,
+    "size": 10,
+    "query": "a",
+    "items": [
+     {
+      "id": 1,
+      "title": "Dawn 自举：从 Kotlin 到 selfhost",
+      "slug": "dawn-selfhost",
+      "created_at": "2026-01-10T08:00:00",
+      "word_count": 48,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 2,
+        "name": "编译器",
+        "slug": "bianyiqi"
+       }
+      ],
+      "title_html": "D<mark>a</mark>wn 自举：从 Kotlin 到 selfhost",
+      "excerpt_html": "D<mark>a</mark>wn 的自举分三步走：先用 Kotlin 写出编译器，再用 D<mark>a</mark>wn 重写一遍，最后让 D<mark>a</mark>wn 版编译自己。 每一代产物都要和上一代逐字节对拍。"
+     },
+     {
+      "id": 2,
+      "title": "LaTeX in Markdown",
+      "slug": "latex-in-markdown",
+      "created_at": "2026-01-09T08:00:00",
+      "word_count": 20,
+      "tags": [
+       {
+        "id": 3,
+        "name": "latex",
+        "slug": "latex"
+       }
+      ],
+      "title_html": "L<mark>a</mark>TeX in M<mark>a</mark>rkdown",
+      "excerpt_html": "L<mark>a</mark>TeX inside m<mark>a</mark>rkdown needs <mark>a</mark> plugin. We use K<mark>a</mark>TeX, not M<mark>a</mark>thJ<mark>a</mark>x: $$\\int 0^1 x^2 \\,dx = \\fr<mark>a</mark>c{1}{3}$$"
+     },
+     {
+      "id": 3,
+      "title": "后端重写记",
+      "slug": "backend-rewrite",
+      "created_at": "2026-01-08T08:00:00",
+      "word_count": 42,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       }
+      ],
+      "title_html": "后端重写记",
+      "excerpt_html": "后端重写不是重写语言，是重写信任。每条路由迁移后都要和旧后端对拍，直到 100 条用例全绿才敢切流。"
+     },
+     {
+      "id": 4,
+      "title": "Golden tests, a field guide",
+      "slug": "golden-tests",
+      "created_at": "2026-01-07T08:00:00",
+      "word_count": 60,
+      "tags": [],
+      "title_html": "Golden tests, <mark>a</mark> field guide",
+      "excerpt_html": "… the wire, not the intent. 搜索转义用例的原料就在这一行：&lt;script <mark>a</mark>lert(1)&lt;/script —— 服务端要把它转义后 再包 &lt;m<mark>a</mark>rk ，前端才敢 v-html。 单引号 &#x27; 也留一个，给 SQL 注入用例当靶子。"
+     },
+     {
+      "id": 5,
+      "title": "Unicode 边界：emoji 🌅 与代理对",
+      "slug": "unicode-edges",
+      "created_at": "2026-01-06T08:00:00",
+      "word_count": 22,
+      "tags": [
+       {
+        "id": 2,
+        "name": "编译器",
+        "slug": "bianyiqi"
+       }
+      ],
+      "title_html": "Unicode 边界：emoji 🌅 与代理对",
+      "excerpt_html": "CJK 在 BMP 内不分叉，只有 emoji 🌅 和 <mark>a</mark>str<mark>a</mark>l 平面才会走代理对路径。"
+     },
+     {
+      "id": 6,
+      "title": "Pagination probe",
+      "slug": "pagination-probe",
+      "created_at": "2026-01-05T08:00:00",
+      "word_count": 1,
+      "tags": [],
+      "title_html": "P<mark>a</mark>gin<mark>a</mark>tion probe",
+      "excerpt_html": "Filler."
+     },
+     {
+      "id": 8,
+      "title": "Empty body",
+      "slug": "empty-body",
+      "created_at": "2026-01-03T08:00:00",
+      "word_count": 0,
+      "tags": [],
+      "title_html": "Empty body",
+      "excerpt_html": "Only <mark>a</mark> summ<mark>a</mark>ry here."
+     },
+     {
+      "id": 9,
+      "title": "Markdown zoo",
+      "slug": "markdown-zoo",
+      "created_at": "2026-01-02T08:00:00",
+      "word_count": 70,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 3,
+        "name": "latex",
+        "slug": "latex"
+       }
+      ],
+      "title_html": "M<mark>a</mark>rkdown zoo",
+      "excerpt_html": "M<mark>a</mark>rkdown zoo 正文里放满了 m<mark>a</mark>rkdown 结构，用来钉住摘要的 strip md 窗口： 行内代码 、图片 、 链接 d<mark>a</mark>wn-l<mark>a</mark>ng 和 引用。 L<mark>a</mark>TeX 行内公式 $<mark>a</mark>^2 + b^2 = c^2$ 也在这里。"
+     },
+     {
+      "id": 10,
+      "title": "Zzz last",
+      "slug": "zzz-last",
+      "created_at": "2026-01-01T08:00:00",
+      "word_count": 3,
+      "tags": [],
+      "title_html": "Zzz l<mark>a</mark>st",
+      "excerpt_html": "The t<mark>a</mark>il <mark>a</mark>rticle."
+     }
+    ]
+   }
+  },
+  "article:dawn-selfhost": {
+   "path": "/api/articles/dawn-selfhost",
+   "status": 200,
+   "body": {
+    "id": 1,
+    "title": "Dawn 自举：从 Kotlin 到 selfhost",
+    "slug": "dawn-selfhost",
+    "summary": "编译器自己编译自己的那一天。",
+    "content": "Dawn 的自举分三步走：先用 Kotlin 写出编译器，再用 Dawn 重写一遍，最后让 Dawn 版编译自己。\n\n每一代产物都要和上一代逐字节对拍。\n",
+    "published": true,
+    "auto_title": false,
+    "page_id": 3,
+    "word_count": 48,
+    "views": 1,
+    "tags": [
+     {
+      "id": 1,
+      "name": "dawn",
+      "slug": "dawn"
+     },
+     {
+      "id": 2,
+      "name": "编译器",
+      "slug": "bianyiqi"
+     }
+    ],
+    "created_at": "2026-01-10T08:00:00",
+    "updated_at": "2026-01-10T08:00:00"
+   }
+  },
+  "article:latex-in-markdown": {
+   "path": "/api/articles/latex-in-markdown",
+   "status": 200,
+   "body": {
+    "id": 2,
+    "title": "LaTeX in Markdown",
+    "slug": "latex-in-markdown",
+    "summary": "KaTeX renders $x^2$ inline.",
+    "content": "LaTeX inside markdown needs a plugin. We use KaTeX, not MathJax:\n\n$$\\int_0^1 x^2 \\,dx = \\frac{1}{3}$$\n",
+    "published": true,
+    "auto_title": false,
+    "page_id": 3,
+    "word_count": 20,
+    "views": 1,
+    "tags": [
+     {
+      "id": 3,
+      "name": "latex",
+      "slug": "latex"
+     }
+    ],
+    "created_at": "2026-01-09T08:00:00",
+    "updated_at": "2026-01-09T08:00:00"
+   }
+  },
+  "article:backend-rewrite": {
+   "path": "/api/articles/backend-rewrite",
+   "status": 200,
+   "body": {
+    "id": 3,
+    "title": "后端重写记",
+    "slug": "backend-rewrite",
+    "summary": "把 FastAPI 后端换成自制语言。",
+    "content": "后端重写不是重写语言，是重写信任。每条路由迁移后都要和旧后端对拍，直到 100 条用例全绿才敢切流。\n",
+    "published": true,
+    "auto_title": false,
+    "page_id": 3,
+    "word_count": 42,
+    "views": 1,
+    "tags": [
+     {
+      "id": 1,
+      "name": "dawn",
+      "slug": "dawn"
+     }
+    ],
+    "created_at": "2026-01-08T08:00:00",
+    "updated_at": "2026-01-08T08:00:00"
+   }
+  },
+  "article:golden-tests": {
+   "path": "/api/articles/golden-tests",
+   "status": 200,
+   "body": {
+    "id": 4,
+    "title": "Golden tests, a field guide",
+    "slug": "golden-tests",
+    "summary": "Record, then diff.",
+    "content": "Golden tests pin the wire, not the intent.\n\n搜索转义用例的原料就在这一行：<script>alert(1)</script> —— 服务端要把它转义后\n再包 <mark>，前端才敢 v-html。\n\n单引号 ' 也留一个，给 SQL 注入用例当靶子。\n",
+    "published": true,
+    "auto_title": false,
+    "page_id": 3,
+    "word_count": 60,
+    "views": 1,
+    "tags": [],
+    "created_at": "2026-01-07T08:00:00",
+    "updated_at": "2026-01-07T08:00:00"
+   }
+  },
+  "article:unicode-edges": {
+   "path": "/api/articles/unicode-edges",
+   "status": 200,
+   "body": {
+    "id": 5,
+    "title": "Unicode 边界：emoji 🌅 与代理对",
+    "slug": "unicode-edges",
+    "summary": "BMP 之外的字符会分叉。",
+    "content": "CJK 在 BMP 内不分叉，只有 emoji 🌅 和 astral 平面才会走代理对路径。\n",
+    "published": true,
+    "auto_title": false,
+    "page_id": 5,
+    "word_count": 22,
+    "views": 1,
+    "tags": [
+     {
+      "id": 2,
+      "name": "编译器",
+      "slug": "bianyiqi"
+     }
+    ],
+    "created_at": "2026-01-06T08:00:00",
+    "updated_at": "2026-01-06T08:00:00"
+   }
+  },
+  "article:pagination-probe": {
+   "path": "/api/articles/pagination-probe",
+   "status": 200,
+   "body": {
+    "id": 6,
+    "title": "Pagination probe",
+    "slug": "pagination-probe",
+    "summary": "Page two must not be empty.",
+    "content": "Filler.\n",
+    "published": true,
+    "auto_title": false,
+    "page_id": 3,
+    "word_count": 1,
+    "views": 1,
+    "tags": [],
+    "created_at": "2026-01-05T08:00:00",
+    "updated_at": "2026-01-05T08:00:00"
+   }
+  },
+  "article:empty-body": {
+   "path": "/api/articles/empty-body",
+   "status": 200,
+   "body": {
+    "id": 8,
+    "title": "Empty body",
+    "slug": "empty-body",
+    "summary": "Only a summary here.",
+    "content": "",
+    "published": true,
+    "auto_title": false,
+    "page_id": null,
+    "word_count": 0,
+    "views": 1,
+    "tags": [],
+    "created_at": "2026-01-03T08:00:00",
+    "updated_at": "2026-01-03T08:00:00"
+   }
+  },
+  "article:markdown-zoo": {
+   "path": "/api/articles/markdown-zoo",
+   "status": 200,
+   "body": {
+    "id": 9,
+    "title": "Markdown zoo",
+    "slug": "markdown-zoo",
+    "summary": "结构大杂烩。",
+    "content": "# Markdown zoo\n\n正文里放满了 markdown 结构，用来钉住摘要的 strip_md 窗口：\n\n```python\ndef f(x):\n    return x * 100\n```\n\n行内代码 `simple_query()`、图片 ![封面](https://example.invalid/c.png)、\n链接 [dawn-lang](https://example.invalid/dawn) 和 > 引用。\n\nLaTeX 行内公式 $a^2 + b^2 = c^2$ 也在这里。\n",
+    "published": true,
+    "auto_title": true,
+    "page_id": 5,
+    "word_count": 70,
+    "views": 1,
+    "tags": [
+     {
+      "id": 1,
+      "name": "dawn",
+      "slug": "dawn"
+     },
+     {
+      "id": 3,
+      "name": "latex",
+      "slug": "latex"
+     }
+    ],
+    "created_at": "2026-01-02T08:00:00",
+    "updated_at": "2026-01-02T08:00:00"
+   }
+  },
+  "page:home": {
+   "path": "/api/pages/home",
+   "status": 404,
+   "body": {
+    "detail": "页面不存在"
+   }
+  },
+  "page.articles:home": {
+   "path": "/api/pages/home/articles?page=1&size=10",
+   "status": 200,
+   "body": {
+    "total": 0,
+    "page": 1,
+    "size": 10,
+    "items": []
+   }
+  },
+  "page:blog": {
+   "path": "/api/pages/blog",
+   "status": 200,
+   "body": {
+    "id": 3,
+    "title": "博客",
+    "slug": "blog",
+    "type": "article_list",
+    "path": "/p/blog",
+    "description": "所有文章",
+    "content": "",
+    "auto_title": false,
+    "nav_visible": true,
+    "nav_order": 10,
+    "created_at": "2026-01-01T00:00:00",
+    "updated_at": "2026-01-01T00:00:00"
+   }
+  },
+  "page.articles:blog": {
+   "path": "/api/pages/blog/articles?page=1&size=10",
+   "status": 200,
+   "body": {
+    "total": 5,
+    "page": 1,
+    "size": 10,
+    "items": [
+     {
+      "id": 1,
+      "title": "Dawn 自举：从 Kotlin 到 selfhost",
+      "slug": "dawn-selfhost",
+      "summary": "编译器自己编译自己的那一天。",
+      "published": true,
+      "page_id": 3,
+      "word_count": 48,
+      "views": 1,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 2,
+        "name": "编译器",
+        "slug": "bianyiqi"
+       }
+      ],
+      "created_at": "2026-01-10T08:00:00",
+      "updated_at": "2026-01-10T08:00:00"
+     },
+     {
+      "id": 2,
+      "title": "LaTeX in Markdown",
+      "slug": "latex-in-markdown",
+      "summary": "KaTeX renders $x^2$ inline.",
+      "published": true,
+      "page_id": 3,
+      "word_count": 20,
+      "views": 1,
+      "tags": [
+       {
+        "id": 3,
+        "name": "latex",
+        "slug": "latex"
+       }
+      ],
+      "created_at": "2026-01-09T08:00:00",
+      "updated_at": "2026-01-09T08:00:00"
+     },
+     {
+      "id": 3,
+      "title": "后端重写记",
+      "slug": "backend-rewrite",
+      "summary": "把 FastAPI 后端换成自制语言。",
+      "published": true,
+      "page_id": 3,
+      "word_count": 42,
+      "views": 1,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       }
+      ],
+      "created_at": "2026-01-08T08:00:00",
+      "updated_at": "2026-01-08T08:00:00"
+     },
+     {
+      "id": 4,
+      "title": "Golden tests, a field guide",
+      "slug": "golden-tests",
+      "summary": "Record, then diff.",
+      "published": true,
+      "page_id": 3,
+      "word_count": 60,
+      "views": 1,
+      "tags": [],
+      "created_at": "2026-01-07T08:00:00",
+      "updated_at": "2026-01-07T08:00:00"
+     },
+     {
+      "id": 6,
+      "title": "Pagination probe",
+      "slug": "pagination-probe",
+      "summary": "Page two must not be empty.",
+      "published": true,
+      "page_id": 3,
+      "word_count": 1,
+      "views": 1,
+      "tags": [],
+      "created_at": "2026-01-05T08:00:00",
+      "updated_at": "2026-01-05T08:00:00"
+     }
+    ]
+   }
+  },
+  "page:about": {
+   "path": "/api/pages/about",
+   "status": 200,
+   "body": {
+    "id": 4,
+    "title": "关于",
+    "slug": "about",
+    "type": "content",
+    "path": "/p/about",
+    "description": "关于本站",
+    "content": "# 关于\n\n这是一个 **内容页**，正文里有 `code`、[链接](https://example.invalid) 和公式 $E = mc^2$。\n",
+    "auto_title": false,
+    "nav_visible": true,
+    "nav_order": 20,
+    "created_at": "2026-01-01T00:00:00",
+    "updated_at": "2026-01-01T00:00:00"
+   }
+  },
+  "page.articles:about": {
+   "path": "/api/pages/about/articles?page=1&size=10",
+   "status": 200,
+   "body": {
+    "total": 0,
+    "page": 1,
+    "size": 10,
+    "items": []
+   }
+  },
+  "tag:dawn": {
+   "path": "/api/tags/dawn",
+   "status": 200,
+   "body": {
+    "id": 1,
+    "name": "dawn",
+    "slug": "dawn",
+    "count": 3
+   }
+  },
+  "tag:latex": {
+   "path": "/api/tags/latex",
+   "status": 200,
+   "body": {
+    "id": 3,
+    "name": "latex",
+    "slug": "latex",
+    "count": 2
+   }
+  },
+  "tag:bianyiqi": {
+   "path": "/api/tags/bianyiqi",
+   "status": 200,
+   "body": {
+    "id": 2,
+    "name": "编译器",
+    "slug": "bianyiqi",
+    "count": 2
+   }
+  },
+  "auth.me": {
+   "path": "/api/auth/me",
+   "status": 200,
+   "body": {
+    "id": 1,
+    "username": "contract-admin",
+    "created_at": "2026-01-01T00:00:00"
+   }
+  },
+  "viz.list": {
+   "path": "/api/viz",
+   "status": 200,
+   "body": [
+    {
+     "id": 1,
+     "slug": "counter-demo",
+     "name": "计数器",
+     "source": "<template><button @click=\"n++\">{{ n }}</button></template>\n",
+     "compiled": "const _sfc_main = { data: () => ({ n: 0 }) };\n",
+     "style": ".counter { color: red }\n",
+     "created_at": "2026-01-01T00:00:00",
+     "updated_at": "2026-01-01T00:00:00"
+    },
+    {
+     "id": 2,
+     "slug": "chart-demo",
+     "name": "Chart demo",
+     "source": "<template><svg width=\"10\" height=\"10\"/></template>\n",
+     "compiled": "const _sfc_main = {};\n",
+     "style": "",
+     "created_at": "2026-01-01T00:00:00",
+     "updated_at": "2026-01-01T00:00:00"
+    }
+   ]
+  },
+  "articles.admin": {
+   "path": "/api/articles/admin?page=1&size=20",
+   "status": 200,
+   "body": {
+    "total": 10,
+    "page": 1,
+    "size": 20,
+    "items": [
+     {
+      "id": 1,
+      "title": "Dawn 自举：从 Kotlin 到 selfhost",
+      "slug": "dawn-selfhost",
+      "summary": "编译器自己编译自己的那一天。",
+      "published": true,
+      "page_id": 3,
+      "word_count": 48,
+      "views": 1,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 2,
+        "name": "编译器",
+        "slug": "bianyiqi"
+       }
+      ],
+      "created_at": "2026-01-10T08:00:00",
+      "updated_at": "2026-01-10T08:00:00"
+     },
+     {
+      "id": 2,
+      "title": "LaTeX in Markdown",
+      "slug": "latex-in-markdown",
+      "summary": "KaTeX renders $x^2$ inline.",
+      "published": true,
+      "page_id": 3,
+      "word_count": 20,
+      "views": 1,
+      "tags": [
+       {
+        "id": 3,
+        "name": "latex",
+        "slug": "latex"
+       }
+      ],
+      "created_at": "2026-01-09T08:00:00",
+      "updated_at": "2026-01-09T08:00:00"
+     },
+     {
+      "id": 3,
+      "title": "后端重写记",
+      "slug": "backend-rewrite",
+      "summary": "把 FastAPI 后端换成自制语言。",
+      "published": true,
+      "page_id": 3,
+      "word_count": 42,
+      "views": 1,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       }
+      ],
+      "created_at": "2026-01-08T08:00:00",
+      "updated_at": "2026-01-08T08:00:00"
+     },
+     {
+      "id": 4,
+      "title": "Golden tests, a field guide",
+      "slug": "golden-tests",
+      "summary": "Record, then diff.",
+      "published": true,
+      "page_id": 3,
+      "word_count": 60,
+      "views": 1,
+      "tags": [],
+      "created_at": "2026-01-07T08:00:00",
+      "updated_at": "2026-01-07T08:00:00"
+     },
+     {
+      "id": 5,
+      "title": "Unicode 边界：emoji 🌅 与代理对",
+      "slug": "unicode-edges",
+      "summary": "BMP 之外的字符会分叉。",
+      "published": true,
+      "page_id": 5,
+      "word_count": 22,
+      "views": 1,
+      "tags": [
+       {
+        "id": 2,
+        "name": "编译器",
+        "slug": "bianyiqi"
+       }
+      ],
+      "created_at": "2026-01-06T08:00:00",
+      "updated_at": "2026-01-06T08:00:00"
+     },
+     {
+      "id": 6,
+      "title": "Pagination probe",
+      "slug": "pagination-probe",
+      "summary": "Page two must not be empty.",
+      "published": true,
+      "page_id": 3,
+      "word_count": 1,
+      "views": 1,
+      "tags": [],
+      "created_at": "2026-01-05T08:00:00",
+      "updated_at": "2026-01-05T08:00:00"
+     },
+     {
+      "id": 7,
+      "title": "草稿：不该出现在公开列表",
+      "slug": "draft-only",
+      "summary": "这是草稿。",
+      "published": false,
+      "page_id": 3,
+      "word_count": 18,
+      "views": 0,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       }
+      ],
+      "created_at": "2026-01-04T08:00:00",
+      "updated_at": "2026-01-04T08:00:00"
+     },
+     {
+      "id": 8,
+      "title": "Empty body",
+      "slug": "empty-body",
+      "summary": "Only a summary here.",
+      "published": true,
+      "page_id": null,
+      "word_count": 0,
+      "views": 1,
+      "tags": [],
+      "created_at": "2026-01-03T08:00:00",
+      "updated_at": "2026-01-03T08:00:00"
+     },
+     {
+      "id": 9,
+      "title": "Markdown zoo",
+      "slug": "markdown-zoo",
+      "summary": "结构大杂烩。",
+      "published": true,
+      "page_id": 5,
+      "word_count": 70,
+      "views": 1,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 3,
+        "name": "latex",
+        "slug": "latex"
+       }
+      ],
+      "created_at": "2026-01-02T08:00:00",
+      "updated_at": "2026-01-02T08:00:00"
+     },
+     {
+      "id": 10,
+      "title": "Zzz last",
+      "slug": "zzz-last",
+      "summary": "Sorted last by design.",
+      "published": true,
+      "page_id": null,
+      "word_count": 3,
+      "views": 0,
+      "tags": [],
+      "created_at": "2026-01-01T08:00:00",
+      "updated_at": "2026-01-01T08:00:00"
+     }
+    ]
+   }
+  },
+  "pages.admin": {
+   "path": "/api/pages/admin",
+   "status": 200,
+   "body": [
+    {
+     "id": 1,
+     "title": "首页",
+     "slug": "home",
+     "type": "builtin",
+     "path": "/",
+     "description": "",
+     "content": "",
+     "auto_title": false,
+     "nav_visible": true,
+     "nav_order": -1000,
+     "created_at": "2026-01-01T00:00:00",
+     "updated_at": "2026-01-01T00:00:00"
+    },
+    {
+     "id": 3,
+     "title": "博客",
+     "slug": "blog",
+     "type": "article_list",
+     "path": "/p/blog",
+     "description": "所有文章",
+     "content": "",
+     "auto_title": false,
+     "nav_visible": true,
+     "nav_order": 10,
+     "created_at": "2026-01-01T00:00:00",
+     "updated_at": "2026-01-01T00:00:00"
+    },
+    {
+     "id": 4,
+     "title": "关于",
+     "slug": "about",
+     "type": "content",
+     "path": "/p/about",
+     "description": "关于本站",
+     "content": "# 关于\n\n这是一个 **内容页**，正文里有 `code`、[链接](https://example.invalid) 和公式 $E = mc^2$。\n",
+     "auto_title": false,
+     "nav_visible": true,
+     "nav_order": 20,
+     "created_at": "2026-01-01T00:00:00",
+     "updated_at": "2026-01-01T00:00:00"
+    },
+    {
+     "id": 5,
+     "title": "手记",
+     "slug": "notes",
+     "type": "article_list",
+     "path": "/p/notes",
+     "description": "零散记录",
+     "content": "",
+     "auto_title": false,
+     "nav_visible": false,
+     "nav_order": 30,
+     "created_at": "2026-01-01T00:00:00",
+     "updated_at": "2026-01-01T00:00:00"
+    },
+    {
+     "id": 2,
+     "title": "标签",
+     "slug": "tags",
+     "type": "builtin",
+     "path": "/tags",
+     "description": "",
+     "content": "",
+     "auto_title": false,
+     "nav_visible": false,
+     "nav_order": 1000,
+     "created_at": "2026-01-01T00:00:00",
+     "updated_at": "2026-01-01T00:00:00"
+    }
+   ]
+  },
+  "tags.admin": {
+   "path": "/api/tags/admin",
+   "status": 200,
+   "body": [
+    {
+     "id": 1,
+     "name": "dawn",
+     "slug": "dawn",
+     "count": 4
+    },
+    {
+     "id": 3,
+     "name": "latex",
+     "slug": "latex",
+     "count": 2
+    },
+    {
+     "id": 4,
+     "name": "孤儿标签",
+     "slug": "orphan-tag",
+     "count": 0
+    },
+    {
+     "id": 2,
+     "name": "编译器",
+     "slug": "bianyiqi",
+     "count": 2
+    }
+   ]
+  },
+  "settings": {
+   "path": "/api/settings",
+   "status": 200,
+   "body": {
+    "upload_concurrency": 5,
+    "download_concurrency": 3,
+    "storage_quota_gb": 10,
+    "text_preview_max_kb": 256
+   }
+  },
+  "fm.root": {
+   "path": "/api/fm?path=qiniu%3A//",
+   "status": 200,
+   "body": {
+    "storages": [
+     "qiniu"
+    ],
+    "dirname": "qiniu://",
+    "files": [
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "archive",
+      "extension": "",
+      "path": "qiniu://archive",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": 1767355200,
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "docs",
+      "extension": "",
+      "path": "qiniu://docs",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": 1767441600,
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "empty-dir",
+      "extension": "",
+      "path": "qiniu://empty-dir",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": 1767787200,
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "图片",
+      "extension": "",
+      "path": "qiniu://图片",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": 1768046400,
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "example.txt",
+      "extension": "txt",
+      "path": "qiniu://example.txt",
+      "type": "file",
+      "file_size": 42,
+      "last_modified": 1767873600,
+      "mime_type": "text/plain",
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "readme.md",
+      "extension": "md",
+      "path": "qiniu://readme.md",
+      "type": "file",
+      "file_size": 1024,
+      "last_modified": 1767960000,
+      "mime_type": "text/markdown",
+      "visibility": "public"
+     }
+    ],
+    "read_only": false
+   }
+  },
+  "fm.dir": {
+   "path": "/api/fm?path=qiniu%3A//docs",
+   "status": 200,
+   "body": {
+    "storages": [
+     "qiniu"
+    ],
+    "dirname": "qiniu://docs",
+    "files": [
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://docs",
+      "basename": "img",
+      "extension": "",
+      "path": "qiniu://docs/img",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": 1767528000,
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://docs",
+      "basename": "notes.txt",
+      "extension": "txt",
+      "path": "qiniu://docs/notes.txt",
+      "type": "file",
+      "file_size": 137,
+      "last_modified": 1767700800,
+      "mime_type": "text/plain",
+      "visibility": "public"
+     }
+    ],
+    "read_only": false
+   }
+  },
+  "fm.search": {
+   "path": "/api/fm/search?path=qiniu%3A//&filter=a",
+   "status": 200,
+   "body": {
+    "files": [
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "archive",
+      "extension": "",
+      "path": "qiniu://archive",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": 1767355200,
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "example.txt",
+      "extension": "txt",
+      "path": "qiniu://example.txt",
+      "type": "file",
+      "file_size": 42,
+      "last_modified": 1767873600,
+      "mime_type": "text/plain",
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "readme.md",
+      "extension": "md",
+      "path": "qiniu://readme.md",
+      "type": "file",
+      "file_size": 1024,
+      "last_modified": 1767960000,
+      "mime_type": "text/markdown",
+      "visibility": "public"
+     }
+    ]
+   }
+  },
+  "fm.search.deep": {
+   "path": "/api/fm/search?path=qiniu%3A//&filter=a&deep=1",
+   "status": 200,
+   "body": {
+    "files": [
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "archive",
+      "extension": "",
+      "path": "qiniu://archive",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": 1767355200,
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "example.txt",
+      "extension": "txt",
+      "path": "qiniu://example.txt",
+      "type": "file",
+      "file_size": 42,
+      "last_modified": 1767873600,
+      "mime_type": "text/plain",
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "readme.md",
+      "extension": "md",
+      "path": "qiniu://readme.md",
+      "type": "file",
+      "file_size": 1024,
+      "last_modified": 1767960000,
+      "mime_type": "text/markdown",
+      "visibility": "public"
+     }
+    ]
+   }
+  },
+  "viz:counter-demo": {
+   "path": "/api/viz/counter-demo",
+   "status": 200,
+   "body": {
+    "slug": "counter-demo",
+    "name": "计数器",
+    "compiled": "const _sfc_main = { data: () => ({ n: 0 }) };\n",
+    "style": ".counter { color: red }\n"
+   }
+  },
+  "viz:chart-demo": {
+   "path": "/api/viz/chart-demo",
+   "status": 200,
+   "body": {
+    "slug": "chart-demo",
+    "name": "Chart demo",
+    "compiled": "const _sfc_main = {};\n",
+    "style": ""
+   }
+  },
+  "monitor.shape": {
+   "path": "/api/monitor",
+   "status": 200,
+   "shape": {
+    "cached_at": "int",
+    "lighthouse": {
+     "configured": "bool"
+    },
+    "qiniu": {
+     "configured": "bool"
+    },
+    "server": {
+     "boot_time": "int",
+     "cpu_count": "int",
+     "cpu_percent": "float",
+     "disk": {
+      "percent": "float",
+      "total": "int",
+      "used": "int"
+     },
+     "load": [
+      "<list>",
+      "float"
+     ],
+     "mem": {
+      "percent": "float",
+      "total": "int",
+      "used": "int"
+     },
+     "net": {
+      "recv": "int",
+      "sent": "int"
+     },
+     "uptime": "int"
+    },
+    "vault": {
+     "alive": "bool",
+     "error": "str",
+     "public_url": "str",
+     "url": "str"
+    }
+   }
+  }
+ }
+}

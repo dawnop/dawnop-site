@@ -28,7 +28,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | 层 | 选型 | 理由 |
 |----|------|------|
 | 后端 | **Dawn**（自制语言 → JVM 字节码），版本由根目录 `.dawn-version` 钉住 | M6 用 strangler-fig 逐路由迁移，2026-07 全量切流，uvicorn 已退役。见 `backend-dawn/` 与 [`docs/m6-retro.md`](https://github.com/dawnop/dawn-lang/blob/main/docs/m6-retro.md) |
-| 后端框架（历史 / 回滚目标） | **FastAPI** + Uvicorn | 原选型。`backend/` 已**冻结**（新功能只进 Dawn，见 CONTRIBUTING）：紧急回滚目标（`backend-dawn/deploy/rollback-to-fastapi.sh`）+ `contract_*.py` 的对拍参照，仍在 CI 里跑确保能启动 |
+| 后端框架（历史 / 回滚目标） | **FastAPI** + Uvicorn | 原选型。`backend/` 已**冻结**（新功能只进 Dawn，见 CONTRIBUTING）：紧急回滚目标（`backend-dawn/deploy/rollback-to-fastapi.sh`），仍在 CI 里跑确保能启动；契约参照已从「它」搬到 `scripts/golden/*.json` |
 | ORM / DB | **SQLAlchemy 2.x** + **SQLite**（Dawn 侧直接用 sqlite-jdbc） | 需求明确指定 SQLite |
 | 鉴权 | OAuth2 Password + **JWT**（**PyJWT** + **bcrypt**） | 前后端分离用 token；PyJWT/bcrypt 比 python-jose/passlib 维护更活跃、依赖更少 |
 | 对象存储 | 七牛云 **Kodo**，官方 `qiniu` Python SDK | 需求指定 |
@@ -69,7 +69,7 @@ dawnop-site/
 │   │   # dawn-lang 仓库 tag 归档（url + hash + subdir），实体在 dawn-lang/packages/
 │   ├── dawn.toml               # [java-deps]（sqlite-jdbc / jbcrypt，coursier 解析）
 │   ├── build.sh                # 按 .dawn-version 取编译器 → dawn test → dawn build（生成 lib/）
-│   ├── scripts/contract_*.py   # 与 FastAPI 的只读/边界/WebDAV 对拍
+│   ├── scripts/contract_*.py   # 只读/边界/WebDAV 契约 golden（fixture + run + golden/*.json）
 │   └── deploy/
 │       ├── dawnop-dawn.service     # systemd 单元（生产）
 │       ├── deploy.sh               # 从 CI artifact 部署 + 健康检查 + 自动回滚
@@ -279,10 +279,12 @@ npm run format                          # prettier
 ruff check . && ruff format --check .   # 配置见 pyproject.toml，target 钉 3.10
 cd frontend && npm run lint && npm run format:check
 
-# ---- 契约对拍（需两套后端都在跑）----
-python backend-dawn/scripts/contract_read.py    # 68 项只读对拍
-python backend-dawn/scripts/contract_edge.py    # 边界/错误路径
-python backend-dawn/scripts/contract_webdav.py  # WebDAV 全周期
+# ---- 契约 golden（CI 每次 push 都跑，只需 Dawn 后端的 jar）----
+python3 backend-dawn/scripts/contract_run.py            # 播种 fixture→起后端→跑三套
+python3 backend-dawn/scripts/contract_run.py --record   # 改了行为后重录，diff 进 review
+python3 backend-dawn/scripts/contract_run.py --only read
+# 期望响应录在 backend-dawn/scripts/golden/*.json；6 条需七牛密钥的用例是具名 skip，
+# 每次运行都打印。不再需要 FastAPI 陪跑（脚本仍可 --base 指向它，golden 就是契约）。
 ```
 
 ## 10. 工程约定（机器强制的部分）

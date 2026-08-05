@@ -17,4 +17,7 @@
   但规矩本身以第 7 节为准。真人协作者的 `Co-Authored-By` 不受影响。
 - **后端只迭代 Dawn**：新功能只进 `backend-dawn/`（生产）。`backend/`（FastAPI）已**冻结**为
   回滚目标 + 契约参照，仍在 CI 里跑（确保还能启动），但**不再要求特性同步**——别再往里加新功能。
-  改了 Dawn 后端若想验证与冻结基线的差异，跑 `backend-dawn/scripts/contract_*.py` 对拍。
+  改了后端的线上形状（JSON 字段、状态码、WebDAV XML），跑
+  `python3 backend-dawn/scripts/contract_run.py`——它播种固定 fixture、起后端、和
+  `scripts/golden/*.json` 逐条比对，CI 每次 push 也跑同一条命令。确属有意的改动用
+  `--record` 重录，**把 golden 的 diff 一起提交**：那份 diff 就是这次改了什么的证据。

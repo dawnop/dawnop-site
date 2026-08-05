@@ -1,0 +1,1064 @@
+{
+ "_note": "Recorded by contract_edge.py --record via contract_run.py. Do not hand-edit: re-record and review the diff.",
+ "_env": {
+  "fixture": "7303e1f8fd74dcd4",
+  "tz": "UTC",
+  "search_backend": "like",
+  "qiniu_configured": false
+ },
+ "skipped": {
+  "fm.stats.ok": "needs QINIU_* credentials (live bucket usage)"
+ },
+ "cases": {
+  "articles.ok": {
+   "method": "GET",
+   "path": "/api/articles",
+   "status": 200,
+   "body": {
+    "total": 9,
+    "page": 1,
+    "size": 10,
+    "items": [
+     {
+      "id": 1,
+      "title": "Dawn 自举：从 Kotlin 到 selfhost",
+      "slug": "dawn-selfhost",
+      "summary": "编译器自己编译自己的那一天。",
+      "published": true,
+      "page_id": 3,
+      "word_count": 48,
+      "views": 0,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 2,
+        "name": "编译器",
+        "slug": "bianyiqi"
+       }
+      ],
+      "created_at": "2026-01-10T08:00:00",
+      "updated_at": "2026-01-10T08:00:00"
+     },
+     {
+      "id": 2,
+      "title": "LaTeX in Markdown",
+      "slug": "latex-in-markdown",
+      "summary": "KaTeX renders $x^2$ inline.",
+      "published": true,
+      "page_id": 3,
+      "word_count": 20,
+      "views": 0,
+      "tags": [
+       {
+        "id": 3,
+        "name": "latex",
+        "slug": "latex"
+       }
+      ],
+      "created_at": "2026-01-09T08:00:00",
+      "updated_at": "2026-01-09T08:00:00"
+     },
+     {
+      "id": 3,
+      "title": "后端重写记",
+      "slug": "backend-rewrite",
+      "summary": "把 FastAPI 后端换成自制语言。",
+      "published": true,
+      "page_id": 3,
+      "word_count": 42,
+      "views": 0,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       }
+      ],
+      "created_at": "2026-01-08T08:00:00",
+      "updated_at": "2026-01-08T08:00:00"
+     },
+     {
+      "id": 4,
+      "title": "Golden tests, a field guide",
+      "slug": "golden-tests",
+      "summary": "Record, then diff.",
+      "published": true,
+      "page_id": 3,
+      "word_count": 60,
+      "views": 0,
+      "tags": [],
+      "created_at": "2026-01-07T08:00:00",
+      "updated_at": "2026-01-07T08:00:00"
+     },
+     {
+      "id": 5,
+      "title": "Unicode 边界：emoji 🌅 与代理对",
+      "slug": "unicode-edges",
+      "summary": "BMP 之外的字符会分叉。",
+      "published": true,
+      "page_id": 5,
+      "word_count": 22,
+      "views": 0,
+      "tags": [
+       {
+        "id": 2,
+        "name": "编译器",
+        "slug": "bianyiqi"
+       }
+      ],
+      "created_at": "2026-01-06T08:00:00",
+      "updated_at": "2026-01-06T08:00:00"
+     },
+     {
+      "id": 6,
+      "title": "Pagination probe",
+      "slug": "pagination-probe",
+      "summary": "Page two must not be empty.",
+      "published": true,
+      "page_id": 3,
+      "word_count": 1,
+      "views": 0,
+      "tags": [],
+      "created_at": "2026-01-05T08:00:00",
+      "updated_at": "2026-01-05T08:00:00"
+     },
+     {
+      "id": 8,
+      "title": "Empty body",
+      "slug": "empty-body",
+      "summary": "Only a summary here.",
+      "published": true,
+      "page_id": null,
+      "word_count": 0,
+      "views": 0,
+      "tags": [],
+      "created_at": "2026-01-03T08:00:00",
+      "updated_at": "2026-01-03T08:00:00"
+     },
+     {
+      "id": 9,
+      "title": "Markdown zoo",
+      "slug": "markdown-zoo",
+      "summary": "结构大杂烩。",
+      "published": true,
+      "page_id": 5,
+      "word_count": 70,
+      "views": 0,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 3,
+        "name": "latex",
+        "slug": "latex"
+       }
+      ],
+      "created_at": "2026-01-02T08:00:00",
+      "updated_at": "2026-01-02T08:00:00"
+     },
+     {
+      "id": 10,
+      "title": "Zzz last",
+      "slug": "zzz-last",
+      "summary": "Sorted last by design.",
+      "published": true,
+      "page_id": null,
+      "word_count": 3,
+      "views": 0,
+      "tags": [],
+      "created_at": "2026-01-01T08:00:00",
+      "updated_at": "2026-01-01T08:00:00"
+     }
+    ]
+   }
+  },
+  "articles.page0": {
+   "method": "GET",
+   "path": "/api/articles?page=0",
+   "status": 422,
+   "body": {
+    "detail": "page：Input should be greater than or equal to 1"
+   }
+  },
+  "articles.pageNeg": {
+   "method": "GET",
+   "path": "/api/articles?page=-1",
+   "status": 422,
+   "body": {
+    "detail": "page：Input should be greater than or equal to 1"
+   }
+  },
+  "articles.pageHuge": {
+   "method": "GET",
+   "path": "/api/articles?page=99999",
+   "status": 200,
+   "body": {
+    "total": 9,
+    "page": 99999,
+    "size": 10,
+    "items": []
+   }
+  },
+  "articles.size0": {
+   "method": "GET",
+   "path": "/api/articles?size=0",
+   "status": 422,
+   "body": {
+    "detail": "size：Input should be greater than or equal to 1"
+   }
+  },
+  "articles.sizeBig": {
+   "method": "GET",
+   "path": "/api/articles?size=1000",
+   "status": 422,
+   "body": {
+    "detail": "size：Input should be less than or equal to 100"
+   }
+  },
+  "articles.sizeNeg": {
+   "method": "GET",
+   "path": "/api/articles?size=-5",
+   "status": 422,
+   "body": {
+    "detail": "size：Input should be greater than or equal to 1"
+   }
+  },
+  "articles.pageNaN": {
+   "method": "GET",
+   "path": "/api/articles?page=abc",
+   "status": 422,
+   "body": {
+    "detail": "page：Input should be a valid integer, unable to parse string as an integer"
+   }
+  },
+  "articles.sizeNaN": {
+   "method": "GET",
+   "path": "/api/articles?size=abc",
+   "status": 422,
+   "body": {
+    "detail": "size：Input should be a valid integer, unable to parse string as an integer"
+   }
+  },
+  "articles.slug404": {
+   "method": "GET",
+   "path": "/api/articles/zzz-does-not-exist",
+   "status": 404,
+   "body": {
+    "detail": "文章不存在"
+   }
+  },
+  "pages.slug404": {
+   "method": "GET",
+   "path": "/api/pages/zzz-nope",
+   "status": 404,
+   "body": {
+    "detail": "页面不存在"
+   }
+  },
+  "pages.slug404.arts": {
+   "method": "GET",
+   "path": "/api/pages/zzz-nope/articles",
+   "status": 404,
+   "body": {
+    "detail": "页面不存在"
+   }
+  },
+  "tags.slug404": {
+   "method": "GET",
+   "path": "/api/tags/zzz-nope",
+   "status": 404,
+   "body": {
+    "detail": "标签不存在"
+   }
+  },
+  "viz.slug404": {
+   "method": "GET",
+   "path": "/api/viz/zzz-nope",
+   "status": 404,
+   "body": {
+    "detail": "组件不存在"
+   }
+  },
+  "pageArts.page0": {
+   "method": "GET",
+   "path": "/api/pages/blog/articles?page=0",
+   "status": 422,
+   "body": {
+    "detail": "page：Input should be greater than or equal to 1"
+   }
+  },
+  "pageArts.sizeBig": {
+   "method": "GET",
+   "path": "/api/pages/blog/articles?size=999",
+   "status": 422,
+   "body": {
+    "detail": "size：Input should be less than or equal to 100"
+   }
+  },
+  "search.noQ": {
+   "method": "GET",
+   "path": "/api/search",
+   "status": 200,
+   "body": {
+    "total": 0,
+    "page": 1,
+    "size": 10,
+    "query": "",
+    "items": []
+   }
+  },
+  "search.emptyQ": {
+   "method": "GET",
+   "path": "/api/search?q=",
+   "status": 200,
+   "body": {
+    "total": 0,
+    "page": 1,
+    "size": 10,
+    "query": "",
+    "items": []
+   }
+  },
+  "search.sizeClamp": {
+   "method": "GET",
+   "path": "/api/search?q=dawn&size=999",
+   "status": 422,
+   "body": {
+    "detail": "size：Input should be less than or equal to 50"
+   }
+  },
+  "search.page0": {
+   "method": "GET",
+   "path": "/api/search?q=dawn&page=0",
+   "status": 422,
+   "body": {
+    "detail": "page：Input should be greater than or equal to 1"
+   }
+  },
+  "search.xss": {
+   "method": "GET",
+   "path": "/api/search?q=%3Cscript%3Ealert%281%29%3C%2Fscript%3E",
+   "status": 200,
+   "body": {
+    "total": 1,
+    "page": 1,
+    "size": 10,
+    "query": "<script>alert(1)</script>",
+    "items": [
+     {
+      "id": 4,
+      "title": "Golden tests, a field guide",
+      "slug": "golden-tests",
+      "created_at": "2026-01-07T08:00:00",
+      "word_count": 60,
+      "tags": [],
+      "title_html": "Golden tests, a field guide",
+      "excerpt_html": "Golden tests pin the wire, not the intent. 搜索转义用例的原料就在这一行：&lt;script alert(1)&lt;/script —— 服务端要把它转义后 再包 &lt;mark ，前端才敢 v-html。 单引号 &#x27; 也留一个，给 SQL 注入用例当靶子。"
+     }
+    ]
+   }
+  },
+  "search.sqli": {
+   "method": "GET",
+   "path": "/api/search?q=%27+OR+%271%27%3D%271",
+   "status": 200,
+   "body": {
+    "total": 1,
+    "page": 1,
+    "size": 10,
+    "query": "' OR '1'='1",
+    "items": [
+     {
+      "id": 4,
+      "title": "Golden tests, a field guide",
+      "slug": "golden-tests",
+      "created_at": "2026-01-07T08:00:00",
+      "word_count": 60,
+      "tags": [],
+      "title_html": "Golden tests, a field guide",
+      "excerpt_html": "…)&lt;/script —— 服务端要把它转义后 再包 &lt;mark ，前端才敢 v-html。 单引号 <mark>&#x27;</mark> 也留一个，给 SQL 注入用例当靶子。"
+     }
+    ]
+   }
+  },
+  "search.cjk": {
+   "method": "GET",
+   "path": "/api/search?q=%E7%BC%96%E8%AF%91%E5%99%A8",
+   "status": 200,
+   "body": {
+    "total": 1,
+    "page": 1,
+    "size": 10,
+    "query": "编译器",
+    "items": [
+     {
+      "id": 1,
+      "title": "Dawn 自举：从 Kotlin 到 selfhost",
+      "slug": "dawn-selfhost",
+      "created_at": "2026-01-10T08:00:00",
+      "word_count": 48,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 2,
+        "name": "编译器",
+        "slug": "bianyiqi"
+       }
+      ],
+      "title_html": "Dawn 自举：从 Kotlin 到 selfhost",
+      "excerpt_html": "Dawn 的自举分三步走：先用 Kotlin 写出<mark>编译器</mark>，再用 Dawn 重写一遍，最后让 Dawn 版编译自己。 每一代产物都要和上一代逐字节对拍。"
+     }
+    ]
+   }
+  },
+  "search.long": {
+   "method": "GET",
+   "path": "/api/search?q=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "status": 200,
+   "body": {
+    "total": 0,
+    "page": 1,
+    "size": 10,
+    "query": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "items": []
+   }
+  },
+  "search.pct": {
+   "method": "GET",
+   "path": "/api/search?q=100%25+done",
+   "status": 200,
+   "body": {
+    "total": 2,
+    "page": 1,
+    "size": 10,
+    "query": "100% done",
+    "items": [
+     {
+      "id": 3,
+      "title": "后端重写记",
+      "slug": "backend-rewrite",
+      "created_at": "2026-01-08T08:00:00",
+      "word_count": 42,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       }
+      ],
+      "title_html": "后端重写记",
+      "excerpt_html": "后端重写不是重写语言，是重写信任。每条路由迁移后都要和旧后端对拍，直到 100 条用例全绿才敢切流。"
+     },
+     {
+      "id": 9,
+      "title": "Markdown zoo",
+      "slug": "markdown-zoo",
+      "created_at": "2026-01-02T08:00:00",
+      "word_count": 70,
+      "tags": [
+       {
+        "id": 1,
+        "name": "dawn",
+        "slug": "dawn"
+       },
+       {
+        "id": 3,
+        "name": "latex",
+        "slug": "latex"
+       }
+      ],
+      "title_html": "Markdown zoo",
+      "excerpt_html": "Markdown zoo 正文里放满了 markdown 结构，用来钉住摘要的 strip md 窗口： 行内代码 、图片 、 链接 dawn-lang 和 引用。 LaTeX 行内公式 $a^2 + b^2 = c^2$ 也在这里。"
+     }
+    ]
+   }
+  },
+  "route.404": {
+   "method": "GET",
+   "path": "/api/nope-endpoint",
+   "status": 404,
+   "body": {
+    "detail": "Not Found"
+   }
+  },
+  "method.health.POST": {
+   "method": "POST",
+   "path": "/api/health",
+   "status": 405,
+   "body": {
+    "detail": "Method Not Allowed"
+   }
+  },
+  "method.nav.DELETE": {
+   "method": "DELETE",
+   "path": "/api/pages/nav",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "me.noTok": {
+   "method": "GET",
+   "path": "/api/auth/me",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "me.garbage": {
+   "method": "GET",
+   "path": "/api/auth/me",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "me.badsig": {
+   "method": "GET",
+   "path": "/api/auth/me",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "me.ok": {
+   "method": "GET",
+   "path": "/api/auth/me",
+   "status": 200,
+   "body": {
+    "id": 1,
+    "username": "contract-admin",
+    "created_at": "2026-01-01T00:00:00"
+   }
+  },
+  "settings.noTok": {
+   "method": "GET",
+   "path": "/api/settings",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "monitor.noTok": {
+   "method": "GET",
+   "path": "/api/monitor",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "articles.admin.noTok": {
+   "method": "GET",
+   "path": "/api/articles/admin",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "pages.admin.noTok": {
+   "method": "GET",
+   "path": "/api/pages/admin",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "tags.admin.noTok": {
+   "method": "GET",
+   "path": "/api/tags/admin",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "viz.list.noTok": {
+   "method": "GET",
+   "path": "/api/viz",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "art.create.noTok": {
+   "method": "POST",
+   "path": "/api/articles",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "art.create.empty": {
+   "method": "POST",
+   "path": "/api/articles",
+   "status": 422,
+   "body": {
+    "detail": "标题不能为空"
+   }
+  },
+  "art.create.blank": {
+   "method": "POST",
+   "path": "/api/articles",
+   "status": 422,
+   "body": {
+    "detail": "标题不能为空"
+   }
+  },
+  "art.create.badSlug": {
+   "method": "POST",
+   "path": "/api/articles",
+   "status": 201,
+   "body": {
+    "id": 11,
+    "title": "x",
+    "slug": "bad-slug",
+    "summary": "",
+    "content": "",
+    "published": false,
+    "auto_title": false,
+    "page_id": null,
+    "word_count": 0,
+    "views": 0,
+    "tags": []
+   }
+  },
+  "art.create.upperSlug": {
+   "method": "POST",
+   "path": "/api/articles",
+   "status": 201,
+   "body": {
+    "id": 12,
+    "title": "x",
+    "slug": "upper",
+    "summary": "",
+    "content": "",
+    "published": false,
+    "auto_title": false,
+    "page_id": null,
+    "word_count": 0,
+    "views": 0,
+    "tags": []
+   }
+  },
+  "art.create.dashSlug": {
+   "method": "POST",
+   "path": "/api/articles",
+   "status": 201,
+   "body": {
+    "id": 13,
+    "title": "x",
+    "slug": "lead",
+    "summary": "",
+    "content": "",
+    "published": false,
+    "auto_title": false,
+    "page_id": null,
+    "word_count": 0,
+    "views": 0,
+    "tags": []
+   }
+  },
+  "art.create.pageMissing": {
+   "method": "POST",
+   "path": "/api/articles",
+   "status": 400,
+   "body": {
+    "detail": "所属页面不存在或不是文章列表页"
+   }
+  },
+  "art.update.404": {
+   "method": "PUT",
+   "path": "/api/articles/99999999",
+   "status": 404,
+   "body": {
+    "detail": "文章不存在"
+   }
+  },
+  "art.delete.404": {
+   "method": "DELETE",
+   "path": "/api/articles/99999999",
+   "status": 404,
+   "body": {
+    "detail": "文章不存在"
+   }
+  },
+  "art.create.pageWrongType": {
+   "method": "POST",
+   "path": "/api/articles",
+   "status": 400,
+   "body": {
+    "detail": "所属页面不存在或不是文章列表页"
+   }
+  },
+  "viz.create.noTok": {
+   "method": "POST",
+   "path": "/api/viz",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "viz.create.empty": {
+   "method": "POST",
+   "path": "/api/viz",
+   "status": 422,
+   "body": {
+    "detail": "slug 格式非法"
+   }
+  },
+  "viz.create.badSlug": {
+   "method": "POST",
+   "path": "/api/viz",
+   "status": 422,
+   "body": {
+    "detail": "slug 格式非法"
+   }
+  },
+  "viz.update.404": {
+   "method": "PUT",
+   "path": "/api/viz/99999999",
+   "status": 404,
+   "body": {
+    "detail": "组件不存在"
+   }
+  },
+  "viz.delete.404": {
+   "method": "DELETE",
+   "path": "/api/viz/99999999",
+   "status": 404,
+   "body": {
+    "detail": "组件不存在"
+   }
+  },
+  "page.create.noTok": {
+   "method": "POST",
+   "path": "/api/pages",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "page.create.empty": {
+   "method": "POST",
+   "path": "/api/pages",
+   "status": 422,
+   "body": {
+    "detail": "标题不能为空"
+   }
+  },
+  "page.update.404": {
+   "method": "PUT",
+   "path": "/api/pages/99999999",
+   "status": 404,
+   "body": {
+    "detail": "页面不存在"
+   }
+  },
+  "page.delete.404": {
+   "method": "DELETE",
+   "path": "/api/pages/99999999",
+   "status": 404,
+   "body": {
+    "detail": "页面不存在"
+   }
+  },
+  "page.reorder.ghosts": {
+   "method": "POST",
+   "path": "/api/pages/reorder",
+   "status": 200,
+   "body": [
+    {
+     "id": 1,
+     "title": "首页",
+     "slug": "home",
+     "type": "builtin",
+     "path": "/",
+     "description": "",
+     "content": "",
+     "auto_title": false,
+     "nav_visible": true,
+     "nav_order": -1000,
+     "created_at": "2026-01-01T00:00:00",
+     "updated_at": "2026-01-01T00:00:00"
+    },
+    {
+     "id": 3,
+     "title": "博客",
+     "slug": "blog",
+     "type": "article_list",
+     "path": "/p/blog",
+     "description": "所有文章",
+     "content": "",
+     "auto_title": false,
+     "nav_visible": true,
+     "nav_order": 10,
+     "created_at": "2026-01-01T00:00:00",
+     "updated_at": "2026-01-01T00:00:00"
+    },
+    {
+     "id": 4,
+     "title": "关于",
+     "slug": "about",
+     "type": "content",
+     "path": "/p/about",
+     "description": "关于本站",
+     "content": "# 关于\n\n这是一个 **内容页**，正文里有 `code`、[链接](https://example.invalid) 和公式 $E = mc^2$。\n",
+     "auto_title": false,
+     "nav_visible": true,
+     "nav_order": 20,
+     "created_at": "2026-01-01T00:00:00",
+     "updated_at": "2026-01-01T00:00:00"
+    },
+    {
+     "id": 5,
+     "title": "手记",
+     "slug": "notes",
+     "type": "article_list",
+     "path": "/p/notes",
+     "description": "零散记录",
+     "content": "",
+     "auto_title": false,
+     "nav_visible": false,
+     "nav_order": 30,
+     "created_at": "2026-01-01T00:00:00",
+     "updated_at": "2026-01-01T00:00:00"
+    },
+    {
+     "id": 2,
+     "title": "标签",
+     "slug": "tags",
+     "type": "builtin",
+     "path": "/tags",
+     "description": "",
+     "content": "",
+     "auto_title": false,
+     "nav_visible": false,
+     "nav_order": 1000,
+     "created_at": "2026-01-01T00:00:00",
+     "updated_at": "2026-01-01T00:00:00"
+    }
+   ]
+  },
+  "tag.merge.noTok": {
+   "method": "POST",
+   "path": "/api/tags/merge",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "tag.cleanup.noTok": {
+   "method": "POST",
+   "path": "/api/tags/cleanup",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "tag.update.404": {
+   "method": "PUT",
+   "path": "/api/tags/99999999",
+   "status": 404,
+   "body": {
+    "detail": "标签不存在"
+   }
+  },
+  "tag.delete.404": {
+   "method": "DELETE",
+   "path": "/api/tags/99999999",
+   "status": 404,
+   "body": {
+    "detail": "标签不存在"
+   }
+  },
+  "fm.list.noTok": {
+   "method": "GET",
+   "path": "/api/fm",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "fm.list.ok": {
+   "method": "GET",
+   "path": "/api/fm?path=qiniu://",
+   "status": 200,
+   "body": {
+    "storages": [
+     "qiniu"
+    ],
+    "dirname": "qiniu://",
+    "files": [
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "archive",
+      "extension": "",
+      "path": "qiniu://archive",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": 1767355200,
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "docs",
+      "extension": "",
+      "path": "qiniu://docs",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": 1767441600,
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "empty-dir",
+      "extension": "",
+      "path": "qiniu://empty-dir",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": 1767787200,
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "图片",
+      "extension": "",
+      "path": "qiniu://图片",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": 1768046400,
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "example.txt",
+      "extension": "txt",
+      "path": "qiniu://example.txt",
+      "type": "file",
+      "file_size": 42,
+      "last_modified": 1767873600,
+      "mime_type": "text/plain",
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "readme.md",
+      "extension": "md",
+      "path": "qiniu://readme.md",
+      "type": "file",
+      "file_size": 1024,
+      "last_modified": 1767960000,
+      "mime_type": "text/markdown",
+      "visibility": "public"
+     }
+    ],
+    "read_only": false
+   }
+  },
+  "fm.search.ok": {
+   "method": "GET",
+   "path": "/api/fm/search?filter=x",
+   "status": 200,
+   "body": {
+    "files": [
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "example.txt",
+      "extension": "txt",
+      "path": "qiniu://example.txt",
+      "type": "file",
+      "file_size": 42,
+      "last_modified": 1767873600,
+      "mime_type": "text/plain",
+      "visibility": "public"
+     }
+    ]
+   }
+  },
+  "fm.sign.404": {
+   "method": "GET",
+   "path": "/api/fm/sign?path=qiniu%3A%2F%2Fzzz-nope.bin",
+   "status": 404,
+   "body": {
+    "detail": "文件不存在"
+   }
+  },
+  "fm.sign.noPath": {
+   "method": "GET",
+   "path": "/api/fm/sign",
+   "status": 404,
+   "body": {
+    "detail": "文件不存在"
+   }
+  },
+  "fm.content.noPath": {
+   "method": "GET",
+   "path": "/api/fm/content",
+   "status": 404,
+   "body": {
+    "detail": "文件不存在"
+   }
+  },
+  "fm.preview.noPath": {
+   "method": "GET",
+   "path": "/api/fm/preview",
+   "status": 404,
+   "body": {
+    "detail": "文件不存在"
+   }
+  },
+  "fm.download.noPath": {
+   "method": "GET",
+   "path": "/api/fm/download",
+   "status": 404,
+   "body": {
+    "detail": "文件不存在"
+   }
+  },
+  "fm.delete.noTok": {
+   "method": "POST",
+   "path": "/api/fm/delete",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "fm.mkfolder.noTok": {
+   "method": "POST",
+   "path": "/api/fm/create-folder",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "fm.uptok.noTok": {
+   "method": "POST",
+   "path": "/api/fm/upload-token",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  }
+ }
+}

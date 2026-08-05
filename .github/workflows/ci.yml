@@ -109,6 +109,21 @@ jobs:
       - name: backend tests + jar
         run: ./backend-dawn/build.sh
 
+      # The contract scripts (read / edge / WebDAV) were written during M6 to
+      # diff Dawn against FastAPI request by request. That needed both backends
+      # up at once, so CI never ran them — 150 recorded wire shapes, exercised
+      # only by hand, against whatever happened to be in the author's database.
+      # They are golden-based now: contract_run.py seeds a pinned SQLite fixture
+      # (contract_fixture.py), boots the jar this job just built on 127.0.0.1,
+      # and compares every response with backend-dawn/scripts/golden/*.json.
+      #
+      # Six cases need object-storage credentials (fm/stats and the four WebDAV
+      # byte paths). They are named skips, listed in the goldens and printed by
+      # every run, so "CI ran it" cannot quietly become "CI compared nothing".
+      # Re-record with `contract_run.py --record` and review the diff.
+      - name: contract goldens (read / edge / webdav)
+        run: python3 backend-dawn/scripts/contract_run.py
+
       # The deployable artifact. The jar is deliberately NOT in git: a build
       # output committed by hand drifts from src/ silently, and its lib/ is
       # gitignored anyway, so the in-repo jar could never run from a checkout.

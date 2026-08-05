@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""Comprehensive READ-path contract diff: Dawn (:8001) vs FastAPI (:8000).
+"""READ-path contract: every GET endpoint against a golden recording.
 
-Hits every GET endpoint (public + admin-read) on both backends and diffs the
-HTTP status + normalized JSON body. Real content slugs/ids are discovered from
-the list endpoints so detail endpoints are exercised against live data.
+Hits the public and admin-read GETs on ONE backend and compares status + body
+with the recording in golden/read.json. Detail endpoints are still driven by
+slugs discovered from the list endpoints — against the pinned fixture those are
+deterministic, and if a list endpoint breaks and returns nothing, the detail
+cases disappear and the golden's case-set guard fails the run.
 
-READ-ONLY: no case mutates the shared store. Volatile fields (view counters,
-wall-clock updated_at, live monitor metrics) are scrubbed before comparison.
+READ-ONLY except for the documented view counter: an anonymous GET of a
+published article bumps `views`, so the fixture database is rebuilt before each
+script (contract_run.py) and the bumped values are themselves pinned.
 
-Usage (on the server, both ports localhost):
-    TOKEN=$(...form login on :8001...) python3 contract_read.py \
-        --dawn http://127.0.0.1:8001 --fast http://127.0.0.1:8000
+Normally driven by contract_run.py, which seeds the fixture, boots the backend
+and passes TOKEN. Standalone:
+
+    TOKEN=... python3 contract_read.py --base http://127.0.0.1:18001 [--record]
 """
 
 import argparse
@@ -21,45 +25,47 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-# Fields that legitimately differ between two independently-serving backends
-# (view counters bumped per-hit, SQLAlchemy onupdate wall-clock, live metrics).
-VOLATILE = {
-    "views",
-    "view_count",
-    "updated_at",
-    "cached_at",
-    "generated_at",
-    "now",
-    "timestamp",
-    "latency_ms",
-    "cpu_percent",
-    "cpu",
-    "load",
-    "uptime",
-    "mem",
-    "memory",
-    "disk",
-    "net",
-    "used",
-    "used_bytes",
-    "remote_space",
-    "space_used",
-    "free",
-    "available",
-    "rss",
-    "traffic",
-    "cpu_trend",
-    "points",
-    "series",
-    "last_modified",  # fm entries: mtime from wall-clock-ish source
-}
+from contract_golden import Golden
 
-PASS = "\033[32mEXACT\033[0m"
-DIFF = "\033[31mDIFF \033[0m"
-ERRC = "\033[33mERR  \033[0m"
+# Direct to 127.0.0.1: urllib's no_proxy matching is suffix-based, so the usual
+# `no_proxy=127.*` export does not exempt localhost and every request would go
+# through a local proxy.
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-tally = {"exact": 0, "diff": 0, "err": 0}
-diffs = []
+# Fields scrubbed before comparison.
+#
+# The old list had 26 entries. It was sized for the differential era, where two
+# independent processes served the same request microseconds apart: view
+# counters raced, SQLAlchemy's onupdate stamped its own wall clock, and every
+# live metric differed by definition. Against a golden that reasoning is gone —
+# one backend, one pinned fixture, values that come from rows this repo wrote.
+#
+# What was checked, one field at a time, before deleting it:
+#   views          -> comes from the fixture row; the anonymous-read bump is
+#                     deterministic because the DB is reseeded per script and the
+#                     case order is fixed. Now PINNED (a bump that stopped
+#                     happening is a real regression the old list hid).
+#   updated_at,
+#   created_at     -> fixture literals. api_public deliberately does not touch
+#                     updated_at on a view. PINNED.
+#   last_modified  -> fm entries; repo_fm derives it from files.updated_at via
+#                     LocalDateTime in the *system* zone. Not wall-clock volatile,
+#                     environment volatile: it differed by 28800 between this
+#                     laptop (+08) and a UTC runner. Fixed by pinning TZ=UTC in
+#                     contract_run.py and recording it in the env fingerprint,
+#                     not by scrubbing the field. PINNED.
+#   cached_at, generated_at, now, timestamp, latency_ms, cpu*, load, uptime,
+#   mem*, disk, net, used*, free, available, rss, traffic, points, series,
+#   remote_space, space_used
+#                  -> every one of these lives under /api/monitor or /api/fm/stats.
+#                     Those two are handled explicitly (a shape assertion and a
+#                     named skip), so the entries scrubbed nothing anywhere else.
+#                     Grepped the wire builders (jsonx/repo_*/api_*) to confirm
+#                     no other endpoint emits them.
+#
+# Empty on purpose: a body diff is now a body diff. Adding an entry here means
+# admitting a field cannot be pinned — say why, in this comment, next to it.
+VOLATILE: set = set()
 
 
 def scrub(x):
@@ -70,59 +76,41 @@ def scrub(x):
     return x
 
 
-def req(base, path, token=None, timeout=25):
+def skeleton(x):
+    """Types and key names only — the shape assertion for live-metric endpoints."""
+    if isinstance(x, dict):
+        return {k: skeleton(v) for k, v in sorted(x.items())}
+    if isinstance(x, list):
+        return ["<list>", skeleton(x[0]) if x else None]
+    return type(x).__name__
+
+
+def req(base, path, token=None, timeout=30):
     url = base + path
     hdrs = {}
     if token:
         hdrs["Authorization"] = "Bearer " + token
     r = urllib.request.Request(url, method="GET", headers=hdrs)
     try:
-        with urllib.request.urlopen(r, timeout=timeout) as resp:
+        with OPENER.open(r, timeout=timeout) as resp:
             return resp.status, resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", "replace")
-    except Exception as e:  # noqa
+    except Exception as e:  # noqa: BLE001 - transport failure is a case failure
         return -1, repr(e)
 
 
 def body_norm(text):
     try:
         return scrub(json.loads(text))
-    except Exception:  # noqa
+    except ValueError:
         return text
-
-
-def diff(label, base_d, base_f, path, token=None):
-    sd, bd = req(base_d, path, token)
-    sf, bf = req(base_f, path, token)
-    nd, nf = body_norm(bd), body_norm(bf)
-    if sd < 0 or sf < 0:
-        tally["err"] += 1
-        print(f"  [{ERRC}] {label}  {path}  dawn={sd} fast={sf}")
-        diffs.append((label, path, "transport", bd[:200], bf[:200]))
-        return nd, nf
-    if sd == sf and nd == nf:
-        tally["exact"] += 1
-        print(f"  [{PASS}] {label}  {path}  ({sd})")
-    else:
-        tally["diff"] += 1
-        print(f"  [{DIFF}] {label}  {path}  dawn={sd} fast={sf}")
-        diffs.append(
-            (
-                label,
-                path,
-                f"{sd}/{sf}",
-                json.dumps(nd, ensure_ascii=False)[:400],
-                json.dumps(nf, ensure_ascii=False)[:400],
-            )
-        )
-    return nd, nf
 
 
 def slugs_from(listing, key="items", field="slug", limit=8):
     try:
         data = json.loads(listing)
-    except Exception:  # noqa
+    except ValueError:
         return []
     items = data.get(key, data) if isinstance(data, dict) else data
     out = []
@@ -136,130 +124,121 @@ def slugs_from(listing, key="items", field="slug", limit=8):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dawn", required=True)
-    ap.add_argument("--fast", required=True)
+    ap.add_argument(
+        "--base", required=True, help="backend under test, e.g. http://127.0.0.1:18001"
+    )
+    ap.add_argument("--record", action="store_true")
     args = ap.parse_args()
-    D, F = args.dawn, args.fast
+    B = args.base
     tok = os.environ.get("TOKEN")
+    if not tok:
+        print("FATAL: TOKEN env not set (admin JWT required)", file=sys.stderr)
+        return 2
+
+    g = Golden("read", record=args.record)
+    if g.fatal:
+        return g.finish()
+
+    def case(label, path, token=None):
+        st, body = req(B, path, token)
+        g.case(label, {"path": path, "status": st, "body": body_norm(body)})
 
     print("\n== health / public lists ==")
-    diff("health", D, F, "/api/health")
-    diff("articles.list", D, F, "/api/articles?page=1&size=20")
-    diff("articles.p2", D, F, "/api/articles?page=2&size=5")
-    diff("articles.tag", D, F, "/api/articles?page=1&size=10&tag=dawn")
-    diff("pages.nav", D, F, "/api/pages/nav")
-    diff("tags.list", D, F, "/api/tags")
+    case("health", "/api/health")
+    case("articles.list", "/api/articles?page=1&size=20")
+    case("articles.p2", "/api/articles?page=2&size=5")
+    case("articles.tag", "/api/articles?page=1&size=10&tag=dawn")
+    case("pages.nav", "/api/pages/nav")
+    case("tags.list", "/api/tags")
 
     print("\n== search (multiple queries) ==")
     for q in ("dawn", "后端", "latex", "zzz-no-such-term", "a"):
-        diff(
-            f"search[{q}]", D, F, "/api/search?q=" + urllib.parse.quote(q) + "&size=10"
-        )
+        case(f"search[{q}]", "/api/search?q=" + urllib.parse.quote(q) + "&size=10")
 
-    print("\n== article details (live slugs) ==")
-    _, list_txt = req(D, "/api/articles?page=1&size=50"), None
-    s, list_txt = req(D, "/api/articles?page=1&size=50")
+    print("\n== article details (slugs from the list endpoint) ==")
+    _, list_txt = req(B, "/api/articles?page=1&size=50")
     for slug in slugs_from(list_txt, "items"):
-        diff("article", D, F, "/api/articles/" + urllib.parse.quote(slug))
+        case("article:" + slug, "/api/articles/" + urllib.parse.quote(slug))
 
-    print("\n== page details + list-page articles (live slugs) ==")
-    s, nav_txt = req(D, "/api/pages/nav")
+    print("\n== page details + list-page articles ==")
+    _, nav_txt = req(B, "/api/pages/nav")
     try:
         nav = json.loads(nav_txt)
         pslugs = [p["slug"] for p in nav if isinstance(p, dict) and p.get("slug")]
-    except Exception:  # noqa
+    except ValueError:
         pslugs = []
     for slug in pslugs[:10]:
-        diff("page", D, F, "/api/pages/" + urllib.parse.quote(slug))
-        diff(
-            "page.articles",
-            D,
-            F,
+        case("page:" + slug, "/api/pages/" + urllib.parse.quote(slug))
+        case(
+            "page.articles:" + slug,
             "/api/pages/" + urllib.parse.quote(slug) + "/articles?page=1&size=10",
         )
 
-    print("\n== tag details (live slugs) ==")
-    s, tags_txt = req(D, "/api/tags")
-    for slug in slugs_from(tags_txt, "items" if '"items"' in tags_txt else None) or [
-        t.get("slug")
-        for t in (json.loads(tags_txt) if tags_txt.startswith("[") else [])
-    ]:
-        if slug:
-            diff("tag", D, F, "/api/tags/" + urllib.parse.quote(slug))
+    print("\n== tag details ==")
+    _, tags_txt = req(B, "/api/tags")
+    try:
+        tag_rows = json.loads(tags_txt)
+    except ValueError:
+        tag_rows = []
+    for t in tag_rows if isinstance(tag_rows, list) else []:
+        if isinstance(t, dict) and t.get("slug"):
+            case("tag:" + t["slug"], "/api/tags/" + urllib.parse.quote(t["slug"]))
 
-    if tok:
-        print("\n== authed reads (admin) ==")
-        diff("auth.me", D, F, "/api/auth/me", tok)
-        diff("viz.list", D, F, "/api/viz", tok)  # /api/viz requires auth
-        diff("articles.admin", D, F, "/api/articles/admin?page=1&size=20", tok)
-        diff("pages.admin", D, F, "/api/pages/admin", tok)
-        diff("settings", D, F, "/api/settings", tok)
-        diff("fm.root", D, F, "/api/fm?path=" + urllib.parse.quote("qiniu://"), tok)
-        diff("fm.stats", D, F, "/api/fm/stats", tok)
-        # 参数名是 filter，不是 q（两侧一致：serve.py 的 filter=Query("")、
-        # api_fm.dawn 的 qparam(req, "filter")）。这里原本发的是 q=a，被两侧一并忽略，
-        # filter 取默认空串 → 两边都回未过滤的整个列表 → 对拍恒等，搜索过滤从未被测到。
-        diff(
-            "fm.search",
-            D,
-            F,
-            "/api/fm/search?path=" + urllib.parse.quote("qiniu://") + "&filter=a",
-            tok,
-        )
-        diff(
-            "fm.search.deep",
-            D,
-            F,
-            "/api/fm/search?path="
-            + urllib.parse.quote("qiniu://")
-            + "&filter=a&deep=1",
-            tok,
-        )
+    print("\n== authed reads (admin) ==")
+    case("auth.me", "/api/auth/me", tok)
+    case("viz.list", "/api/viz", tok)
+    case("articles.admin", "/api/articles/admin?page=1&size=20", tok)
+    case("pages.admin", "/api/pages/admin", tok)
+    case("tags.admin", "/api/tags/admin", tok)
+    case("settings", "/api/settings", tok)
+    case("fm.root", "/api/fm?path=" + urllib.parse.quote("qiniu://"), tok)
+    case("fm.dir", "/api/fm?path=" + urllib.parse.quote("qiniu://docs"), tok)
+    # 参数名是 filter，不是 q（两侧一致：serve.py 的 filter=Query("")、api_fm.dawn 的
+    # qparam(req, "filter")）。这里原本发的是 q=a，被两侧一并忽略，filter 取默认空串
+    # → 回的是未过滤的整个列表 → 搜索过滤从未被测到。
+    case(
+        "fm.search",
+        "/api/fm/search?path=" + urllib.parse.quote("qiniu://") + "&filter=a",
+        tok,
+    )
+    case(
+        "fm.search.deep",
+        "/api/fm/search?path=" + urllib.parse.quote("qiniu://") + "&filter=a&deep=1",
+        tok,
+    )
+    # /api/fm/stats asks qiniu how much space the bucket uses. With no
+    # credentials the HMAC signer refuses an empty key before any request goes
+    # out; with credentials the answer is a live number that cannot be pinned.
+    # Neither state is worth recording, so the case is a named skip.
+    g.skip("fm.stats", "needs QINIU_* credentials (live bucket usage)")
 
-        print("\n== viz details (live slugs) ==")
-        s, viz_txt = req(D, "/api/viz", tok)
-        try:
-            vlist = json.loads(viz_txt)
-            vlist = vlist if isinstance(vlist, list) else vlist.get("items", [])
-        except Exception:  # noqa
-            vlist = []
-        for v in vlist:
-            sv = v.get("slug") if isinstance(v, dict) else None
-            if sv:
-                diff("viz", D, F, "/api/viz/" + urllib.parse.quote(sv), tok)
+    print("\n== viz details ==")
+    _, viz_txt = req(B, "/api/viz", tok)
+    try:
+        vlist = json.loads(viz_txt)
+        vlist = vlist if isinstance(vlist, list) else vlist.get("items", [])
+    except ValueError:
+        vlist = []
+    for v in vlist:
+        sv = v.get("slug") if isinstance(v, dict) else None
+        if sv:
+            case("viz:" + sv, "/api/viz/" + urllib.parse.quote(sv), tok)
 
-        # monitor: aggregates live third-party metrics (deeply volatile values);
-        # assert same status + identical top-level key set, not exact bytes.
-        print("\n== monitor (shape only) ==")
-        sd, bd = req(D, "/api/monitor", tok)
-        sf, bf = req(F, "/api/monitor", tok)
-        try:
-            kd = sorted(json.loads(bd).keys())
-            kf = sorted(json.loads(bf).keys())
-            ok = sd == sf == 200 and kd == kf
-        except Exception:  # noqa
-            ok = False
-            kd = kf = None
-        if ok:
-            tally["exact"] += 1
-            print(f"  [{PASS}] monitor  /api/monitor  ({sd})  keys={kd}")
-        else:
-            tally["diff"] += 1
-            print(f"  [{DIFF}] monitor  /api/monitor  dawn={sd}/{kd} fast={sf}/{kf}")
-            diffs.append(("monitor", "/api/monitor", f"{sd}/{sf}", str(kd), str(kf)))
-    else:
-        print("\n(no TOKEN — skipping authed reads)")
+    # /api/monitor aggregates live third-party metrics (CPU, bucket usage,
+    # vault liveness). The values cannot be golden; the SHAPE can, and that is
+    # what the differential harness compared too — only it compared the
+    # top-level key set, and this compares the whole nested skeleton (key names
+    # + value types, list lengths ignored). A renamed or dropped field fails.
+    print("\n== monitor (shape assertion, not values) ==")
+    st, body = req(B, "/api/monitor", tok)
+    try:
+        shape = skeleton(json.loads(body))
+    except ValueError:
+        shape = body
+    g.case("monitor.shape", {"path": "/api/monitor", "status": st, "shape": shape})
 
-    print("\n=== tally ===")
-    print(f"  EXACT {tally['exact']}   DIFF {tally['diff']}   ERR {tally['err']}")
-    if diffs:
-        print("\n--- differences ---")
-        for label, path, code, d, f in diffs:
-            print(f"\n[{label}] {path}  ({code})")
-            print(f"  dawn: {d}")
-            print(f"  fast: {f}")
-    sys.exit(1 if (tally["diff"] or tally["err"]) else 0)
+    return g.finish()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
