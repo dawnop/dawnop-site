@@ -2,6 +2,7 @@
 # SQLite + virtual-thread-per-request would race on a shared Connection, and
 # opening is cheap on a memory-mapped file. WAL lets Python and Dawn share the
 # file during the gradual cutover (readers never block the single writer).
+use std/str
 use java "java.sql.Connection"
 use sql.{open_ext, exec, query, ColStr}
 
@@ -26,9 +27,32 @@ pub fn connect(path: String, ext: String) -> Connection !io = {
 }
 
 ## Open a connection, run `body`, and close it — the per-request lifecycle.
-pub fn with_db[T](path: String, ext: String, body: fn(Connection) -> T !io) -> T !io = {
-  let c = connect(path, ext)
-  let r = body(c)
-  c.close()
-  r
+pub fn with_db[T](path: String, ext: String, body: fn(Connection) -> T !io) -> T !io =
+  using(connect(path, ext), body)
+
+# The close is unconditional, which is why it goes through `bracket` rather than
+# a statement after the call: production `main` catches a panicking request and
+# keeps serving, so a handle dropped on the failure path is not reclaimed at the
+# end of the request — it accumulates for the life of the process.
+#
+# Split out from with_db so the test below drives the same code an endpoint does
+# (bracket wants the resource as a value, and a test cannot reach the connection
+# with_db opens for itself).
+fn using[T](c: Connection, body: fn(Connection) -> T !io) -> T !io =
+  bracket(c, (h) => h.close(), body)
+
+test "the request connection is closed on both paths" {
+  let ok_conn = connect(":memory:", "")
+  assert using(ok_conn, (_h) => 7) == 7
+  assert ok_conn.isClosed()
+
+  # the leak this guards: with_db used to close after `body(c)` returned, so a
+  # panicking handler skipped the close entirely
+  let bad_conn = connect(":memory:", "")
+  let r: Result[Int, ForeignError] = catch_panic(() => using(bad_conn, (_h) => panic("boom")))
+  match r {
+    Ok(_) -> { assert false }
+    Err(e) -> { assert str.contains(e.message, "boom") }
+  }
+  assert bad_conn.isClosed()
 }

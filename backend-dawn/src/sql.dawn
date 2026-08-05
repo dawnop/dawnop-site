@@ -156,8 +156,10 @@ pub fn last_id(c: Connection) -> Result[Int, String] !io =
   scalar_int(c, "select last_insert_rowid()", [])
 
 ## Run `body` in a transaction: commit on Ok, roll back on Err. A transaction
-## left open by a panicked request is rolled back on entry (no try/finally in
-## Dawn — this is the recovery point).
+## left open on this connection is rolled back on entry. That entry rollback is
+## now belt and braces rather than the only recovery point: `db.with_db` closes
+## the per-request handle through `bracket`, so a panicking request takes its
+## open transaction down with the connection instead of leaving one behind.
 pub fn with_tx[T](c: Connection, body: fn() -> Result[T, String] !io) -> Result[T, String] !io = {
   if c.getAutoCommit() == false {
     c.rollback()
