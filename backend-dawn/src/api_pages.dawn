@@ -110,12 +110,12 @@ fn page_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Opti
       let _t = if has(m, "title") { set_page_str(c, id, "title", str.trim(str_or(m, "title", "")))? } else { 0 }
       let _nv = if has(m, "nav_visible") { set_page_int(c, id, "nav_visible", bool_int(bool_or(m, "nav_visible", false)))? } else { 0 }
       let _no = if has(m, "nav_order") { set_page_int(c, id, "nav_order", nav_order_of(m))? } else { 0 }
-      let _ty = if builtin == false && has(m, "type") { set_page_str(c, id, "type", str_or(m, "type", "content"))? } else { 0 }
-      let _de = if builtin == false && has(m, "description") { set_page_str(c, id, "description", str_or(m, "description", ""))? } else { 0 }
-      let _co = if builtin == false && has(m, "content") { set_page_str(c, id, "content", str_or(m, "content", ""))? } else { 0 }
-      let _au = if builtin == false && has(m, "auto_title") { set_page_int(c, id, "auto_title", bool_int(bool_or(m, "auto_title", false)))? } else { 0 }
-      let _ca = if builtin == false { match opt_str(m, "created_at") { Some(s) -> set_page_created(c, id, s)? None -> 0 } } else { 0 }
-      let _sl = if builtin == false && has(m, "slug") { regen_page_slug(c, id, slug_base(c, id, m)?)? } else { 0 }
+      let _ty = if not builtin && has(m, "type") { set_page_str(c, id, "type", str_or(m, "type", "content"))? } else { 0 }
+      let _de = if not builtin && has(m, "description") { set_page_str(c, id, "description", str_or(m, "description", ""))? } else { 0 }
+      let _co = if not builtin && has(m, "content") { set_page_str(c, id, "content", str_or(m, "content", ""))? } else { 0 }
+      let _au = if not builtin && has(m, "auto_title") { set_page_int(c, id, "auto_title", bool_int(bool_or(m, "auto_title", false)))? } else { 0 }
+      let _ca = if not builtin { match opt_str(m, "created_at") { Some(s) -> set_page_created(c, id, s)? None -> 0 } } else { 0 }
+      let _sl = if not builtin && has(m, "slug") { regen_page_slug(c, id, slug_base(c, id, m)?)? } else { 0 }
       let _u = touch_page(c, id)?
       repo_page.by_id_admin(c, id)
     }

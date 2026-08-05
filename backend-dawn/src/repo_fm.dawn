@@ -63,12 +63,12 @@ pub fn children(c: Connection, parent: String) -> Result[List[FileRow], String] 
 # dirs before files, then by lowercased path
 fn cmp_entry(a: FileRow, b: FileRow) -> Int =
   if a.is_dir != b.is_dir {
-    if a.is_dir { 0 - 1 } else { 1 }
+    if a.is_dir { -1 } else { 1 }
   } else {
     cmp_str(str.to_lower(a.path), str.to_lower(b.path))
   }
 
-fn cmp_str(a: String, b: String) -> Int = if a < b { 0 - 1 } else if a > b { 1 } else { 0 }
+fn cmp_str(a: String, b: String) -> Int = if a < b { -1 } else if a > b { 1 } else { 0 }
 
 ## The FsData for a directory listing.
 pub fn fs_data(c: Connection, dir_rel: String) -> Result[Json, String] !io = {

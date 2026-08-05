@@ -79,7 +79,7 @@ pub fn login(a: Auth) -> Handler =
     let form = parse_form(req.body)
     # OAuth2PasswordRequestForm requires both fields: an absent username/password
     # is a 422 (a present-but-empty value proceeds to the 401 auth check).
-    if has_field(form, "username") == false || has_field(form, "password") == false {
+    if not has_field(form, "username") || not has_field(form, "password") {
       Err(http_error(422, "username 和 password 必填"))
     } else {
       let username = get_or_blank(form, "username")

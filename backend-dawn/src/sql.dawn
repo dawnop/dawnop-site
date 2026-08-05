@@ -152,7 +152,7 @@ pub fn last_id(c: Connection) -> Result[Int, String] !io =
 ## the per-request handle through `bracket`, so a panicking request takes its
 ## open transaction down with the connection instead of leaving one behind.
 pub fn with_tx[T](c: Connection, body: fn() -> Result[T, String] !io) -> Result[T, String] !io = {
-  if c.getAutoCommit() == false {
+  if not c.getAutoCommit() {
     c.rollback()
     c.setAutoCommit(true)
   }

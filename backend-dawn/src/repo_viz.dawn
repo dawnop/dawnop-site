@@ -11,9 +11,9 @@ use jsonx.{obj, jint, jstr, jdatetime}
 pub fn valid_slug(s: String) -> Bool =
   str.len(s) > 0 && no_edge_dash(s) && only_slug_chars(s) && no_double_dash(s)
 
-fn no_edge_dash(s: String) -> Bool = str.starts_with(s, "-") == false && str.ends_with(s, "-") == false
+fn no_edge_dash(s: String) -> Bool = not str.starts_with(s, "-") && not str.ends_with(s, "-")
 
-fn no_double_dash(s: String) -> Bool = str.contains(s, "--") == false
+fn no_double_dash(s: String) -> Bool = not str.contains(s, "--")
 
 fn only_slug_chars(s: String) -> Bool =
   fold(code_points(s), true, (acc, c) => acc && is_slug_char(c))
@@ -97,10 +97,10 @@ test "valid_slug accepts clean slugs, rejects the rest" {
   assert valid_slug("dawn-trait-orphan")
   assert valid_slug("about-timeline")
   assert valid_slug("abc123")
-  assert valid_slug("-lead") == false
-  assert valid_slug("trail-") == false
-  assert valid_slug("dou--ble") == false
-  assert valid_slug("Upper") == false
-  assert valid_slug("has space") == false
-  assert valid_slug("") == false
+  assert not valid_slug("-lead")
+  assert not valid_slug("trail-")
+  assert not valid_slug("dou--ble")
+  assert not valid_slug("Upper")
+  assert not valid_slug("has space")
+  assert not valid_slug("")
 }

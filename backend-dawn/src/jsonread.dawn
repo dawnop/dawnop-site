@@ -71,7 +71,7 @@ test "reads fields and honors presence" {
       assert opt_int(m, "page_id") == Some(3)
       assert str_list(m, "tags") == ["a", "b"]
       assert has(m, "title")
-      assert has(m, "missing") == false
+      assert not has(m, "missing")
       assert opt_int(m, "missing") == None
     }
     Err(e) -> panic(e)

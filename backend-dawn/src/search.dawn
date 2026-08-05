@@ -13,19 +13,17 @@ use repo_article.{word_count, tags_json}
 # ---- HTML escape (matches Python html.escape, quote=True) ----
 
 pub fn html_escape(s: String) -> String = {
-  let a = replace(s, "&", "&amp;")
-  let b = replace(a, "<", "&lt;")
-  let d = replace(b, ">", "&gt;")
-  let e = replace(d, "\"", "&quot;")
-  replace(e, "'", "&#x27;")
+  let a = str.replace(s, "&", "&amp;")
+  let b = str.replace(a, "<", "&lt;")
+  let d = str.replace(b, ">", "&gt;")
+  let e = str.replace(d, "\"", "&quot;")
+  str.replace(e, "'", "&#x27;")
 }
-
-fn replace(s: String, from: String, to: String) -> String = join(str.split(s, from), to)
 
 # normalize tab/newline/CR to spaces so a whitespace-run split matches Python's
 # str.split() (which splits on any whitespace, not only U+0020)
 fn ws_to_space(s: String) -> String =
-  replace(replace(replace(s, "\t", " "), "\n", " "), from_code_points([13]), " ")
+  str.replace(str.replace(str.replace(s, "\t", " "), "\n", " "), "\r", " ")
 # ---- <mark> wrapping on escaped text (case-insensitive, term order) ----
 
 ## Wrap each occurrence of an (escaped) term in <mark>. Operates on already-

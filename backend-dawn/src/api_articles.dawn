@@ -71,7 +71,7 @@ pub fn create(a: Auth) -> Handler =
   guarded_user(a, req, _u =>
       {
         let m = as_http(body_obj(req.body), 422)?
-        if has(m, "title") == false || str.trim(str_or(m, "title", "")) == "" {
+        if not has(m, "title") || str.trim(str_or(m, "title", "")) == "" {
           Err(http_error(422, "标题不能为空"))
         } else if over_len(str_or(m, "title", "")) || over_len(str_or(m, "slug", "")) {
           Err(http_error(422, "标题或 slug 长度超出 255"))

@@ -191,7 +191,7 @@ pub fn content(a: Auth) -> Handler =
             # a non-2xx body is qiniu's error, not the file — serving it would
             # hand the browser a JSON error under the file's content type. Close
             # the stream (don't leak the connection) and map to an error.
-            if ok_stream(r) == false {
+            if not ok_stream(r) {
               close_stream(r.stream)
               Err(http_error(502, "qiniu ${r.status}"))
             } else {
@@ -268,7 +268,7 @@ fn thumb_fop(content_type: String, size: Int, w: Option[Int], h: Option[Int], mo
   match (w, h) {
     (None, None) -> None
     _ ->
-      if thumbable(content_type) == false {
+      if not thumbable(content_type) {
         None
       } else if size <= 51200 { # 50 * 1024
         None

@@ -62,9 +62,9 @@ fn contains_ci(hay: String, needle: String) -> Bool = str.contains(str.to_lower(
 
 # XML text escaping (& < >), matching xml.sax.saxutils.escape; & must go first.
 fn xml_escape(s: String) -> String = {
-  let a = join(str.split(s, "&"), "&amp;")
-  let b = join(str.split(a, "<"), "&lt;")
-  join(str.split(b, ">"), "&gt;")
+  let a = str.replace(s, "&", "&amp;")
+  let b = str.replace(a, "<", "&lt;")
+  str.replace(b, ">", "&gt;")
 }
 
 # ---- dates (HTTP RFC1123 and ISO8601, both GMT) ----
@@ -101,7 +101,7 @@ fn href(prefix: String, rel: String, is_dir: Bool) -> String !io = {
     } else {
       "$prefix/$path"
     }
-  if is_dir && str.ends_with(base, "/") == false { base ++ "/" } else { base }
+  if is_dir && not str.ends_with(base, "/") { base ++ "/" } else { base }
 }
 
 # ---- PROPFIND XML ----
@@ -223,7 +223,7 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
           # anything else is an upstream error whose body is not the file. Streaming
           # can't measure the returned length, so decide 206-vs-200 by the upstream
           # status (the interval was already validated against the trusted o.size).
-          if ok_stream(r) == false {
+          if not ok_stream(r) {
             close_stream(r.stream)
             Err(http_error(502, "qiniu ${r.status}"))
           } else if r.status == 206 {
@@ -236,7 +236,7 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
       None ->
         {
           let r = as_http(fetch_stream(signed_url(a.qiniu, key, ""), [("Accept-Encoding", "identity")]), 502)?
-          if ok_stream(r) == false {
+          if not ok_stream(r) {
             close_stream(r.stream)
             Err(http_error(502, "qiniu ${r.status}"))
           } else {
@@ -254,7 +254,7 @@ fn range_of(req: Request, total: Int) -> Option[(Int, Int)] =
   match header(req, "range") {
     None -> None
     Some(rng) ->
-      if str.starts_with(rng, "bytes=") == false || total <= 0 {
+      if not str.starts_with(rng, "bytes=") || total <= 0 {
         None
       } else {
         let spec = str.substring(rng, 6, str.len(rng))
@@ -328,7 +328,7 @@ fn put(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io =
 fn put_do(a: Auth, req: Request, rel: String, existing: Option[FileRow]) -> Result[Response, HttpError] !io =
   {
     let ok = as_http(parent_exists(a, rel), 500)?
-    if ok == false {
+    if not ok {
       Err(http_error(409, "父目录不存在"))
     } else {
       let mime = guess_mime(basename(rel))
@@ -400,7 +400,7 @@ fn mkcol(a: Auth, rel: String) -> Result[Response, HttpError] !io =
       Some(_) -> Err(http_error(405, "已存在同名项"))
       None -> {
         let ok = as_http(parent_exists(a, rel), 500)?
-        if ok == false {
+        if not ok {
           Err(http_error(409, "父目录不存在"))
         } else {
           let _i = as_http(with_db(a.db.path, a.db.ext, c => insert_folder(c, rel)), 500)?
@@ -458,7 +458,7 @@ fn mc_check_dst(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) 
     let dst_existing = as_http(with_db(a.db.path, a.db.ext, c => get_row(c, dst)), 500)?
     let overwrite = str.to_upper(header_or(req, "overwrite", "T")) != "F"
     match dst_existing {
-      Some(_) -> if overwrite == false { Err(http_error(412, "目标已存在")) } else { mc_purge_then(a, rel, dst, is_move, true) }
+      Some(_) -> if not overwrite { Err(http_error(412, "目标已存在")) } else { mc_purge_then(a, rel, dst, is_move, true) }
       None -> mc_require_parent(a, rel, dst, is_move, false)
     }
   }
@@ -481,7 +481,7 @@ fn purge_silent(a: Auth, rel: String) -> Result[Int, String] !io =
 fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =
   {
     let ok = as_http(parent_exists(a, dst), 500)?
-    if ok == false { Err(http_error(409, "父目录不存在")) } else { mc_apply(a, rel, dst, is_move, dst_existed) }
+    if not ok { Err(http_error(409, "父目录不存在")) } else { mc_apply(a, rel, dst, is_move, dst_existed) }
   }
 
 fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io = {
@@ -572,7 +572,7 @@ fn dav_auth(a: Auth, cell: AtomicReference, req: Request) -> Option[Response] !i
   match header(req, "authorization") {
     None -> Some(unauthorized())
     Some(h) ->
-      if str.starts_with(h, "Basic ") == false {
+      if not str.starts_with(h, "Basic ") {
         Some(unauthorized())
       } else {
         # malformed base64 is a 401, not a 500 (FastAPI wraps b64decode in try/except)

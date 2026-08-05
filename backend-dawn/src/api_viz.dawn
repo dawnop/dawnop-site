@@ -32,7 +32,7 @@ pub fn viz_create(a: Auth) -> Handler =
             Err(http_error(422, "字段不能为 null"))
           } else if str.len(str_or(m, "slug", "")) > 255 {
             Err(http_error(422, "slug 长度超出 255"))
-          } else if valid_slug(slug) == false {
+          } else if not valid_slug(slug) {
             Err(http_error(422, "slug 格式非法"))
           } else if str.trim(source) == "" {
             Err(http_error(422, "source 不能为空"))
@@ -51,7 +51,7 @@ pub fn viz_create(a: Auth) -> Handler =
 
 fn viz_create_read(c: Connection, nv: NewViz) -> Result[Option[Json], String] !io = {
   let free = slug_free(c, nv.slug, None)?
-  if free == false {
+  if not free {
     Ok(None)
   } else {
     let id = create_viz(c, nv)?
@@ -86,7 +86,7 @@ fn classify_viz(msg: String) -> HttpError = {
 
 fn viz_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Option[Json], String] !io = {
   let ex = viz_exists(c, id)?
-  if ex == false {
+  if not ex {
     Ok(None)
   } else {
     # PATCH semantics: a present, non-null field is applied; an explicit null is
@@ -107,11 +107,11 @@ fn update_viz_slug(c: Connection, id: Int, raw: String) -> Result[Int, String] !
   let slug = str.to_lower(str.trim(raw))
   if str.len(raw) > 255 {
     Err("slug 长度超出 255")
-  } else if valid_slug(slug) == false {
+  } else if not valid_slug(slug) {
     Err("slug 格式非法")
   } else {
     let free = slug_free(c, slug, Some(id))?
-    if free == false { Err(conflict("标识 $slug 已存在")) } else { set_viz_str(c, id, "slug", slug) }
+    if not free { Err(conflict("标识 $slug 已存在")) } else { set_viz_str(c, id, "slug", slug) }
   }
 }
 

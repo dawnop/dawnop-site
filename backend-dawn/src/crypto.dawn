@@ -105,7 +105,7 @@ test "base64url round-trips, unpadded and multibyte" {
 
 test "constant-time equality" {
   assert eq_const("same", "same")
-  assert eq_const("same", "diff") == false
+  assert not eq_const("same", "diff")
 }
 
 test "uuid shape" {

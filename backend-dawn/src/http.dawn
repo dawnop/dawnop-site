@@ -247,7 +247,7 @@ test "fetch_stream carries a non-2xx status; ok_stream is false" {
   match fetch_stream("http://127.0.0.1:$port/", []) {
     Ok(r) -> {
       assert r.status == 404
-      assert ok_stream(r) == false
+      assert not ok_stream(r)
       # a rejecting caller closes the stream so the connection frees
       close_stream(r.stream)
     }

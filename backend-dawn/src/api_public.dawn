@@ -54,10 +54,10 @@ fn fetch_detail(c: Connection, slug: String, authed: Bool) -> Result[Option[Json
   match published_of(c, slug)? {
     None -> Ok(None)
     Some(published) ->
-      if published == false && authed == false {
+      if not published && not authed {
         Ok(None)
       } else {
-        let _b = if authed == false && published { bump_views(c, slug)? } else { 0 }
+        let _b = if not authed && published { bump_views(c, slug)? } else { 0 }
         by_slug_any(c, slug)
       }
   }

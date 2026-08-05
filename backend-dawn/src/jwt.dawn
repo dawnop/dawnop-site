@@ -29,7 +29,7 @@ pub fn verify(secret: String, token: String) -> Result[String, String] !io = {
   } else {
     let signing_input = "${parts[0]}.${parts[1]}"
     let expected = hmac_sha256_b64url_nopad(secret, signing_input)
-    if eq_const(expected, parts[2]) == false {
+    if not eq_const(expected, parts[2]) {
       Err("bad signature")
     } else {
       let payload = b64url_decode(parts[1])?
@@ -71,7 +71,7 @@ test "a tampered signature is rejected" {
 }
 
 test "an expired token is rejected" {
-  let tok = sign("secret", "admin", 0 - 1)
+  let tok = sign("secret", "admin", -1)
   assert verify("secret", tok) == Err("token expired")
 }
 

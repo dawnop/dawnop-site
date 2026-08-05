@@ -153,7 +153,7 @@ pub type ArticlePatch = {
 ## Update an article. Ok(true) on success, Ok(false) when the id is absent.
 pub fn update_article(c: Connection, id: Int, p: ArticlePatch) -> Result[Bool, String] !io = {
   let exists = article_exists(c, id)?
-  if exists == false {
+  if not exists {
     Ok(false)
   } else {
     let _v = if p.has_page_id { validate_page_ref(c, p.page_id)? } else { true }

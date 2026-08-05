@@ -2,7 +2,7 @@
 # request body arrives as first-class Bytes (Request.raw). Structure is located
 # at the byte level (byte_index_of / byte_slice), each part's content is kept as
 # raw Bytes, and only the ASCII header block is decoded to a string for field
-# extraction. CRLF is spelled from_code_points([13,10]); Dawn has no \r escape.
+# extraction.
 
 use std/str
 use std/bytes
@@ -15,9 +15,9 @@ pub type Part = {
   content: Bytes, # the part's raw bytes
 }
 
-fn crlf() -> String = from_code_points([13, 10])
-fn crlf_b() -> Bytes = bytes.utf8(from_code_points([13, 10]))
-fn crlf2_b() -> Bytes = bytes.utf8(from_code_points([13, 10, 13, 10]))
+fn crlf() -> String = "\r\n"
+fn crlf_b() -> Bytes = bytes.utf8(crlf())
+fn crlf2_b() -> Bytes = bytes.utf8("\r\n\r\n")
 
 ## The substring after the first occurrence of `sep`; None if `sep` is absent.
 fn after(s: String, sep: String) -> Option[String] = {

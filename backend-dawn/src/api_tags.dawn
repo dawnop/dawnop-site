@@ -41,7 +41,7 @@ pub fn tag_rename(a: Auth) -> Handler =
 
 fn rename_then_read(c: Connection, id: Int, name: String) -> Result[Option[Json], String] !io = {
   let ex = tag_exists(c, id)?
-  if ex == false {
+  if not ex {
     Ok(None)
   } else {
     let _r = rename_tag(c, id, name)?
@@ -74,7 +74,7 @@ pub fn tag_merge(a: Auth) -> Handler =
 fn merge_then_read(c: Connection, s: Int, t: Int) -> Result[Option[Json], String] !io = {
   let se = tag_exists(c, s)?
   let te = tag_exists(c, t)?
-  if se == false || te == false {
+  if not se || not te {
     Ok(None)
   } else {
     let cnt = merge_tags(c, s, t)?
