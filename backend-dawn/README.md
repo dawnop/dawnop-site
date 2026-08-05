@@ -7,7 +7,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 与 `POST /api/fm/upload`（multipart 代理上传，`src/multipart.dawn`）**也已落地**。
 
 契约由 `scripts/golden/*.json` 钉住（`scripts/contract_run.py`，CI 每次 push 都跑）：
-播种固定 fixture → 起后端 → 151 条响应逐字节比对；6 条需七牛密钥的用例是具名 skip。
+播种固定 fixture → 起后端 → 153 条响应逐字节比对；6 条需七牛密钥的用例是具名 skip。
 
 ## 依赖与构建
 
@@ -20,7 +20,9 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   **jar 与 `lib/` 都是构建产物，不入库**——jar 曾经入库，结果是它悄悄落后于 `src/`（要靠手动
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
-- 测试：`dawn test .`（60 个单测，无需 .env / 库 / libsimple / 网络，CI 每次 push 都跑）。
+- 测试：`dawn test .`（本仓 73 个单测，连 web/json 两个包共 123 个；无需 .env / 库 /
+  libsimple / 网络，CI 每次 push 都跑）。用到 SQLite 的几个跑内存库（`jdbc:sqlite::memory:`），
+  自带建表，不碰 fixture。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
   绑定 `127.0.0.1:$DAWN_PORT`，默认 8001）。
 
@@ -36,7 +38,13 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 ## 模块地图
 
 **基础设施（预备刀 1–5）**
-- `sql.dawn` — SQLite JDBC 薄包装：`SqlV/Col/Cell` ADT、`query/exec/with_tx`、类型化取值。
+- `sql.dawn` — SQLite JDBC 薄包装：`SqlV/Col/Cell` ADT、`query/exec/with_tx`、类型化取值、
+  `first_*` 首行取值（`match get(rows, 0)` 的样板收在这里）。
+  **按列名读行（`query_rows` + `row.col_int("id")`）只用在选择列表是共享常量的三处**：
+  `repo_article` 的 `LIST_COLS`(12 列)、`repo_page` 的 `PAGE_COLS`(11 列)、`repo_viz` 的
+  `OUT_COLS`(8 列)——这类列表被多条查询共用，加一列就得数所有下标，位置索引在这里是负担。
+  其余仓（tag / fm / export / auth / search）是 1–4 列的就地 select，下标与 select 同屏可见，
+  按位置读更短也不易错，**故意保留**，不是漏迁。
 - `ferr.dawn` — `ForeignError` → 旧版 `Throwable.toString()` 文本（`fe_text`）：v0.33.0+ 的
   `catch_fault`/`cast` 返回结构化 `ForeignError`，各屏障模块经它转回 `Result[T, String]`，错误文案与升级前逐字节一致。
 - `db.dawn` — 每请求一连接（`with_db`）：WAL + `load_extension(libsimple)`。
@@ -70,7 +78,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `fm_service.dawn` — 文件树操作层：①`api_fm` 与 `webdav` 共用的对象存储原语（signed_url / rebase / superseded_key / gc_superseded / copy_object / delete_object_of）——
   只回 Result 不映射状态码，因为两个调用方的错误映射与连接持有方式本就不同（fm 一棵树一条连接，WebDAV 一步一条）；②`api_fm` 自己的树遍历（rename/move/copy/delete/save/upload）。
 - `qiniu_sign.dawn` — 三类七牛签名：上传凭证、私有下载 URL、QBox 管理、QiniuMacAuth（统计/CDN/账单，含 body）。
-- `qiniu_rs.dawn` — 管理 REST：stat/delete/copy/upload_text/space_used。
+- `qiniu_rs.dawn` — 管理 REST：stat/delete/copy/upload_text/upload_bytes/upload_file。
 - `fm_paths.dawn` / `repo_fm.dawn` — 路径原语 / 虚拟树（path↔key，DirEntry 序列化）。
 
 **监控（刀 12）**

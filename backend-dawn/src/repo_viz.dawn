@@ -2,7 +2,7 @@
 # ```viz fences mount. slug must match ^[a-z0-9]+(-[a-z0-9]+)*$; source required.
 use std/str
 use java "java.sql.Connection"
-use sql.{PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, last_id, int_at, str_at, first_map, first_bool_or}
+use sql.{PInt, PStr, Col, ColInt, ColStr, Row, query, query_rows, exec, last_id, str_at, first_map, first_named_map, first_bool_or, col_int, col_str}
 use json/value.{Json}
 use jsonx.{obj, jint, jstr, jdatetime}
 
@@ -25,29 +25,29 @@ const OUT_COLS: String = "id, slug, name, source, compiled, style, created_at, u
 
 fn out_col_types() -> List[Col] = [ColInt, ColStr, ColStr, ColStr, ColStr, ColStr, ColStr, ColStr]
 
-fn out_json(r: List[Cell]) -> Json =
+fn out_json(r: Row) -> Json =
   obj([
-    ("id", jint(int_at(r, 0))),
-    ("slug", jstr(str_at(r, 1))),
-    ("name", jstr(str_at(r, 2))),
-    ("source", jstr(str_at(r, 3))),
-    ("compiled", jstr(str_at(r, 4))),
-    ("style", jstr(str_at(r, 5))),
-    ("created_at", jdatetime(str_at(r, 6))),
-    ("updated_at", jdatetime(str_at(r, 7))),
+    ("id", jint(r.col_int("id"))),
+    ("slug", jstr(r.col_str("slug"))),
+    ("name", jstr(r.col_str("name"))),
+    ("source", jstr(r.col_str("source"))),
+    ("compiled", jstr(r.col_str("compiled"))),
+    ("style", jstr(r.col_str("style"))),
+    ("created_at", jdatetime(r.col_str("created_at"))),
+    ("updated_at", jdatetime(r.col_str("updated_at"))),
   ])
 
 ## GET /api/viz — all components (admin, full VizOut). Ordered newest-edited
 ## first to match app/api/viz.py (order_by updated_at desc).
 pub fn list_all(c: Connection) -> Result[List[Json], String] !io = {
-  let rows = query(c, "select $OUT_COLS from viz_components order by updated_at desc", [], out_col_types())?
+  let rows = query_rows(c, "select $OUT_COLS from viz_components order by updated_at desc", [], out_col_types())?
   Ok(map(rows, out_json))
 }
 
 ## Full component by id (VizOut) — create/update response.
 pub fn by_id(c: Connection, id: Int) -> Result[Option[Json], String] !io = {
-  let rows = query(c, "select $OUT_COLS from viz_components where id = ?", [PInt(id)], out_col_types())?
-  Ok(first_map(rows, r => out_json(r)))
+  let rows = query_rows(c, "select $OUT_COLS from viz_components where id = ?", [PInt(id)], out_col_types())?
+  Ok(first_named_map(rows, r => out_json(r)))
 }
 
 ## GET /api/viz/{slug} — public component {slug, name, compiled, style}.

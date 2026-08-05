@@ -271,6 +271,13 @@ pub fn first_map[T](rows: List[List[Cell]], f: fn(List[Cell]) -> T !io) -> Optio
     None -> None
   }
 
+## `first_map` for the read-by-name flavour (`query_rows`).
+pub fn first_named_map[T](rows: List[Row], f: fn(Row) -> T !io) -> Option[T] !io =
+  match get(rows, 0) {
+    Some(r) -> Some(f(r))
+    None -> None
+  }
+
 # ---- read-by-name accessors (Row from query_rows) ----
 # A missing name is a repo-layer bug (the column is not in the select list),
 # hence panic — same stance as a positional type mismatch above.
