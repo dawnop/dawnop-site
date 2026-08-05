@@ -66,6 +66,9 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 **文件管理（刀 11）**
 - `api_fm.dawn` — 17 端点（除 `upload`）：列目录 / 预览 / 下载（302）/ 内容代理（二进制）/ stats / search / CRUD / save / register / upload-token。
+  只剩路由与线格式，树操作在 `fm_service.dawn`。
+- `fm_service.dawn` — 文件树操作层：①`api_fm` 与 `webdav` 共用的对象存储原语（signed_url / rebase / superseded_key / gc_superseded / copy_object / delete_object_of）——
+  只回 Result 不映射状态码，因为两个调用方的错误映射与连接持有方式本就不同（fm 一棵树一条连接，WebDAV 一步一条）；②`api_fm` 自己的树遍历（rename/move/copy/delete/save/upload）。
 - `qiniu_sign.dawn` — 三类七牛签名：上传凭证、私有下载 URL、QBox 管理、QiniuMacAuth（统计/CDN/账单，含 body）。
 - `qiniu_rs.dawn` — 管理 REST：stat/delete/copy/upload_text/space_used。
 - `fm_paths.dawn` / `repo_fm.dawn` — 路径原语 / 虚拟树（path↔key，DirEntry 序列化）。

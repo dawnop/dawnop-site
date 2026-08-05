@@ -61,7 +61,8 @@ dawnop-site/
 │   │   ├── config.dawn db.dawn crypto.dawn jwt.dawn auth.dawn slugify.dawn ttl.dawn
 │   │   ├── api_*.dawn          # 路由层：public / articles / settings / tags / pages / viz / fm / monitor
 │   │   ├── repo_*.dawn sql.dawn  # 数据层：article/page/tag/pagetag/viz/settings/fm/write
-│   │   ├── webdav.dawn export.dawn multipart.dawn search.dawn monitor.dawn fm_paths.dawn
+│   │   ├── webdav.dawn export.dawn multipart.dawn search.dawn monitor.dawn
+│   │   ├── fm_paths.dawn fm_service.dawn  # 路径原语 / 文件树操作层（api_fm 与 webdav 共用）
 │   │   ├── http.dawn           # 出站 HTTP 客户端（七牛/腾讯管理 API、register stat、探针）
 │   │   ├── qiniu_*.dawn tencent_*.dawn  # 对象存储：签名 / rs 操作 / 用量统计
 │   │   ├── jsonx.dawn jsonread.dawn      # 应用层 JSON：构造 wire 形状 / 读请求体字段

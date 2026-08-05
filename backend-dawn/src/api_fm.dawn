@@ -13,21 +13,23 @@ use multipart.{Part, boundary_of, parse_multipart, part_named}
 use http.{fetch_stream, ok_stream, close_stream}
 use web/router.{Route, route_get, route_post, tagged}
 use jsonx.{obj, jstr, jint}
-use db.{Db, with_db}
-use auth.{Auth, Qiniu, guarded, guarded_flexible}
+use db.{with_db}
+use auth.{Auth, guarded, guarded_flexible}
 use jsonread.{body_obj, str_or, str_list, opt_int}
-use fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime, strip_slashes, strip_trailing_slash}
-use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, ledger_insert, ledger_delete, search_files, subtree_rows, entry_json, delete_row, stats_db, FileRow}
+use fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime}
+use repo_fm.{fs_data, ensure_dirs, insert_file, get_row, ledger_insert, ledger_delete, search_files, entry_json, stats_db}
+use fm_service.{signed_url, gc_superseded, mk_folder, do_rename, do_move, do_copy, do_delete,
+  item_paths, merge_deleted, do_create_file, do_save, run_upload, sanitize_name, token_rel }
 use repo_settings.{setting_int}
-use errkind.{Kind, KConflict, conflict, split_kind}
+use errkind.{KConflict, split_kind}
 use crypto.{uuid_hex}
 use export.{pct_encode}
-use qiniu_sign.{private_url, upload_token}
-use qiniu_rs.{delete_obj, copy_obj, stat, upload_text, upload_bytes}
+use qiniu_sign.{upload_token}
+use qiniu_rs.{stat}
 use qiniu_stats.{kodo_series, last_nonzero, field, int_of}
 use monitor.{respack_cached}
 use ttl.{cache_get, cache_put, now_s}
-use json/value.{Json, JNull, JArr, JObj, JStr, JNum, JInt}
+use json/value.{Json, JNull, JObj, JStr, JNum, JInt}
 use json/render.{render}
 use json/parser.{parse}
 
@@ -61,18 +63,6 @@ pub fn create_folder(a: Auth) -> Handler =
         }
       })
 
-fn mk_folder(c: Connection, rel: String, cur: String) -> Result[Option[Json], String] !io = {
-  let t = taken(c, rel)?
-  if t {
-    Ok(None)
-  } else {
-    let _e = ensure_dirs(c, rel)?
-    let _i = insert_folder(c, rel)?
-    let d = fs_data(c, cur)?
-    Ok(Some(d))
-  }
-}
-
 ## POST /api/fm/rename — {path, item, name}.
 pub fn rename(a: Auth) -> Handler =
   (req) =>
@@ -93,21 +83,6 @@ pub fn rename(a: Auth) -> Handler =
         }
       })
 
-fn do_rename(c: Connection, old: String, new_rel: String, cur: String) -> Result[Option[Json], String] !io =
-  if new_rel == old {
-    let d = fs_data(c, cur)?
-    Ok(Some(d))
-  } else {
-    let t = taken(c, new_rel)?
-    if t {
-      Ok(None)
-    } else {
-      let _r = reparent(c, old, new_rel)?
-      let d = fs_data(c, cur)?
-      Ok(Some(d))
-    }
-  }
-
 ## POST /api/fm/move — {path, destination, sources[]}.
 pub fn move(a: Auth) -> Handler =
   (req) =>
@@ -120,38 +95,7 @@ pub fn move(a: Auth) -> Handler =
         Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, (c) => do_move(c, sources, dest, cur, 0)), conflict_or(500))?))
       })
 
-fn do_move(c: Connection, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
-  if i >= len(sources) {
-    fs_data(c, cur)
-  } else {
-    let src = fm_split(sources[i])
-    if src == "" {
-      do_move(c, sources, dest, cur, i + 1)
-    } else {
-      let new_rel = fm_join(dest, basename(src))
-      if new_rel == src || str.starts_with(new_rel, "$src/") {
-        do_move(c, sources, dest, cur, i + 1)
-      } else {
-        let t = taken(c, new_rel)?
-        if t {
-          Err(conflict("已存在同名项：${basename(new_rel)}"))
-        } else {
-          let _e = ensure_dirs(c, new_rel)?
-          let _r = reparent(c, src, new_rel)?
-          do_move(c, sources, dest, cur, i + 1)
-        }
-      }
-    }
-  }
-
 # ---- qiniu URL / upload endpoints (read-only: sign & redirect, no mutation) ----
-
-# the signed private URL for a stored file (deadline = now + configured expires)
-fn signed(q: Qiniu, key: String, suffix: String) -> String !io = {
-  let domain = strip_trailing_slash(q.domain)
-  let base = "$domain/$key$suffix"
-  private_url(q.ak, q.sk, base, now_s() + q.expires)
-}
 
 ## GET /api/fm/sign?path= — a signed URL for direct fetch (text preview).
 pub fn sign(a: Auth) -> Handler =
@@ -161,7 +105,7 @@ pub fn sign(a: Auth) -> Handler =
     match as_http(with_db(a.db.path, a.db.ext, (c) => get_row(c, rel)), 500)? {
       Some(o) ->
         match o.key {
-          Some(k) -> Ok(json_ok(obj([("url", jstr(signed(a.qiniu, k, "")))])))
+          Some(k) -> Ok(json_ok(obj([("url", jstr(signed_url(a.qiniu, k, "")))])))
           None -> Err(http_error(404, "文件不存在"))
         }
       None -> Err(http_error(404, "文件不存在"))
@@ -242,7 +186,7 @@ pub fn content(a: Auth) -> Handler =
       Some(o) ->
         match o.key {
           Some(k) -> {
-            let url = signed(a.qiniu, k, "")
+            let url = signed_url(a.qiniu, k, "")
             let r = as_http(fetch_stream(url, []), 502)?
             # a non-2xx body is qiniu's error, not the file — serving it would
             # hand the browser a JSON error under the file's content type. Close
@@ -289,7 +233,7 @@ pub fn preview(a: Auth) -> Handler =
               Some(fop) -> "?$fop"
               None -> ""
             }
-            Ok(redirect(302, signed(a.qiniu, k, suffix)))
+            Ok(redirect(302, signed_url(a.qiniu, k, suffix)))
           }
           None -> Err(http_error(404, "文件不存在"))
         }
@@ -353,7 +297,7 @@ fn redirect_to_named(a: Auth, rel: String) -> Result[Response, HttpError] !io =
   match as_http(with_db(a.db.path, a.db.ext, (c) => get_row(c, rel)), 500)? {
     Some(o) ->
       match o.key {
-        Some(k) -> Ok(redirect(302, signed(a.qiniu, k, "?attname=${url_q(basename(rel))}")))
+        Some(k) -> Ok(redirect(302, signed_url(a.qiniu, k, "?attname=${url_q(basename(rel))}")))
         None -> Err(http_error(404, "文件不存在"))
       }
     None -> Err(http_error(404, "文件不存在"))
@@ -410,59 +354,6 @@ pub fn delete(a: Auth) -> Handler =
         Ok(json_ok(merge_deleted(base, deleted)))
       })
 
-# items is [{path: "qiniu://..."}]; extract the split rel paths
-fn item_paths(m: Map[String, Json]) -> List[String] =
-  match map.get(m, "items") {
-    Some(JArr(xs)) -> fold(xs, [], (acc, j) =>
-        match j {
-          JObj(im) ->
-            match map.get(im, "path") {
-              Some(JStr(p)) -> acc ++ [fm_split(p)]
-              _ -> acc
-            }
-          _ -> acc
-        })
-    _ -> []
-  }
-
-fn do_delete(q: Qiniu, c: Connection, items: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
-  if i >= len(items) {
-    Ok(acc)
-  } else {
-    let rel = items[i]
-    if rel == "" {
-      do_delete(q, c, items, i + 1, acc)
-    } else {
-      let rows = subtree_rows(c, rel)?
-      let d2 = delete_rows(q, c, rows, 0, acc)?
-      do_delete(q, c, items, i + 1, d2)
-    }
-  }
-
-fn delete_rows(q: Qiniu, c: Connection, rows: List[FileRow], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
-  if i >= len(rows) {
-    Ok(acc)
-  } else {
-    let o = rows[i]
-    let _obj = if o.is_dir == false {
-      match o.key {
-        Some(k) -> delete_obj(q.ak, q.sk, q.bucket, k)?
-        None -> ()
-      }
-    } else {
-      ()
-    }
-    let e = entry_json(o)
-    let _d = delete_row(c, o.path)?
-    delete_rows(q, c, rows, i + 1, acc ++ [e])
-  }
-
-fn merge_deleted(base: Json, deleted: List[Json]) -> Json =
-  match base {
-    JObj(bm) -> JObj(map.insert(bm, "deleted", JArr(deleted)))
-    _ -> base
-  }
-
 ## POST /api/fm/create-file — {path, name}. Creates an empty file object.
 pub fn create_file(a: Auth) -> Handler =
   (req) =>
@@ -482,25 +373,6 @@ pub fn create_file(a: Auth) -> Handler =
         }
       })
 
-fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json], String] !io = {
-  let t = with_db(a.db.path, a.db.ext, (c) => taken(c, rel))?
-  if t {
-    Ok(None)
-  } else {
-    let mime = guess_mime(rel)
-    let key = uuid_hex()
-    let _up = upload_text(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, "", mime, now_s() + a.qiniu.expires)?
-    let d = with_db(a.db.path, a.db.ext, (c) => create_file_db(c, rel, key, mime, cur))?
-    Ok(Some(d))
-  }
-}
-
-fn create_file_db(c: Connection, rel: String, key: String, mime: String, cur: String) -> Result[Json, String] !io = {
-  let _e = ensure_dirs(c, rel)?
-  let _i = insert_file(c, rel, key, mime, 0)?
-  fs_data(c, cur)
-}
-
 ## POST /api/fm/save — {path, content}. Writes text to a NEW qiniu key (CDN
 ## caches by URL, so overwrite would read stale), updates the DB, deletes the
 ## old key. Returns {path}.
@@ -518,40 +390,6 @@ pub fn save(a: Auth) -> Handler =
         }
       })
 
-fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !io = {
-  let existing = with_db(a.db.path, a.db.ext, (c) => get_row(c, rel))?
-  let mime = save_mime(existing, rel)
-  let old_key: Option[String] = match existing {
-    Some(o) -> o.key
-    None -> None
-  }
-  let new_key = save_key(rel)
-  let _up = upload_text(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, new_key, content, mime, now_s() + a.qiniu.expires)?
-  let _db = with_db(a.db.path, a.db.ext, (c) => save_db(c, rel, new_key, mime, str.len(content)))?
-  # best-effort delete of the superseded object (ignore failure)
-  let _del: Result[Unit, String] = match old_key {
-    Some(k) -> if k != new_key { delete_obj(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, k) } else { Ok(()) }
-    None -> Ok(())
-  }
-  Ok(obj([("path", jstr(full(rel)))]))
-}
-
-fn save_db(c: Connection, rel: String, key: String, mime: String, size: Int) -> Result[Int, String] !io = {
-  let _e = ensure_dirs(c, rel)?
-  insert_file(c, rel, key, mime, size)
-}
-
-fn save_mime(existing: Option[FileRow], rel: String) -> String =
-  match existing {
-    Some(o) -> if o.content_type != "" { o.content_type } else { guess_mime(rel) }
-    None -> guess_mime(rel)
-  }
-
-fn save_key(rel: String) -> String !io = {
-  let e = ext(basename(rel))
-  if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
-}
-
 ## POST /api/fm/copy — {path, destination, sources[]}. Copies each subtree;
 ## files get a fresh qiniu object (new uuid key), dirs are recreated.
 pub fn copy(a: Auth) -> Handler =
@@ -564,52 +402,6 @@ pub fn copy(a: Auth) -> Handler =
         let sources = str_list(m, "sources")
         Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, (c) => do_copy(a.qiniu, c, sources, dest, cur, 0)), conflict_or(502))?))
       })
-
-fn do_copy(q: Qiniu, c: Connection, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
-  if i >= len(sources) {
-    fs_data(c, cur)
-  } else {
-    let src = fm_split(sources[i])
-    if src == "" {
-      do_copy(q, c, sources, dest, cur, i + 1)
-    } else {
-      let new_rel = fm_join(dest, basename(src))
-      if str.starts_with(new_rel, "$src/") {
-        do_copy(q, c, sources, dest, cur, i + 1)
-      } else {
-        let t = taken(c, new_rel)?
-        if t {
-          Err(conflict("已存在同名项：${basename(new_rel)}"))
-        } else {
-          let _e = ensure_dirs(c, new_rel)?
-          let rows = subtree_rows(c, src)?
-          let _cp = copy_rows(q, c, rows, src, new_rel, 0)?
-          do_copy(q, c, sources, dest, cur, i + 1)
-        }
-      }
-    }
-  }
-
-fn copy_rows(q: Qiniu, c: Connection, rows: List[FileRow], src: String, new_rel: String, i: Int) -> Result[Int, String] !io =
-  if i >= len(rows) {
-    Ok(0)
-  } else {
-    let o = rows[i]
-    let dst_path = new_rel ++ str.substring(o.path, str.len(src), str.len(o.path))
-    let _one = if o.is_dir {
-      insert_folder(c, dst_path)?
-    } else {
-      match o.key {
-        Some(k) -> {
-          let new_key = uuid_hex()
-          let _c = copy_obj(q.ak, q.sk, q.bucket, k, new_key)?
-          insert_file(c, dst_path, new_key, o.content_type, o.size)?
-        }
-        None -> 0
-      }
-    }
-    copy_rows(q, c, rows, src, new_rel, i + 1)
-  }
 
 ## POST /api/fm/register — {path, key, size?, content_type?}. Confirms the
 ## object exists in qiniu (stat), records the FileObject with qiniu's authoritative
@@ -643,7 +435,7 @@ fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint:
   # overwrite: if a file already sits at this path under a different key, its old
   # qiniu object is about to be orphaned — drop it (best-effort, ignore failure).
   let existing = with_db(a.db.path, a.db.ext, (c) => get_row(c, rel))?
-  let _gc = overwrite_gc(a, existing, key)
+  let _gc = gc_superseded(a.qiniu, existing, key)
   with_db(a.db.path, a.db.ext, (c) => {
     let _e = ensure_dirs(c, rel)?
     let _i = insert_file(c, rel, key, mime, size)?
@@ -669,26 +461,6 @@ fn reg_mime(stat_body: String, ct_hint: String, rel: String) -> String !io = {
   let mt = stat_str(stat_body, "mimeType")
   if mt != "" { mt } else if ct_hint != "" { ct_hint } else { guess_mime(rel) }
 }
-
-# best-effort delete of a superseded qiniu object when overwriting a file in place;
-# a directory or a same-key/absent-key row leaves the object alone. Errors ignored.
-fn overwrite_gc(a: Auth, existing: Option[FileRow], new_key: String) -> Bool !io =
-  match existing {
-    Some(o) ->
-      if o.is_dir == false {
-        match o.key {
-          Some(old) ->
-            if old != new_key {
-              match delete_obj(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, old) {
-                Ok(_x) -> true
-                Err(_e) -> true
-              }
-            } else { true }
-          None -> true
-        }
-      } else { true }
-    None -> true
-  }
 
 # read a numeric/string field out of qiniu's stat JSON
 fn stat_int(body: String, key: String) -> Int !io =
@@ -765,41 +537,6 @@ fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpErro
   Ok(json_ok(as_http(run_upload(a, rel, fp.content, mime, size), 502)?))
 }
 
-fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int) -> Result[Json, String] !io = {
-  let existing = with_db(a.db.path, a.db.ext, (c) => get_row(c, rel))?
-  let key = upload_key(existing)
-  let _up = upload_bytes(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_s() + a.qiniu.expires)?
-  with_db(a.db.path, a.db.ext, (c) => upsert_upload(c, rel, key, mime, size))
-}
-
-# reuse an existing file's key (overwrite in place, matching FastAPI), else a fresh
-# uuid; a directory at that path is not a file so it gets a fresh key too.
-fn upload_key(existing: Option[FileRow]) -> String !io =
-  match existing {
-    Some(o) ->
-      match o.key {
-        Some(k) -> if o.is_dir == false { k } else { uuid_hex() }
-        None -> uuid_hex()
-      }
-    None -> uuid_hex()
-  }
-
-fn upsert_upload(c: Connection, rel: String, key: String, mime: String, size: Int) -> Result[Json, String] !io = {
-  let _e = ensure_dirs(c, rel)?
-  let _i = insert_file(c, rel, key, mime, size)?
-  match get_row(c, rel)? {
-    Some(o) -> Ok(entry_json(o))
-    None -> Err("uploaded file vanished")
-  }
-}
-
-# FastAPI: name = (filename or "file").replace("\\","/").strip("/") — backslashes
-# to slashes, then strip leading/trailing slashes (internal ones survive).
-fn sanitize_name(n: String) -> String = {
-  let base = if n == "" { "file" } else { n }
-  strip_slashes(join(str.split(base, "\\"), "/"))
-}
-
 pub fn routes(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReference) -> List[Route] =
   [
     route_get("/api/fm", fm_list(a)),
@@ -825,28 +562,6 @@ pub fn routes(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReferenc
 # Where an upload lands: the target directory joined with the sanitized name.
 # The endpoint calls this — the test below drives the same function rather than a
 # copy of the same expression, which is how the copy drifted last time.
-#
-# The path returned by /upload-token (echoed to /register) must be the full FILE
-# path, not the bare directory. The regression this guards: dropping `name`
-# returned the dir, so a root upload came back as "qiniu://" → /register saw an
-# empty rel → 400 "缺少 path / key".
-fn token_rel(dir: String, raw_name: String) -> String =
-  fm_join(fm_split(dir), sanitize_name(raw_name))
-
-test "upload-token path joins the filename (not the bare dir)" {
-  # subdir upload: full file path, key extension from the filename
-  assert full(token_rel("qiniu://docs", "pic.png")) == "qiniu://docs/pic.png"
-  assert ext(sanitize_name("pic.png")) == "png"
-  # root upload: the file lands at root, not the empty directory
-  assert full(token_rel("", "a.txt")) == "qiniu://a.txt"
-  assert full(token_rel("qiniu://", "a.txt")) == "qiniu://a.txt"
-  # folder upload keeps internal subpath; ext still from the trailing name
-  assert full(token_rel("qiniu://up", "sub/b.md")) == "qiniu://up/sub/b.md"
-  assert ext(sanitize_name("sub/b.md")) == "md"
-  # extensionless file: no dot appended (caller uses a bare uuid key)
-  assert ext(sanitize_name("README")) == ""
-}
-
 test "register size/mime fall back like FastAPI (stat -> client hint -> guess)" {
   # qiniu stat is authoritative when present
   assert reg_size("{\"fsize\":123}", Some(9)) == 123
