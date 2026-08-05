@@ -50,6 +50,50 @@ pub fn ext(name: String) -> String =
     None -> ""
   }
 
+## Best-effort content type for a name or relative path, mirroring the server's
+## `mimetypes.guess_type` for the extensions this site actually stores, with
+## mimetypes' application/octet-stream default for everything else.
+##
+## The FastAPI reference has exactly one of these (app/api/fm/paths.py
+## `_guess_mime`), shared by webdav, uploads and crud. Dawn had grown three
+## copies — webdav PUT, fm create-file/save, and the multipart proxy upload —
+## and the third had drifted to 13 of the 28 entries, so a `.csv` uploaded
+## through the proxy with no part Content-Type was stored as
+## application/octet-stream while the same file saved from the text editor was
+## stored as text/csv. One table, one answer.
+pub fn guess_mime(name: String) -> String =
+  match ext(basename(name)) {
+    "png" -> "image/png"
+    "jpg" -> "image/jpeg"
+    "jpeg" -> "image/jpeg"
+    "gif" -> "image/gif"
+    "webp" -> "image/webp"
+    "svg" -> "image/svg+xml"
+    "bmp" -> "image/bmp"
+    "tiff" -> "image/tiff"
+    "ico" -> "image/vnd.microsoft.icon"
+    "pdf" -> "application/pdf"
+    "txt" -> "text/plain"
+    "md" -> "text/markdown"
+    "json" -> "application/json"
+    "html" -> "text/html"
+    "htm" -> "text/html"
+    "css" -> "text/css"
+    "js" -> "text/javascript"
+    "mjs" -> "text/javascript"
+    "xml" -> "application/xml"
+    "csv" -> "text/csv"
+    "yaml" -> "application/yaml"
+    "yml" -> "application/yaml"
+    "mp4" -> "video/mp4"
+    "mp3" -> "audio/mpeg"
+    "zip" -> "application/zip"
+    "tar" -> "application/x-tar"
+    "py" -> "text/x-python"
+    "sh" -> "text/x-sh"
+    _ -> "application/octet-stream"
+  }
+
 ## Unix seconds for a SQLite DATETIME, interpreted in the system-local zone —
 ## matches Python's naive `datetime.timestamp()`.
 pub fn ts(s: String) -> Int !io = {
@@ -77,4 +121,21 @@ test "path helpers" {
   assert ext("c.txt") == "txt"
   assert ext("noext") == ""
   assert ext(".hidden") == ""
+}
+
+test "guess_mime takes a bare name or a path, and defaults to octet-stream" {
+  # pre-existing divergence, pinned rather than fixed here: all three copies
+  # matched the extension verbatim, so an upper-case suffix misses the table
+  # where Python's mimetypes would case-fold it
+  assert guess_mime("a.PNG") == "application/octet-stream"
+  assert guess_mime("cover.png") == "image/png"
+  assert guess_mime("docs/img/cover.png") == "image/png"
+  assert guess_mime("notes.md") == "text/markdown"
+  assert guess_mime("data.csv") == "text/csv"
+  assert guess_mime("app.mjs") == "text/javascript"
+  assert guess_mime("archive.tar") == "application/x-tar"
+  assert guess_mime("README") == "application/octet-stream"
+  assert guess_mime("blob.unknown") == "application/octet-stream"
+  # a dot in a directory name is not the file's extension
+  assert guess_mime("v1.2/notes") == "application/octet-stream"
 }

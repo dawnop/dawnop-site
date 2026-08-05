@@ -17,7 +17,7 @@ use jsonx.{obj, jstr, jint}
 use db.{Db, with_db}
 use auth.{Auth, Qiniu, guarded, guarded_flexible}
 use jsonread.{body_obj, str_or, str_list, opt_int}
-use fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full}
+use fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime}
 use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, ledger_insert, ledger_delete, search_files, subtree_rows, entry_json, delete_row, stats_db, FileRow}
 use repo_settings.{setting_int}
 use errkind.{Kind, KConflict, conflict, split_kind}
@@ -379,10 +379,9 @@ pub fn upload_token_ep(a: Auth) -> Handler =
   (req) =>
   guarded(a, req, () => {
     let m = as_http(body_obj(req.body), 422)?
-    let target = fm_split(str_or(m, "path", ""))
-    let name = sanitize_name(str_or(m, "name", ""))
-    let rel = fm_join(target, name)
-    let e = ext(name)
+    let raw_name = str_or(m, "name", "")
+    let rel = token_rel(str_or(m, "path", ""), raw_name)
+    let e = ext(sanitize_name(raw_name))
     let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
     let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_secs() + a.qiniu.expires)
     let _x = as_http(with_db(a.db.path, a.db.ext, (c) => ledger(c, key, rel)), 500)?
@@ -566,43 +565,6 @@ fn save_key(rel: String) -> String !io = {
   let e = ext(basename(rel))
   if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
 }
-
-# a minimal mime guess for text files (fm text editor only saves text)
-# mirrors Python mimetypes.guess_type (the server's stdlib table) for the common
-# extensions, with mimetypes' application/octet-stream default for the unknown —
-# create-file/save previously defaulted text/plain and mis-typed js.
-fn guess_mime(rel: String) -> String =
-  match ext(basename(rel)) {
-    "md" -> "text/markdown"
-    "txt" -> "text/plain"
-    "json" -> "application/json"
-    "html" -> "text/html"
-    "htm" -> "text/html"
-    "css" -> "text/css"
-    "js" -> "text/javascript"
-    "mjs" -> "text/javascript"
-    "xml" -> "application/xml"
-    "csv" -> "text/csv"
-    "yaml" -> "application/yaml"
-    "yml" -> "application/yaml"
-    "pdf" -> "application/pdf"
-    "png" -> "image/png"
-    "jpg" -> "image/jpeg"
-    "jpeg" -> "image/jpeg"
-    "gif" -> "image/gif"
-    "webp" -> "image/webp"
-    "svg" -> "image/svg+xml"
-    "bmp" -> "image/bmp"
-    "tiff" -> "image/tiff"
-    "ico" -> "image/vnd.microsoft.icon"
-    "mp4" -> "video/mp4"
-    "mp3" -> "audio/mpeg"
-    "zip" -> "application/zip"
-    "tar" -> "application/x-tar"
-    "py" -> "text/x-python"
-    "sh" -> "text/x-sh"
-    _ -> "application/octet-stream"
-  }
 
 ## POST /api/fm/copy — {path, destination, sources[]}. Copies each subtree;
 ## files get a fresh qiniu object (new uuid key), dirs are recreated.
@@ -812,7 +774,7 @@ fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpErro
   # fp.filename comes from the (UTF-8-decoded) part headers already
   let name = sanitize_name(fp.filename)
   let rel = fm_join(target, name)
-  let mime = if fp.content_type != "" { fp.content_type } else { upload_mime(name) }
+  let mime = if fp.content_type != "" { fp.content_type } else { guess_mime(name) }
   let size = bytes.len(fp.content)
   Ok(json_ok(as_http(run_upload(a, rel, fp.content, mime, size), 502)?))
 }
@@ -865,26 +827,6 @@ fn first_nonempty(xs: List[String], i: Int) -> Int =
 fn last_nonempty(xs: List[String], i: Int) -> Int =
   if i < 0 { -1 } else if xs[i] != "" { i } else { last_nonempty(xs, i - 1) }
 
-# mime fallback for a file part with no Content-Type (rare; browsers/curl send one).
-# Mirrors mimetypes.guess_type's common cases with the octet-stream default.
-fn upload_mime(name: String) -> String =
-  match ext(name) {
-    "png" -> "image/png"
-    "jpg" -> "image/jpeg"
-    "jpeg" -> "image/jpeg"
-    "gif" -> "image/gif"
-    "webp" -> "image/webp"
-    "svg" -> "image/svg+xml"
-    "pdf" -> "application/pdf"
-    "txt" -> "text/plain"
-    "md" -> "text/markdown"
-    "json" -> "application/json"
-    "html" -> "text/html"
-    "css" -> "text/css"
-    "js" -> "text/javascript"
-    _ -> "application/octet-stream"
-  }
-
 pub fn routes(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReference) -> List[Route] =
   [
     route_get("/api/fm", fm_list(a)),
@@ -907,21 +849,26 @@ pub fn routes(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReferenc
     tagged(route_post("/api/fm/upload", upload(a)), ["raw-body"]),
   ]
 
+# Where an upload lands: the target directory joined with the sanitized name.
+# The endpoint calls this — the test below drives the same function rather than a
+# copy of the same expression, which is how the copy drifted last time.
+#
 # The path returned by /upload-token (echoed to /register) must be the full FILE
-# path — target dir joined with the sanitized name — not the bare directory. The
-# regression this guards: dropping `name` returned the dir, so a root upload came
-# back as "qiniu://" → /register saw an empty rel → 400 "缺少 path / key".
-fn token_path(dir: String, name: String) -> String = full(fm_join(fm_split(dir), sanitize_name(name)))
+# path, not the bare directory. The regression this guards: dropping `name`
+# returned the dir, so a root upload came back as "qiniu://" → /register saw an
+# empty rel → 400 "缺少 path / key".
+fn token_rel(dir: String, raw_name: String) -> String =
+  fm_join(fm_split(dir), sanitize_name(raw_name))
 
 test "upload-token path joins the filename (not the bare dir)" {
   # subdir upload: full file path, key extension from the filename
-  assert token_path("qiniu://docs", "pic.png") == "qiniu://docs/pic.png"
+  assert full(token_rel("qiniu://docs", "pic.png")) == "qiniu://docs/pic.png"
   assert ext(sanitize_name("pic.png")) == "png"
   # root upload: the file lands at root, not the empty directory
-  assert token_path("", "a.txt") == "qiniu://a.txt"
-  assert token_path("qiniu://", "a.txt") == "qiniu://a.txt"
+  assert full(token_rel("", "a.txt")) == "qiniu://a.txt"
+  assert full(token_rel("qiniu://", "a.txt")) == "qiniu://a.txt"
   # folder upload keeps internal subpath; ext still from the trailing name
-  assert token_path("qiniu://up", "sub/b.md") == "qiniu://up/sub/b.md"
+  assert full(token_rel("qiniu://up", "sub/b.md")) == "qiniu://up/sub/b.md"
   assert ext(sanitize_name("sub/b.md")) == "md"
   # extensionless file: no dot appended (caller uses a bare uuid key)
   assert ext(sanitize_name("README")) == ""

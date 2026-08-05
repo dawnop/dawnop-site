@@ -33,7 +33,7 @@ use web/router.{Route, route_method_of, tagged}
 use db.{Db, with_db}
 use auth.{Auth, Qiniu, check_basic}
 use repo_fm.{FileRow, get_row, children, subtree_rows, ensure_dirs, insert_file, insert_folder, delete_row, reparent}
-use fm_paths.{basename, parent_rel, ext, ts}
+use fm_paths.{basename, parent_rel, ext, ts, guess_mime}
 use qiniu_sign.{private_url}
 use qiniu_rs.{delete_obj, copy_obj, upload_bytes, upload_file}
 use java "java.io.File"
@@ -315,42 +315,6 @@ fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {
     }
   }
 }
-
-# a minimal mime guess for PUT (mirrors mimetypes' common cases, octet-stream default)
-# mirrors Python mimetypes.guess_type (PUT stores this as content_type, surfaced
-# in PROPFIND getcontenttype and GET Content-Type)
-fn guess_mime(name: String) -> String =
-  match ext(name) {
-    "png" -> "image/png"
-    "jpg" -> "image/jpeg"
-    "jpeg" -> "image/jpeg"
-    "gif" -> "image/gif"
-    "webp" -> "image/webp"
-    "svg" -> "image/svg+xml"
-    "bmp" -> "image/bmp"
-    "tiff" -> "image/tiff"
-    "ico" -> "image/vnd.microsoft.icon"
-    "pdf" -> "application/pdf"
-    "txt" -> "text/plain"
-    "md" -> "text/markdown"
-    "json" -> "application/json"
-    "html" -> "text/html"
-    "htm" -> "text/html"
-    "css" -> "text/css"
-    "js" -> "text/javascript"
-    "mjs" -> "text/javascript"
-    "xml" -> "application/xml"
-    "csv" -> "text/csv"
-    "yaml" -> "application/yaml"
-    "yml" -> "application/yaml"
-    "mp4" -> "video/mp4"
-    "mp3" -> "audio/mpeg"
-    "zip" -> "application/zip"
-    "tar" -> "application/x-tar"
-    "py" -> "text/x-python"
-    "sh" -> "text/x-sh"
-    _ -> "application/octet-stream"
-  }
 
 # ---- PUT ----
 
