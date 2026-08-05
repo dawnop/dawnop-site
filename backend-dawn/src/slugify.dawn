@@ -3,6 +3,7 @@
 # from the ends, empty → "article". "Word" is Unicode letter-or-digit or '_'
 # (Python's \w under re.UNICODE — so accented letters and CJK are kept).
 use std/str
+use std/list
 use java "java.lang.Character"
 
 fn is_word(cp: Int) -> Bool !io = Character.isLetterOrDigit(cp) || cp == 95
@@ -34,14 +35,12 @@ fn collapse(cps: List[Int], i: Int, acc: List[Int], last_dash: Bool) -> List[Int
 fn strip_edges(cps: List[Int]) -> String = from_code_points(drop_trailing(drop_leading(cps)))
 
 fn drop_leading(cps: List[Int]) -> List[Int] =
-  if len(cps) > 0 && is_edge(cps[0]) { drop_leading(tail_ints(cps)) } else { cps }
+  if len(cps) > 0 && is_edge(cps[0]) { drop_leading(list.drop(cps, 1)) } else { cps }
 
 fn drop_trailing(cps: List[Int]) -> List[Int] =
   if len(cps) > 0 && is_edge(cps[len(cps) - 1]) { drop_trailing(init_ints(cps)) } else { cps }
 
 fn is_edge(cp: Int) -> Bool = cp == 45 || cp == 95
-
-fn tail_ints(xs: List[Int]) -> List[Int] = map(range(1, len(xs)), (i) => xs[i])
 
 fn init_ints(xs: List[Int]) -> List[Int] = map(range(0, len(xs) - 1), (i) => xs[i])
 

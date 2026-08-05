@@ -3,10 +3,12 @@
 # routing and render roots the FastAPI builtin filter strips.
 use std/str
 use std/map
+use std/list
 use java "java.sql.Connection"
 use web/types.{Handler, http_error, as_http, opt_param_int, json_ok, json_response, text}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json, JArr, JInt}
+use sql.{bool_int}
 use db.{with_db}
 use auth.{Auth, guarded}
 use jsonread.{body_obj, has, str_or, opt_str, bool_or, int_field}
@@ -136,8 +138,6 @@ fn nav_order_of(m: Map[String, Json]) -> Int =
     None -> 0
   }
 
-fn bool_int(b: Bool) -> Int = if b { 1 } else { 0 }
-
 ## DELETE /api/pages/{page_id} — 204 (builtin pages are protected: 400).
 pub fn page_delete(a: Auth) -> Handler =
   (req) =>
@@ -192,12 +192,10 @@ fn all_ints(xs: List[Json], acc: List[Int]) -> Option[List[Int]] =
     Some(acc)
   } else {
     match xs[0] {
-      JInt(n) -> all_ints(tail_json(xs), acc ++ [n])
+      JInt(n) -> all_ints(list.drop(xs, 1), acc ++ [n])
       _ -> None
     }
   }
-
-fn tail_json(xs: List[Json]) -> List[Json] = map(range(1, len(xs)), (i) => xs[i])
 
 fn reorder_read(c: Connection, ids: List[Int]) -> Result[List[Json], String] !io = {
   let _r = reorder_pages(c, ids)?

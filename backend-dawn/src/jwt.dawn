@@ -4,19 +4,17 @@
 # match, only the algorithm and secret.
 use std/str
 use std/map
-use java "java.lang.System"
 use crypto.{hmac_sha256_b64url_nopad, b64url_encode_nopad, b64url_decode, eq_const}
+use ttl.{now_s}
 use json/value.{Json, JObj, JNum, JInt, JStr}
 use json/parser.{parse}
 
 const HEADER_JSON: String = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}"
 
-fn now_secs() -> Int !io = System.currentTimeMillis() / 1000
-
 ## Sign a token for `sub` valid for `exp_minutes`.
 pub fn sign(secret: String, sub: String, exp_minutes: Int) -> String !io = {
   let head = b64url_encode_nopad(HEADER_JSON)
-  let exp = now_secs() + exp_minutes * 60
+  let exp = now_s() + exp_minutes * 60
   let payload = b64url_encode_nopad("{\"sub\":\"$sub\",\"exp\":$exp}")
   let signing_input = "$head.$payload"
   let sig = hmac_sha256_b64url_nopad(secret, signing_input)
@@ -47,8 +45,8 @@ fn claims_of(payload_json: String) -> Result[String, String] !io = {
       # exp is an integer unix time; PyJWT emits it without a fraction, so it
       # parses as JInt now (JNum kept for any float-encoded producer)
       let exp_ok: Result[Bool, String] = match map.get(m, "exp") {
-        Some(JInt(t)) -> if now_secs() < t { Ok(true) } else { Err("token expired") }
-        Some(JNum(t)) -> if to_float(now_secs()) < t { Ok(true) } else { Err("token expired") }
+        Some(JInt(t)) -> if now_s() < t { Ok(true) } else { Err("token expired") }
+        Some(JNum(t)) -> if to_float(now_s()) < t { Ok(true) } else { Err("token expired") }
         _ -> Err("no exp claim")
       }
       let _e = exp_ok?

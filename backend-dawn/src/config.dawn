@@ -2,6 +2,7 @@
 # reads (KEY=VALUE per line, # comments, optional quotes). Loaded once at
 # startup; a missing required key panics before the server binds.
 use std/str
+use std/list
 use std/io
 use std/map
 use java "java.lang.System"
@@ -32,10 +33,8 @@ fn before(s: String, sep: String) -> String = str.split(s, sep)[0]
 
 fn after(s: String, sep: String) -> String = {
   let parts = str.split(s, sep)
-  join(drop1(parts), sep)
+  join(list.drop(parts, 1), sep)
 }
-
-fn drop1(xs: List[String]) -> List[String] = map(range(1, len(xs)), (i) => xs[i])
 
 fn unquote(s: String) -> String =
   if str.len(s) >= 2 && ((str.starts_with(s, "\"") && str.ends_with(s, "\"")) || (str.starts_with(s, "'") && str.ends_with(s, "'"))) {

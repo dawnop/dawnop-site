@@ -4,7 +4,7 @@
 # (the article_fts triggers use it) — db.connect handles that.
 use std/str
 use java "java.sql.Connection"
-use sql.{SqlV, PInt, PStr, PNull, ColInt, ColStr, open, query, exec, scalar_int, last_id, int_at, first_bool_or, first_str_or}
+use sql.{SqlV, PInt, PStr, PNull, ColInt, ColStr, open, query, exec, scalar_int, last_id, int_at, first_bool_or, first_str_or, bool_int}
 use errkind.{invalid}
 use slugify.{slugify}
 
@@ -213,9 +213,8 @@ pub fn article_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
   Ok(first_bool_or(rows, false))
 }
 
-fn bool_int(b: Bool) -> Int = if b { 1 } else { 0 }
-
-fn clip(s: String, n: Int) -> String = if str.len(s) > n { str.substring(s, 0, n) } else { s }
+## Truncate to at most `n` characters — tag names are capped at 64 like FastAPI's.
+pub fn clip(s: String, n: Int) -> String = if str.len(s) > n { str.substring(s, 0, n) } else { s }
 
 fn member(xs: List[String], x: String) -> Bool =
   fold(xs, false, (acc, y) => acc || y == x)

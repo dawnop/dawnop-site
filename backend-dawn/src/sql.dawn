@@ -204,6 +204,9 @@ pub fn str_at(row: List[Cell], i: Int) -> String =
 ## SQLite stores booleans as 0/1 integers.
 pub fn bool_at(row: List[Cell], i: Int) -> Bool = int_at(row, i) != 0
 
+## The write direction of `bool_at`: a Bool as the 0/1 integer to bind.
+pub fn bool_int(b: Bool) -> Int = if b { 1 } else { 0 }
+
 pub fn opt_str_at(row: List[Cell], i: Int) -> Option[String] =
   match row[i] {
     VStr(s) -> Some(s)

@@ -2,13 +2,9 @@
 # rename/merge/cleanup/delete tags. Mirrors app/api/pages.py and tags.py.
 use std/str
 use java "java.sql.Connection"
-use sql.{SqlV, PInt, PStr, ColInt, ColStr, query, exec, last_id, str_at, first_str, first_str_or, first_bool_or, first_int_or}
+use sql.{SqlV, PInt, PStr, ColInt, ColStr, query, exec, last_id, str_at, first_str, first_str_or, first_bool_or, first_int_or, bool_int}
 use slugify.{slugify}
-use repo_write.{unique_slug}
-
-fn bool_int(b: Bool) -> Int = if b { 1 } else { 0 }
-
-fn clip(s: String, n: Int) -> String = if str.len(s) > n { str.substring(s, 0, n) } else { s }
+use repo_write.{unique_slug, clip}
 
 # ---- pages ----
 

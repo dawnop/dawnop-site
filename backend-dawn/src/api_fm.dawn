@@ -5,7 +5,6 @@ use std/str
 use std/bytes
 use std/map
 use java "java.sql.Connection"
-use java "java.lang.System"
 use java "java.lang.Object"
 use java "java.lang.String"
 use java "java.util.concurrent.atomic.AtomicReference"
@@ -21,13 +20,13 @@ use fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime}
 use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, ledger_insert, ledger_delete, search_files, subtree_rows, entry_json, delete_row, stats_db, FileRow}
 use repo_settings.{setting_int}
 use errkind.{Kind, KConflict, conflict, split_kind}
-use crypto.{uuid}
+use crypto.{uuid_hex}
 use export.{pct_encode}
 use qiniu_sign.{private_url, upload_token}
 use qiniu_rs.{delete_obj, copy_obj, stat, upload_text, upload_bytes}
 use qiniu_stats.{kodo_series, last_nonzero, field, int_of}
 use monitor.{respack_cached}
-use ttl.{cache_get, cache_put}
+use ttl.{cache_get, cache_put, now_s}
 use json/value.{Json, JNull, JArr, JObj, JStr, JNum, JInt}
 use json/render.{render}
 use json/parser.{parse}
@@ -149,13 +148,11 @@ fn do_move(c: Connection, sources: List[String], dest: String, cur: String, i: I
 
 # ---- qiniu URL / upload endpoints (read-only: sign & redirect, no mutation) ----
 
-fn now_secs() -> Int !io = System.currentTimeMillis() / 1000
-
 # the signed private URL for a stored file (deadline = now + configured expires)
 fn signed(q: Qiniu, key: String, suffix: String) -> String !io = {
   let domain = strip_trailing_slash(q.domain)
   let base = "$domain/$key$suffix"
-  private_url(q.ak, q.sk, base, now_secs() + q.expires)
+  private_url(q.ak, q.sk, base, now_s() + q.expires)
 }
 
 fn strip_trailing_slash(s: String) -> String =
@@ -383,7 +380,7 @@ pub fn upload_token_ep(a: Auth) -> Handler =
     let rel = token_rel(str_or(m, "path", ""), raw_name)
     let e = ext(sanitize_name(raw_name))
     let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
-    let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_secs() + a.qiniu.expires)
+    let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_s() + a.qiniu.expires)
     let _x = as_http(with_db(a.db.path, a.db.ext, (c) => ledger(c, key, rel)), 500)?
     Ok(json_ok(obj([
       ("token", jstr(token)),
@@ -398,8 +395,6 @@ pub fn upload_token_ep(a: Auth) -> Handler =
       ("up_host", jstr("https://upload.qiniup.com")),
     ])))
   })
-
-fn uuid_hex() -> String !io = join(str.split(uuid(), "-"), "")
 
 fn ledger(c: Connection, key: String, rel: String) -> Result[Int, String] !io =
   ledger_insert(c, key, full(rel))
@@ -503,7 +498,7 @@ fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json], Str
   } else {
     let mime = guess_mime(rel)
     let key = uuid_hex()
-    let _up = upload_text(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, "", mime, now_secs() + a.qiniu.expires)?
+    let _up = upload_text(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, "", mime, now_s() + a.qiniu.expires)?
     let d = with_db(a.db.path, a.db.ext, (c) => create_file_db(c, rel, key, mime, cur))?
     Ok(Some(d))
   }
@@ -540,7 +535,7 @@ fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !io = 
     None -> None
   }
   let new_key = save_key(rel)
-  let _up = upload_text(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, new_key, content, mime, now_secs() + a.qiniu.expires)?
+  let _up = upload_text(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, new_key, content, mime, now_s() + a.qiniu.expires)?
   let _db = with_db(a.db.path, a.db.ext, (c) => save_db(c, rel, new_key, mime, str.len(content)))?
   # best-effort delete of the superseded object (ignore failure)
   let _del: Result[Unit, String] = match old_key {
@@ -782,7 +777,7 @@ fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpErro
 fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int) -> Result[Json, String] !io = {
   let existing = with_db(a.db.path, a.db.ext, (c) => get_row(c, rel))?
   let key = upload_key(existing)
-  let _up = upload_bytes(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_secs() + a.qiniu.expires)?
+  let _up = upload_bytes(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_s() + a.qiniu.expires)?
   with_db(a.db.path, a.db.ext, (c) => upsert_upload(c, rel, key, mime, size))
 }
 

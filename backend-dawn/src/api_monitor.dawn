@@ -2,14 +2,13 @@
 # third-party pair (lighthouse + qiniu) memoizes in a 120s TTL cell like the
 # FastAPI TTLCache, `?refresh=1` busts it. server/vault stay live every call.
 use std/map
-use java "java.lang.System"
 use java "java.util.concurrent.atomic.AtomicReference"
 use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, query}
 use web/router.{Route, route_get}
 use auth.{Auth, current_user}
 use db.{with_db}
 use repo_settings.{setting_int}
-use ttl.{cache_get, cache_put}
+use ttl.{cache_get, cache_put, now_s}
 use monitor.{server_block, lighthouse_block, qiniu_block, vault_block}
 use qiniu_stats.{field}
 use json/value.{Json, JNull, JBool, JInt, JObj}
@@ -71,8 +70,6 @@ fn refill(a: Auth, cfg: MonCfg, cell: AtomicReference, respack_cell: AtomicRefer
   cache_put(cell, render(j))
   j
 }
-
-fn now_s() -> Int !io = System.currentTimeMillis() / 1000
 
 # inject quota (settings table over the .env default) when qiniu is configured
 fn with_quota(a: Auth, qn: Json) -> Json !io =

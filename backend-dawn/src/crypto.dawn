@@ -77,6 +77,10 @@ pub fn eq_const(a: String, b: String) -> Bool !io =
 pub fn uuid() -> String !io =
   UUID.randomUUID()!.toString()!
 
+## `uuid` with the dashes removed — the shape fm and WebDAV mint qiniu object
+## keys in (an opaque 32-hex name, optionally suffixed with the file extension).
+pub fn uuid_hex() -> String !io = join(str.split(uuid(), "-"), "")
+
 # ---- tests (vectors cross-checked against Python hashlib/hmac) ----
 
 test "sha256 known vector" {

@@ -4,6 +4,7 @@
 # Vaultwarden probe. A failing item lands in its own *_error field, never 500s.
 use std/str
 use std/io
+use std/list
 use java "java.lang.System"
 use java "java.lang.Runtime"
 use java "java.lang.Thread"
@@ -17,7 +18,7 @@ use java "java.time.format.DateTimeFormatter"
 use java "java.util.concurrent.atomic.AtomicReference"
 use auth.{Auth}
 use tencent_client
-use ttl.{cache_get, cache_put}
+use ttl.{cache_get, cache_put, now_s}
 use qiniu_stats.{field, int_of, last_nonzero, kodo_series, flow_series, cdn_domains, cdn_tune, respack_summary}
 use http.{fetch}
 use json/value.{Json, JNull, JBool, JNum, JInt, JStr, JArr, JObj}
@@ -73,8 +74,6 @@ pub fn server_block() -> Json !io = {
     }
   }
 }
-
-fn now_s() -> Int !io = System.currentTimeMillis() / 1000
 
 # psutil cpu_percent(interval=0.3): busy/total delta over a 300ms window
 fn cpu_percent() -> Float !io = {
@@ -146,7 +145,7 @@ fn net_totals() -> Json !io =
           if str.contains(line, ":") {
             let (s, r) = acc
             let parts = str.split(line, ":")
-            let fs = fields_of(join(rest1(parts), ":"))
+            let fs = fields_of(join(list.drop(parts, 1), ":"))
             if len(fs) > 8 {
               (s + parse_or0(fs[8]), r + parse_or0(fs[0]))
             } else {
@@ -159,8 +158,6 @@ fn net_totals() -> Json !io =
     }
     Err(_m) -> obj([("sent", jint(0)), ("recv", jint(0))])
   }
-
-fn rest1(xs: List[String]) -> List[String] = map(range(1, len(xs)), (i) => xs[i])
 
 fn uptime_s() -> Int !io =
   match io.read_file("/proc/uptime") {

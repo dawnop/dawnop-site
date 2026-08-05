@@ -19,12 +19,10 @@ fn crlf() -> String = from_code_points([13, 10])
 fn crlf_b() -> Bytes = bytes.utf8(from_code_points([13, 10]))
 fn crlf2_b() -> Bytes = bytes.utf8(from_code_points([13, 10, 13, 10]))
 
-fn drop1(xs: List[String]) -> List[String] = list.drop(xs, 1)
-
 ## The substring after the first occurrence of `sep`; None if `sep` is absent.
 fn after(s: String, sep: String) -> Option[String] = {
   let ps = str.split(s, sep)
-  if len(ps) >= 2 { Some(join(drop1(ps), sep)) } else { None }
+  if len(ps) >= 2 { Some(join(list.drop(ps, 1), sep)) } else { None }
 }
 
 ## The substring before the first occurrence of `sep` (the whole string if absent).

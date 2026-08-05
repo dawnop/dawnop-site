@@ -16,10 +16,10 @@
 use std/str
 use std/bytes
 use std/map
+use std/list
 use ferr.{fe_text}
 use java "java.sql.Connection"
 use java "java.lang.String"
-use java "java.lang.System"
 use java "java.util.Base64"
 use java "java.net.URI"
 use java "java.net.URLDecoder"
@@ -37,9 +37,9 @@ use fm_paths.{basename, parent_rel, ext, ts, guess_mime}
 use qiniu_sign.{private_url}
 use qiniu_rs.{delete_obj, copy_obj, upload_bytes, upload_file}
 use java "java.io.File"
-use crypto.{sha256_hex, uuid}
+use crypto.{sha256_hex, uuid, uuid_hex}
 use http.{fetch_stream, ok_stream, close_stream}
-use ttl.{cache_get, cache_put}
+use ttl.{cache_get, cache_put, now_s}
 use errkind.{Kind, KUpstream, as_upstream, split_kind}
 use export.{url_encode}
 
@@ -48,8 +48,6 @@ const REDIRECT_CLIENTS: List[String] = ["rclone", "cyberduck", "mountain duck", 
 
 # ---- small string helpers ----
 
-fn now_secs() -> Int !io = System.currentTimeMillis() / 1000
-
 fn header_or(req: Request, name: String, dflt: String) -> String =
   match header(req, name) { Some(v) -> v None -> dflt }
 
@@ -57,8 +55,6 @@ fn path_segs(rel: String) -> List[String] = filter(str.split(rel, "/"), (s) => s
 
 # Python str.strip("/") — remove leading and trailing slashes, keep internal.
 fn strip_slashes(s: String) -> String = join(path_segs(s), "/")
-
-fn uuid_hex() -> String !io = join(str.split(uuid(), "-"), "")
 
 fn contains_ci(hay: String, needle: String) -> Bool = str.contains(str.to_lower(hay), needle)
 
@@ -155,7 +151,7 @@ fn propfind(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !
 
 fn propfind_body(c: Connection, prefix: String, rel: String, depth: String) -> Result[Option[String], String] !io =
   if rel == "" {
-    let now = now_secs()
+    let now = now_s()
     let self_xml = response_xml(prefix, "", "", true, 0, "", now, now, "")
     let kids: List[FileRow] = if depth != "0" { children(c, "")? } else { [] }
     Ok(Some(multistatus(self_xml ++ kids_xml(prefix, kids))))
@@ -179,7 +175,7 @@ fn follows_redirect(req: Request) -> Bool = {
 
 fn signed_url(q: Qiniu, key: String) -> String !io = {
   let domain = if str.ends_with(q.domain, "/") { str.substring(q.domain, 0, str.len(q.domain) - 1) } else { q.domain }
-  private_url(q.ak, q.sk, "$domain/$key", now_secs() + q.expires)
+  private_url(q.ak, q.sk, "$domain/$key", now_s() + q.expires)
 }
 
 fn get_or_head(a: Auth, req: Request, rel: String, head: Bool) -> Result[Response, HttpError] !io =
@@ -351,7 +347,7 @@ fn put_do(a: Auth, req: Request, rel: String, existing: Option[FileRow]) -> Resu
         None -> Err(http_error(500, "请求体未落盘"))
         Some(path) -> {
           let size = as_http(file_size(path), 500)?
-          let _u = as_http(upload_file(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, path, mime, now_secs() + a.qiniu.expires), 502)?
+          let _u = as_http(upload_file(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, path, mime, now_s() + a.qiniu.expires), 502)?
           put_commit(a, rel, key, mime, size, existing)
         }
       }
@@ -609,7 +605,7 @@ fn dav_auth(a: Auth, cell: AtomicReference, req: Request) -> Option[Response] !i
               Some(unauthorized())
             } else {
               let user = parts[0]
-              let pass = join(drop_first(parts), ":")
+              let pass = join(list.drop(parts, 1), ":")
               let key = sha256_hex(raw_cred)
               match cache_get(cell, AUTH_TTL) {
                 Some(cached) -> if cached == key { None } else { verify_cache(a, cell, user, pass, key) }
@@ -620,8 +616,6 @@ fn dav_auth(a: Auth, cell: AtomicReference, req: Request) -> Option[Response] !i
         }
       }
   }
-
-fn drop_first(xs: List[String]) -> List[String] = map(range(1, len(xs)), (i) => xs[i])
 
 fn b64_decode(s: String) -> String !io =
   bytes.decode_utf8(Base64.getDecoder()!.decode(s)!)
