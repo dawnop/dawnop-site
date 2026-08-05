@@ -4,11 +4,11 @@
 use std/str
 use std/map
 use java "java.sql.Connection"
-use web/types.{Request, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text, raw, with_header, query_int_bounded}
+use web/types.{Request, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text, raw, with_header, query_int_bounded_with}
 use export.{export_markdown, url_encode}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json}
-use jsonx.{paginated}
+use jsonx.{paginated, fastapi_errors}
 use db.{with_db}
 use auth.{Auth, guarded_user}
 use jsonread.{body_obj, has, str_or, opt_str, bool_or, opt_int, str_list}
@@ -37,8 +37,8 @@ fn opt_query_int(req: Request, name: String) -> Result[Option[Int], HttpError] =
 pub fn list_admin(a: Auth) -> Handler =
   (req) =>
   guarded_user(a, req, (_u) => {
-    let page = query_int_bounded(req, "page", 1, 1, -1)?
-    let size = query_int_bounded(req, "size", 10, 1, 100)?
+    let page = query_int_bounded_with(fastapi_errors(), req, "page", 1, 1, -1)?
+    let size = query_int_bounded_with(fastapi_errors(), req, "size", 10, 1, 100)?
     let pub_filter: Option[Bool] = match map.get(req.query, "published") {
       Some("true") -> Some(true)
       Some("false") -> Some(false)

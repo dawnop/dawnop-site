@@ -3,6 +3,19 @@
 use std/str
 use std/map
 use json/value.{Json, JNull, JBool, JInt, JStr, JArr, JObj}
+use web/types.{ErrorFormat}
+
+## The error wording this backend's clients were written against, which web 2.1
+## no longer hardcodes: FastAPI's {"detail": ...} body, the 500 text the Python
+## backend sent, and the fullwidth colon its error handler joins loc and msg
+## with. The framework defaults to neutral English; these three strings are what
+## keeps the wire bytes identical to what the frontend reads.
+pub fn fastapi_errors() -> ErrorFormat =
+  ErrorFormat {
+    detail_key: "detail",
+    internal_message: "服务器内部错误",
+    param_separator: "：",
+  }
 
 ## Build an object from ordered (key, value) pairs.
 pub fn obj(pairs: List[(String, Json)]) -> Json = JObj(map.from(pairs))

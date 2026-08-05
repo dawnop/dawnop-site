@@ -3,10 +3,10 @@
 # {"detail": ...} through the web framework's Err branch.
 use std/map
 use java "java.sql.Connection"
-use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, json_response, query, query_int_bounded}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, json_response, query, query_int_bounded_with}
 use web/router.{Route, route_get}
 use json/value.{Json, JArr}
-use jsonx.{paginated, detail, obj, jstr}
+use jsonx.{paginated, detail, obj, jstr, fastapi_errors}
 use db.{Db, with_db}
 use auth.{Auth, is_authed}
 use repo_article.{list_published, list_by_page, by_slug, by_slug_any, published_of, bump_views}
@@ -24,8 +24,8 @@ fn mk_health() -> Json = obj([("status", jstr("ok")), ("app", jstr("dawnop-site"
 ## GET /api/articles — published list, paginated, optional ?tag= filter.
 pub fn list_articles(db: Db) -> Handler =
   (req) => {
-    let page = query_int_bounded(req, "page", 1, 1, -1)?
-    let size = query_int_bounded(req, "size", 10, 1, 100)?
+    let page = query_int_bounded_with(fastapi_errors(), req, "page", 1, 1, -1)?
+    let size = query_int_bounded_with(fastapi_errors(), req, "size", 10, 1, 100)?
     # an empty ?tag= means no filter (FastAPI's `if tag:`), not "tag with empty slug"
     let tag: Option[String] = match query(req, "tag") {
       Some(s) -> if s == "" { None } else { Some(s) }
@@ -87,8 +87,8 @@ pub fn get_page(db: Db) -> Handler =
 pub fn get_page_articles(db: Db) -> Handler =
   (req) => {
     let slug = map_get_or(req.params, "slug", "")
-    let page = query_int_bounded(req, "page", 1, 1, -1)?
-    let size = query_int_bounded(req, "size", 10, 1, 100)?
+    let page = query_int_bounded_with(fastapi_errors(), req, "page", 1, 1, -1)?
+    let size = query_int_bounded_with(fastapi_errors(), req, "size", 10, 1, 100)?
     match as_http(with_db(db.path, db.ext, (c) => fetch_page_articles(c, slug, page, size)), 500)? {
       Some(pair) -> {
         let (total, items) = pair
@@ -129,8 +129,8 @@ pub fn search(db: Db) -> Handler =
       Some(s) -> s
       None -> ""
     }
-    let page = query_int_bounded(req, "page", 1, 1, -1)?
-    let size = query_int_bounded(req, "size", 10, 1, 50)?
+    let page = query_int_bounded_with(fastapi_errors(), req, "page", 1, 1, -1)?
+    let size = query_int_bounded_with(fastapi_errors(), req, "size", 10, 1, 50)?
     Ok(json_ok(as_http(with_db(db.path, db.ext, (c) => search_published(c, q, page, size)), 500)?))
   }
 
