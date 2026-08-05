@@ -36,7 +36,6 @@ worthless:
 import json
 import os
 import pathlib
-import sys
 
 import contract_fixture
 
@@ -55,6 +54,28 @@ GOLDEN_DIR = pathlib.Path(__file__).resolve().parent / "golden"
 # escaping, <mark> wrapping, the excerpt window, word_count, tags, the paging
 # envelope — because Dawn computes those itself whichever path found the ids.
 SEARCH_BACKEND = "like"
+
+# A request that never got an HTTP answer at all — connection refused, DNS
+# failure, timeout, a truncated read — still has to land in the (status, body)
+# shape the golden compares, so it gets encoded rather than raised.
+#
+# It is here because the three scripts each invented their own spelling for the
+# same event: `repr(e)`, `f"__ERR__ {type(e).__name__}: {e}"`, and
+# `repr(e).encode()`. Same failure, three renderings in the golden, and a reader
+# had to know which script wrote a line to know whether it was one. Worse for
+# `--record`: whichever spelling was live got baked in, so a golden recorded
+# while the backend was still coming up recorded a *different string* per script
+# for the identical cause.
+#
+# The status is -1, not a 5xx: a 5xx is an answer from the server, and "never
+# reached it" must not be able to masquerade as one.
+TRANSPORT_STATUS = -1
+
+
+def transport_error(e):
+    """The recorded body for a request that got no HTTP answer."""
+    return f"__ERR__ {type(e).__name__}: {e}"
+
 
 RESET = "\033[0m"
 GREEN = "\033[32m"
@@ -263,11 +284,3 @@ class Golden:
             bad = bool(missing)  # recording defines the golden; nothing to violate
         print(f"\n{self.name}: {(RED + 'FAIL' if bad else GREEN + 'PASS')}{RESET}")
         return 1 if bad else 0
-
-
-def main_guard(fn):
-    """Run fn, mapping an unhandled failure to exit 2 rather than a traceback."""
-    try:
-        sys.exit(fn())
-    except KeyboardInterrupt:
-        sys.exit(130)

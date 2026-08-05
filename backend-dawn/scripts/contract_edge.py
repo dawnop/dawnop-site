@@ -26,7 +26,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from contract_golden import Golden
+from contract_golden import TRANSPORT_STATUS, Golden, transport_error
 
 # urllib's no_proxy matching is suffix-based and does not exempt 127.0.0.1 from
 # a `no_proxy=127.*` export; go direct.
@@ -54,7 +54,7 @@ def req(base, method, path, headers=None, body=None, timeout=30):
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", "replace")
     except Exception as e:  # noqa: BLE001 - transport failure is a case failure
-        return -1, f"__ERR__ {type(e).__name__}: {e}"
+        return TRANSPORT_STATUS, transport_error(e)
 
 
 def as_json(text):

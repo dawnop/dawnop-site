@@ -36,7 +36,7 @@ import sys
 import urllib.error
 import urllib.request
 
-from contract_golden import Golden
+from contract_golden import TRANSPORT_STATUS, Golden, transport_error
 
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -112,8 +112,8 @@ def dav(base, method, path, auth, headers=None, body=None, timeout=30):
             )
     except urllib.error.HTTPError as e:
         return e.code, {k.lower(): v for k, v in (e.headers or {}).items()}, e.read()
-    except Exception as e:  # noqa: BLE001
-        return -1, {}, repr(e).encode()
+    except Exception as e:  # noqa: BLE001 - transport failure is a case failure
+        return TRANSPORT_STATUS, {}, transport_error(e).encode()
 
 
 def facts(xml: str) -> dict:
