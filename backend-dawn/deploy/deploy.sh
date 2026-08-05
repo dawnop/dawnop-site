@@ -16,6 +16,11 @@
 # scoped to this repo with Actions: read-only is enough; nothing here writes to
 # GitHub.
 #
+# The artifact download goes through a local forward proxy configured in
+# $APP/.deploy-proxy; see PROXY below for why, why only that one call, and what
+# happens without it. Do not set proxy variables on the invocation — the script
+# handles it, and the comment there explains what that shortcut breaks.
+#
 # A bad deploy self-reverts: the running jar is kept and restored if the new one
 # does not come up healthy. The exception is the very first deploy onto a fresh
 # machine, where there is nothing to revert *to* — the script says so up front
@@ -29,8 +34,42 @@ TOKEN_FILE="$APP/.github-token"
 HEALTH="http://127.0.0.1:8001/api/health"
 WANT_SHA="${1:-}"
 
+# Artifact *bytes* do not come from api.github.com — it 302s to Azure blob
+# storage, and that leg is throttled to uselessness from this host. Measured on
+# the same 10MB artifact, minutes apart: 11.7 KB/s direct (~15 min for 10MB, if
+# it finishes at all) vs 290 KB/s through the host's local forward proxy (35s).
+# The GitHub *API* is fine direct (~1.8s round trip) and is deliberately left
+# unproxied — only the download needs this.
+#
+# The endpoint is read from a file rather than written here, for the same reason
+# .github-token is: it is a fact about this particular host, not about the app,
+# and the machine's bypass plumbing is kept out of the public repo (the private
+# ops notes own it). One line, `host:port`:
+#     install -m 600 /dev/stdin $PROXY_FILE
+# Absent, the download still works — it just crawls, and says so.
+PROXY_FILE="$APP/.deploy-proxy"
+PROXY="${DEPLOY_PROXY-$(cat "$PROXY_FILE" 2>/dev/null || true)}"
+PROXY=$(printf '%s' "$PROXY" | tr -d ' \t\n\r')
+
+# Two things this deliberately does NOT do, both trapdoors:
+#
+# 1. It does not export http_proxy/https_proxy for the whole script. The step-6
+#    health check is http://127.0.0.1:8001, so an exported http_proxy captures
+#    it too; the proxy accepts the connection and then hangs, every one of the 40
+#    attempts times out, and the script rolls back a deploy that was perfectly
+#    healthy. Instead the proxy is passed as `curl --proxy` on the single call
+#    that needs it, so there is no no_proxy incantation left to forget.
+#    (Exporting only https_proxy does not trip this — curl selects the proxy
+#    variable by URL scheme and the health check is http. Both measured.)
+# 2. It does not honour an inherited proxy env, which would re-arm exactly that
+#    trap. The advice this replaces was "prefix the ssh command with the proxy
+#    variables", and someone will do it again from muscle memory or an old note.
+unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
+
 if [ "$(id -u)" -ne 0 ]; then
-  echo "!!! run as root: ssh <user>@<server> 'sudo bash -s' < $0" >&2
+  # Not "$0": the intended invocation pipes this file over ssh, so $0 is "bash"
+  # and the message would tell you to redirect from a file called `bash`.
+  echo "!!! run as root: ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/deploy.sh" >&2
   exit 1
 fi
 # Deployed code is root-owned and world-readable: the service account only ever
@@ -90,7 +129,21 @@ for a in json.load(sys.stdin)['artifacts']:
 else:
     sys.exit(f'no live artifact named {want} (expired? CI changed?)')
 ")
-api -L -o "$TMP/b.zip" "$ART_URL"
+DL=()
+if [ -z "$PROXY" ]; then
+  echo "    no proxy configured ($PROXY_FILE) — direct download, expect this to crawl" >&2
+elif timeout 2 bash -c "exec 3<>/dev/tcp/${PROXY%:*}/${PROXY##*:}" 2>/dev/null; then
+  # Probe rather than assume: if the proxy is down, `--proxy` fails the download
+  # outright, and "proxy missing" should degrade to slow, not to broken.
+  DL=(--proxy "$PROXY")
+  echo "    via proxy $PROXY"
+else
+  echo "    proxy $PROXY unreachable — direct download, expect this to crawl" >&2
+fi
+# Give up rather than hang: under 1 KB/s for 60s straight is the direct-download
+# failure mode, and an unattended deploy that stalls forever at 3am is worse than
+# one that stops with an error.
+api "${DL[@]}" --speed-limit 1024 --speed-time 60 -L -o "$TMP/b.zip" "$ART_URL"
 echo "    $(stat -c %s "$TMP/b.zip") bytes"
 
 echo "==> 3/6 checking the artifact really contains a runnable app"
@@ -179,15 +232,42 @@ if [ -z "$ok" ]; then
   fi
   chmod 755 "$APP/lib" && chmod 644 "$APP/lib"/*.jar
   systemctl restart "$SERVICE"
+  back=""
   for _ in $(seq 1 40); do
-    curl -sf -o /dev/null --max-time 3 "$HEALTH" && break
+    if curl -sf -o /dev/null --max-time 3 "$HEALTH"; then back=1; break; fi
     sleep 0.5
   done
-  echo "!!! rolled back. logs: journalctl -u $SERVICE -n 50 --no-pager" >&2
+  # Say which of the two happened. "rolled back" on its own was true about the
+  # files and silent about the service, so a rollback that also failed to come up
+  # printed the same line as one that worked — the site is down either way, but
+  # only one of them means the previous build is the problem too.
+  if [ -n "$back" ]; then
+    echo "!!! rolled back to $CURRENT and healthy again on :8001." >&2
+  else
+    echo "!!! rolled back to $CURRENT, but it is NOT healthy either — site is down." >&2
+  fi
+  echo "    logs: journalctl -u $SERVICE -n 50 --no-pager" >&2
   exit 1
 fi
 
 echo
 echo "Deployed ${RUN_SHA:0:7} (run $RUN_ID) at $STAMP. Healthy on :8001."
+
+# .prev holds the jar and lib/ but not the sha that goes with them — $CURRENT is
+# the only record of it, and it dies with this shell. So bake it into the printed
+# command rather than leaving the reader to reconstruct it.
+#
+# Restoring .deployed-sha is not cosmetic. Undoing without it leaves the file
+# claiming $RUN_SHA while $CURRENT's jar is running, and step 1 compares exactly
+# that file: the next deploy of $RUN_SHA says "already deployed — nothing to do"
+# and refuses to reinstall it. That is a stuck deploy pipeline, discovered by
+# someone who is already dealing with whatever made them undo.
+if [ "$CURRENT" = "unknown" ]; then
+  # Nothing legitimate to restore it to; absent is the honest state, same as the
+  # automatic rollback path above.
+  UNDO_SHA="rm -f $APP/.deployed-sha && chown -R root:root $APP/backend-dawn.jar $APP/lib"
+else
+  UNDO_SHA="printf %s $CURRENT > $APP/.deployed-sha && chown -R root:root $APP/backend-dawn.jar $APP/lib $APP/.deployed-sha"
+fi
 echo "  previous build kept at $PREV — to undo:"
-echo "    cp -a $PREV/backend-dawn.jar $APP/ && rm -rf $APP/lib && cp -a $PREV/lib $APP/ && chown -R root:root $APP/backend-dawn.jar $APP/lib && systemctl restart $SERVICE"
+echo "    cp -a $PREV/backend-dawn.jar $APP/ && rm -rf $APP/lib && cp -a $PREV/lib $APP/ && $UNDO_SHA && systemctl restart $SERVICE"

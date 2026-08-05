@@ -26,7 +26,24 @@ Environment=DAWN_PORT=8001
 # the dav vhost's client_max_body_size went 64m -> 0 with it. Was 512m when the
 # whole body sat in the heap.
 ExecStart=/usr/bin/java -Xmx256m -jar /opt/dawnop-dawn/backend-dawn.jar
-Restart=on-failure
+# A JVM handling SIGTERM runs its shutdown hooks and exits 128+15=143, so every
+# ordinary `systemctl restart` used to log "status=143/n/a" + "Failed with result
+# 'exit-code'". A unit that reports failure on every clean stop has no failure
+# signal left: the lines that mean something are indistinguishable from the noise
+# around them. 143 is an exit *status* here, not a kill (systemd prints
+# status=15/TERM for those), so this is the directive that matches.
+SuccessExitStatus=143
+# Verified that this does not swallow the failures worth having: SIGKILL — what
+# the OOM killer sends, and what a stop timeout escalates to — still logs
+# "Failed with result 'signal'" and still restarts.
+#
+# `always` rather than `on-failure` because of what the line above costs: with
+# 143 reclassified as success, on-failure would no longer resurrect the process
+# if anything outside systemd SIGTERMed it (measured: the service stayed down).
+# `always` gives that back. Nothing is lost by restarting after a clean exit —
+# the app has no deliberate exit at all, so any exit is unexpected, and an
+# explicit `systemctl stop` is never overridden by Restart= anyway.
+Restart=always
 RestartSec=3
 # hardening (mirrors the FastAPI unit). /opt/dawnop/data holds the shared DB +
 # WAL/SHM (writable); the jar dir and libsimple.so are read-only, which is fine.
