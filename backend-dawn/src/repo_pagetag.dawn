@@ -2,7 +2,7 @@
 # rename/merge/cleanup/delete tags. Mirrors app/api/pages.py and tags.py.
 use std/str
 use java "java.sql.Connection"
-use sql.{SqlV, PInt, PStr, ColInt, ColStr, query, exec, last_id, str_at, first_str, first_str_or, first_bool_or, first_int_or, bool_int}
+use sql.{SqlV, PInt, PStr, ColInt, ColStr, query, exec, last_id, str_at, first_str, first_str_or, first_bool_or, first_int_or, bool_int, open, scalar_int}
 use repo_write.{unique_slug, clip}
 
 # ---- pages ----
@@ -151,4 +151,156 @@ pub fn cleanup_tags(c: Connection) -> Result[Int, String] !io = {
 pub fn delete_tag(c: Connection, id: Int) -> Result[Int, String] !io = {
   let _l = exec(c, "delete from article_tags where tag_id = ?", [PInt(id)])?
   exec(c, "delete from tags where id = ?", [PInt(id)])
+}
+
+# ---- tests (need --cp lib/sqlite-jdbc-*.jar) ----
+#
+# The schema here is the shape create_all builds, trimmed to the columns this
+# module touches. Everything below runs against an in-memory database, so no
+# fixture file, no libsimple, and no network.
+
+# a schema or seed typo must fail loudly here, not as a puzzling assertion later
+fn must(r: Result[Int, String]) -> Int =
+  match r {
+    Ok(n) -> n
+    Err(m) -> panic(m)
+  }
+
+fn test_db() -> Connection !io = {
+  let c = open("jdbc:sqlite::memory:")
+  let _p = must(exec(c, "create table pages (id integer primary key, title text, slug text unique, type text, description text, content text, nav_visible integer, nav_order integer, auto_title integer, created_at text, updated_at text)", []))
+  let _t = must(exec(c, "create table tags (id integer primary key, name text, slug text unique, created_at text)", []))
+  let _a = must(exec(c, "create table articles (id integer primary key, title text, slug text unique, page_id integer)", []))
+  let _l = must(exec(c, "create table article_tags (article_id integer, tag_id integer)", []))
+  c
+}
+
+fn a_page(title: String, hint: String) -> NewPage =
+  NewPage {
+    title: title, slug_hint: hint, kind: "content", description: "", content: "",
+    auto_title: false, nav_visible: true, nav_order: 0, created_at: None,
+  }
+
+test "create_page derives a unique slug and reads back its type and title" {
+  let c = test_db()
+  let id = create_page(c, a_page("Hello World", ""))
+  assert id == Ok(1)
+  assert page_kind(c, 1) == Ok(Some("content"))
+  assert page_title(c, 1) == Ok("Hello World")
+  # a second page with the same title cannot take the same slug
+  let id2 = create_page(c, a_page("Hello World", ""))
+  assert id2 == Ok(2)
+  assert scalar_int(c, "select count(*) from pages where slug = 'hello-world'", []) == Ok(1)
+  assert scalar_int(c, "select count(*) from pages where slug = 'hello-world-2'", []) == Ok(1)
+  # slug_hint wins over the title when supplied
+  let _id3 = create_page(c, a_page("Ignored", "chosen-slug"))
+  assert scalar_int(c, "select count(*) from pages where slug = 'chosen-slug'", []) == Ok(1)
+  # a missing page answers None/"" rather than failing
+  assert page_kind(c, 99) == Ok(None)
+  assert page_title(c, 99) == Ok("")
+}
+
+test "delete_page detaches its articles instead of deleting them" {
+  let c = test_db()
+  let _p = create_page(c, a_page("Notes", ""))
+  assert exec(c, "insert into articles (title, slug, page_id) values ('a', 'a', 1)", []) == Ok(1)
+  assert exec(c, "insert into articles (title, slug, page_id) values ('b', 'b', 1)", []) == Ok(1)
+  assert delete_page(c, 1) == Ok(1)
+  # the articles survive with page_id nulled — the FastAPI contract, and the
+  # reason this is not a foreign-key cascade
+  assert scalar_int(c, "select count(*) from articles", []) == Ok(2)
+  assert scalar_int(c, "select count(*) from articles where page_id is null", []) == Ok(2)
+  assert scalar_int(c, "select count(*) from pages", []) == Ok(0)
+}
+
+test "reorder_pages numbers by position and drops repeated ids" {
+  let c = test_db()
+  for i in range(0, 4) {
+    let _p = create_page(c, a_page("P$i", "p$i"))
+  }
+  assert reorder_pages(c, [4, 2, 3, 1]) == Ok(0)
+  assert scalar_int(c, "select nav_order from pages where id = 4", []) == Ok(0)
+  assert scalar_int(c, "select nav_order from pages where id = 2", []) == Ok(1)
+  assert scalar_int(c, "select nav_order from pages where id = 3", []) == Ok(2)
+  assert scalar_int(c, "select nav_order from pages where id = 1", []) == Ok(3)
+  # a repeated id keeps its first position and does not shift the ones after it
+  assert reorder_pages(c, [1, 2, 1, 3]) == Ok(0)
+  assert scalar_int(c, "select nav_order from pages where id = 1", []) == Ok(0)
+  assert scalar_int(c, "select nav_order from pages where id = 2", []) == Ok(1)
+  assert scalar_int(c, "select nav_order from pages where id = 3", []) == Ok(2)
+}
+
+test "regen_page_slug keeps a page out of its own uniqueness check" {
+  let c = test_db()
+  let _a = create_page(c, a_page("One", "one"))
+  let _b = create_page(c, a_page("Two", "two"))
+  # renaming page 1 to a base it already owns must not append -2
+  assert regen_page_slug(c, 1, "One") == Ok(1)
+  assert scalar_int(c, "select count(*) from pages where id = 1 and slug = 'one'", []) == Ok(1)
+  # but it must still dodge another page's slug
+  assert regen_page_slug(c, 1, "Two") == Ok(1)
+  assert scalar_int(c, "select count(*) from pages where id = 1 and slug = 'two-2'", []) == Ok(1)
+}
+
+fn seed_tag(c: Connection, name: String, slug: String) -> Unit !io = {
+  let _t = must(exec(c, "insert into tags (name, slug, created_at) values (?, ?, datetime('now'))", [PStr(name), PStr(slug)]))
+  ()
+}
+
+test "rename_tag refuses duplicates and leaves a same-name rename alone" {
+  let c = test_db()
+  seed_tag(c, "Rust", "rust")
+  seed_tag(c, "Dawn", "dawn")
+  assert tag_exists(c, 1) == Ok(true)
+  assert tag_exists(c, 9) == Ok(false)
+  # a rename that only changes case of its own name must not disturb the slug
+  assert rename_tag(c, 1, "Rust") == Ok(true)
+  assert scalar_int(c, "select count(*) from tags where id = 1 and slug = 'rust'", []) == Ok(1)
+  # a real rename regenerates the slug
+  assert rename_tag(c, 1, "  Systems  ") == Ok(true)
+  assert scalar_int(c, "select count(*) from tags where id = 1 and name = 'Systems' and slug = 'systems'", []) == Ok(1)
+  # colliding with another tag's name (case-insensitively) is refused, not merged
+  assert rename_tag(c, 1, "dawn") == Err("已存在同名标签「Dawn」，如需归并请用合并功能")
+  assert rename_tag(c, 1, "   ") == Err("标签名不能为空")
+}
+
+test "merge_tags moves links without duplicating, then drops the source" {
+  let c = test_db()
+  seed_tag(c, "src", "src")
+  seed_tag(c, "dst", "dst")
+  # article 1 carries both tags; article 2 only the source
+  assert exec(c, "insert into article_tags values (1, 1), (1, 2), (2, 1)", []) == Ok(3)
+  # article 1 must not end up linked to the target twice
+  assert merge_tags(c, 1, 2) == Ok(2)
+  assert scalar_int(c, "select count(*) from article_tags where tag_id = 2", []) == Ok(2)
+  assert scalar_int(c, "select count(*) from article_tags where tag_id = 1", []) == Ok(0)
+  assert tag_exists(c, 1) == Ok(false)
+  assert tag_exists(c, 2) == Ok(true)
+}
+
+test "cleanup_tags removes only the unreferenced ones, and reports how many" {
+  let c = test_db()
+  seed_tag(c, "used", "used")
+  seed_tag(c, "loose", "loose")
+  seed_tag(c, "also-loose", "also-loose")
+  assert exec(c, "insert into article_tags values (1, 1)", []) == Ok(1)
+  assert cleanup_tags(c) == Ok(2)
+  assert scalar_int(c, "select count(*) from tags", []) == Ok(1)
+  assert tag_exists(c, 1) == Ok(true)
+  # a second sweep finds nothing left to do
+  assert cleanup_tags(c) == Ok(0)
+}
+
+test "delete_tag takes its article links with it" {
+  let c = test_db()
+  seed_tag(c, "gone", "gone")
+  seed_tag(c, "kept", "kept")
+  assert exec(c, "insert into article_tags values (1, 1), (2, 1), (1, 2)", []) == Ok(3)
+  assert delete_tag(c, 1) == Ok(1)
+  assert scalar_int(c, "select count(*) from tags", []) == Ok(1)
+  # the other tag's links are untouched
+  assert scalar_int(c, "select count(*) from article_tags", []) == Ok(1)
+  assert scalar_int(c, "select count(*) from article_tags where tag_id = 2", []) == Ok(1)
+  # deleting a tag that is not there is a no-op, not an error
+  assert delete_tag(c, 99) == Ok(0)
 }

@@ -90,43 +90,49 @@ fn cpu_percent() -> Float !io = {
 # (busy, total) jiffies from the aggregate cpu line; idle = idle + iowait
 fn cpu_sample() -> (Int, Int) !io =
   match io.read_file("/proc/stat") {
-    Ok(text) -> {
-      let fs = fields_of(str.split(text, "\n")[0])
-      let upto = if len(fs) < 9 { len(fs) } else { 9 }
-      let total = fold(range(1, upto), 0, (acc, i) => acc + parse_or0(fs[i]))
-      let idle = if len(fs) > 5 { parse_or0(fs[4]) + parse_or0(fs[5]) } else { 0 }
-      (total - idle, total)
-    }
+    Ok(text) -> cpu_of(text)
     Err(_m) -> (0, 0)
   }
 
+fn cpu_of(text: String) -> (Int, Int) = {
+  let fs = fields_of(str.split(text, "\n")[0])
+  let upto = if len(fs) < 9 { len(fs) } else { 9 }
+  let total = fold(range(1, upto), 0, (acc, i) => acc + parse_or0(fs[i]))
+  let idle = if len(fs) > 5 { parse_or0(fs[4]) + parse_or0(fs[5]) } else { 0 }
+  (total - idle, total)
+}
+
 fn loadavg() -> Json !io =
   match io.read_file("/proc/loadavg") {
-    Ok(text) -> {
-      let fs = fields_of(text)
-      JArr(map(range(0, 3), i =>
-          match parse_float(fs[i]) {
-            Some(x) -> JNum(x)
-            None -> JNull
-          }))
-    }
+    Ok(text) -> loadavg_of(text)
     Err(_m) -> JArr([JNull, JNull, JNull])
   }
+
+fn loadavg_of(text: String) -> Json = {
+  let fs = fields_of(text)
+  JArr(map(range(0, 3), i =>
+      match parse_float(fs[i]) {
+        Some(x) -> JNum(x)
+        None -> JNull
+      }))
+}
 
 # MemTotal/MemAvailable in kB; used/percent match psutil (total - available)
 fn meminfo() -> Json !io =
   match io.read_file("/proc/meminfo") {
-    Ok(text) -> {
-      let total = meminfo_kb(text, "MemTotal") * 1024
-      let avail = meminfo_kb(text, "MemAvailable") * 1024
-      obj([
-        ("total", jint(total)),
-        ("used", jint(total - avail)),
-        ("percent", JNum(pct(total - avail, total))),
-      ])
-    }
+    Ok(text) -> meminfo_of(text)
     Err(_m) -> obj([("total", jint(0)), ("used", jint(0)), ("percent", JNum(0.0))])
   }
+
+fn meminfo_of(text: String) -> Json = {
+  let total = meminfo_kb(text, "MemTotal") * 1024
+  let avail = meminfo_kb(text, "MemAvailable") * 1024
+  obj([
+    ("total", jint(total)),
+    ("used", jint(total - avail)),
+    ("percent", JNum(pct(total - avail, total))),
+  ])
+}
 
 fn meminfo_kb(text: String, key: String) -> Int =
   fold(str.split(text, "\n"), 0, (acc, line) =>
@@ -140,33 +146,37 @@ fn meminfo_kb(text: String, key: String) -> Int =
 # cumulative bytes over every interface (psutil net_io_counters aggregates all)
 fn net_totals() -> Json !io =
   match io.read_file("/proc/net/dev") {
-    Ok(text) -> {
-      let (sent, recv) = fold(str.split(text, "\n"), (0, 0), (acc: (Int, Int), line) =>
-          if str.contains(line, ":") {
-            let (s, r) = acc
-            let parts = str.split(line, ":")
-            let fs = fields_of(join(list.drop(parts, 1), ":"))
-            if len(fs) > 8 {
-              (s + parse_or0(fs[8]), r + parse_or0(fs[0]))
-            } else {
-              acc
-            }
-          } else {
-            acc
-          })
-      obj([("sent", jint(sent)), ("recv", jint(recv))])
-    }
+    Ok(text) -> net_totals_of(text)
     Err(_m) -> obj([("sent", jint(0)), ("recv", jint(0))])
   }
 
+fn net_totals_of(text: String) -> Json = {
+  let (sent, recv) = fold(str.split(text, "\n"), (0, 0), (acc: (Int, Int), line) =>
+      if str.contains(line, ":") {
+        let (s, r) = acc
+        let parts = str.split(line, ":")
+        let fs = fields_of(join(list.drop(parts, 1), ":"))
+        if len(fs) > 8 {
+          (s + parse_or0(fs[8]), r + parse_or0(fs[0]))
+        } else {
+          acc
+        }
+      } else {
+        acc
+      })
+  obj([("sent", jint(sent)), ("recv", jint(recv))])
+}
+
 fn uptime_s() -> Int !io =
   match io.read_file("/proc/uptime") {
-    Ok(text) ->
-      match parse_float(fields_of(text)[0]) {
-        Some(x) -> to_int(x)
-        None -> 0
-      }
+    Ok(text) -> uptime_of(text)
     Err(_m) -> 0
+  }
+
+fn uptime_of(text: String) -> Int =
+  match parse_float(fields_of(text)[0]) {
+    Some(x) -> to_int(x)
+    None -> 0
   }
 
 fn fields_of(line: String) -> List[String] = filter(str.split(line, " "), s => s != "")
@@ -410,4 +420,53 @@ pub fn vault_block(alive_url: String, public_url: String) -> Json !io = {
     }
     Err(m) -> obj(head ++ [("alive", jbool(false)), ("error", jstr(m))])
   }
+}
+
+# ---- tests: the /proc readers, fed fixed sample text ----
+#
+# The four blocks above read a file and hand the text to a pure parser; these
+# pin the parsers. Sample text is copied from a real Ubuntu 22.04 host, so a
+# column-index slip (which is how these break) fails here rather than silently
+# reporting plausible-looking numbers in production.
+
+test "cpu_of takes busy/total jiffies off the aggregate cpu line" {
+  let stat = "cpu  100 20 30 800 40 0 5 0 0 0\ncpu0 50 10 15 400 20 0 2 0 0 0\nintr 12345\n"
+  # fields 1..8 sum to total; idle = field 4 (idle) + field 5 (iowait) = 800 + 40
+  let (busy, total) = cpu_of(stat)
+  assert total == 100 + 20 + 30 + 800 + 40 + 0 + 5 + 0
+  assert busy == total - 840
+  # a short line must not index past the end
+  assert cpu_of("cpu  1 2\n") == (3, 3)
+  assert cpu_of("") == (0, 0)
+}
+
+test "loadavg_of reads the three averages, and only those" {
+  assert loadavg_of("0.52 0.31 0.28 1/394 21755\n") == JArr([JNum(0.52), JNum(0.31), JNum(0.28)])
+}
+
+test "meminfo_of reports used = total - available, in bytes" {
+  let mem = "MemTotal:        4000000 kB\nMemFree:          500000 kB\nMemAvailable:    1000000 kB\nBuffers:          100000 kB\n"
+  # psutil's "used" is total - available, not total - free
+  assert meminfo_of(mem) == obj([
+    ("total", jint(4000000 * 1024)),
+    ("used", jint(3000000 * 1024)),
+    ("percent", JNum(75.0)),
+  ])
+  # a missing key reads 0 rather than throwing
+  assert meminfo_of("MemTotal:  0 kB\n") == obj([("total", jint(0)), ("used", jint(0)), ("percent", JNum(0.0))])
+}
+
+test "net_totals_of sums every interface (recv = field 0, sent = field 8)" {
+  let dev = "Inter-|   Receive                                                |  Transmit\n" ++
+    " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n" ++
+    "    lo:    1000      10    0    0    0     0          0         0     2000      20    0    0    0     0       0          0\n" ++
+    "  eth0:  300000    3000    0    0    0     0          0         0   400000    4000    0    0    0     0       0          0\n"
+  # the two header lines contain a "|" but the second also contains ":" in "face |bytes";
+  # it has fewer than 9 numeric fields, so it contributes nothing
+  assert net_totals_of(dev) == obj([("sent", jint(402000)), ("recv", jint(301000))])
+}
+
+test "uptime_of takes the first float, truncated to whole seconds" {
+  assert uptime_of("123456.78 987654.32\n") == 123456
+  assert uptime_of("bad\n") == 0
 }

@@ -185,3 +185,27 @@ pub fn routes(a: Auth) -> List[Route] =
     route_post("/api/auth/login", login(a)),
     route_get("/api/auth/me", me(a)),
   ]
+
+test "verify_password accepts the \$2b hashes the shared users table holds" {
+  # seed_admin.py hashed with Python's bcrypt, which writes the $2b revision;
+  # jBCrypt only parses $2a/$2y. The revisions are the same algorithm for
+  # passwords <= 72 bytes, so the fix is a prefix rewrite — pinned here because
+  # getting it wrong locks every existing account out with a 401.
+  let a2 = BCrypt.hashpw("hunter2", BCrypt.gensalt(4)!)!
+  assert str.starts_with(a2, "$2a$")
+  let b2 = "\$2b\$" ++ str.substring(a2, 4, str.len(a2))
+  assert verify_password("hunter2", b2)
+  assert verify_password("hunter2", a2)
+  assert not verify_password("wrong-password", b2)
+  # $2y$ is the third spelling of the same hash
+  assert verify_password("hunter2", "\$2y\$" ++ str.substring(a2, 4, str.len(a2)))
+  # the trap: jBCrypt refuses the $2b revision outright rather than ignoring it,
+  # so without the rewrite this is what every login would hit
+  match catch_fault(() => BCrypt.checkpw("hunter2", b2)) {
+    Ok(_v) -> { assert false }
+    Err(_e) -> { assert true }
+  }
+  # a malformed hash reads as "wrong password", never as a crash (401, not 500)
+  assert not verify_password("hunter2", "not-a-bcrypt-hash")
+  assert not verify_password("hunter2", "")
+}

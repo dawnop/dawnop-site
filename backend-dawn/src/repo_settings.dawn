@@ -73,3 +73,25 @@ pub fn put_one(c: Connection, key: String, value: Int) -> Result[Bool, String] !
         Ok(true)
       }
   }
+
+test "check_setting rejects unknown keys and out-of-range values" {
+  # every known key, at both ends of its documented range and just outside
+  assert check_setting("upload_concurrency", 1) == Ok(true)
+  assert check_setting("upload_concurrency", 8) == Ok(true)
+  assert check_setting("upload_concurrency", 0) == Err("upload_concurrency 应为 1~8 的整数")
+  assert check_setting("upload_concurrency", 9) == Err("upload_concurrency 应为 1~8 的整数")
+  assert check_setting("download_concurrency", 4) == Ok(true)
+  assert check_setting("storage_quota_gb", 1) == Ok(true)
+  assert check_setting("storage_quota_gb", 1024) == Ok(true)
+  assert check_setting("storage_quota_gb", 1025) == Err("storage_quota_gb 应为 1~1024 的整数")
+  assert check_setting("text_preview_max_kb", 16) == Ok(true)
+  assert check_setting("text_preview_max_kb", 15) == Err("text_preview_max_kb 应为 16~10240 的整数")
+  # an unknown key is refused whatever the value — the validate-then-commit pass
+  # relies on this, since nothing downstream would notice a stray key
+  assert check_setting("nope", 3) == Err("未知配置项：nope")
+  assert check_setting("", 3) == Err("未知配置项：")
+  # check_setting and put_one must agree on the bounds, or a value could pass
+  # validation and then be refused mid-write
+  assert range_of("upload_concurrency") == Some((1, 8))
+  assert range_of("nope") == None
+}
