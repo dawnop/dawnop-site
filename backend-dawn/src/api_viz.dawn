@@ -10,6 +10,7 @@ use db.{with_db}
 use auth.{Auth, guarded}
 use jsonread.{body_obj, opt_str, str_or, present_null}
 use repo_viz.{NewViz, valid_slug, slug_free, viz_exists, create_viz, set_viz_str, touch_viz, delete_viz, list_all, by_id}
+use errkind.{Kind, KConflict, conflict, split_kind}
 
 ## GET /api/viz — all components (admin).
 pub fn viz_list(a: Auth) -> Handler =
@@ -75,8 +76,13 @@ pub fn viz_update(a: Auth) -> Handler =
       })
 
 # a slug collision is a 409, every other update failure a 422 (validation)
-fn classify_viz(msg: String) -> HttpError =
-  if str.contains(msg, "已存在") { http_error(409, msg) } else { http_error(422, msg) }
+fn classify_viz(msg: String) -> HttpError = {
+  let (k, t) = split_kind(msg)
+  match k {
+    KConflict -> http_error(409, t)
+    _ -> http_error(422, t)
+  }
+}
 
 fn viz_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Option[Json], String] !io = {
   let ex = viz_exists(c, id)?
@@ -105,7 +111,7 @@ fn update_viz_slug(c: Connection, id: Int, raw: String) -> Result[Int, String] !
     Err("slug 格式非法")
   } else {
     let free = slug_free(c, slug, Some(id))?
-    if free == false { Err("标识 $slug 已存在") } else { set_viz_str(c, id, "slug", slug) }
+    if free == false { Err(conflict("标识 $slug 已存在")) } else { set_viz_str(c, id, "slug", slug) }
   }
 }
 

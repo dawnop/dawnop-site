@@ -14,6 +14,7 @@ use auth.{Auth, guarded_user}
 use jsonread.{body_obj, has, str_or, opt_str, bool_or, opt_int, str_list}
 use repo_article
 use repo_write.{NewArticle, ArticlePatch, create_article, update_article, delete_article}
+use errkind.{Kind, KInvalid, split_kind}
 
 fn param(req: Request, name: String) -> String =
   match map.get(req.params, name) {
@@ -180,8 +181,13 @@ pub fn remove(a: Auth) -> Handler =
       })
 
 # page_id validation failures are 400, everything else 500
-fn classify(m: String) -> HttpError =
-  if str.contains(m, "所属页面") { http_error(400, m) } else { http_error(500, m) }
+fn classify(m: String) -> HttpError = {
+  let (k, t) = split_kind(m)
+  match k {
+    KInvalid -> http_error(400, t)
+    _ -> http_error(500, t)
+  }
+}
 
 ## The admin article routes (protected). Static admin paths precede /{id}.
 pub fn routes(a: Auth) -> List[Route] =

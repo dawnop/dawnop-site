@@ -221,6 +221,15 @@ def build_cases(token, content_page_id):
         "reject",
     )
     add("viz.update.404", "PUT", "/api/viz/99999999", AUTH, {"name": "n"}, "reject")
+    # slug already worn by viz #1 -> 409, and nothing else in the patch applies
+    add(
+        "viz.update.slugTaken",
+        "PUT",
+        "/api/viz/2",
+        AUTH,
+        {"slug": "counter-demo"},
+        "reject",
+    )
     add("viz.delete.404", "DELETE", "/api/viz/99999999", AUTH, None, "reject")
 
     add("page.create.noTok", "POST", "/api/pages", None, {"title": "x"}, "reject")
@@ -290,6 +299,22 @@ def build_cases(token, content_page_id):
         "/api/fm/upload-token",
         None,
         {"path": "qiniu://x"},
+        "reject",
+    )
+    # copying a directory onto its own parent collides with itself -> 409 before
+    # anything is written and before the object store is touched. This is the
+    # only fm write path whose 409 the fixture can reach without credentials, and
+    # it is what pins the name-collision status code (api_fm.conflict_or).
+    add(
+        "fm.copy.nameTaken",
+        "POST",
+        "/api/fm/copy",
+        AUTH,
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://",
+            "sources": ["qiniu://empty-dir"],
+        },
         "reject",
     )
     return C

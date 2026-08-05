@@ -40,6 +40,7 @@ use java "java.io.File"
 use crypto.{sha256_hex, uuid}
 use http.{fetch_stream, ok_stream, close_stream}
 use ttl.{cache_get, cache_put}
+use errkind.{Kind, KUpstream, as_upstream, split_kind}
 use export.{url_encode}
 
 const AUTH_TTL: Int = 300
@@ -551,7 +552,15 @@ fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool)
       copy_subtree(a, rel, dst)
     }
   match outcome {
-    Err(m) -> if str.contains(m, "七牛") { Err(http_error(502, m)) } else { Err(http_error(500, m)) }
+    Err(m) -> {
+      # an object-store refusal is a 502 (the FastAPI reference raises 502 around
+      # qiniu_client.copy); a database failure stays a 500
+      let (k, t) = split_kind(m)
+      match k {
+        KUpstream -> Err(http_error(502, t))
+        _ -> Err(http_error(500, t))
+      }
+    }
     Ok(_) -> if dst_existed { Ok(text(204, "")) } else { Ok(text(201, "")) }
   }
 }
@@ -578,7 +587,7 @@ fn copy_rows(a: Auth, rel: String, dst: String, rows: List[FileRow], i: Int) -> 
 fn copy_one_file(a: Auth, o: FileRow, dst_path: String) -> Result[Int, String] !io = {
   let new_key = uuid_hex()
   let src_key = match o.key { Some(k) -> k None -> "" }
-  let _c = copy_obj(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, src_key, new_key)?
+  let _c = as_upstream(copy_obj(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, src_key, new_key))?
   with_db(a.db.path, a.db.ext, (c) => insert_file(c, dst_path, new_key, o.content_type, o.size))
 }
 

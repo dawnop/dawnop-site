@@ -5,6 +5,7 @@
 use std/str
 use java "java.sql.Connection"
 use sql.{SqlV, PInt, PStr, PNull, Col, ColInt, ColStr, Cell, open, query, exec, scalar_int, last_id, int_at, str_at}
+use errkind.{invalid}
 use slugify.{slugify}
 
 # ---- unique slug ----
@@ -84,6 +85,10 @@ fn link_tags(c: Connection, article_id: Int, tag_ids: List[Int], i: Int) -> Resu
 
 # ---- page reference validation ----
 
+# Tagged KInvalid so api_articles answers 400 instead of 500; the text is what
+# the client sees, unchanged.
+const BAD_PAGE_REF: String = "所属页面不存在或不是文章列表页"
+
 ## A page_id must reference an existing article_list page (or be None).
 pub fn validate_page_ref(c: Connection, page_id: Option[Int]) -> Result[Bool, String] !io =
   match page_id {
@@ -91,8 +96,8 @@ pub fn validate_page_ref(c: Connection, page_id: Option[Int]) -> Result[Bool, St
     Some(id) -> {
       let rows = query(c, "select count(*) from pages where id = ? and type = 'article_list'", [PInt(id)], [ColInt])?
       match get(rows, 0) {
-        Some(r) -> if int_at(r, 0) != 0 { Ok(true) } else { Err("所属页面不存在或不是文章列表页") }
-        None -> Err("所属页面不存在或不是文章列表页")
+        Some(r) -> if int_at(r, 0) != 0 { Ok(true) } else { Err(invalid(BAD_PAGE_REF)) }
+        None -> Err(invalid(BAD_PAGE_REF))
       }
     }
   }

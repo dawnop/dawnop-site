@@ -732,6 +732,14 @@
     "detail": "组件不存在"
    }
   },
+  "viz.update.slugTaken": {
+   "method": "PUT",
+   "path": "/api/viz/2",
+   "status": 409,
+   "body": {
+    "detail": "标识 counter-demo 已存在"
+   }
+  },
   "viz.delete.404": {
    "method": "DELETE",
    "path": "/api/viz/99999999",
@@ -1058,6 +1066,14 @@
    "status": 401,
    "body": {
     "detail": "无效或过期的凭证"
+   }
+  },
+  "fm.copy.nameTaken": {
+   "method": "POST",
+   "path": "/api/fm/copy",
+   "status": 409,
+   "body": {
+    "detail": "已存在同名项：empty-dir"
    }
   }
  }
