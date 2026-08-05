@@ -599,6 +599,12 @@ fn lock_response(req: Request, rel: String) -> Response !io = {
 
 # ---- OPTIONS ----
 
+# The verbs dav_routes actually registers. Also the source of `Allow` — the two
+# used to be independent literals that could drift apart silently, so the inline
+# test below pins Allow to this list.
+const DAV_VERBS: List[String] =
+  ["OPTIONS", "PROPFIND", "HEAD", "GET", "PUT", "DELETE", "MKCOL", "MOVE", "COPY", "LOCK", "UNLOCK"]
+
 const ALLOW: String = "OPTIONS, PROPFIND, HEAD, GET, PUT, DELETE, MKCOL, MOVE, COPY, LOCK, UNLOCK"
 
 fn options_response() -> Response =
@@ -693,7 +699,7 @@ fn dav_handler(a: Auth, cell: AtomicReference, method: String) -> Handler =
 
 ## All WebDAV routes under /dav/{rest*} (the tail matches /dav and any depth).
 pub fn dav_routes(a: Auth, cell: AtomicReference) -> List[Route] = {
-  let verbs = ["OPTIONS", "PROPFIND", "HEAD", "GET", "PUT", "DELETE", "MKCOL", "MOVE", "COPY", "LOCK", "UNLOCK"]
+  let verbs = DAV_VERBS
   # raw-body: WebDAV PUT carries file bytes (bounded by nginx, not the JSON limit).
   # no-cors: WebDAV is not browser traffic — skip the CORS middleware entirely.
   # stream-body: PUT only — the server spills the body to a temp file instead of
@@ -716,4 +722,17 @@ test "range_pair parses the WebDAV Range forms against a total size" {
   assert range_pair("5000", "", 5000) == None
   assert range_pair("", "0", 5000) == None
   assert range_pair("x", "", 5000) == None
+}
+
+test "OPTIONS advertises DAV class 1,2 and an Allow matching the routed verbs" {
+  # `DAV: 1, 2` is the header a client reads to decide the mount is writable
+  # (class 2 = LOCK). Losing it degrades macOS Finder to read-only while every
+  # verb keeps working, so no functional test would notice — pin it explicitly.
+  # Note the wire spelling is `Dav: 1, 2`: the JDK http server title-cases header
+  # names on emission. Field names are case-insensitive (RFC 9110 §5.1), so that
+  # is conforming, but a case-sensitive `grep '^DAV:'` will miss it.
+  assert options_response().headers ==
+    [("DAV", "1, 2"), ("Allow", ALLOW), ("MS-Author-Via", "DAV"), ("Content-Length", "0")]
+  # Allow cannot drift from the verbs dav_routes actually registers.
+  assert ALLOW == fold(DAV_VERBS, "", (acc, v) => if acc == "" { v } else { acc ++ ", " ++ v })
 }
