@@ -43,6 +43,7 @@
    "status": 401,
    "headers": {
     "content-type": "application/json; charset=utf-8",
+    "content-length": "25",
     "www-authenticate": "Basic realm=\"dawnop-webdav\""
    },
    "body": "{\"detail\":\"需要认证\"}"
@@ -53,6 +54,7 @@
    "status": 401,
    "headers": {
     "content-type": "application/json; charset=utf-8",
+    "content-length": "25",
     "www-authenticate": "Basic realm=\"dawnop-webdav\""
    },
    "body": "{\"detail\":\"需要认证\"}"
@@ -62,7 +64,8 @@
    "path": "/dav/",
    "status": 207,
    "headers": {
-    "content-type": "application/xml; charset=\"utf-8\""
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "409"
    },
    "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/</D:href><D:propstat><D:prop><D:displayname></D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
    "facts": {
@@ -88,7 +91,8 @@
    "path": "/dav/",
    "status": 207,
    "headers": {
-    "content-type": "application/xml; charset=\"utf-8\""
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "2744"
    },
    "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/</D:href><D:propstat><D:prop><D:displayname></D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/archive/</D:href><D:propstat><D:prop><D:displayname>archive</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>Fri, 02 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-02T12:00:00Z</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/docs/</D:href><D:propstat><D:prop><D:displayname>docs</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>Sat, 03 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-03T12:00:00Z</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/empty-dir/</D:href><D:propstat><D:prop><D:displayname>empty-dir</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>Wed, 07 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-07T12:00:00Z</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/%E5%9B%BE%E7%89%87/</D:href><D:propstat><D:prop><D:displayname>图片</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>Sat, 10 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-10T12:00:00Z</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/example.txt</D:href><D:propstat><D:prop><D:displayname>example.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>Thu, 08 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-08T12:00:00Z</D:creationdate><D:getcontentlength>42</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/readme.md</D:href><D:propstat><D:prop><D:displayname>readme.md</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>Fri, 09 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-09T12:00:00Z</D:creationdate><D:getcontentlength>1024</D:getcontentlength><D:getcontenttype>text/markdown</D:getcontenttype><D:getetag>\"99999999-8888-7777-6666-555555555555\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
    "facts": {
@@ -138,7 +142,8 @@
    "path": "/dav/docs",
    "status": 207,
    "headers": {
-    "content-type": "application/xml; charset=\"utf-8\""
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "1240"
    },
    "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/docs/</D:href><D:propstat><D:prop><D:displayname>docs</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>Sat, 03 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-03T12:00:00Z</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/docs/img/</D:href><D:propstat><D:prop><D:displayname>img</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>Sun, 04 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-04T12:00:00Z</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/docs/notes.txt</D:href><D:propstat><D:prop><D:displayname>notes.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>Tue, 06 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-06T12:00:00Z</D:creationdate><D:getcontentlength>137</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"11111111-2222-3333-4444-555555555555\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
    "facts": {
@@ -174,7 +179,8 @@
    "path": "/dav/docs/notes.txt",
    "status": 207,
    "headers": {
-    "content-type": "application/xml; charset=\"utf-8\""
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "569"
    },
    "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/docs/notes.txt</D:href><D:propstat><D:prop><D:displayname>notes.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>Tue, 06 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-06T12:00:00Z</D:creationdate><D:getcontentlength>137</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"11111111-2222-3333-4444-555555555555\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
    "facts": {
@@ -204,7 +210,8 @@
    "path": "/dav/%E5%9B%BE%E7%89%87",
    "status": 207,
    "headers": {
-    "content-type": "application/xml; charset=\"utf-8\""
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "949"
    },
    "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/%E5%9B%BE%E7%89%87/</D:href><D:propstat><D:prop><D:displayname>图片</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>Sat, 10 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-10T12:00:00Z</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/%E5%9B%BE%E7%89%87/%E9%A3%8E%E6%99%AF.jpg</D:href><D:propstat><D:prop><D:displayname>风景.jpg</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>Sun, 11 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-11T12:00:00Z</D:creationdate><D:getcontentlength>65536</D:getcontentlength><D:getcontenttype>image/jpeg</D:getcontenttype><D:getetag>\"cafebabe-dead-beef-0123-456789abcdef\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
    "facts": {
@@ -237,7 +244,8 @@
    "path": "/dav/zzz-nope",
    "status": 404,
    "headers": {
-    "content-type": "application/json; charset=utf-8"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
    },
    "body": "{\"detail\":\"资源不存在\"}"
   },
@@ -246,7 +254,8 @@
    "path": "/dav/",
    "status": 207,
    "headers": {
-    "content-type": "application/xml; charset=\"utf-8\""
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "2716"
    },
    "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/</D:href><D:propstat><D:prop><D:displayname></D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/archive/</D:href><D:propstat><D:prop><D:displayname>archive</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>Fri, 02 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-02T12:00:00Z</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/docs/</D:href><D:propstat><D:prop><D:displayname>docs</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>Sat, 03 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-03T12:00:00Z</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/empty-dir/</D:href><D:propstat><D:prop><D:displayname>empty-dir</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>Wed, 07 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-07T12:00:00Z</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/%E5%9B%BE%E7%89%87/</D:href><D:propstat><D:prop><D:displayname>图片</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>Sat, 10 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-10T12:00:00Z</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/example.txt</D:href><D:propstat><D:prop><D:displayname>example.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>Thu, 08 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-08T12:00:00Z</D:creationdate><D:getcontentlength>42</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/readme.md</D:href><D:propstat><D:prop><D:displayname>readme.md</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>Fri, 09 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-09T12:00:00Z</D:creationdate><D:getcontentlength>1024</D:getcontentlength><D:getcontenttype>text/markdown</D:getcontenttype><D:getetag>\"99999999-8888-7777-6666-555555555555\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
    "facts": {
@@ -308,7 +317,8 @@
    "path": "/dav/docs",
    "status": 405,
    "headers": {
-    "content-type": "application/json; charset=utf-8"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "31"
    },
    "body": ""
   },
@@ -317,7 +327,8 @@
    "path": "/dav/zzz-nope.bin",
    "status": 404,
    "headers": {
-    "content-type": "application/json; charset=utf-8"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
    },
    "body": ""
   },
@@ -326,7 +337,8 @@
    "path": "/dav/dav-test",
    "status": 201,
    "headers": {
-    "content-type": "text/plain; charset=utf-8"
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
    },
    "body": ""
   },
@@ -335,7 +347,8 @@
    "path": "/dav/dav-test",
    "status": 405,
    "headers": {
-    "content-type": "application/json; charset=utf-8"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "31"
    },
    "body": "{\"detail\":\"已存在同名项\"}"
   },
@@ -344,7 +357,8 @@
    "path": "/dav/dav-test/sub",
    "status": 201,
    "headers": {
-    "content-type": "text/plain; charset=utf-8"
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
    },
    "body": ""
   },
@@ -353,7 +367,8 @@
    "path": "/dav/zzz-missing-parent/child",
    "status": 409,
    "headers": {
-    "content-type": "application/json; charset=utf-8"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "31"
    },
    "body": "{\"detail\":\"父目录不存在\"}"
   },
@@ -362,7 +377,8 @@
    "path": "/dav/",
    "status": 405,
    "headers": {
-    "content-type": "application/json; charset=utf-8"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "25"
    },
    "body": "{\"detail\":\"根已存在\"}"
   },
@@ -371,7 +387,8 @@
    "path": "/dav/dav-test",
    "status": 207,
    "headers": {
-    "content-type": "application/xml; charset=\"utf-8\""
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "767"
    },
    "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/</D:href><D:propstat><D:prop><D:displayname>dav-test</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/sub/</D:href><D:propstat><D:prop><D:displayname>sub</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
    "facts": {
@@ -400,7 +417,8 @@
    "path": "/dav/dav-test/sub",
    "status": 400,
    "headers": {
-    "content-type": "application/json; charset=utf-8"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "31"
    },
    "body": "{\"detail\":\"缺少 Destination\"}"
   },
@@ -409,7 +427,8 @@
    "path": "/dav/dav-test/sub",
    "status": 409,
    "headers": {
-    "content-type": "application/json; charset=utf-8"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "53"
    },
    "body": "{\"detail\":\"不能移动/复制到自身或子目录\"}"
   },
@@ -418,7 +437,8 @@
    "path": "/dav/dav-test",
    "status": 409,
    "headers": {
-    "content-type": "application/json; charset=utf-8"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "53"
    },
    "body": "{\"detail\":\"不能移动/复制到自身或子目录\"}"
   },
@@ -427,7 +447,8 @@
    "path": "/dav/zzz-nope",
    "status": 404,
    "headers": {
-    "content-type": "application/json; charset=utf-8"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "25"
    },
    "body": "{\"detail\":\"源不存在\"}"
   },
@@ -436,7 +457,8 @@
    "path": "/dav/dav-test/sub",
    "status": 201,
    "headers": {
-    "content-type": "text/plain; charset=utf-8"
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
    },
    "body": ""
   },
@@ -445,7 +467,8 @@
    "path": "/dav/docs/notes.txt",
    "status": 201,
    "headers": {
-    "content-type": "text/plain; charset=utf-8"
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
    },
    "body": ""
   },
@@ -454,7 +477,8 @@
    "path": "/dav/docs/notes.txt",
    "status": 404,
    "headers": {
-    "content-type": "application/json; charset=utf-8"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
    },
    "body": "{\"detail\":\"资源不存在\"}"
   },
@@ -463,7 +487,8 @@
    "path": "/dav/dav-test/renamed",
    "status": 207,
    "headers": {
-    "content-type": "application/xml; charset=\"utf-8\""
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "930"
    },
    "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/renamed/</D:href><D:propstat><D:prop><D:displayname>renamed</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/renamed/notes.txt</D:href><D:propstat><D:prop><D:displayname>notes.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>137</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"11111111-2222-3333-4444-555555555555\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
    "facts": {
@@ -496,7 +521,8 @@
    "path": "/dav/dav-test/renamed",
    "status": 412,
    "headers": {
-    "content-type": "application/json; charset=utf-8"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
    },
    "body": "{\"detail\":\"目标已存在\"}"
   },
@@ -505,7 +531,8 @@
    "path": "/dav/empty-dir",
    "status": 201,
    "headers": {
-    "content-type": "text/plain; charset=utf-8"
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
    },
    "body": ""
   },
@@ -514,7 +541,8 @@
    "path": "/dav/dav-test/copied",
    "status": 207,
    "headers": {
-    "content-type": "application/xml; charset=\"utf-8\""
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "431"
    },
    "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/copied/</D:href><D:propstat><D:prop><D:displayname>copied</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
    "facts": {
@@ -541,6 +569,7 @@
    "status": 200,
    "headers": {
     "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "430",
     "lock-token": "<opaquelocktoken:<uuid>>"
    },
    "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:prop xmlns:D=\"DAV:\"><D:lockdiscovery><D:activelock><D:locktype><D:write/></D:locktype><D:lockscope><D:exclusive/></D:lockscope><D:depth>infinity</D:depth><D:timeout>Second-3600</D:timeout><D:locktoken><D:href>opaquelocktoken:<uuid></D:href></D:locktoken><D:lockroot><D:href>/dav/dav-test/renamed</D:href></D:lockroot></D:activelock></D:lockdiscovery></D:prop>"
@@ -559,7 +588,8 @@
    "path": "/dav/",
    "status": 405,
    "headers": {
-    "content-type": "application/json; charset=utf-8"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
    },
    "body": "{\"detail\":\"不能删除根\"}"
   },
@@ -568,7 +598,8 @@
    "path": "/dav/zzz-nope",
    "status": 404,
    "headers": {
-    "content-type": "application/json; charset=utf-8"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
    },
    "body": "{\"detail\":\"资源不存在\"}"
   },
@@ -577,7 +608,8 @@
    "path": "/dav/dav-test",
    "status": 500,
    "headers": {
-    "content-type": "application/json; charset=utf-8"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "34"
    },
    "body": "{\"detail\":\"服务器内部错误\"}"
   },
@@ -586,7 +618,8 @@
    "path": "/dav/dav-test",
    "status": 207,
    "headers": {
-    "content-type": "application/xml; charset=\"utf-8\""
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "426"
    },
    "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/</D:href><D:propstat><D:prop><D:displayname>dav-test</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>"
   }
