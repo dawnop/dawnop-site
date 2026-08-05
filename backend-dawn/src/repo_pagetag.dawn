@@ -2,7 +2,7 @@
 # rename/merge/cleanup/delete tags. Mirrors app/api/pages.py and tags.py.
 use std/str
 use java "java.sql.Connection"
-use sql.{SqlV, PInt, PStr, PNull, ColInt, ColStr, Cell, query, exec, last_id, int_at, str_at}
+use sql.{SqlV, PInt, PStr, ColInt, ColStr, query, exec, last_id, str_at, first_str, first_str_or, first_bool_or, first_int_or}
 use slugify.{slugify}
 use repo_write.{unique_slug}
 
@@ -40,10 +40,7 @@ pub fn create_page(c: Connection, p: NewPage) -> Result[Int, String] !io = {
 ## Whether a page id exists, and whether it is a builtin page.
 pub fn page_kind(c: Connection, id: Int) -> Result[Option[String], String] !io = {
   let rows = query(c, "select type from pages where id = ?", [PInt(id)], [ColStr])?
-  match get(rows, 0) {
-    Some(r) -> Ok(Some(str_at(r, 0)))
-    None -> Ok(None)
-  }
+  Ok(first_str(rows))
 }
 
 pub fn set_page_str(c: Connection, id: Int, col: String, v: String) -> Result[Int, String] !io =
@@ -66,10 +63,7 @@ pub fn regen_page_slug(c: Connection, id: Int, base: String) -> Result[Int, Stri
 
 pub fn page_title(c: Connection, id: Int) -> Result[String, String] !io = {
   let rows = query(c, "select title from pages where id = ?", [PInt(id)], [ColStr])?
-  match get(rows, 0) {
-    Some(r) -> Ok(str_at(r, 0))
-    None -> Ok("")
-  }
+  Ok(first_str_or(rows, ""))
 }
 
 ## Delete a page; articles pointing at it have page_id nulled first.
@@ -102,18 +96,12 @@ fn int_member(xs: List[Int], x: Int) -> Bool =
 
 fn tag_name(c: Connection, id: Int) -> Result[String, String] !io = {
   let rows = query(c, "select name from tags where id = ?", [PInt(id)], [ColStr])?
-  match get(rows, 0) {
-    Some(r) -> Ok(str_at(r, 0))
-    None -> Ok("")
-  }
+  Ok(first_str_or(rows, ""))
 }
 
 pub fn tag_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
   let rows = query(c, "select count(*) from tags where id = ?", [PInt(id)], [ColInt])?
-  match get(rows, 0) {
-    Some(r) -> Ok(int_at(r, 0) != 0)
-    None -> Ok(false)
-  }
+  Ok(first_bool_or(rows, false))
 }
 
 ## Rename a tag, regenerating slug. Err on empty name or a duplicate name.
@@ -153,19 +141,13 @@ pub fn merge_tags(c: Connection, source_id: Int, target_id: Int) -> Result[Int, 
 
 pub fn target_published_count(c: Connection, target_id: Int) -> Result[Int, String] !io = {
   let rows = query(c, "select count(*) from article_tags where tag_id = ?", [PInt(target_id)], [ColInt])?
-  match get(rows, 0) {
-    Some(r) -> Ok(int_at(r, 0))
-    None -> Ok(0)
-  }
+  Ok(first_int_or(rows, 0))
 }
 
 ## Delete tags used by no article; returns how many were removed.
 pub fn cleanup_tags(c: Connection) -> Result[Int, String] !io = {
   let rows = query(c, "select count(*) from tags where id not in (select distinct tag_id from article_tags)", [], [ColInt])?
-  let n = match get(rows, 0) {
-    Some(r) -> int_at(r, 0)
-    None -> 0
-  }
+  let n = first_int_or(rows, 0)
   let _d = exec(c, "delete from tags where id not in (select distinct tag_id from article_tags)", [])?
   Ok(n)
 }

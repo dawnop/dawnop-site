@@ -2,7 +2,7 @@
 # settings table, merged over defaults on read. Unknown keys and out-of-range
 # values are rejected on write (matching app/api/settings.py).
 use java "java.sql.Connection"
-use sql.{PStr, ColStr, query, exec, str_at}
+use sql.{PStr, ColStr, query, exec, first_str_or}
 use json/value.{Json}
 use jsonx.{obj, jint}
 
@@ -52,14 +52,7 @@ fn read_loop(c: Connection, ds: List[(String, Int)], i: Int, acc: List[(String, 
 
 fn stored_int(c: Connection, key: String, dflt: Int) -> Result[Int, String] !io = {
   let rows = query(c, "select value from settings where key = ?", [PStr(key)], [ColStr])?
-  match get(rows, 0) {
-    Some(r) ->
-      match parse_int(str_at(r, 0)) {
-        Some(n) -> Ok(n)
-        None -> Ok(dflt)
-      }
-    None -> Ok(dflt)
-  }
+  Ok(unwrap_or(parse_int(first_str_or(rows, "")), dflt))
 }
 
 ## One integer setting: the stored row over the supplied default. The monitor

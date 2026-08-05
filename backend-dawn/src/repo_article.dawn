@@ -4,7 +4,7 @@
 # as the Python model's `word_count` property.
 use std/str
 use java "java.sql.Connection"
-use sql.{SqlV, PInt, PStr, Col, ColInt, ColStr, Row, query, query_rows, exec, int_at, col_int, col_str, col_bool, col_opt_int, col_opt_str}
+use sql.{SqlV, PInt, PStr, Col, ColInt, ColStr, Row, query, query_rows, exec, col_int, col_str, col_bool, col_opt_int, col_opt_str, first_int_or, first_bool}
 use json/value.{Json, JArr}
 use jsonx.{obj, jint, jstr, jbool, jopt_int, jopt_str, jdatetime}
 
@@ -139,10 +139,7 @@ pub fn list_admin(c: Connection, pub_filter: Option[Bool], page_id: Option[Int],
   let p0: List[SqlV] = match page_id { Some(id) -> [PInt(id)] None -> [] }
   let params: List[SqlV] = match q_filter(q) { Some(s) -> p0 ++ [PStr("%$s%")] None -> p0 }
   let cnt = query(c, "select count(*) from articles a $where", params, [ColInt])?
-  let total = match get(cnt, 0) {
-    Some(r) -> int_at(r, 0)
-    None -> 0
-  }
+  let total = first_int_or(cnt, 0)
   let rows = query_rows(c, "select $LIST_COLS from articles a $where order by a.created_at desc limit ? offset ?", params ++ [PInt(size), PInt(offset)], list_col_types())?
   let items = shape_items(c, rows, 0, [])?
   Ok((total, items))
@@ -171,10 +168,7 @@ pub fn stats(c: Connection) -> Result[Json, String] !io = {
 
 fn scalar0(c: Connection, q: String) -> Result[Int, String] !io = {
   let rows = query(c, q, [], [ColInt])?
-  match get(rows, 0) {
-    Some(r) -> Ok(int_at(r, 0))
-    None -> Ok(0)
-  }
+  Ok(first_int_or(rows, 0))
 }
 
 ## Published articles belonging to a page (article_list page), newest first, one
@@ -182,10 +176,7 @@ fn scalar0(c: Connection, q: String) -> Result[Int, String] !io = {
 pub fn list_by_page(c: Connection, page_id: Int, page: Int, size: Int) -> Result[(Int, List[Json]), String] !io = {
   let offset = (page - 1) * size
   let cnt = query(c, "select count(*) from articles where published = 1 and page_id = ?", [PInt(page_id)], [ColInt])?
-  let total = match get(cnt, 0) {
-    Some(r) -> int_at(r, 0)
-    None -> 0
-  }
+  let total = first_int_or(cnt, 0)
   let rows = query_rows(c,
     "select $LIST_COLS from articles a where a.published = 1 and a.page_id = ? order by a.created_at desc limit ? offset ?",
     [PInt(page_id), PInt(size), PInt(offset)], list_col_types())?
@@ -201,10 +192,7 @@ fn count_published(c: Connection, tag: Option[String]) -> Result[Int, String] !i
         [PStr(slug)], [ColInt])?
     None -> query(c, "select count(*) from articles where published = 1", [], [ColInt])?
   }
-  match get(rows, 0) {
-    Some(r) -> Ok(int_at(r, 0))
-    None -> Ok(0)
-  }
+  Ok(first_int_or(rows, 0))
 }
 
 ## Full article detail by id, ignoring the published filter and not bumping
@@ -221,10 +209,7 @@ pub fn by_id_admin(c: Connection, id: Int) -> Result[Option[Json], String] !io =
 ## draft-preview / view-bump rules on the public detail endpoint.
 pub fn published_of(c: Connection, slug: String) -> Result[Option[Bool], String] !io = {
   let rows = query(c, "select published from articles where slug = ?", [PStr(slug)], [ColInt])?
-  match get(rows, 0) {
-    Some(r) -> Ok(Some(int_at(r, 0) != 0))
-    None -> Ok(None)
-  }
+  Ok(first_bool(rows))
 }
 
 ## Full detail for any article by slug, regardless of published state and

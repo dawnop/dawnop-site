@@ -3,7 +3,7 @@
 # on the `files` table (rename/move only rewrite paths, never touch qiniu).
 use std/str
 use java "java.sql.Connection"
-use sql.{PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, int_at, str_at, opt_str_at, bool_at}
+use sql.{PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
 use json/value.{Json, JNull, JBool, JInt, JStr, JArr, JObj}
 use jsonx.{obj, jint, jstr, jbool}
 use fm_paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts, fm_split}
@@ -108,19 +108,13 @@ pub fn search_files(c: Connection, base: String, needle: String, deep: Bool) -> 
 
 pub fn get_row(c: Connection, rel: String) -> Result[Option[FileRow], String] !io = {
   let rows = query(c, "select $COLS from files where path = ?", [PStr(rel)], col_types())?
-  match get(rows, 0) {
-    Some(r) -> Ok(Some(row_of(r)))
-    None -> Ok(None)
-  }
+  Ok(first_map(rows, r => row_of(r)))
 }
 
 ## True when a path is already taken.
 pub fn taken(c: Connection, rel: String) -> Result[Bool, String] !io = {
   let rows = query(c, "select count(*) from files where path = ?", [PStr(rel)], [ColInt])?
-  match get(rows, 0) {
-    Some(r) -> Ok(int_at(r, 0) != 0)
-    None -> Ok(false)
-  }
+  Ok(first_bool_or(rows, false))
 }
 
 ## Backfill ancestor directory rows for `rel` (not rel itself), idempotently.
@@ -175,10 +169,7 @@ pub fn stats_db(c: Connection) -> Result[(Int, Int, Int), String] !io = {
 
 fn scalar_or0(c: Connection, q: String) -> Result[Int, String] !io = {
   let rows = query(c, q, [], [ColInt])?
-  match get(rows, 0) {
-    Some(r) -> Ok(int_at(r, 0))
-    None -> Ok(0)
-  }
+  Ok(first_int_or(rows, 0))
 }
 
 ## Record a signed upload key in the pending_uploads ledger (orphan tracking).

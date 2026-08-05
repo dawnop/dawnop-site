@@ -2,7 +2,7 @@
 # ```viz fences mount. slug must match ^[a-z0-9]+(-[a-z0-9]+)*$; source required.
 use std/str
 use java "java.sql.Connection"
-use sql.{PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, last_id, int_at, str_at}
+use sql.{PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, last_id, int_at, str_at, first_map, first_bool_or}
 use json/value.{Json}
 use jsonx.{obj, jint, jstr, jdatetime}
 
@@ -47,24 +47,18 @@ pub fn list_all(c: Connection) -> Result[List[Json], String] !io = {
 ## Full component by id (VizOut) — create/update response.
 pub fn by_id(c: Connection, id: Int) -> Result[Option[Json], String] !io = {
   let rows = query(c, "select $OUT_COLS from viz_components where id = ?", [PInt(id)], out_col_types())?
-  match get(rows, 0) {
-    Some(r) -> Ok(Some(out_json(r)))
-    None -> Ok(None)
-  }
+  Ok(first_map(rows, r => out_json(r)))
 }
 
 ## GET /api/viz/{slug} — public component {slug, name, compiled, style}.
 pub fn by_slug_public(c: Connection, slug: String) -> Result[Option[Json], String] !io = {
   let rows = query(c, "select slug, name, compiled, style from viz_components where slug = ?", [PStr(slug)], [ColStr, ColStr, ColStr, ColStr])?
-  match get(rows, 0) {
-    Some(r) -> Ok(Some(obj([
-      ("slug", jstr(str_at(r, 0))),
-      ("name", jstr(str_at(r, 1))),
-      ("compiled", jstr(str_at(r, 2))),
-      ("style", jstr(str_at(r, 3))),
-    ])))
-    None -> Ok(None)
-  }
+  Ok(first_map(rows, r => obj([
+    ("slug", jstr(str_at(r, 0))),
+    ("name", jstr(str_at(r, 1))),
+    ("compiled", jstr(str_at(r, 2))),
+    ("style", jstr(str_at(r, 3))),
+  ])))
 }
 
 pub fn slug_free(c: Connection, slug: String, exclude: Option[Int]) -> Result[Bool, String] !io = {
@@ -72,18 +66,12 @@ pub fn slug_free(c: Connection, slug: String, exclude: Option[Int]) -> Result[Bo
     Some(id) -> query(c, "select count(*) from viz_components where slug = ? and id != ?", [PStr(slug), PInt(id)], [ColInt])?
     None -> query(c, "select count(*) from viz_components where slug = ?", [PStr(slug)], [ColInt])?
   }
-  match get(rows, 0) {
-    Some(r) -> Ok(int_at(r, 0) == 0)
-    None -> Ok(true)
-  }
+  Ok(not first_bool_or(rows, false))
 }
 
 pub fn viz_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
   let rows = query(c, "select count(*) from viz_components where id = ?", [PInt(id)], [ColInt])?
-  match get(rows, 0) {
-    Some(r) -> Ok(int_at(r, 0) != 0)
-    None -> Ok(false)
-  }
+  Ok(first_bool_or(rows, false))
 }
 
 pub type NewViz = { slug: String, name: String, source: String, compiled: String, style: String }

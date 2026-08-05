@@ -4,7 +4,7 @@
 # (the article_fts triggers use it) — db.connect handles that.
 use std/str
 use java "java.sql.Connection"
-use sql.{SqlV, PInt, PStr, PNull, Col, ColInt, ColStr, Cell, open, query, exec, scalar_int, last_id, int_at, str_at}
+use sql.{SqlV, PInt, PStr, PNull, ColInt, ColStr, open, query, exec, scalar_int, last_id, int_at, first_bool_or, first_str_or}
 use errkind.{invalid}
 use slugify.{slugify}
 
@@ -31,10 +31,7 @@ fn slug_taken(c: Connection, table: String, candidate: String, exclude: Option[I
     Some(id) -> query(c, "select count(*) from $table where slug = ? and id != ?", [PStr(candidate), PInt(id)], [ColInt])?
     None -> query(c, "select count(*) from $table where slug = ?", [PStr(candidate)], [ColInt])?
   }
-  match get(rows, 0) {
-    Some(r) -> Ok(int_at(r, 0) != 0)
-    None -> Ok(false)
-  }
+  Ok(first_bool_or(rows, false))
 }
 
 # ---- tag resolution (find-or-create by lowercased name) ----
@@ -95,10 +92,7 @@ pub fn validate_page_ref(c: Connection, page_id: Option[Int]) -> Result[Bool, St
     None -> Ok(true)
     Some(id) -> {
       let rows = query(c, "select count(*) from pages where id = ? and type = 'article_list'", [PInt(id)], [ColInt])?
-      match get(rows, 0) {
-        Some(r) -> if int_at(r, 0) != 0 { Ok(true) } else { Err(invalid(BAD_PAGE_REF)) }
-        None -> Err(invalid(BAD_PAGE_REF))
-      }
+      if first_bool_or(rows, false) { Ok(true) } else { Err(invalid(BAD_PAGE_REF)) }
     }
   }
 
@@ -204,10 +198,7 @@ fn set_slug(c: Connection, id: Int, p: ArticlePatch) -> Result[Int, String] !io 
 
 fn current_title(c: Connection, id: Int) -> Result[String, String] !io = {
   let rows = query(c, "select title from articles where id = ?", [PInt(id)], [ColStr])?
-  match get(rows, 0) {
-    Some(r) -> Ok(str_at(r, 0))
-    None -> Ok("")
-  }
+  Ok(first_str_or(rows, ""))
 }
 
 ## Delete an article and its tag links. Ok(rows) — 0 means it did not exist.
@@ -219,10 +210,7 @@ pub fn delete_article(c: Connection, id: Int) -> Result[Int, String] !io = {
 ## Whether an article id exists.
 pub fn article_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
   let rows = query(c, "select count(*) from articles where id = ?", [PInt(id)], [ColInt])?
-  match get(rows, 0) {
-    Some(r) -> Ok(int_at(r, 0) != 0)
-    None -> Ok(false)
-  }
+  Ok(first_bool_or(rows, false))
 }
 
 fn bool_int(b: Bool) -> Int = if b { 1 } else { 0 }

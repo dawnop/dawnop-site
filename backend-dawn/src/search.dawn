@@ -5,7 +5,7 @@
 use std/str
 use std/cursor
 use java "java.sql.Connection"
-use sql.{SqlV, PInt, PStr, Cell, ColInt, ColStr, query, str_at, int_at}
+use sql.{PInt, PStr, ColInt, ColStr, query, str_at, int_at, first_int_or}
 use json/value.{Json, JArr}
 use jsonx.{obj, jint, jstr, jdatetime}
 use repo_article.{word_count, tags_json}
@@ -274,7 +274,7 @@ fn simple_query(c: Connection, q: String, offset: Int, size: Int) -> Result[(Int
   let tot = query(c,
     "select count(*) from article_fts join articles a on a.id = article_fts.rowid where article_fts match simple_query(?) and a.published = 1",
     [PStr(q)], [ColInt])?
-  let total = first_int(tot)
+  let total = first_int_or(tot, 0)
   let rows = query(c,
     "select a.id from article_fts join articles a on a.id = article_fts.rowid where article_fts match simple_query(?) and a.published = 1 order by bm25(article_fts, 10.0, 4.0, 1.0) limit ? offset ?",
     [PStr(q), PInt(size), PInt(offset)], [ColInt])?
@@ -286,16 +286,10 @@ fn like_query(c: Connection, terms: List[String], offset: Int, size: Int) -> Res
   let first = terms[0]
   let pat = "%$first%"
   let tot = query(c, "select count(*) from articles where published = 1 and (title like ? or summary like ? or content like ?)", [PStr(pat), PStr(pat), PStr(pat)], [ColInt])?
-  let total = first_int(tot)
+  let total = first_int_or(tot, 0)
   let rows = query(c, "select id from articles where published = 1 and (title like ? or summary like ? or content like ?) order by created_at desc limit ? offset ?", [PStr(pat), PStr(pat), PStr(pat), PInt(size), PInt(offset)], [ColInt])?
   Ok((total, map(rows, (r) => int_at(r, 0))))
 }
-
-fn first_int(rows: List[List[Cell]]) -> Int =
-  match get(rows, 0) {
-    Some(r) -> int_at(r, 0)
-    None -> 0
-  }
 
 fn build_items(c: Connection, ids: List[Int], terms: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
   if i >= len(ids) {

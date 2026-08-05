@@ -145,7 +145,7 @@ pub fn exec(c: Connection, q: String, ps: List[SqlV]) -> Result[Int, String] !io
 ## Err when the query fails or returns no rows.
 pub fn scalar_int(c: Connection, q: String, ps: List[SqlV]) -> Result[Int, String] !io = {
   let rows = query(c, q, ps, [ColInt])?
-  match get(rows, 0) {
+  match first_row(rows) {
     Some(row) -> Ok(int_at(row, 0))
     None -> Err("scalar query returned no rows: $q")
   }
@@ -216,6 +216,65 @@ pub fn opt_int_at(row: List[Cell], i: Int) -> Option[Int] =
     VInt(n) -> Some(n)
     VNull -> None
     other -> panic("column $i is not a nullable Int: ${to_string(other)}")
+  }
+
+# ---- first-row shortcuts ----
+# `query` hands back every matching row, but most repo lookups select at most one
+# and then read a single column out of it. These fold the `match get(rows, 0)`
+# preamble away; the `_or` variants take the value used when the query matched
+# nothing, which is the shape a repo function almost always wants.
+
+## The first row of a result, if the query matched anything.
+pub fn first_row(rows: List[List[Cell]]) -> Option[List[Cell]] = get(rows, 0)
+
+## First row's first column as Int, or `dflt` when there is no row.
+pub fn first_int_or(rows: List[List[Cell]], dflt: Int) -> Int =
+  match get(rows, 0) {
+    Some(r) -> int_at(r, 0)
+    None -> dflt
+  }
+
+## First row's first column as Bool (SQLite 0/1), or `dflt` when there is no row.
+pub fn first_bool_or(rows: List[List[Cell]], dflt: Bool) -> Bool =
+  match get(rows, 0) {
+    Some(r) -> bool_at(r, 0)
+    None -> dflt
+  }
+
+## First row's first column as String, or `dflt` when there is no row.
+pub fn first_str_or(rows: List[List[Cell]], dflt: String) -> String =
+  match get(rows, 0) {
+    Some(r) -> str_at(r, 0)
+    None -> dflt
+  }
+
+## First row's first column as Int, None when the query matched nothing.
+pub fn first_int(rows: List[List[Cell]]) -> Option[Int] =
+  match get(rows, 0) {
+    Some(r) -> Some(int_at(r, 0))
+    None -> None
+  }
+
+## First row's first column as Bool, None when the query matched nothing.
+pub fn first_bool(rows: List[List[Cell]]) -> Option[Bool] =
+  match get(rows, 0) {
+    Some(r) -> Some(bool_at(r, 0))
+    None -> None
+  }
+
+## First row's first column as String, None when the query matched nothing.
+pub fn first_str(rows: List[List[Cell]]) -> Option[String] =
+  match get(rows, 0) {
+    Some(r) -> Some(str_at(r, 0))
+    None -> None
+  }
+
+## The first row mapped through `f`, None when the query matched nothing —
+## the "load one record into its JSON shape" lookup.
+pub fn first_map[T](rows: List[List[Cell]], f: fn(List[Cell]) -> T !io) -> Option[T] !io =
+  match get(rows, 0) {
+    Some(r) -> Some(f(r))
+    None -> None
   }
 
 # ---- read-by-name accessors (Row from query_rows) ----

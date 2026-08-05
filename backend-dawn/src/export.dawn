@@ -4,7 +4,7 @@
 use std/str
 use std/bytes
 use java "java.sql.Connection"
-use sql.{PInt, ColInt, ColStr, query, str_at, int_at, bool_at}
+use sql.{PInt, ColInt, ColStr, query, str_at, bool_at, first_row}
 
 ## Percent-encode matching Python's urllib.parse.quote (default safe): the
 ## unreserved set A-Za-z0-9-._~ passes through, every other byte of the UTF-8
@@ -71,7 +71,7 @@ fn is_special(c: Int) -> Bool =
 ## Build the article's markdown (frontmatter + content). Returns (slug, body).
 pub fn export_markdown(c: Connection, id: Int) -> Result[Option[(String, String)], String] !io = {
   let rows = query(c, "select title, slug, summary, content, published, auto_title from articles where id = ?", [PInt(id)], [ColStr, ColStr, ColStr, ColStr, ColInt, ColInt])?
-  match get(rows, 0) {
+  match first_row(rows) {
     Some(r) -> {
       let title = str_at(r, 0)
       let slug = str_at(r, 1)

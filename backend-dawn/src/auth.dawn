@@ -11,7 +11,7 @@ use web/server.{parse_form}
 use json/value.{Json}
 use jsonx.{obj, jint, jstr, jdatetime}
 use db.{Db, with_db}
-use sql.{PStr, ColInt, ColStr, query, int_at, str_at}
+use sql.{PStr, ColInt, ColStr, query, int_at, str_at, first_str, first_map}
 use jwt.{sign, verify}
 
 ## App context passed to protected handlers: the db, the JWT secret and token
@@ -59,22 +59,16 @@ pub fn check_basic(c: Connection, username: String, password: String) -> Result[
 
 fn hash_of(c: Connection, username: String) -> Result[Option[String], String] !io = {
   let rows = query(c, "select password_hash from users where username = ?", [PStr(username)], [ColStr])?
-  match get(rows, 0) {
-    Some(r) -> Ok(Some(str_at(r, 0)))
-    None -> Ok(None)
-  }
+  Ok(first_str(rows))
 }
 
 fn user_json(c: Connection, username: String) -> Result[Option[Json], String] !io = {
   let rows = query(c, "select id, username, created_at from users where username = ?", [PStr(username)], [ColInt, ColStr, ColStr])?
-  match get(rows, 0) {
-    Some(r) -> Ok(Some(obj([
-      ("id", jint(int_at(r, 0))),
-      ("username", jstr(str_at(r, 1))),
-      ("created_at", jdatetime(str_at(r, 2))),
-    ])))
-    None -> Ok(None)
-  }
+  Ok(first_map(rows, r => obj([
+    ("id", jint(int_at(r, 0))),
+    ("username", jstr(str_at(r, 1))),
+    ("created_at", jdatetime(str_at(r, 2))),
+  ])))
 }
 
 # ---- handlers ----
