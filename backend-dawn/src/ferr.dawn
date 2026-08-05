@@ -16,6 +16,15 @@
 pub fn fe_text(e: ForeignError) -> String =
   if e.message == "" { e.kind } else { "${e.kind}: ${e.message}" }
 
+## The barrier itself: run `body` behind `catch_fault` and render any fault
+## through `fe_text`. Every barrier module wraps its FFI calls in this, which
+## is what keeps their public signatures at Result[T, String].
+pub fn catch_text[T](body: fn() -> T !io) -> Result[T, String] !io =
+  match catch_fault(body) {
+    Ok(v) -> Ok(v)
+    Err(e) -> Err(fe_text(e))
+  }
+
 test "fe_text matches Throwable.toString() rendering" {
   let with_msg = ForeignError {
     kind: "java.lang.NumberFormatException",

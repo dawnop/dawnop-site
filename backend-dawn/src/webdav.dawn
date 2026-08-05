@@ -17,7 +17,7 @@ use std/str
 use std/bytes
 use std/map
 use std/list
-use ferr.{fe_text}
+use ferr.{catch_text}
 use java "java.sql.Connection"
 use java "java.lang.String"
 use java "java.util.Base64"
@@ -48,13 +48,15 @@ const REDIRECT_CLIENTS: List[String] = ["rclone", "cyberduck", "mountain duck", 
 
 # ---- small string helpers ----
 
-fn header_or(req: Request, name: String, dflt: String) -> String =
-  match header(req, name) { Some(v) -> v None -> dflt }
+fn header_or(req: Request, name: String, dflt: String) -> String = unwrap_or(header(req, name), dflt)
 
 fn path_segs(rel: String) -> List[String] = filter(str.split(rel, "/"), (s) => s != "")
 
-# Python str.strip("/") — remove leading and trailing slashes, keep internal.
-fn strip_slashes(s: String) -> String = join(path_segs(s), "/")
+# Normalize a WebDAV path to its non-empty segments: drops leading, trailing
+# and repeated slashes. (Not Python's str.strip("/") — that keeps internal
+# runs; fm_paths.strip_slashes is the one that does. Hrefs are rebuilt from
+# segments anyway, so collapsing here is what the rest of the module expects.)
+fn path_join(s: String) -> String = join(path_segs(s), "/")
 
 fn contains_ci(hay: String, needle: String) -> Bool = str.contains(str.to_lower(hay), needle)
 
@@ -85,12 +87,11 @@ fn fmt_date(pattern: String, t: Int) -> String !io = {
 # :8001/dav access (no header) defaults to /dav.
 fn dav_prefix(req: Request) -> String = {
   let raw = header_or(req, "x-dav-prefix", "/dav")
-  let p = "/" ++ strip_slashes(raw)
+  let p = "/" ++ path_join(raw)
   if p == "/" { "" } else { p }
 }
 
-fn dav_rel(req: Request) -> String =
-  match map.get(req.params, "rest") { Some(r) -> strip_slashes(r) None -> "" }
+fn dav_rel(req: Request) -> String = path_join(unwrap_or(map.get(req.params, "rest"), ""))
 
 fn href(prefix: String, rel: String, is_dir: Bool) -> String !io = {
   let path = join(map(path_segs(rel), url_encode), "/")
@@ -317,10 +318,7 @@ fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {
 # Size of the spilled body. The Content-Length header would be a client's claim;
 # the file on disk is what we actually received and are about to upload.
 fn file_size(path: String) -> Result[Int, String] !io =
-  match catch_fault(() => File.new(path).length()) {
-    Ok(v) -> Ok(v)
-    Err(e) -> Err(fe_text(e))
-  }
+  catch_text(() => File.new(path).length())
 
 fn put(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io =
   if rel == "" {
@@ -446,7 +444,7 @@ fn dest_rel(req: Request) -> Option[String] !io =
       # single percent-decode like Python's unquote: %XX resolves, a literal '+'
       # stays '+' (URLDecoder would turn it into a space), so protect '+' as %2B first
       let decoded = URLDecoder.decode(join(str.split(stripped, "+"), "%2B"), "UTF-8")!
-      Some(strip_slashes(decoded))
+      Some(path_join(decoded))
     }
   }
 
@@ -622,10 +620,7 @@ fn b64_decode(s: String) -> String !io =
 
 # base64-decode that turns malformed input into an Err instead of a panic
 fn b64_decode_try(s: String) -> Result[String, String] !io =
-  match catch_fault(() => b64_decode(s)) {
-    Ok(v) -> Ok(v)
-    Err(e) -> Err(fe_text(e))
-  }
+  catch_text(() => b64_decode(s))
 
 fn verify_cache(a: Auth, cell: AtomicReference, user: String, pass: String, key: String) -> Option[Response] !io =
   match with_db(a.db.path, a.db.ext, (c) => check_basic(c, user, pass)) {

@@ -16,7 +16,7 @@ use jsonx.{obj, jstr, jint}
 use db.{Db, with_db}
 use auth.{Auth, Qiniu, guarded, guarded_flexible}
 use jsonread.{body_obj, str_or, str_list, opt_int}
-use fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime}
+use fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime, strip_slashes, strip_trailing_slash}
 use repo_fm.{fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, ledger_insert, ledger_delete, search_files, subtree_rows, entry_json, delete_row, stats_db, FileRow}
 use repo_settings.{setting_int}
 use errkind.{Kind, KConflict, conflict, split_kind}
@@ -30,8 +30,6 @@ use ttl.{cache_get, cache_put, now_s}
 use json/value.{Json, JNull, JArr, JObj, JStr, JNum, JInt}
 use json/render.{render}
 use json/parser.{parse}
-
-fn strip_slash(s: String) -> String = fm_split(s)
 
 ## GET /api/fm?path= — directory listing (FsData).
 pub fn fm_list(a: Auth) -> Handler =
@@ -51,7 +49,7 @@ pub fn create_folder(a: Auth) -> Handler =
       {
         let m = as_http(body_obj(req.body), 422)?
         let cur = fm_split(str_or(m, "path", ""))
-        let name = strip_slash(str.trim(str_or(m, "name", "")))
+        let name = fm_split(str.trim(str_or(m, "name", "")))
         if name == "" {
           Err(http_error(400, "缺少 name"))
         } else {
@@ -83,7 +81,7 @@ pub fn rename(a: Auth) -> Handler =
         let m = as_http(body_obj(req.body), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let old = fm_split(str_or(m, "item", ""))
-        let new_name = strip_slash(str.trim(str_or(m, "name", "")))
+        let new_name = fm_split(str.trim(str_or(m, "name", "")))
         if old == "" || new_name == "" {
           Err(http_error(400, "缺少 item / name"))
         } else {
@@ -154,9 +152,6 @@ fn signed(q: Qiniu, key: String, suffix: String) -> String !io = {
   let base = "$domain/$key$suffix"
   private_url(q.ak, q.sk, base, now_s() + q.expires)
 }
-
-fn strip_trailing_slash(s: String) -> String =
-  if str.ends_with(s, "/") && str.len(s) > 0 { strip_trailing_slash(str.substring(s, 0, str.len(s) - 1)) } else { s }
 
 ## GET /api/fm/sign?path= — a signed URL for direct fetch (text preview).
 pub fn sign(a: Auth) -> Handler =
@@ -399,11 +394,7 @@ pub fn upload_token_ep(a: Auth) -> Handler =
 fn ledger(c: Connection, key: String, rel: String) -> Result[Int, String] !io =
   ledger_insert(c, key, full(rel))
 
-fn qparam(req: Request, name: String) -> String =
-  match query(req, name) {
-    Some(v) -> v
-    None -> ""
-  }
+fn qparam(req: Request, name: String) -> String = unwrap_or(query(req, name), "")
 
 ## POST /api/fm/delete — {path, items:[{path}]}. Deletes each item's subtree:
 ## the qiniu object for every file, then the DB row. Returns FsData + {deleted}.
@@ -479,7 +470,7 @@ pub fn create_file(a: Auth) -> Handler =
       {
         let m = as_http(body_obj(req.body), 422)?
         let cur = fm_split(str_or(m, "path", ""))
-        let name = strip_slash(str.trim(str_or(m, "name", "")))
+        let name = fm_split(str.trim(str_or(m, "name", "")))
         if name == "" {
           Err(http_error(400, "缺少 name"))
         } else {
@@ -808,19 +799,6 @@ fn sanitize_name(n: String) -> String = {
   let base = if n == "" { "file" } else { n }
   strip_slashes(join(str.split(base, "\\"), "/"))
 }
-
-fn strip_slashes(s: String) -> String = {
-  let segs = str.split(s, "/")
-  let lo = first_nonempty(segs, 0)
-  let hi = last_nonempty(segs, len(segs) - 1)
-  if lo > hi { "" } else { join(map(range(lo, hi + 1), (i) => segs[i]), "/") }
-}
-
-fn first_nonempty(xs: List[String], i: Int) -> Int =
-  if i >= len(xs) { len(xs) } else if xs[i] != "" { i } else { first_nonempty(xs, i + 1) }
-
-fn last_nonempty(xs: List[String], i: Int) -> Int =
-  if i < 0 { -1 } else if xs[i] != "" { i } else { last_nonempty(xs, i - 1) }
 
 pub fn routes(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReference) -> List[Route] =
   [

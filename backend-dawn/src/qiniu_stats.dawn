@@ -198,10 +198,7 @@ fn min_str(xs: List[String]) -> Json = {
 pub fn field(j: Json, key: String) -> Json =
   match j {
     JObj(m) ->
-      match map.get(m, key) {
-        Some(v) -> v
-        None -> JNull
-      }
+      unwrap_or(map.get(m, key), JNull)
     _ -> JNull,
   }
 
@@ -245,11 +242,7 @@ fn str_list(j: Json) -> List[String] = map(arr_items(j), str_or_empty)
 
 fn int_list(j: Json) -> List[Int] = map(arr_items(j), int_of)
 
-fn at(xs: List[Json], i: Int) -> Json =
-  match get(xs, i) {
-    Some(v) -> v
-    None -> JNull,
-  }
+fn at(xs: List[Json], i: Int) -> Json = unwrap_or(get(xs, i), JNull)
 
 test "last_nonzero skips trailing zeros" {
   assert last_nonzero([1, 5, 0, 0]) == 5

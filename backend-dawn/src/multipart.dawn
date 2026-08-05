@@ -60,11 +60,7 @@ fn disp_filename(headers: String) -> String =
   }
 
 ## The part's declared Content-Type ("" if the part has no Content-Type header).
-fn part_ctype(headers: String) -> String =
-  match between(headers, "Content-Type: ", crlf()) {
-    Some(v) -> v
-    None -> ""
-  }
+fn part_ctype(headers: String) -> String = unwrap_or(between(headers, "Content-Type: ", crlf()), "")
 
 ## Split Bytes on a (non-empty) Bytes separator, like string split — the pieces
 ## between separators, including the preamble and epilogue.

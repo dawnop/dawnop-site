@@ -16,11 +16,7 @@ use repo_article
 use repo_write.{NewArticle, ArticlePatch, create_article, update_article, delete_article}
 use errkind.{Kind, KInvalid, split_kind}
 
-fn param(req: Request, name: String) -> String =
-  match map.get(req.params, name) {
-    Some(v) -> v
-    None -> ""
-  }
+fn param(req: Request, name: String) -> String = unwrap_or(map.get(req.params, name), "")
 
 # An optional integer query param: absent → None, present-and-numeric → Some,
 # present-but-non-integer → 422 (matches FastAPI's `int | None` Query coercion).

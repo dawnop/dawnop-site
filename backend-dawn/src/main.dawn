@@ -68,11 +68,7 @@ pub fn main() -> Unit !io = {
   ])
 }
 
-fn env_or(key: String, fallback: String) -> String !io =
-  match System.getenv(key) {
-    Some(v) -> v
-    None -> fallback
-  }
+fn env_or(key: String, fallback: String) -> String !io = unwrap_or(System.getenv(key), fallback)
 
 fn parse_or(s: String, fallback: Int) -> Int =
   match parse_int(s) {

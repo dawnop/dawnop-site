@@ -63,10 +63,7 @@ fn fetch_detail(c: Connection, slug: String, authed: Bool) -> Result[Option[Json
   }
 
 fn map_get_or(m: Map[String, String], k: String, fallback: String) -> String =
-  match map.get(m, k) {
-    Some(v) -> v
-    None -> fallback
-  }
+  unwrap_or(map.get(m, k), fallback)
 
 ## GET /api/pages/nav — visible nav items.
 pub fn get_nav(db: Db) -> Handler =

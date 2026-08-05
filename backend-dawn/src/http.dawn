@@ -4,7 +4,7 @@
 # inspects .status) — only transport errors are failures here.
 use std/str
 use std/bytes
-use ferr.{fe_text}
+use ferr.{fe_text, catch_text}
 use java "java.net.URI"
 use java "java.net.http.HttpClient"
 use java "java.net.http.HttpRequest"
@@ -120,7 +120,7 @@ fn add_headers(b: Builder, hs: List[(String, String)], i: Int) -> Builder !io =
   }
 
 fn send(method: String, url: String, headers: List[(String, String)], body: Option[String]) -> Result[HttpResp, String] !io =
-  match catch_fault(() => {
+  catch_text(() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)
@@ -131,10 +131,7 @@ fn send(method: String, url: String, headers: List[(String, String)], body: Opti
     let req = withHeaders.method(method, publisher)!.build()!
     let resp = shared_client().send(req, BodyHandlers.ofString()!)!
     HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! }
-  }) {
-    Ok(v) -> Ok(v)
-    Err(e) -> Err(fe_text(e))
-  }
+  })
 
 pub fn fetch(url: String, headers: List[(String, String)]) -> Result[HttpResp, String] !io =
   send("GET", url, headers, None)
@@ -155,17 +152,14 @@ pub fn post_bytes(url: String, headers: List[(String, String)], body: Bytes) -> 
 ## part is read from disk in chunks and never sits in the heap. ofByteArray keeps
 ## the in-memory path for small bodies.
 pub fn post_publisher(url: String, headers: List[(String, String)], publisher: BodyPublisher) -> Result[HttpResp, String] !io =
-  match catch_fault(() => {
+  catch_text(() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)
     let req = withHeaders.method("POST", publisher)!.build()!
     let resp = shared_client().send(req, BodyHandlers.ofString()!)!
     HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! }
-  }) {
-    Ok(v) -> Ok(v)
-    Err(e) -> Err(fe_text(e))
-  }
+  })
 
 # ---- tests ----
 #

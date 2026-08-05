@@ -20,9 +20,11 @@ pub fn fm_split(p: String) -> String =
     strip_slashes(str.trim(after))
   }
 
-fn strip_slashes(s: String) -> String = strip_trailing_slash(strip_leading_slash(s))
+## Python `str.strip("/")`: drop leading and trailing slashes, keep internal
+## runs as they are.
+pub fn strip_slashes(s: String) -> String = strip_trailing_slash(strip_leading_slash(s))
 fn strip_leading_slash(s: String) -> String = if str.starts_with(s, "/") { strip_leading_slash(str.substring(s, 1, str.len(s))) } else { s }
-fn strip_trailing_slash(s: String) -> String = if str.ends_with(s, "/") && str.len(s) > 0 { strip_trailing_slash(str.substring(s, 0, str.len(s) - 1)) } else { s }
+pub fn strip_trailing_slash(s: String) -> String = if str.ends_with(s, "/") && str.len(s) > 0 { strip_trailing_slash(str.substring(s, 0, str.len(s) - 1)) } else { s }
 
 pub fn full(rel: String) -> String = if rel == "" { "$STORAGE://" } else { "$STORAGE://$rel" }
 

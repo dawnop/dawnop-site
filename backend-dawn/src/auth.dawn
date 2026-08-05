@@ -183,11 +183,7 @@ pub fn is_authed(a: Auth, req: Request) -> Bool !io =
     Err(_e) -> false
   }
 
-fn get_or_blank(m: Map[String, String], k: String) -> String =
-  match map.get(m, k) {
-    Some(v) -> v
-    None -> ""
-  }
+fn get_or_blank(m: Map[String, String], k: String) -> String = unwrap_or(map.get(m, k), "")
 
 ## The auth routes.
 pub fn routes(a: Auth) -> List[Route] =

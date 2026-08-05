@@ -61,10 +61,7 @@ pub fn require(cfg: Config, key: String) -> String !io =
 
 ## A value with a fallback default (checks .env then the process environment).
 pub fn get_or(cfg: Config, key: String, fallback: String) -> String !io =
-  match lookup(cfg, key) {
-    Some(v) -> v
-    None -> fallback
-  }
+  unwrap_or(lookup(cfg, key), fallback)
 
 test "parse env: comments, quotes, spacing, embedded =" {
   let c = Config {

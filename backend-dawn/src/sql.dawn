@@ -4,7 +4,7 @@
 # failures (cannot open, driver missing) panic — they are deploy bugs.
 use std/str
 use std/map
-use ferr.{fe_text}
+use ferr.{catch_text}
 use java "java.sql.Connection"
 use java "java.sql.DriverManager"
 use java "java.sql.PreparedStatement"
@@ -91,17 +91,14 @@ fn rows_of(rs: ResultSet, cols: List[Col]) -> List[List[Cell]] !io =
 ## Run a select; `cols` declares the select list's types in order.
 ## Rows are fully materialized and the statement is closed before returning.
 pub fn query(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[List[Cell]], String] !io =
-  match catch_fault(() => {
+  catch_text(() => {
     let st = c.prepareStatement(q)!
     bind(st, ps)
     let rs = st.executeQuery()!
     let rows = rows_of(rs, cols)
     st.close()
     rows
-  }) {
-    Ok(v) -> Ok(v)
-    Err(e) -> Err(fe_text(e))
-  }
+  })
 
 ## Column label -> 0-based position, read from the result metadata (available
 ## before the first row is fetched). Duplicate labels resolve to the last one.
@@ -115,7 +112,7 @@ fn names_of(rs: ResultSet) -> Map[String, Int] !io = {
 ## (`row.col_int("id")`, `row.col_opt_str("summary")`, ...). `cols` still declares
 ## the select list's types in order; the names come from the driver's metadata.
 pub fn query_rows(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[Row], String] !io =
-  match catch_fault(() => {
+  catch_text(() => {
     let st = c.prepareStatement(q)!
     bind(st, ps)
     let rs = st.executeQuery()!
@@ -123,23 +120,17 @@ pub fn query_rows(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> 
     let rows = map(rows_of(rs, cols), (cells) => Row { cells: cells, names: names })
     st.close()
     rows
-  }) {
-    Ok(v) -> Ok(v)
-    Err(e) -> Err(fe_text(e))
-  }
+  })
 
 ## Run an insert/update/delete/DDL; Ok carries the affected row count.
 pub fn exec(c: Connection, q: String, ps: List[SqlV]) -> Result[Int, String] !io =
-  match catch_fault(() => {
+  catch_text(() => {
     let st = c.prepareStatement(q)!
     bind(st, ps)
     let n = st.executeUpdate()
     st.close()
     n
-  }) {
-    Ok(v) -> Ok(v)
-    Err(e) -> Err(fe_text(e))
-  }
+  })
 
 ## Single-value convenience: first column of the first row as Int.
 ## Err when the query fails or returns no rows.
