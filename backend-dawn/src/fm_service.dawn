@@ -49,7 +49,15 @@ pub fn rebase(src_root: String, dst_root: String, path: String) -> String =
 
 ## The object key that an overwrite orphans, if any: the row's current key when it
 ## differs from the one just written. Directories carry no key (insert_folder
-## stores NULL), so they answer None and their objects are never touched.
+## stores NULL), so a normal directory answers None and is never touched.
+##
+## Keyed off the key alone, deliberately. The three call sites this replaced did
+## not agree: fm's register also required `is_dir == false`, while fm's save and
+## WebDAV's put looked at the key only. That only diverges for a row that is both
+## a directory and an object — which `insert_file`'s upsert can mint, since it
+## rewrites `key` without clearing `is_dir`. In that state the old key is
+## unreferenced either way (the row now names the new one), so collecting it can
+## never strand a live file; the `is_dir` variant just leaked the object.
 pub fn superseded_key(existing: Option[FileRow], new_key: String) -> Option[String] =
   match existing {
     Some(o) ->
