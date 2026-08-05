@@ -31,7 +31,7 @@ pub type MonCfg = {
 ## cached_at}. Quota is read from the settings table on every request (editing
 ## the setting takes effect immediately, unaffected by the cache).
 pub fn get_monitor(a: Auth, cfg: MonCfg, cell: AtomicReference, respack_cell: AtomicReference) -> Handler =
-  (req) => {
+  req => {
     let _u = current_user(a, req)?
     let refresh = match query(req, "refresh") {
       Some(v) -> v == "1" || v == "true"
@@ -76,7 +76,7 @@ fn with_quota(a: Auth, qn: Json) -> Json !io =
   match field(qn, "configured") {
     JBool(on) ->
       if on {
-        let gb = match with_db(a.db.path, a.db.ext, (c) => setting_int(c, "storage_quota_gb", a.storage_quota)) {
+        let gb = match with_db(a.db.path, a.db.ext, c => setting_int(c, "storage_quota_gb", a.storage_quota)) {
           Ok(n) -> n
           Err(_m) -> a.storage_quota
         }

@@ -56,7 +56,7 @@ pub fn children(c: Connection, parent: String) -> Result[List[FileRow], String] 
     query(c, "select $COLS from files where path like ?", [PStr("$parent/%")], col_types())?
   }
   let all = map(rows, row_of)
-  let kids = filter(all, (o) => parent_rel(o.path) == parent)
+  let kids = filter(all, o => parent_rel(o.path) == parent)
   Ok(sort_by(kids, (a, b) => cmp_entry(a, b)))
 }
 
@@ -99,8 +99,8 @@ pub fn search_files(c: Connection, base: String, needle: String, deep: Bool) -> 
     query(c, "select $COLS from files where path like ?", [PStr("$base/%")], col_types())?
   }
   let all = map(rows, row_of)
-  let scoped = if deep { all } else { filter(all, (o) => parent_rel(o.path) == base) }
-  let matched = if needle == "" { scoped } else { filter(scoped, (o) => str.contains(str.to_lower(basename(o.path)), needle)) }
+  let scoped = if deep { all } else { filter(all, o => parent_rel(o.path) == base) }
+  let matched = if needle == "" { scoped } else { filter(scoped, o => str.contains(str.to_lower(basename(o.path)), needle)) }
   let sorted = sort_by(matched, (a, b) => cmp_entry(a, b))
   let files = entries_of(sorted, 0, [])?
   Ok(obj([("files", JArr(files))]))
@@ -120,7 +120,7 @@ pub fn taken(c: Connection, rel: String) -> Result[Bool, String] !io = {
 ## Backfill ancestor directory rows for `rel` (not rel itself), idempotently.
 pub fn ensure_dirs(c: Connection, rel: String) -> Result[Int, String] !io = {
   let parent = parent_rel(rel)
-  let parts = filter(str_split(parent, "/"), (s) => s != "")
+  let parts = filter(str_split(parent, "/"), s => s != "")
   ensure_loop(c, parts, 0, "")
 }
 
@@ -179,7 +179,7 @@ pub fn ledger_insert(c: Connection, key: String, path: String) -> Result[Int, St
 ## Reparent old_rel and its whole subtree to new_rel (path-prefix rewrite).
 pub fn reparent(c: Connection, old_rel: String, new_rel: String) -> Result[Int, String] !io = {
   let rows = query(c, "select path from files where path = ? or path like ?", [PStr(old_rel), PStr("$old_rel/%")], [ColStr])?
-  let paths = map(rows, (r) => str_at(r, 0))
+  let paths = map(rows, r => str_at(r, 0))
   reparent_loop(c, paths, old_rel, new_rel, 0)
 }
 

@@ -167,7 +167,7 @@ pub fn copy_obj(ak: String, sk: String, bucket: String, src_key: String, dst_key
 test "the streaming multipart body goes on the wire byte-exactly, across many chunks" {
   # 20000 bytes: many times over the chunk size ofFile reads with, so the file
   # part really arrives in pieces — the case a single-chunk test would not catch.
-  let payload = join(map(range(0, 2000), (i) => "0123456789"), "")
+  let payload = join(map(range(0, 2000), i => "0123456789"), "")
   let src = File.createTempFile("dawn-test-src-", ".bin")!
   let out = FileOutputStream.new(src)
   out.write(bytes.utf8(payload))
@@ -178,7 +178,7 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
   # back, so the assertion compares what the publisher actually put on the wire —
   # contentLength alone would not catch a wrong order or a mangled part
   let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
-  server.createContext("/", (ex) => {
+  server.createContext("/", ex => {
     let buf = ByteArrayOutputStream.new()
     let _n = ex.getRequestBody()!.transferTo(buf)
     let got = buf.toByteArray()!

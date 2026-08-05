@@ -42,7 +42,7 @@ fn drop_trailing(cps: List[Int]) -> List[Int] =
 
 fn is_edge(cp: Int) -> Bool = cp == 45 || cp == 95
 
-fn init_ints(xs: List[Int]) -> List[Int] = map(range(0, len(xs) - 1), (i) => xs[i])
+fn init_ints(xs: List[Int]) -> List[Int] = map(range(0, len(xs) - 1), i => xs[i])
 
 test "slugify matches the Python vectors" {
   assert slugify("Hello World!") == "hello-world"

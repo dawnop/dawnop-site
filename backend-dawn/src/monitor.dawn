@@ -104,7 +104,7 @@ fn loadavg() -> Json !io =
   match io.read_file("/proc/loadavg") {
     Ok(text) -> {
       let fs = fields_of(text)
-      JArr(map(range(0, 3), (i) =>
+      JArr(map(range(0, 3), i =>
           match parse_float(fs[i]) {
             Some(x) -> JNum(x)
             None -> JNull
@@ -169,7 +169,7 @@ fn uptime_s() -> Int !io =
     Err(_m) -> 0
   }
 
-fn fields_of(line: String) -> List[String] = filter(str.split(line, " "), (s) => s != "")
+fn fields_of(line: String) -> List[String] = filter(str.split(line, " "), s => s != "")
 
 fn parse_or0(s: String) -> Int =
   match parse_int(s) {
@@ -282,7 +282,7 @@ fn cpu_trend_fetch(id: String, key: String, region: String, instance: String) ->
       let ts = arr_of(field(dp, "Timestamps"))
       let vs = arr_of(field(dp, "Values"))
       let n = if len(ts) < len(vs) { len(ts) } else { len(vs) }
-      Ok(JArr(map(range(0, n), (i) => obj([
+      Ok(JArr(map(range(0, n), i => obj([
         ("t", JInt(int_of(ts[i]))),
         ("v", vs[i]),
       ]))))
@@ -338,7 +338,7 @@ fn kodo_stats(a: Auth) -> Result[List[(String, Json)], String] !io = {
     ("flow_30d", jint(sum_snd(flow))),
     ("hits_30d", jint(sum_snd(hits))),
     ("space_trend", trend_int(stimes, sdatas)),
-    ("flow_trend", JArr(map(flow, (p) => {
+    ("flow_trend", JArr(map(flow, p => {
       let (t, v) = p
       obj([("t", jstr(t)), ("v", jint(v))])
     }))),
@@ -359,14 +359,14 @@ fn cdn_stats(a: Auth) -> Result[List[(String, Json)], String] !io = {
   Ok([
     ("cdn_flow_30d", jint(fold(fvalues, 0, (acc, v) => acc + v))),
     ("cdn_peak_bps", jint(peak)),
-    ("cdn_domains", JArr(map(domains, (d) => JStr(d)))),
+    ("cdn_domains", JArr(map(domains, d => JStr(d)))),
     ("cdn_trend", trend_int(ftimes, fvalues)),
   ])
 }
 
 fn trend_int(times: List[Int], values: List[Int]) -> Json = {
   let n = if len(times) < len(values) { len(times) } else { len(values) }
-  JArr(map(range(0, n), (i) => obj([("t", jint(times[i])), ("v", jint(values[i]))])))
+  JArr(map(range(0, n), i => obj([("t", jint(times[i])), ("v", jint(values[i]))])))
 }
 
 ## respack balances through a 300s TTL cell (the billing API is rate-limited;

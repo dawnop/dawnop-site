@@ -35,18 +35,18 @@ use json/parser.{parse}
 
 ## GET /api/fm?path= — directory listing (FsData).
 pub fn fm_list(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded(a, req, () => {
     let path = match query(req, "path") {
       Some(p) -> p
       None -> ""
     }
-    Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, (c) => fs_data(c, fm_split(path))), 500)?))
+    Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, c => fs_data(c, fm_split(path))), 500)?))
   })
 
 ## POST /api/fm/create-folder — {path, name}.
 pub fn create_folder(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded(a, req, () =>
       {
         let m = as_http(body_obj(req.body), 422)?
@@ -56,7 +56,7 @@ pub fn create_folder(a: Auth) -> Handler =
           Err(http_error(400, "缺少 name"))
         } else {
           let rel = fm_join(cur, name)
-          match as_http(with_db(a.db.path, a.db.ext, (c) => mk_folder(c, rel, cur)), 500)? {
+          match as_http(with_db(a.db.path, a.db.ext, c => mk_folder(c, rel, cur)), 500)? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
           }
@@ -65,7 +65,7 @@ pub fn create_folder(a: Auth) -> Handler =
 
 ## POST /api/fm/rename — {path, item, name}.
 pub fn rename(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded(a, req, () =>
       {
         let m = as_http(body_obj(req.body), 422)?
@@ -76,7 +76,7 @@ pub fn rename(a: Auth) -> Handler =
           Err(http_error(400, "缺少 item / name"))
         } else {
           let new_rel = fm_join(parent_rel(old), new_name)
-          match as_http(with_db(a.db.path, a.db.ext, (c) => do_rename(c, old, new_rel, cur)), 500)? {
+          match as_http(with_db(a.db.path, a.db.ext, c => do_rename(c, old, new_rel, cur)), 500)? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(409, "已存在同名项：${basename(new_rel)}"))
           }
@@ -85,24 +85,24 @@ pub fn rename(a: Auth) -> Handler =
 
 ## POST /api/fm/move — {path, destination, sources[]}.
 pub fn move(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded(a, req, () =>
       {
         let m = as_http(body_obj(req.body), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let dest = fm_split(str_or(m, "destination", ""))
         let sources = str_list(m, "sources")
-        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, (c) => do_move(c, sources, dest, cur, 0)), conflict_or(500))?))
+        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_move(c, sources, dest, cur, 0)), conflict_or(500))?))
       })
 
 # ---- qiniu URL / upload endpoints (read-only: sign & redirect, no mutation) ----
 
 ## GET /api/fm/sign?path= — a signed URL for direct fetch (text preview).
 pub fn sign(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded(a, req, () => {
     let rel = fm_split(qparam(req, "path"))
-    match as_http(with_db(a.db.path, a.db.ext, (c) => get_row(c, rel)), 500)? {
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
       Some(o) ->
         match o.key {
           Some(k) -> Ok(json_ok(obj([("url", jstr(signed_url(a.qiniu, k, "")))])))
@@ -117,10 +117,10 @@ pub fn sign(a: Auth) -> Handler =
 ## bucket space (null when unavailable); quota prefers the storage respack
 ## capacity over the settings value, like the FastAPI handler.
 pub fn stats(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReference) -> Handler =
-  (req) =>
+  req =>
   guarded(a, req, () =>
       {
-        let (used_local, files, dirs) = as_http(with_db(a.db.path, a.db.ext, (c) => stats_db(c)), 500)?
+        let (used_local, files, dirs) = as_http(with_db(a.db.path, a.db.ext, c => stats_db(c)), 500)?
         {
           let remote = remote_space(a, space_cell)
           let remote_n = int_of(remote)
@@ -168,7 +168,7 @@ fn quota_bytes(a: Auth, respack_cell: AtomicReference) -> Int !io = {
   if cap > 0 {
     cap
   } else {
-    let gb = match with_db(a.db.path, a.db.ext, (c) => setting_int(c, "storage_quota_gb", a.storage_quota)) {
+    let gb = match with_db(a.db.path, a.db.ext, c => setting_int(c, "storage_quota_gb", a.storage_quota)) {
       Ok(n) -> n
       Err(_m) -> a.storage_quota
     }
@@ -179,10 +179,10 @@ fn quota_bytes(a: Auth, respack_cell: AtomicReference) -> Int !io = {
 ## GET /api/fm/content?path= — proxy the object bytes through the backend (the
 ## fallback when a cross-origin 302 to qiniu is CORS-blocked). Binary body (G6).
 pub fn content(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded(a, req, () => {
     let rel = fm_split(qparam(req, "path"))
-    match as_http(with_db(a.db.path, a.db.ext, (c) => get_row(c, rel)), 500)? {
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
       Some(o) ->
         match o.key {
           Some(k) -> {
@@ -207,7 +207,7 @@ pub fn content(a: Auth) -> Handler =
 # a name collision is a 409; everything else takes the caller's code (500 for a
 # database failure, 502 when the object store is the one that failed)
 fn conflict_or(other: Int) -> fn(String) -> HttpError =
-  (msg) => {
+  msg => {
     let (k, t) = split_kind(msg)
     match k {
       KConflict -> http_error(409, t)
@@ -221,11 +221,11 @@ fn content_type_of(ct: String) -> String = if ct == "" { "application/octet-stre
 ## raster image with w/h given (and original >50KB) redirect to a seven-niu
 ## imageView2 thumbnail instead of the original (省流量), mirroring serve.py.
 pub fn preview(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded_flexible(a, req, () => {
     let (w, h, mode) = preview_params(req)?
     let rel = fm_split(qparam(req, "path"))
-    match as_http(with_db(a.db.path, a.db.ext, (c) => get_row(c, rel)), 500)? {
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
       Some(o) ->
         match o.key {
           Some(k) -> {
@@ -287,14 +287,14 @@ fn thumbable(ct: String) -> Bool =
 
 ## GET /api/fm/download?path= — 302 to the signed URL with an attachment name.
 pub fn download(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded_flexible(a, req, () => {
     let rel = fm_split(qparam(req, "path"))
     redirect_to_named(a, rel)
   })
 
 fn redirect_to_named(a: Auth, rel: String) -> Result[Response, HttpError] !io =
-  match as_http(with_db(a.db.path, a.db.ext, (c) => get_row(c, rel)), 500)? {
+  match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
     Some(o) ->
       match o.key {
         Some(k) -> Ok(redirect(302, signed_url(a.qiniu, k, "?attname=${url_q(basename(rel))}")))
@@ -312,7 +312,7 @@ fn url_q(s: String) -> String = pct_encode(s)
 ## join in `name`, not return the bare directory, and the key extension comes from
 ## the filename. Mirrors app/api/fm/uploads.py.
 pub fn upload_token_ep(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded(a, req, () => {
     let m = as_http(body_obj(req.body), 422)?
     let raw_name = str_or(m, "name", "")
@@ -320,7 +320,7 @@ pub fn upload_token_ep(a: Auth) -> Handler =
     let e = ext(sanitize_name(raw_name))
     let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
     let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_s() + a.qiniu.expires)
-    let _x = as_http(with_db(a.db.path, a.db.ext, (c) => ledger(c, key, rel)), 500)?
+    let _x = as_http(with_db(a.db.path, a.db.ext, c => ledger(c, key, rel)), 500)?
     Ok(json_ok(obj([
       ("token", jstr(token)),
       ("key", jstr(key)),
@@ -343,20 +343,20 @@ fn qparam(req: Request, name: String) -> String = unwrap_or(query(req, name), ""
 ## POST /api/fm/delete — {path, items:[{path}]}. Deletes each item's subtree:
 ## the qiniu object for every file, then the DB row. Returns FsData + {deleted}.
 pub fn delete(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded(a, req, () =>
       {
         let m = as_http(body_obj(req.body), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let items = item_paths(m)
-        let deleted = as_http(with_db(a.db.path, a.db.ext, (c) => do_delete(a.qiniu, c, items, 0, [])), 502)?
-        let base = as_http(with_db(a.db.path, a.db.ext, (c) => fs_data(c, cur)), 500)?
+        let deleted = as_http(with_db(a.db.path, a.db.ext, c => do_delete(a.qiniu, c, items, 0, [])), 502)?
+        let base = as_http(with_db(a.db.path, a.db.ext, c => fs_data(c, cur)), 500)?
         Ok(json_ok(merge_deleted(base, deleted)))
       })
 
 ## POST /api/fm/create-file — {path, name}. Creates an empty file object.
 pub fn create_file(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded(a, req, () =>
       {
         let m = as_http(body_obj(req.body), 422)?
@@ -377,7 +377,7 @@ pub fn create_file(a: Auth) -> Handler =
 ## caches by URL, so overwrite would read stale), updates the DB, deletes the
 ## old key. Returns {path}.
 pub fn save(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded(a, req, () =>
       {
         let m = as_http(body_obj(req.body), 422)?
@@ -393,21 +393,21 @@ pub fn save(a: Auth) -> Handler =
 ## POST /api/fm/copy — {path, destination, sources[]}. Copies each subtree;
 ## files get a fresh qiniu object (new uuid key), dirs are recreated.
 pub fn copy(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded(a, req, () =>
       {
         let m = as_http(body_obj(req.body), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let dest = fm_split(str_or(m, "destination", ""))
         let sources = str_list(m, "sources")
-        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, (c) => do_copy(a.qiniu, c, sources, dest, cur, 0)), conflict_or(502))?))
+        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), conflict_or(502))?))
       })
 
 ## POST /api/fm/register — {path, key, size?, content_type?}. Confirms the
 ## object exists in qiniu (stat), records the FileObject with qiniu's authoritative
 ## size/mime, clears the ledger row. Rejects if the object isn't really there.
 pub fn register(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded(a, req, () =>
       {
         let m = as_http(body_obj(req.body), 422)?
@@ -434,9 +434,9 @@ fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint:
   let mime = reg_mime(stat_body, ct_hint, rel)
   # overwrite: if a file already sits at this path under a different key, its old
   # qiniu object is about to be orphaned — drop it (best-effort, ignore failure).
-  let existing = with_db(a.db.path, a.db.ext, (c) => get_row(c, rel))?
+  let existing = with_db(a.db.path, a.db.ext, c => get_row(c, rel))?
   let _gc = gc_superseded(a.qiniu, existing, key)
-  with_db(a.db.path, a.db.ext, (c) => {
+  with_db(a.db.path, a.db.ext, c => {
     let _e = ensure_dirs(c, rel)?
     let _i = insert_file(c, rel, key, mime, size)?
     let _l = ledger_delete(c, key)?
@@ -486,12 +486,12 @@ fn stat_str(body: String, key: String) -> String !io =
 
 ## GET /api/fm/search?path=&filter=&deep= — filename search over the tree.
 pub fn fm_search(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded(a, req, () => {
     let base = fm_split(qparam(req, "path"))
     let needle = str.to_lower(str.trim(qparam(req, "filter")))
     let deep = qparam(req, "deep") != ""
-    Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, (c) => search_files(c, base, needle, deep)), 500)?))
+    Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, c => search_files(c, base, needle, deep)), 500)?))
   })
 
 ## The fm routes (protected). Static paths precede any captures. The two TTL
@@ -503,7 +503,7 @@ pub fn fm_search(a: Auth) -> Handler =
 ## from the raw request Bytes (Request.raw) via the multipart parser, then
 ## re-POSTed to qiniu. Matches FastAPI: form field `path` (target dir) + file part.
 pub fn upload(a: Auth) -> Handler =
-  (req) =>
+  req =>
   guarded(a, req, () =>
       match header(req, "content-type") {
         None -> Err(http_error(422, "expected multipart/form-data"))

@@ -19,7 +19,7 @@ pub fn nav(c: Connection) -> Result[List[Json], String] !io = {
   let rows = query(c,
     "select id, title, slug, type, nav_order from pages where nav_visible = 1 order by nav_order, id",
     [], [ColInt, ColStr, ColStr, ColStr, ColInt])?
-  Ok(map(rows, (r) => {
+  Ok(map(rows, r => {
     let kind = str_at(r, 3)
     let slug = str_at(r, 2)
     obj([

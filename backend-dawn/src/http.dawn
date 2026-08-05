@@ -170,7 +170,7 @@ pub fn post_publisher(url: String, headers: List[(String, String)], publisher: B
 ## Serve one canned response on an ephemeral port; returns (server, port).
 fn echo_server(status: Int, body: String) -> (HttpServer, Int) !io = {
   let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
-  server.createContext("/", (ex) => {
+  server.createContext("/", ex => {
     # reflect the request headers back so a test can assert what was sent
     let probe = unwrap_or(ex.getRequestHeaders()!.getFirst("X-Probe"), "-")
     let payload = bytes.utf8(body ++ probe)

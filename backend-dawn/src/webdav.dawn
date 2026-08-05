@@ -50,7 +50,7 @@ const REDIRECT_CLIENTS: List[String] = ["rclone", "cyberduck", "mountain duck", 
 
 fn header_or(req: Request, name: String, dflt: String) -> String = unwrap_or(header(req, name), dflt)
 
-fn path_segs(rel: String) -> List[String] = filter(str.split(rel, "/"), (s) => s != "")
+fn path_segs(rel: String) -> List[String] = filter(str.split(rel, "/"), s => s != "")
 
 # Normalize a WebDAV path to its non-empty segments: drops leading, trailing
 # and repeated slashes. (Not Python's str.strip("/") — that keeps internal
@@ -144,7 +144,7 @@ fn kids_xml(prefix: String, rows: List[FileRow]) -> String !io =
 fn propfind(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io = {
   let prefix = dav_prefix(req)
   let depth = header_or(req, "depth", "1")
-  match as_http(with_db(a.db.path, a.db.ext, (c) => propfind_body(c, prefix, rel, depth)), 500)? {
+  match as_http(with_db(a.db.path, a.db.ext, c => propfind_body(c, prefix, rel, depth)), 500)? {
     Some(body) -> Ok(raw(207, "application/xml; charset=\"utf-8\"", body))
     None -> Err(http_error(404, "资源不存在"))
   }
@@ -178,7 +178,7 @@ fn get_or_head(a: Auth, req: Request, rel: String, head: Bool) -> Result[Respons
   if rel == "" {
     Err(http_error(405, "不能下载目录"))
   } else {
-    match as_http(with_db(a.db.path, a.db.ext, (c) => get_row(c, rel)), 500)? {
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
       None -> Err(http_error(404, "资源不存在"))
       Some(o) ->
         if o.is_dir {
@@ -301,7 +301,7 @@ fn add_headers(r: Response, hs: List[(String, String)]) -> Response =
 fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {
   let parent = parent_rel(rel)
   if parent == "" { Ok(true) } else {
-    match with_db(a.db.path, a.db.ext, (c) => get_row(c, parent))? {
+    match with_db(a.db.path, a.db.ext, c => get_row(c, parent))? {
       Some(_) -> Ok(true)
       None -> Ok(false)
     }
@@ -319,7 +319,7 @@ fn put(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io =
   if rel == "" {
     Err(http_error(405, "不能写入根"))
   } else {
-    match as_http(with_db(a.db.path, a.db.ext, (c) => get_row(c, rel)), 500)? {
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
       Some(o) -> if o.is_dir { Err(http_error(405, "目标是目录")) } else { put_do(a, req, rel, Some(o)) }
       None -> put_do(a, req, rel, None)
     }
@@ -349,7 +349,7 @@ fn put_do(a: Auth, req: Request, rel: String, existing: Option[FileRow]) -> Resu
 
 fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int, existing: Option[FileRow]) -> Result[Response, HttpError] !io =
   {
-    let _i = as_http(with_db(a.db.path, a.db.ext, (c) => insert_file(c, rel, key, mime, size)), 500)?
+    let _i = as_http(with_db(a.db.path, a.db.ext, c => insert_file(c, rel, key, mime, size)), 500)?
     let _d = gc_superseded(a.qiniu, existing, key)
     match existing {
       Some(_) -> Ok(text(204, ""))
@@ -363,7 +363,7 @@ fn del(a: Auth, rel: String) -> Result[Response, HttpError] !io =
   if rel == "" {
     Err(http_error(405, "不能删除根"))
   } else {
-    match as_http(with_db(a.db.path, a.db.ext, (c) => get_row(c, rel)), 500)? {
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
       None -> Err(http_error(404, "资源不存在"))
       Some(_) -> purge(a, rel)
     }
@@ -371,9 +371,9 @@ fn del(a: Auth, rel: String) -> Result[Response, HttpError] !io =
 
 fn purge(a: Auth, rel: String) -> Result[Response, HttpError] !io =
   {
-    let rows = as_http(with_db(a.db.path, a.db.ext, (c) => subtree_rows(c, rel)), 500)?
+    let rows = as_http(with_db(a.db.path, a.db.ext, c => subtree_rows(c, rel)), 500)?
     let _q = del_qiniu(a.qiniu, rows, 0)
-    let _d = as_http(with_db(a.db.path, a.db.ext, (c) => del_rows(c, rows, 0)), 500)?
+    let _d = as_http(with_db(a.db.path, a.db.ext, c => del_rows(c, rows, 0)), 500)?
     Ok(text(204, ""))
   }
 
@@ -396,14 +396,14 @@ fn mkcol(a: Auth, rel: String) -> Result[Response, HttpError] !io =
   if rel == "" {
     Err(http_error(405, "根已存在"))
   } else {
-    match as_http(with_db(a.db.path, a.db.ext, (c) => get_row(c, rel)), 500)? {
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
       Some(_) -> Err(http_error(405, "已存在同名项"))
       None -> {
         let ok = as_http(parent_exists(a, rel), 500)?
         if ok == false {
           Err(http_error(409, "父目录不存在"))
         } else {
-          let _i = as_http(with_db(a.db.path, a.db.ext, (c) => insert_folder(c, rel)), 500)?
+          let _i = as_http(with_db(a.db.path, a.db.ext, c => insert_folder(c, rel)), 500)?
           Ok(text(201, ""))
         }
       }
@@ -436,7 +436,7 @@ fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Res
   if rel == "" {
     Err(http_error(405, "不能操作根"))
   } else {
-    match as_http(with_db(a.db.path, a.db.ext, (c) => get_row(c, rel)), 500)? {
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
       None -> Err(http_error(404, "源不存在"))
       Some(_) ->
         match dest_rel(req) {
@@ -455,7 +455,7 @@ fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Res
 
 fn mc_check_dst(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) -> Result[Response, HttpError] !io =
   {
-    let dst_existing = as_http(with_db(a.db.path, a.db.ext, (c) => get_row(c, dst)), 500)?
+    let dst_existing = as_http(with_db(a.db.path, a.db.ext, c => get_row(c, dst)), 500)?
     let overwrite = str.to_upper(header_or(req, "overwrite", "T")) != "F"
     match dst_existing {
       Some(_) -> if overwrite == false { Err(http_error(412, "目标已存在")) } else { mc_purge_then(a, rel, dst, is_move, true) }
@@ -471,10 +471,10 @@ fn mc_purge_then(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: 
 
 # delete the dst subtree (rows + qiniu) without producing a Response
 fn purge_silent(a: Auth, rel: String) -> Result[Int, String] !io =
-  match with_db(a.db.path, a.db.ext, (c) => subtree_rows(c, rel))? {
+  match with_db(a.db.path, a.db.ext, c => subtree_rows(c, rel))? {
     rows -> {
       let _q = del_qiniu(a.qiniu, rows, 0)
-      with_db(a.db.path, a.db.ext, (c) => del_rows(c, rows, 0))
+      with_db(a.db.path, a.db.ext, c => del_rows(c, rows, 0))
     }
   }
 
@@ -487,7 +487,7 @@ fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, dst_exist
 fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io = {
   let outcome: Result[Int, String] =
     if is_move {
-      with_db(a.db.path, a.db.ext, (c) => reparent(c, rel, dst))
+      with_db(a.db.path, a.db.ext, c => reparent(c, rel, dst))
     } else {
       copy_subtree(a, rel, dst)
     }
@@ -507,7 +507,7 @@ fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool)
 
 # COPY: recreate dirs, and for each file copy the qiniu object to a fresh key.
 fn copy_subtree(a: Auth, rel: String, dst: String) -> Result[Int, String] !io =
-  match with_db(a.db.path, a.db.ext, (c) => subtree_rows(c, rel))? {
+  match with_db(a.db.path, a.db.ext, c => subtree_rows(c, rel))? {
     rows -> copy_rows(a, rel, dst, rows, 0)
   }
 
@@ -517,7 +517,7 @@ fn copy_rows(a: Auth, rel: String, dst: String, rows: List[FileRow], i: Int) -> 
     let dst_path = rebase(rel, dst, o.path)
     let _step =
       if o.is_dir {
-        with_db(a.db.path, a.db.ext, (c) => insert_folder(c, dst_path))?
+        with_db(a.db.path, a.db.ext, c => insert_folder(c, dst_path))?
       } else {
         copy_one_file(a, o, dst_path)?
       }
@@ -527,7 +527,7 @@ fn copy_rows(a: Auth, rel: String, dst: String, rows: List[FileRow], i: Int) -> 
 fn copy_one_file(a: Auth, o: FileRow, dst_path: String) -> Result[Int, String] !io = {
   let src_key = unwrap_or(o.key, "")
   let new_key = as_upstream(copy_object(a.qiniu, src_key))?
-  with_db(a.db.path, a.db.ext, (c) => insert_file(c, dst_path, new_key, o.content_type, o.size))
+  with_db(a.db.path, a.db.ext, c => insert_file(c, dst_path, new_key, o.content_type, o.size))
 }
 
 # ---- LOCK (fake) / UNLOCK ----
@@ -604,7 +604,7 @@ fn b64_decode_try(s: String) -> Result[String, String] !io =
   catch_text(() => b64_decode(s))
 
 fn verify_cache(a: Auth, cell: AtomicReference, user: String, pass: String, key: String) -> Option[Response] !io =
-  match with_db(a.db.path, a.db.ext, (c) => check_basic(c, user, pass)) {
+  match with_db(a.db.path, a.db.ext, c => check_basic(c, user, pass)) {
     Ok(true) -> {
       let _p = cache_put(cell, key)
       None
@@ -615,7 +615,7 @@ fn verify_cache(a: Auth, cell: AtomicReference, user: String, pass: String, key:
 # ---- routes ----
 
 fn dav_handler(a: Auth, cell: AtomicReference, method: String) -> Handler =
-  (req) =>
+  req =>
   if method == "OPTIONS" {
     Ok(options_response())
   } else {
@@ -648,7 +648,7 @@ pub fn dav_routes(a: Auth, cell: AtomicReference) -> List[Route] = {
   # stream-body: PUT only — the server spills the body to a temp file instead of
   # reading it into memory, and put() uploads straight from that path. The other
   # verbs carry small XML bodies (PROPFIND/LOCK) that handlers read from `body`.
-  map(verbs, (v) => tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, cell, v)),
+  map(verbs, v => tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, cell, v)),
     if v == "PUT" { ["raw-body", "no-cors", "stream-body"] } else { ["raw-body", "no-cors"] }))
 }
 

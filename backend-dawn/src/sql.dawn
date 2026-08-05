@@ -83,7 +83,7 @@ fn cell_of(rs: ResultSet, col: Col, i: Int) -> Cell !io =
   }
 
 fn row_of(rs: ResultSet, cols: List[Col]) -> List[Cell] !io =
-  map(range(0, len(cols)), (i) => cell_of(rs, cols[i], i + 1))
+  map(range(0, len(cols)), i => cell_of(rs, cols[i], i + 1))
 
 fn rows_of(rs: ResultSet, cols: List[Col]) -> List[List[Cell]] !io =
   if rs.next() { [row_of(rs, cols)] ++ rows_of(rs, cols) } else { [] }
@@ -105,7 +105,7 @@ pub fn query(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Resul
 fn names_of(rs: ResultSet) -> Map[String, Int] !io = {
   let md = rs.getMetaData()!
   let n = md.getColumnCount()
-  map.from(map(range(0, n), (i) => (md.getColumnLabel(i + 1)!, i)))
+  map.from(map(range(0, n), i => (md.getColumnLabel(i + 1)!, i)))
 }
 
 ## Like `query`, but each row carries its column names for read-by-name access
@@ -117,7 +117,7 @@ pub fn query_rows(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> 
     bind(st, ps)
     let rs = st.executeQuery()!
     let names = names_of(rs)
-    let rows = map(rows_of(rs, cols), (cells) => Row { cells: cells, names: names })
+    let rows = map(rows_of(rs, cols), cells => Row { cells: cells, names: names })
     st.close()
     rows
   })

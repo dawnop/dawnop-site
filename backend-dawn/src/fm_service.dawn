@@ -244,14 +244,14 @@ pub fn merge_deleted(base: Json, deleted: List[Json]) -> Json =
 # ---- create empty file / save text ----
 
 pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json], String] !io = {
-  let t = with_db(a.db.path, a.db.ext, (c) => taken(c, rel))?
+  let t = with_db(a.db.path, a.db.ext, c => taken(c, rel))?
   if t {
     Ok(None)
   } else {
     let mime = guess_mime(rel)
     let key = uuid_hex()
     let _up = upload_text(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, "", mime, now_s() + a.qiniu.expires)?
-    let d = with_db(a.db.path, a.db.ext, (c) => create_file_db(c, rel, key, mime, cur))?
+    let d = with_db(a.db.path, a.db.ext, c => create_file_db(c, rel, key, mime, cur))?
     Ok(Some(d))
   }
 }
@@ -264,11 +264,11 @@ fn create_file_db(c: Connection, rel: String, key: String, mime: String, cur: St
 
 ## Write text to a NEW qiniu key, repoint the row, drop the old key. Returns {path}.
 pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !io = {
-  let existing = with_db(a.db.path, a.db.ext, (c) => get_row(c, rel))?
+  let existing = with_db(a.db.path, a.db.ext, c => get_row(c, rel))?
   let mime = save_mime(existing, rel)
   let new_key = save_key(rel)
   let _up = upload_text(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, new_key, content, mime, now_s() + a.qiniu.expires)?
-  let _db = with_db(a.db.path, a.db.ext, (c) => save_db(c, rel, new_key, mime, str.len(content)))?
+  let _db = with_db(a.db.path, a.db.ext, c => save_db(c, rel, new_key, mime, str.len(content)))?
   let _gc = gc_superseded(a.qiniu, existing, new_key)
   Ok(obj([("path", jstr(full(rel)))]))
 }
@@ -292,10 +292,10 @@ fn save_key(rel: String) -> String !io = {
 # ---- proxy upload ----
 
 pub fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int) -> Result[Json, String] !io = {
-  let existing = with_db(a.db.path, a.db.ext, (c) => get_row(c, rel))?
+  let existing = with_db(a.db.path, a.db.ext, c => get_row(c, rel))?
   let key = upload_key(existing)
   let _up = upload_bytes(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_s() + a.qiniu.expires)?
-  with_db(a.db.path, a.db.ext, (c) => upsert_upload(c, rel, key, mime, size))
+  with_db(a.db.path, a.db.ext, c => upsert_upload(c, rel, key, mime, size))
 }
 
 # reuse an existing file's key (overwrite in place, matching FastAPI), else a fresh

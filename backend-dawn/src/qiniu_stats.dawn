@@ -63,7 +63,7 @@ pub fn flow_series(ak: String, sk: String, bucket: String, select: String, days:
   let (begin, end) = day_range(days)
   let j = stat_get(ak, sk, "/v6/blob_io?\$bucket=$bucket&select=$select&begin=$begin&end=$end&g=day")?
   match j {
-    JArr(items) -> Ok(map(items, (it) =>
+    JArr(items) -> Ok(map(items, it =>
         (str_or_empty(field(it, "time")), int_of(field(field(it, "values"), select)))))
     _ -> Ok([])
   }
@@ -105,9 +105,9 @@ pub fn cdn_tune(ak: String, sk: String, kind: String, days: Int, domains: List[S
     ]))
     let j = mac_json(ak, sk, "POST", FUSION_HOST, "/v2/tune/$kind", body)?
     let time_strs = str_list(field(j, "time"))
-    let zeros = map(time_strs, (_t) => 0)
+    let zeros = map(time_strs, _t => 0)
     let totals = fold(leaf_arrays(field(j, "data")), zeros, (acc: List[Int], arr) =>
-        map(range(0, len(acc)), (i) => acc[i] + int_of(at(arr, i))))
+        map(range(0, len(acc)), i => acc[i] + int_of(at(arr, i))))
     Ok((map(time_strs, day_epoch), totals))
   }
 
@@ -146,9 +146,9 @@ fn leaf_arrays(data: Json) -> List[List[Json]] = {
 ## in a TTL cache (the billing API is rate-limited and slow-moving).
 pub fn respack_summary(ak: String, sk: String) -> Result[Json, String] !io = {
   let listing = mac_json(ak, sk, "GET", API_HOST, "/billing-api/v1/respack/list", "")?
-  let active = filter(arr_items(field(listing, "data")), (d) => int_of(field(d, "status")) == 2)
+  let active = filter(arr_items(field(listing, "data")), d => int_of(field(d, "status")) == 2)
 
-  let cdn_items = filter(active, (d) => str.contains(str_or_empty(field(d, "respack_name")), "流量"))
+  let cdn_items = filter(active, d => str.contains(str_or_empty(field(d, "respack_name")), "流量"))
   let cdn = if len(cdn_items) == 0 {
     JNull
   } else {
@@ -159,22 +159,22 @@ pub fn respack_summary(ak: String, sk: String) -> Result[Json, String] !io = {
       ("used", JInt(to_int(used))),
       ("total", JInt(to_int(total))),
       ("remain", JInt(to_int(remain))),
-      ("expire", min_str(map(cdn_items, (d) => str_or_empty(field(d, "effective_end"))))),
-      ("names", JArr(map(cdn_items, (d) => JStr(str_or_empty(field(d, "respack_name")))))),
+      ("expire", min_str(map(cdn_items, d => str_or_empty(field(d, "effective_end"))))),
+      ("names", JArr(map(cdn_items, d => JStr(str_or_empty(field(d, "respack_name")))))),
     ])
   }
 
-  let store_items = filter(active, (d) => str.contains(str_or_empty(field(d, "respack_name")), "存储"))
+  let store_items = filter(active, d => str.contains(str_or_empty(field(d, "respack_name")), "存储"))
   let overview = mac_json(ak, sk, "GET", API_HOST, "/billing-api/v1/respack/month-overview", "")?
-  let store_ov = filter(arr_items(field(overview, "data")), (o) => str.contains(str_or_empty(field(o, "item_name")), "存储"))
+  let store_ov = filter(arr_items(field(overview, "data")), o => str.contains(str_or_empty(field(o, "item_name")), "存储"))
   let storage = if len(store_ov) == 0 {
     JNull
   } else {
     let capacity = sum_amount(store_ov, "total_surplus") * GB
     obj([
       ("capacity", JInt(to_int(capacity))),
-      ("expire", min_str(map(store_items, (d) => str_or_empty(field(d, "effective_end"))))),
-      ("names", JArr(map(store_ov, (o) => JStr(str_or_empty(field(o, "item_name")))))),
+      ("expire", min_str(map(store_items, d => str_or_empty(field(d, "effective_end"))))),
+      ("names", JArr(map(store_ov, o => JStr(str_or_empty(field(o, "item_name")))))),
     ])
   }
   Ok(obj([("cdn", cdn), ("storage", storage)]))
@@ -185,7 +185,7 @@ fn sum_amount(items: List[Json], key: String) -> Float =
 
 # min of the non-empty strings (ISO datetimes order lexicographically); null when none
 fn min_str(xs: List[String]) -> Json = {
-  let present = filter(xs, (s) => s != "")
+  let present = filter(xs, s => s != "")
   fold(present, JNull, (acc, s) =>
       match acc {
         JStr(cur) -> if s < cur { JStr(s) } else { acc }
