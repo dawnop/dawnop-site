@@ -24,6 +24,7 @@ import { fmApi as fm, settingsApi } from '../api'
 import { useIsMobile } from './useIsMobile'
 import { fmtBytes, fmtMonthDay } from '../utils/format'
 import { confirmDanger } from '../utils/confirm'
+import { saveBlob } from '../utils/saveBlob'
 
 export function useFileManager() {
   // ---------- 状态 ----------
@@ -379,14 +380,7 @@ export function useFileManager() {
     const t = addTask('down', row.name)
     try {
       const blob = await fm.downloadBlob(row.path, (p) => (t.pct = Math.round(p * 100)), row.size)
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = row.name
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      setTimeout(() => URL.revokeObjectURL(url), 60000)
+      saveBlob(blob, row.name)
       t.pct = 100
       t.status = 'done'
     } catch {

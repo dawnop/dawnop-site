@@ -1,6 +1,8 @@
 // 自建文件管理器的后端对接层（复用后端现成的 /api/fm 那套接口）。
 // 后端路径用 `qiniu://<rel>` 前缀；本层对外一律用「相对路径 rel」（根为空串），
 // 只在跟后端通信时转成 qiniu:// 形式，组件里不必关心存储前缀。
+// 约定：本层一律**返回解包后的响应体**（不是 axios 的 res），调用方不用再 `.data`。
+// 其余 xxxApi 返回 res 是历史写法，这一层自成一体，就在这里统一掉。
 import * as qiniuJs from 'qiniu-js'
 import client from './client'
 import { auth } from '../store/auth'
@@ -74,7 +76,8 @@ export async function textContent(rel) {
 }
 
 // 保存文本（在线编辑）：后端代理写回七牛并更新元数据
-export const saveText = (rel, content) => client.post('/fm/save', { path: toFull(rel), content })
+export const saveText = async (rel, content) =>
+  (await client.post('/fm/save', { path: toFull(rel), content })).data
 
 // 带进度下载：首选签名 URL 直连七牛流式读字节（不占后端流量）；
 // 直连被 CORS 拦（本地开发测试域名）时改走后端代理，进度不丢。
@@ -119,27 +122,33 @@ export async function downloadBlob(rel, onProgress, sizeHint) {
 }
 
 // 增删改（后端都返回当前目录的新 FsData，这里不用它，调用方自行刷新）
-export const createFolder = (rel, name) =>
-  client.post('/fm/create-folder', { path: toFull(rel), name })
-export const rename = (rel, itemRel, name) =>
-  client.post('/fm/rename', { path: toFull(rel), item: toFull(itemRel), name })
-export const remove = (rel, itemRels) =>
-  client.post('/fm/delete', {
-    path: toFull(rel),
-    items: itemRels.map((r) => ({ path: toFull(r) })),
-  })
-export const move = (rel, destRel, srcRels) =>
-  client.post('/fm/move', {
-    path: toFull(rel),
-    destination: toFull(destRel),
-    sources: srcRels.map(toFull),
-  })
-export const copy = (rel, destRel, srcRels) =>
-  client.post('/fm/copy', {
-    path: toFull(rel),
-    destination: toFull(destRel),
-    sources: srcRels.map(toFull),
-  })
+export const createFolder = async (rel, name) =>
+  (await client.post('/fm/create-folder', { path: toFull(rel), name })).data
+export const rename = async (rel, itemRel, name) =>
+  (await client.post('/fm/rename', { path: toFull(rel), item: toFull(itemRel), name })).data
+export const remove = async (rel, itemRels) =>
+  (
+    await client.post('/fm/delete', {
+      path: toFull(rel),
+      items: itemRels.map((r) => ({ path: toFull(r) })),
+    })
+  ).data
+export const move = async (rel, destRel, srcRels) =>
+  (
+    await client.post('/fm/move', {
+      path: toFull(rel),
+      destination: toFull(destRel),
+      sources: srcRels.map(toFull),
+    })
+  ).data
+export const copy = async (rel, destRel, srcRels) =>
+  (
+    await client.post('/fm/copy', {
+      path: toFull(rel),
+      destination: toFull(destRel),
+      sources: srcRels.map(toFull),
+    })
+  ).data
 
 // 上传 = 前端直传七牛：要凭证 → qiniu-js 直传 → 登记。
 // qiniu-js 自动按文件大小选通道：≤4MB 表单直传，>4MB 分片上传（v2，4MB/片、

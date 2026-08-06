@@ -6,7 +6,8 @@ import { Search, Upload, EditPen, MoreFilled } from '@element-plus/icons-vue'
 import { articlesApi, pagesApi, tagsApi } from '../../api'
 import { parseFrontmatter } from '../../utils/frontmatter'
 import { confirmDanger } from '../../utils/confirm'
-import { useColWidths } from '../../utils/colWidths'
+import { saveBlob } from '../../utils/saveBlob'
+import { useColWidths } from '../../composables/useColWidths'
 import { useIsMobile } from '../../composables/useIsMobile'
 import ListPager from '../../components/ListPager.vue'
 
@@ -144,12 +145,7 @@ async function onImport(e) {
 
 async function exportMd(a) {
   const { data } = await articlesApi.exportMarkdown(a.id)
-  const url = URL.createObjectURL(data)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `${a.slug}.md`
-  link.click()
-  URL.revokeObjectURL(url)
+  saveBlob(data, `${a.slug}.md`)
 }
 
 function goPage(p) {

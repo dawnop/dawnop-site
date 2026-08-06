@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { Search, Delete, MoreFilled } from '@element-plus/icons-vue'
 import { tagsApi } from '../../api'
-import { useColWidths } from '../../utils/colWidths'
+import { useColWidths } from '../../composables/useColWidths'
 import { confirmDanger } from '../../utils/confirm'
 import { useIsMobile } from '../../composables/useIsMobile'
 

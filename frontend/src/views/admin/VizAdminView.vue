@@ -5,7 +5,7 @@ import { useRouter } from 'vue-router'
 import { MagicStick } from '@element-plus/icons-vue'
 import { vizApi } from '../../api'
 import HelpTip from '../../components/HelpTip.vue'
-import { useColWidths } from '../../utils/colWidths'
+import { useColWidths } from '../../composables/useColWidths'
 import { confirmDanger } from '../../utils/confirm'
 import { useIsMobile } from '../../composables/useIsMobile'
 

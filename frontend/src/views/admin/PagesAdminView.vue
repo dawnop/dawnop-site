@@ -5,7 +5,7 @@ import { useRouter } from 'vue-router'
 import { Rank, Document, Collection, Top, Bottom } from '@element-plus/icons-vue'
 import Sortable from 'sortablejs'
 import { pagesApi } from '../../api'
-import { useColWidths } from '../../utils/colWidths'
+import { useColWidths } from '../../composables/useColWidths'
 import { confirmDanger } from '../../utils/confirm'
 import { useIsMobile } from '../../composables/useIsMobile'
 
