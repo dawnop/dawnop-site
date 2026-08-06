@@ -126,6 +126,107 @@
   font-size: 0.85rem;
 }
 
+/* ---- 编辑页骨架（文章编辑 / 页面编辑共用）----
+   两页原本各抄一份完全相同的 scoped 样式。这些类名只在这两个视图里出现
+   （.actions 除外——它另有三处不同定义，故这里限定在 .edit-topbar 内，
+   特指度也高于任何 scoped 的 .actions，不会互相压制）。 */
+.admin .edit-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.admin .edit-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.admin .doc-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin .title-from {
+  margin-left: 8px;
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--muted);
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  padding: 1px 6px;
+  vertical-align: middle;
+}
+.admin .auto-title-chk {
+  margin-top: 6px;
+}
+.admin .edit-topbar .actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.admin .editor {
+  flex: 1;
+  min-height: 360px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
+.admin .field-hint {
+  margin-top: 6px;
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.admin .field-hint code {
+  background: #f0f1f3;
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+}
+.admin .w-full {
+  width: 100%;
+}
+@media (max-width: 768px) {
+  .admin .edit-topbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .admin .doc-title {
+    flex: 1 0 100%;
+    font-size: 1.12rem;
+    white-space: normal;
+  }
+  .admin .edit-topbar .actions {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .admin .editor {
+    min-height: 300px;
+  }
+}
+
+/* ---- 后台列表页的移动端卡片 ----
+   只沉降各视图逐字相同的那几条：.m-list 的纵向排布（标签页也用这个类但不要卡片间距，
+   故 gap 留在各视图自己的 scoped 里）、卡片内边距与内部排布。
+   .m-card-head / .m-meta / .m-actions 三个视图各有出入，仍留在各自 scoped。 */
+.admin .m-list {
+  display: flex;
+  flex-direction: column;
+}
+.admin .m-card .el-card__body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 /* ---- 空状态 ---- */
 .admin .empty {
   text-align: center;

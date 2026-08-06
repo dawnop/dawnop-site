@@ -277,15 +277,8 @@ onMounted(load)
   line-height: 1.7;
   color: #1f2329;
 }
-.w-full {
-  width: 100%;
-}
 
 /* 移动端卡片列表 */
-.m-list {
-  display: flex;
-  flex-direction: column;
-}
 .m-tag {
   display: flex;
   align-items: center;

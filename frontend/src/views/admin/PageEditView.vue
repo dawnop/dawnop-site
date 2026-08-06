@@ -259,53 +259,6 @@ async function save() {
 </template>
 
 <style scoped>
-.edit-wrap {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-.edit-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-.doc-title {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  font-size: 1.3rem;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.title-from {
-  margin-left: 8px;
-  font-size: 0.7rem;
-  font-weight: 400;
-  color: var(--muted);
-  border: 1px solid var(--el-border-color);
-  border-radius: 4px;
-  padding: 1px 6px;
-  vertical-align: middle;
-}
-.auto-title-chk {
-  margin-top: 6px;
-}
-.actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.editor {
-  flex: 1;
-  min-height: 360px;
-  border-radius: var(--radius);
-  overflow: hidden;
-  box-shadow: var(--shadow-card);
-}
 .list-panel .list-head {
   display: flex;
   align-items: center;
@@ -347,40 +300,5 @@ async function save() {
 }
 .cat-list a:hover {
   color: var(--accent);
-}
-.field-hint {
-  margin-top: 6px;
-  font-size: 0.82rem;
-  color: var(--muted);
-  line-height: 1.5;
-}
-.field-hint code {
-  background: #f0f1f3;
-  padding: 0.1em 0.4em;
-  border-radius: 4px;
-}
-.w-full {
-  width: 100%;
-}
-
-@media (max-width: 768px) {
-  .edit-topbar {
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 10px;
-  }
-  .doc-title {
-    flex: 1 0 100%;
-    font-size: 1.12rem;
-    white-space: normal;
-  }
-  .actions {
-    width: 100%;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  .editor {
-    min-height: 300px;
-  }
 }
 </style>

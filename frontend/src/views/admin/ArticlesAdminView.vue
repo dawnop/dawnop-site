@@ -393,15 +393,7 @@ onMounted(load)
 
 /* 移动端卡片列表 */
 .m-list {
-  display: flex;
-  flex-direction: column;
   gap: 12px;
-}
-.m-card :deep(.el-card__body) {
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
 }
 .m-card-head {
   display: flex;
