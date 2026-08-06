@@ -59,6 +59,10 @@ pub fn kodo_series(ak: String, sk: String, bucket: String, what: String, days: I
 
 ## Origin traffic (select=flow, bytes) or requests (select=hits) by day.
 ## blob_io answers a list [{time, values:{<select>: n}}], unlike space/count.
+##
+## The query really does name its parameter `$bucket` — hence `\$bucket=$bucket`
+## below: an escaped literal `$`, then the interpolated value. The other
+## endpoints above spell the same parameter plain `bucket`.
 pub fn flow_series(ak: String, sk: String, bucket: String, select: String, days: Int) -> Result[List[(String, Int)], String] !io = {
   let (begin, end) = day_range(days)
   let j = stat_get(ak, sk, "/v6/blob_io?\$bucket=$bucket&select=$select&begin=$begin&end=$end&g=day")?

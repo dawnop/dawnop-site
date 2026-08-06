@@ -35,10 +35,15 @@ pub type Qiniu = { ak: String, sk: String, bucket: String, domain: String, expir
 # only in a long-password wraparound flag). Normalize the prefix so existing
 # $2b$ hashes verify unchanged. A malformed hash throws — caught to false, as
 # FastAPI's verify_password does, so it becomes a 401 not a 500.
+#
+# In string literals the prefixes are written `\$`, always. Bare `$2a$` happens
+# to lex the same (a digit cannot start an identifier, so the `$` falls back to
+# a literal), but that is a fallback and not a rule — comments below use the
+# bare form because a comment is not lexed at all.
 fn verify_password(plain: String, hashed: String) -> Bool !io = {
   let normalized =
-    if str.starts_with(hashed, "$2b$") || str.starts_with(hashed, "$2y$") {
-      "$2a$" ++ str.substring(hashed, 4, str.len(hashed))
+    if str.starts_with(hashed, "\$2b\$") || str.starts_with(hashed, "\$2y\$") {
+      "\$2a\$" ++ str.substring(hashed, 4, str.len(hashed))
     } else {
       hashed
     }
@@ -192,7 +197,7 @@ test "verify_password accepts the \$2b hashes the shared users table holds" {
   # passwords <= 72 bytes, so the fix is a prefix rewrite — pinned here because
   # getting it wrong locks every existing account out with a 401.
   let a2 = BCrypt.hashpw("hunter2", BCrypt.gensalt(4)!)!
-  assert str.starts_with(a2, "$2a$")
+  assert str.starts_with(a2, "\$2a\$")
   let b2 = "\$2b\$" ++ str.substring(a2, 4, str.len(a2))
   assert verify_password("hunter2", b2)
   assert verify_password("hunter2", a2)
