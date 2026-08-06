@@ -186,7 +186,7 @@ fn reparent_loop(c: Connection, paths: List[String], old_rel: String, new_rel: S
     Ok(0)
   } else {
     let p = paths[i]
-    let np = new_rel ++ str.substring(p, str.len(old_rel), str.len(p))
+    let np = new_rel ++ str.slice(p, str.len(old_rel), str.len(p))
     # match FastAPI's SQLAlchemy onupdate: a path change bumps updated_at (wall
     # clock, so not diff-comparable across the two servers — like article updated_at)
     let _u = exec(c, "update files set path = ?, updated_at = datetime('now') where path = ?", [PStr(np), PStr(p)])?

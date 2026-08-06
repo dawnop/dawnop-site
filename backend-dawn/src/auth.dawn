@@ -43,7 +43,7 @@ pub type Qiniu = { ak: String, sk: String, bucket: String, domain: String, expir
 fn verify_password(plain: String, hashed: String) -> Bool !io = {
   let normalized =
     if str.starts_with(hashed, "\$2b\$") || str.starts_with(hashed, "\$2y\$") {
-      "\$2a\$" ++ str.substring(hashed, 4, str.len(hashed))
+      "\$2a\$" ++ str.slice(hashed, 4, str.len(hashed))
     } else {
       hashed
     }
@@ -158,7 +158,7 @@ pub fn guarded_flexible(a: Auth, req: Request, body: fn() -> Result[Response, Ht
 
 fn header_token(req: Request) -> String =
   match header(req, "authorization") {
-    Some(h) -> if str.starts_with(h, "Bearer ") { str.substring(h, 7, str.len(h)) } else { h }
+    Some(h) -> if str.starts_with(h, "Bearer ") { str.slice(h, 7, str.len(h)) } else { h }
     None -> ""
   }
 
@@ -198,12 +198,12 @@ test "verify_password accepts the \$2b hashes the shared users table holds" {
   # getting it wrong locks every existing account out with a 401.
   let a2 = BCrypt.hashpw("hunter2", BCrypt.gensalt(4)!)!
   assert str.starts_with(a2, "\$2a\$")
-  let b2 = "\$2b\$" ++ str.substring(a2, 4, str.len(a2))
+  let b2 = "\$2b\$" ++ str.slice(a2, 4, str.len(a2))
   assert verify_password("hunter2", b2)
   assert verify_password("hunter2", a2)
   assert not verify_password("wrong-password", b2)
   # $2y$ is the third spelling of the same hash
-  assert verify_password("hunter2", "\$2y\$" ++ str.substring(a2, 4, str.len(a2)))
+  assert verify_password("hunter2", "\$2y\$" ++ str.slice(a2, 4, str.len(a2)))
   # the trap: jBCrypt refuses the $2b revision outright rather than ignoring it,
   # so without the rewrite this is what every login would hit
   match catch_fault(() => BCrypt.checkpw("hunter2", b2)) {

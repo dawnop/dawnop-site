@@ -45,7 +45,7 @@ pub fn signed_url(q: Qiniu, key: String, suffix: String) -> String !io = {
 ## Move `path` from under `src_root` to under `dst_root`, keeping the tail. Both
 ## subtree copies walk rows this way, so a child lands at the mirrored spot.
 pub fn rebase(src_root: String, dst_root: String, path: String) -> String =
-  dst_root ++ str.substring(path, str.len(src_root), str.len(path))
+  dst_root ++ str.slice(path, str.len(src_root), str.len(path))
 
 ## The object key that an overwrite orphans, if any: the row's current key when it
 ## differs from the one just written. Directories carry no key (insert_folder

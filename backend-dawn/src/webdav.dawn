@@ -257,7 +257,7 @@ fn range_of(req: Request, total: Int) -> Option[(Int, Int)] =
       if not str.starts_with(rng, "bytes=") || total <= 0 {
         None
       } else {
-        let spec = str.substring(rng, 6, str.len(rng))
+        let spec = str.slice(rng, 6, str.len(rng))
         if str.contains(spec, ",") {
           None
         } else {
@@ -422,7 +422,7 @@ fn dest_rel(req: Request) -> Option[String] !io =
     Some(d) -> {
       let path = uri_path(d)
       let prefix = dav_prefix(req)
-      let stripped = if prefix != "" && str.starts_with(path, prefix) { str.substring(path, str.len(prefix), str.len(path)) } else { path }
+      let stripped = if prefix != "" && str.starts_with(path, prefix) { str.slice(path, str.len(prefix), str.len(path)) } else { path }
       # single percent-decode like Python's unquote: %XX resolves, a literal '+'
       # stays '+' (URLDecoder would turn it into a space), so protect '+' as %2B first
       let decoded = URLDecoder.decode(join(str.split(stripped, "+"), "%2B"), "UTF-8")!
@@ -576,7 +576,7 @@ fn dav_auth(a: Auth, cell: AtomicReference, req: Request) -> Option[Response] !i
         Some(unauthorized())
       } else {
         # malformed base64 is a 401, not a 500 (FastAPI wraps b64decode in try/except)
-        match b64_decode_try(str.substring(h, 6, str.len(h))) {
+        match b64_decode_try(str.slice(h, 6, str.len(h))) {
           Err(_e) -> Some(unauthorized())
           Ok(raw_cred) -> {
             let parts = str.split(raw_cred, ":")

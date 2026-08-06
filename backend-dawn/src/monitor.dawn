@@ -395,7 +395,7 @@ pub fn respack_cached(a: Auth, cell: AtomicReference) -> Result[Json, String] !i
 
 pub fn vault_block(alive_url: String, public_url: String) -> Json !io = {
   let base = if str.ends_with(alive_url, "/alive") {
-    str.substring(alive_url, 0, str.len(alive_url) - 6)
+    str.slice(alive_url, 0, str.len(alive_url) - 6)
   } else {
     alive_url
   }

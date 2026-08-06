@@ -214,7 +214,7 @@ pub fn article_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
 }
 
 ## Truncate to at most `n` characters — tag names are capped at 64 like FastAPI's.
-pub fn clip(s: String, n: Int) -> String = if str.len(s) > n { str.substring(s, 0, n) } else { s }
+pub fn clip(s: String, n: Int) -> String = if str.len(s) > n { str.slice(s, 0, n) } else { s }
 
 fn member(xs: List[String], x: String) -> Bool =
   fold(xs, false, (acc, y) => acc || y == x)

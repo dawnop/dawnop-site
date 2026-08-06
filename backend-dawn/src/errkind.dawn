@@ -51,8 +51,8 @@ pub fn split_kind(m: String) -> (Kind, String) =
   match str.index_of(m, sep()) {
     None -> (KPlain, m)
     Some(i) ->
-      match named(str.substring(m, 0, i)) {
-        Some(k) -> (k, str.substring(m, i + 1, str.len(m)))
+      match named(str.slice(m, 0, i)) {
+        Some(k) -> (k, str.slice(m, i + 1, str.len(m)))
         None -> (KPlain, m)
       }
   }
