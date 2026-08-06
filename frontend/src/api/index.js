@@ -109,6 +109,10 @@ export const pagesApi = {
   listAll() {
     return client.get('/pages/admin')
   },
+  // 编辑页取单行（builtin 也返回），省得拉全量再 find
+  getForEdit(id) {
+    return client.get(`/pages/admin/${id}`)
+  },
   create(data) {
     return client.post('/pages', data)
   },
@@ -127,6 +131,10 @@ export const pagesApi = {
 export const vizApi = {
   listAll() {
     return client.get('/viz')
+  },
+  // 编辑页取单行，省得拉全量再 find
+  getForEdit(id) {
+    return client.get(`/viz/admin/${id}`)
   },
   get(slug) {
     return client.get(`/viz/${slug}`)

@@ -590,6 +590,54 @@
     "detail": "无效或过期的凭证"
    }
   },
+  "pages.adminGet.noTok": {
+   "method": "GET",
+   "path": "/api/pages/admin/1",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "pages.adminGet.404": {
+   "method": "GET",
+   "path": "/api/pages/admin/99999999",
+   "status": 404,
+   "body": {
+    "detail": "页面不存在"
+   }
+  },
+  "pages.adminGet.nan": {
+   "method": "GET",
+   "path": "/api/pages/admin/abc",
+   "status": 422,
+   "body": {
+    "detail": "page_id must be an integer"
+   }
+  },
+  "viz.adminGet.noTok": {
+   "method": "GET",
+   "path": "/api/viz/admin/1",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "viz.adminGet.404": {
+   "method": "GET",
+   "path": "/api/viz/admin/99999999",
+   "status": 404,
+   "body": {
+    "detail": "组件不存在"
+   }
+  },
+  "viz.adminGet.nan": {
+   "method": "GET",
+   "path": "/api/viz/admin/abc",
+   "status": 422,
+   "body": {
+    "detail": "viz_id must be an integer"
+   }
+  },
   "art.create.noTok": {
    "method": "POST",
    "path": "/api/articles",

@@ -1608,6 +1608,124 @@
     ]
    }
   },
+  "pages.admin:1": {
+   "path": "/api/pages/admin/1",
+   "status": 200,
+   "body": {
+    "id": 1,
+    "title": "首页",
+    "slug": "home",
+    "type": "builtin",
+    "path": "/",
+    "description": "",
+    "content": "",
+    "auto_title": false,
+    "nav_visible": true,
+    "nav_order": -1000,
+    "created_at": "2026-01-01T00:00:00",
+    "updated_at": "2026-01-01T00:00:00"
+   }
+  },
+  "pages.admin:3": {
+   "path": "/api/pages/admin/3",
+   "status": 200,
+   "body": {
+    "id": 3,
+    "title": "博客",
+    "slug": "blog",
+    "type": "article_list",
+    "path": "/p/blog",
+    "description": "所有文章",
+    "content": "",
+    "auto_title": false,
+    "nav_visible": true,
+    "nav_order": 10,
+    "created_at": "2026-01-01T00:00:00",
+    "updated_at": "2026-01-01T00:00:00"
+   }
+  },
+  "pages.admin:4": {
+   "path": "/api/pages/admin/4",
+   "status": 200,
+   "body": {
+    "id": 4,
+    "title": "关于",
+    "slug": "about",
+    "type": "content",
+    "path": "/p/about",
+    "description": "关于本站",
+    "content": "# 关于\n\n这是一个 **内容页**，正文里有 `code`、[链接](https://example.invalid) 和公式 $E = mc^2$。\n",
+    "auto_title": false,
+    "nav_visible": true,
+    "nav_order": 20,
+    "created_at": "2026-01-01T00:00:00",
+    "updated_at": "2026-01-01T00:00:00"
+   }
+  },
+  "pages.admin:5": {
+   "path": "/api/pages/admin/5",
+   "status": 200,
+   "body": {
+    "id": 5,
+    "title": "手记",
+    "slug": "notes",
+    "type": "article_list",
+    "path": "/p/notes",
+    "description": "零散记录",
+    "content": "",
+    "auto_title": false,
+    "nav_visible": false,
+    "nav_order": 30,
+    "created_at": "2026-01-01T00:00:00",
+    "updated_at": "2026-01-01T00:00:00"
+   }
+  },
+  "pages.admin:2": {
+   "path": "/api/pages/admin/2",
+   "status": 200,
+   "body": {
+    "id": 2,
+    "title": "标签",
+    "slug": "tags",
+    "type": "builtin",
+    "path": "/tags",
+    "description": "",
+    "content": "",
+    "auto_title": false,
+    "nav_visible": false,
+    "nav_order": 1000,
+    "created_at": "2026-01-01T00:00:00",
+    "updated_at": "2026-01-01T00:00:00"
+   }
+  },
+  "viz.admin:1": {
+   "path": "/api/viz/admin/1",
+   "status": 200,
+   "body": {
+    "id": 1,
+    "slug": "counter-demo",
+    "name": "计数器",
+    "source": "<template><button @click=\"n++\">{{ n }}</button></template>\n",
+    "compiled": "const _sfc_main = { data: () => ({ n: 0 }) };\n",
+    "style": ".counter { color: red }\n",
+    "created_at": "2026-01-01T00:00:00",
+    "updated_at": "2026-01-01T00:00:00"
+   }
+  },
+  "viz.admin:2": {
+   "path": "/api/viz/admin/2",
+   "status": 200,
+   "body": {
+    "id": 2,
+    "slug": "chart-demo",
+    "name": "Chart demo",
+    "source": "<template><svg width=\"10\" height=\"10\"/></template>\n",
+    "compiled": "const _sfc_main = {};\n",
+    "style": "",
+    "created_at": "2026-01-01T00:00:00",
+    "updated_at": "2026-01-01T00:00:00"
+   }
+  },
   "viz:counter-demo": {
    "path": "/api/viz/counter-demo",
    "status": 200,

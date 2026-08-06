@@ -107,6 +107,11 @@ def body_norm(text):
         return text
 
 
+def ids_from(listing, key="items", limit=8):
+    """行 id（整数），给按 id 取单行的 admin 端点用。"""
+    return slugs_from(listing, key=key, field="id", limit=limit)
+
+
 def slugs_from(listing, key="items", field="slug", limit=8):
     try:
         data = json.loads(listing)
@@ -212,8 +217,17 @@ def main():
     # Neither state is worth recording, so the case is a named skip.
     g.skip("fm.stats", "needs QINIU_* credentials (live bucket usage)")
 
+    print("\n== admin single-row reads (edit forms) ==")
+    # 编辑页原本拉整张 admin 列表再 find 一行；这两个端点是那条路的替代品。
+    # id 从上面的列表端点里取，跟其他 detail 用例同一套路（fixture 固定 → 确定）。
+    _, padmin_txt = req(B, "/api/pages/admin", tok)
+    for pid in ids_from(padmin_txt):
+        case(f"pages.admin:{pid}", f"/api/pages/admin/{pid}", tok)
+
     print("\n== viz details ==")
     _, viz_txt = req(B, "/api/viz", tok)
+    for vid in ids_from(viz_txt):
+        case(f"viz.admin:{vid}", f"/api/viz/admin/{vid}", tok)
     try:
         vlist = json.loads(viz_txt)
         vlist = vlist if isinstance(vlist, list) else vlist.get("items", [])

@@ -132,15 +132,11 @@ const { takeSnapshot, markSaved } = useUnsavedGuard(serialize)
 onMounted(async () => {
   if (isEdit.value) {
     try {
-      const { data } = await vizApi.listAll()
-      const v = data.find((x) => String(x.id) === String(id.value))
-      if (!v) {
-        ElMessage.error('组件不存在')
-        router.replace('/admin/viz')
-        return
-      }
+      const { data: v } = await vizApi.getForEdit(id.value)
       form.value = { slug: v.slug, name: v.name || '', source: v.source || '' }
     } catch (e) {
+      // 404 与其他错误都由 axios 拦截器提示过了，这里只负责退回列表
+      router.replace('/admin/viz')
       return
     }
   }

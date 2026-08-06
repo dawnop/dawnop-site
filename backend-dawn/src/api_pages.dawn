@@ -21,6 +21,20 @@ pub fn pages_admin(a: Auth) -> Handler =
   guarded(a, req, () =>
       Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, c => repo_page.list_admin(c)), 500)?))))
 
+## GET /api/pages/admin/{page_id} — one page (builtin included), for the edit
+## form; saves the editor pulling the whole admin list just to find one row.
+pub fn page_admin_get(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () =>
+      match opt_param_int(req, "page_id") {
+        Some(id) ->
+          match as_http(with_db(a.db.path, a.db.ext, c => repo_page.by_id_admin(c, id)), 500)? {
+            Some(j) -> Ok(json_ok(j))
+            None -> Err(http_error(404, "页面不存在"))
+          }
+        None -> Err(http_error(422, "page_id must be an integer"))
+      })
+
 ## POST /api/pages — create; returns the created page (201).
 pub fn page_create(a: Auth) -> Handler =
   req =>
@@ -200,6 +214,7 @@ fn reorder_read(c: Connection, ids: List[Int]) -> Result[List[Json], String] !io
 pub fn routes(a: Auth) -> List[Route] =
   [
     route_get("/api/pages/admin", pages_admin(a)),
+    route_get("/api/pages/admin/{page_id}", page_admin_get(a)),
     route_post("/api/pages/reorder", page_reorder(a)),
     route_post("/api/pages", page_create(a)),
     route_put("/api/pages/{page_id}", page_update(a)),

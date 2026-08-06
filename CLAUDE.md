@@ -192,7 +192,10 @@ dawnop-site/
 
 - 页面：`GET /api/pages/nav`（公开，导航项）、`GET /api/pages/{slug}`（公开）、
   `GET /api/pages/{slug}/articles`（公开，列表页文章分页）、`GET /api/pages/admin`（需鉴权，全部）、
+  `GET /api/pages/admin/{id}`（需鉴权，单行，编辑页取数）、
   `POST/PUT/DELETE /api/pages`（需鉴权）、`POST /api/pages/reorder`（需鉴权，按 id 列表排序）。
+- 可视化组件：`GET /api/viz/{slug}`（公开）、`GET /api/viz`（需鉴权，全部）、
+  `GET /api/viz/admin/{id}`（需鉴权，单行，编辑页取数）、`POST/PUT/DELETE /api/viz`（需鉴权）。
 - 搜索：`GET /api/search?q=&page=&size=`（公开，只搜 `published=1`，size≤50）→ `{total,page,size,query,items[]}`，
   每项含服务端算好的高亮 `title_html`/`excerpt_html`（转义后包 `<mark>`）、`tags`、`word_count`。
 

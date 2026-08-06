@@ -93,10 +93,11 @@ const { takeSnapshot, markSaved } = useUnsavedGuard(serialize)
 
 onMounted(async () => {
   if (isEdit.value) {
-    const { data } = await pagesApi.listAll()
-    const p = data.find((x) => String(x.id) === String(id.value))
-    if (!p) {
-      ElMessage.error('页面不存在')
+    let p
+    try {
+      p = (await pagesApi.getForEdit(id.value)).data
+    } catch (e) {
+      // 404 与其他错误都由 axios 拦截器提示过了，这里只负责退回列表
       router.replace('/admin/pages')
       return
     }

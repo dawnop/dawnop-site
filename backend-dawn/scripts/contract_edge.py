@@ -143,6 +143,13 @@ def build_cases(token, content_page_id):
     add("pages.admin.noTok", "GET", "/api/pages/admin")
     add("tags.admin.noTok", "GET", "/api/tags/admin")
     add("viz.list.noTok", "GET", "/api/viz")
+    # 编辑页取单行的两个端点：鉴权、缺行、非整数 id
+    add("pages.adminGet.noTok", "GET", "/api/pages/admin/1")
+    add("pages.adminGet.404", "GET", "/api/pages/admin/99999999", AUTH)
+    add("pages.adminGet.nan", "GET", "/api/pages/admin/abc", AUTH)
+    add("viz.adminGet.noTok", "GET", "/api/viz/admin/1")
+    add("viz.adminGet.404", "GET", "/api/viz/admin/99999999", AUTH)
+    add("viz.adminGet.nan", "GET", "/api/viz/admin/abc", AUTH)
 
     # ---- write REJECTION paths (must never answer 2xx) ----
     add("art.create.noTok", "POST", "/api/articles", None, {"title": "x"}, "reject")

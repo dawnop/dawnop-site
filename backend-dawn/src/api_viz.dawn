@@ -18,6 +18,20 @@ pub fn viz_list(a: Auth) -> Handler =
   guarded(a, req, () =>
       Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, c => list_all(c)), 500)?))))
 
+## GET /api/viz/admin/{viz_id} — one component, for the edit form; saves the
+## editor pulling the whole list just to find one row.
+pub fn viz_admin_get(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () =>
+      match opt_param_int(req, "viz_id") {
+        Some(id) ->
+          match as_http(with_db(a.db.path, a.db.ext, c => by_id(c, id)), 500)? {
+            Some(j) -> Ok(json_ok(j))
+            None -> Err(http_error(404, "组件不存在"))
+          }
+        None -> Err(http_error(422, "viz_id must be an integer"))
+      })
+
 ## POST /api/viz — create (201). slug format + uniqueness + source required.
 pub fn viz_create(a: Auth) -> Handler =
   req =>
@@ -136,6 +150,7 @@ pub fn viz_delete(a: Auth) -> Handler =
 pub fn routes(a: Auth) -> List[Route] =
   [
     route_get("/api/viz", viz_list(a)),
+    route_get("/api/viz/admin/{viz_id}", viz_admin_get(a)),
     route_post("/api/viz", viz_create(a)),
     route_put("/api/viz/{viz_id}", viz_update(a)),
     route_delete("/api/viz/{viz_id}", viz_delete(a)),
