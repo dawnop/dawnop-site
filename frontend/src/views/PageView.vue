@@ -4,8 +4,10 @@ import { useRoute } from 'vue-router'
 import { pagesApi } from '../api'
 import MarkdownView from '../components/MarkdownView.vue'
 import PostList from '../components/PostList.vue'
+import ListPager from '../components/ListPager.vue'
 import { stripFirstH1 } from '../utils/markdownTitle'
 import { fmtDate } from '../utils/format'
+import { setTitle } from '../utils/title'
 
 const route = useRoute()
 const page = ref(null)
@@ -51,7 +53,7 @@ async function load(slug) {
   try {
     const { data } = await pagesApi.get(slug)
     page.value = data
-    document.title = `${data.title} · dawnop`
+    setTitle(data.title)
     setMeta(data.description)
     if (data.type === 'article_list') await loadArticles(slug)
   } catch (e) {
@@ -107,16 +109,7 @@ watch(
       </header>
       <el-empty v-if="items.length === 0" description="该栏目下还没有文章" />
       <PostList v-else :items="items" />
-      <div v-if="total > size" class="pager">
-        <el-pagination
-          background
-          layout="prev, pager, next"
-          :total="total"
-          :page-size="size"
-          :current-page="pageNum"
-          @current-change="go"
-        />
-      </div>
+      <ListPager :total="total" :page-size="size" :current-page="pageNum" @change="go" />
     </template>
   </template>
 </template>
@@ -164,10 +157,5 @@ watch(
   .list-subtitle {
     font-size: 1rem;
   }
-}
-.pager {
-  display: flex;
-  justify-content: center;
-  margin-top: 28px;
 }
 </style>

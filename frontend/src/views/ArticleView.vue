@@ -5,6 +5,7 @@ import { useRoute } from 'vue-router'
 import { articlesApi } from '../api'
 import MarkdownView from '../components/MarkdownView.vue'
 import { stripFirstH1 } from '../utils/markdownTitle'
+import { setTitle } from '../utils/title'
 
 const route = useRoute()
 const article = ref(null)
@@ -25,7 +26,7 @@ async function load(slug) {
   try {
     const { data } = await articlesApi.getBySlug(slug)
     article.value = data
-    document.title = `${data.title} · dawnop`
+    setTitle(data.title)
   } catch (e) {
     notFound.value = true
   } finally {

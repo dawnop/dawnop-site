@@ -3,6 +3,8 @@ import { ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { articlesApi, tagsApi } from '../api'
 import PostList from '../components/PostList.vue'
+import ListPager from '../components/ListPager.vue'
+import { setTitle } from '../utils/title'
 
 const route = useRoute()
 const items = ref([])
@@ -26,7 +28,7 @@ async function load() {
     tagName.value = tagResp.data.name
     items.value = listResp.data.items
     total.value = listResp.data.total
-    document.title = `#${tagName.value} · dawnop`
+    setTitle(`#${tagName.value}`)
   } catch (e) {
     error.value = e?.response?.status === 404 ? '标签不存在' : '加载失败'
   } finally {
@@ -65,16 +67,7 @@ watch(
 
     <PostList v-else :items="items" class="post-list-wrap" />
 
-    <div v-if="total > size" class="pager">
-      <el-pagination
-        background
-        layout="prev, pager, next"
-        :total="total"
-        :page-size="size"
-        :current-page="page"
-        @current-change="go"
-      />
-    </div>
+    <ListPager :total="total" :page-size="size" :current-page="page" @change="go" />
   </div>
 </template>
 
@@ -107,10 +100,5 @@ watch(
 }
 .post-list-wrap {
   margin-top: 8px;
-}
-.pager {
-  display: flex;
-  justify-content: center;
-  margin-top: 28px;
 }
 </style>

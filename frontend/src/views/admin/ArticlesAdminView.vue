@@ -8,6 +8,7 @@ import { parseFrontmatter } from '../../utils/frontmatter'
 import { confirmDanger } from '../../utils/confirm'
 import { useColWidths } from '../../utils/colWidths'
 import { useIsMobile } from '../../composables/useIsMobile'
+import ListPager from '../../components/ListPager.vue'
 
 const { colW, onHeaderDrag } = useColWidths('dawnop_colw_articles')
 
@@ -279,16 +280,13 @@ onMounted(load)
         </el-table-column>
       </el-table>
 
-      <div v-if="total > size" class="pager">
-        <el-pagination
-          background
-          layout="prev, pager, next"
-          :total="total"
-          :page-size="size"
-          :current-page="page"
-          @current-change="goPage"
-        />
-      </div>
+      <ListPager
+        variant="admin"
+        :total="total"
+        :page-size="size"
+        :current-page="page"
+        @change="goPage"
+      />
     </el-card>
 
     <!-- 移动端卡片列表 -->
@@ -343,17 +341,14 @@ onMounted(load)
           </el-dropdown>
         </div>
       </el-card>
-      <div v-if="total > size" class="pager">
-        <el-pagination
-          background
-          small
-          layout="prev, pager, next"
-          :total="total"
-          :page-size="size"
-          :current-page="page"
-          @current-change="goPage"
-        />
-      </div>
+      <ListPager
+        variant="admin"
+        small
+        :total="total"
+        :page-size="size"
+        :current-page="page"
+        @change="goPage"
+      />
     </div>
   </div>
 </template>
@@ -398,11 +393,6 @@ onMounted(load)
   border-radius: 4px;
   padding: 0 5px;
   white-space: nowrap;
-}
-.pager {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 16px;
 }
 
 /* 移动端卡片列表 */

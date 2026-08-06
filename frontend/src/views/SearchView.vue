@@ -4,6 +4,8 @@ import { fmtDate, fmtReadMinutes } from '../utils/format'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { Search } from '@element-plus/icons-vue'
 import { searchApi } from '../api'
+import ListPager from '../components/ListPager.vue'
+import { setTitle } from '../utils/title'
 
 const route = useRoute()
 const router = useRouter()
@@ -45,7 +47,7 @@ async function load() {
     if (my !== reqId) return
     items.value = data.items
     total.value = data.total
-    document.title = `“${q}” 的搜索结果 · dawnop`
+    setTitle(`“${q}” 的搜索结果`)
   } catch (e) {
     if (my !== reqId) return
     items.value = []
@@ -112,16 +114,7 @@ watch(
       </li>
     </ul>
 
-    <div v-if="total > size" class="pager">
-      <el-pagination
-        background
-        layout="prev, pager, next"
-        :total="total"
-        :page-size="size"
-        :current-page="page"
-        @current-change="go"
-      />
-    </div>
+    <ListPager :total="total" :page-size="size" :current-page="page" @change="go" />
   </div>
 </template>
 
@@ -180,11 +173,6 @@ watch(
 }
 .r-tag:hover {
   text-decoration: underline;
-}
-.pager {
-  display: flex;
-  justify-content: center;
-  margin-top: 28px;
 }
 /* 高亮命中（title_html / excerpt_html 里的 <mark>）*/
 .search-page :deep(mark) {

@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { articlesApi } from '../api'
 import PostList from '../components/PostList.vue'
+import ListPager from '../components/ListPager.vue'
 
 const items = ref([])
 const total = ref(0)
@@ -40,23 +41,6 @@ onMounted(load)
 
     <PostList v-else :items="items" />
 
-    <div v-if="total > size" class="pager">
-      <el-pagination
-        background
-        layout="prev, pager, next"
-        :total="total"
-        :page-size="size"
-        :current-page="page"
-        @current-change="go"
-      />
-    </div>
+    <ListPager :total="total" :page-size="size" :current-page="page" @change="go" />
   </div>
 </template>
-
-<style scoped>
-.pager {
-  display: flex;
-  justify-content: center;
-  margin-top: 28px;
-}
-</style>
