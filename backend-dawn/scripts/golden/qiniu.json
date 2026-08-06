@@ -1,0 +1,860 @@
+{
+ "_note": "Recorded by contract_qiniu.py --record via contract_run.py. Do not hand-edit: re-record and review the diff.",
+ "_env": {
+  "fixture": "7303e1f8fd74dcd4",
+  "tz": "UTC",
+  "search_backend": "like",
+  "qiniu_configured": true
+ },
+ "skipped": {
+  "fm.stats": "bucket usage comes from the qiniu billing/space APIs (qiniu_stats.dawn), which this fake does not model — needs QINIU_* credentials"
+ },
+ "cases": {
+  "fake.rejects.badsignature": {
+   "note": "harness self-check",
+   "status": 401,
+   "body": {
+    "error": "bad token"
+   }
+  },
+  "mkcol.sandbox": {
+   "method": "MKCOL",
+   "path": "/dav/dav-test",
+   "status": 201,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
+   },
+   "body": ""
+  },
+  "copy.subdir": {
+   "method": "COPY",
+   "path": "/dav/docs",
+   "status": 201,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
+   },
+   "body": ""
+  },
+  "copy.subdir.tree": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/docs-copy",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "1283"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/docs-copy/</D:href><D:propstat><D:prop><D:displayname>docs-copy</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/docs-copy/img/</D:href><D:propstat><D:prop><D:displayname>img</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/docs-copy/notes.txt</D:href><D:propstat><D:prop><D:displayname>notes.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>137</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"<key1>\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/docs-copy/",
+     "/dav/dav-test/docs-copy/img/",
+     "/dav/dav-test/docs-copy/notes.txt"
+    ],
+    "displaynames": [
+     "docs-copy",
+     "img",
+     "notes.txt"
+    ],
+    "contentlengths": [
+     "137"
+    ],
+    "contenttypes": [
+     "text/plain"
+    ],
+    "lastmodified": [
+     "WALL-CLOCK",
+     "WALL-CLOCK",
+     "WALL-CLOCK"
+    ],
+    "collections": 2,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "copy.subdir.tree.sub": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/docs-copy/img",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "935"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/docs-copy/img/</D:href><D:propstat><D:prop><D:displayname>img</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/docs-copy/img/cover.png</D:href><D:propstat><D:prop><D:displayname>cover.png</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>20480</D:getcontentlength><D:getcontenttype>image/png</D:getcontenttype><D:getetag>\"<key2>\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/docs-copy/img/",
+     "/dav/dav-test/docs-copy/img/cover.png"
+    ],
+    "displaynames": [
+     "img",
+     "cover.png"
+    ],
+    "contentlengths": [
+     "20480"
+    ],
+    "contenttypes": [
+     "image/png"
+    ],
+    "lastmodified": [
+     "WALL-CLOCK",
+     "WALL-CLOCK"
+    ],
+    "collections": 1,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "copy.subdir.objects": {
+   "note": "one qiniu copy per file row, dirs excluded",
+   "calls": [
+    {
+     "op": "copy",
+     "src": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "dst": "<key2>",
+     "found": true
+    },
+    {
+     "op": "copy",
+     "src": "11111111-2222-3333-4444-555555555555",
+     "dst": "<key1>",
+     "found": true
+    }
+   ]
+  },
+  "copy.subdir.bytes": {
+   "method": "GET",
+   "path": "/dav/dav-test/docs-copy/notes.txt",
+   "status": 200,
+   "headers": {
+    "content-type": "text/plain",
+    "etag": "\"<key1>\""
+   },
+   "body": "fixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nf"
+  },
+  "copy.file": {
+   "method": "COPY",
+   "path": "/dav/example.txt",
+   "status": 201,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
+   },
+   "body": ""
+  },
+  "copy.file.calls": {
+   "note": "one row, one object, a fresh key",
+   "calls": [
+    {
+     "op": "copy",
+     "src": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+     "dst": "<key3>",
+     "found": true
+    }
+   ]
+  },
+  "copy.upstream.502": {
+   "method": "COPY",
+   "path": "/dav/docs",
+   "status": 502,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "76"
+   },
+   "body": "{\"detail\":\"copy: qiniu 599 {\\\"error\\\":\\\"contract fake refuses this copy\\\"}\"}"
+  },
+  "copy.upstream.calls": {
+   "note": "the walk aborts at the first refusal",
+   "calls": [
+    {
+     "op": "copy",
+     "outcome": "refused",
+     "status": 599,
+     "src": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "dst": "<key4>"
+    }
+   ]
+  },
+  "copy.upstream.partial": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/docs-refused",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "797"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/docs-refused/</D:href><D:propstat><D:prop><D:displayname>docs-refused</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/docs-refused/img/</D:href><D:propstat><D:prop><D:displayname>img</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/docs-refused/",
+     "/dav/dav-test/docs-refused/img/"
+    ],
+    "displaynames": [
+     "docs-refused",
+     "img"
+    ],
+    "contentlengths": [],
+    "contenttypes": [],
+    "lastmodified": [
+     "WALL-CLOCK",
+     "WALL-CLOCK"
+    ],
+    "collections": 2,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "get.file": {
+   "method": "GET",
+   "path": "/dav/docs/notes.txt",
+   "status": 200,
+   "headers": {
+    "content-type": "text/plain",
+    "etag": "\"11111111-2222-3333-4444-555555555555\"",
+    "last-modified": "Tue, 06 Jan 2026 12:00:00 GMT"
+   },
+   "body": "fixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nf"
+  },
+  "get.file.range": {
+   "method": "GET",
+   "path": "/dav/docs/notes.txt",
+   "status": 206,
+   "headers": {
+    "content-type": "text/plain",
+    "etag": "\"11111111-2222-3333-4444-555555555555\"",
+    "last-modified": "Tue, 06 Jan 2026 12:00:00 GMT"
+   },
+   "body": "fixture object f"
+  },
+  "get.file.302": {
+   "method": "GET",
+   "path": "/dav/docs/notes.txt",
+   "status": 302,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0",
+    "location": "<fake-qiniu>/11111111-2222-3333-4444-555555555555?e=<deadline>&token=<signature>"
+   },
+   "body": ""
+  },
+  "get.dir": {
+   "method": "GET",
+   "path": "/dav/docs",
+   "status": 405,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "31"
+   },
+   "body": "{\"detail\":\"不能下载目录\"}"
+  },
+  "get.file.calls": {
+   "note": "two proxied reads (one ranged); the 302 fetches nothing",
+   "calls": [
+    {
+     "op": "download",
+     "key": "11111111-2222-3333-4444-555555555555",
+     "outcome": "full"
+    },
+    {
+     "op": "download",
+     "key": "11111111-2222-3333-4444-555555555555",
+     "outcome": "range 0-15"
+    }
+   ]
+  },
+  "put.new": {
+   "method": "PUT",
+   "path": "/dav/dav-test/hello.txt",
+   "status": 201,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
+   },
+   "body": ""
+  },
+  "put.new.calls": {
+   "note": "one upload, no delete: nothing was superseded",
+   "calls": [
+    {
+     "op": "upload",
+     "key": "<key5>.txt",
+     "size": 24,
+     "mime": "text/plain"
+    }
+   ]
+  },
+  "put.new.bytes": {
+   "method": "GET",
+   "path": "/dav/dav-test/hello.txt",
+   "status": 200,
+   "headers": {
+    "content-type": "text/plain",
+    "etag": "\"<key5>.txt\""
+   },
+   "body": "hello from the contract\n"
+  },
+  "put.overwrite": {
+   "method": "PUT",
+   "path": "/dav/dav-test/hello.txt",
+   "status": 204,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8"
+   },
+   "body": ""
+  },
+  "put.overwrite.calls": {
+   "note": "new key uploaded, superseded key dropped",
+   "calls": [
+    {
+     "op": "upload",
+     "key": "<key6>.txt",
+     "size": 36,
+     "mime": "text/plain"
+    },
+    {
+     "op": "delete",
+     "key": "<key5>.txt",
+     "existed": true
+    }
+   ]
+  },
+  "put.overwrite.bytes": {
+   "method": "GET",
+   "path": "/dav/dav-test/hello.txt",
+   "status": 200,
+   "headers": {
+    "content-type": "text/plain",
+    "etag": "\"<key6>.txt\""
+   },
+   "body": "second write, longer than the first\n"
+  },
+  "delete.file": {
+   "method": "DELETE",
+   "path": "/dav/dav-test/hello.txt",
+   "status": 204,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8"
+   },
+   "body": ""
+  },
+  "delete.file.calls": {
+   "note": "the object is deleted, not just the row",
+   "calls": [
+    {
+     "op": "delete",
+     "key": "<key6>.txt",
+     "existed": true
+    }
+   ]
+  },
+  "delete.file.gone": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/hello.txt",
+   "status": 404,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
+   },
+   "body": "{\"detail\":\"资源不存在\"}"
+  },
+  "fm.copy.subdir": {
+   "method": "POST",
+   "path": "/api/fm/copy",
+   "status": 200,
+   "request": {
+    "path": "qiniu://dav-test",
+    "destination": "qiniu://dav-test",
+    "sources": [
+     "qiniu://docs"
+    ]
+   },
+   "body": {
+    "storages": [
+     "qiniu"
+    ],
+    "dirname": "qiniu://dav-test",
+    "files": [
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "docs",
+      "extension": "",
+      "path": "qiniu://dav-test/docs",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "docs-copy",
+      "extension": "",
+      "path": "qiniu://dav-test/docs-copy",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "docs-refused",
+      "extension": "",
+      "path": "qiniu://dav-test/docs-refused",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "example-copy.txt",
+      "extension": "txt",
+      "path": "qiniu://dav-test/example-copy.txt",
+      "type": "file",
+      "file_size": 42,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": "text/plain",
+      "visibility": "public"
+     }
+    ],
+    "read_only": false
+   }
+  },
+  "fm.copy.subdir.objects": {
+   "note": "fm walks the subtree the same way WebDAV does",
+   "calls": [
+    {
+     "op": "copy",
+     "src": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "dst": "<key7>",
+     "found": true
+    },
+    {
+     "op": "copy",
+     "src": "11111111-2222-3333-4444-555555555555",
+     "dst": "<key8>",
+     "found": true
+    }
+   ]
+  },
+  "fm.mkdir": {
+   "method": "POST",
+   "path": "/api/fm/create-folder",
+   "status": 200,
+   "request": {
+    "path": "qiniu://dav-test",
+    "name": "refused"
+   },
+   "body": {
+    "storages": [
+     "qiniu"
+    ],
+    "dirname": "qiniu://dav-test",
+    "files": [
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "docs",
+      "extension": "",
+      "path": "qiniu://dav-test/docs",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "docs-copy",
+      "extension": "",
+      "path": "qiniu://dav-test/docs-copy",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "docs-refused",
+      "extension": "",
+      "path": "qiniu://dav-test/docs-refused",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "refused",
+      "extension": "",
+      "path": "qiniu://dav-test/refused",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "example-copy.txt",
+      "extension": "txt",
+      "path": "qiniu://dav-test/example-copy.txt",
+      "type": "file",
+      "file_size": 42,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": "text/plain",
+      "visibility": "public"
+     }
+    ],
+    "read_only": false
+   }
+  },
+  "fm.copy.502": {
+   "method": "POST",
+   "path": "/api/fm/copy",
+   "status": 502,
+   "request": {
+    "path": "qiniu://dav-test",
+    "destination": "qiniu://dav-test/refused",
+    "sources": [
+     "qiniu://docs"
+    ]
+   },
+   "body": {
+    "detail": "copy: qiniu 599 {\"error\":\"contract fake refuses this copy\"}"
+   }
+  },
+  "fm.createfile": {
+   "method": "POST",
+   "path": "/api/fm/create-file",
+   "status": 200,
+   "request": {
+    "path": "qiniu://dav-test",
+    "name": "note.md"
+   },
+   "body": {
+    "storages": [
+     "qiniu"
+    ],
+    "dirname": "qiniu://dav-test",
+    "files": [
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "docs",
+      "extension": "",
+      "path": "qiniu://dav-test/docs",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "docs-copy",
+      "extension": "",
+      "path": "qiniu://dav-test/docs-copy",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "docs-refused",
+      "extension": "",
+      "path": "qiniu://dav-test/docs-refused",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "refused",
+      "extension": "",
+      "path": "qiniu://dav-test/refused",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "example-copy.txt",
+      "extension": "txt",
+      "path": "qiniu://dav-test/example-copy.txt",
+      "type": "file",
+      "file_size": 42,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": "text/plain",
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "note.md",
+      "extension": "md",
+      "path": "qiniu://dav-test/note.md",
+      "type": "file",
+      "file_size": 0,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": "text/markdown",
+      "visibility": "public"
+     }
+    ],
+    "read_only": false
+   }
+  },
+  "fm.createfile.calls": {
+   "note": "create-file writes a real (empty) object",
+   "calls": [
+    {
+     "op": "upload",
+     "key": "<key9>",
+     "size": 0,
+     "mime": "text/markdown"
+    }
+   ]
+  },
+  "fm.save": {
+   "method": "POST",
+   "path": "/api/fm/save",
+   "status": 200,
+   "request": {
+    "path": "qiniu://dav-test/note.md",
+    "content": "# saved by the contract\n"
+   },
+   "body": {
+    "path": "qiniu://dav-test/note.md"
+   }
+  },
+  "fm.save.calls": {
+   "note": "saved under a new key, the superseded one dropped",
+   "calls": [
+    {
+     "op": "upload",
+     "key": "<key10>.md",
+     "size": 24,
+     "mime": "text/markdown"
+    },
+    {
+     "op": "delete",
+     "key": "<key9>",
+     "existed": true
+    }
+   ]
+  },
+  "fm.content": {
+   "method": "GET",
+   "path": "/api/fm/content?path=qiniu%3A//dav-test%2Fnote.md",
+   "status": 200,
+   "body": "# saved by the contract\n"
+  },
+  "fm.uptok": {
+   "method": "POST",
+   "path": "/api/fm/upload-token",
+   "status": 200,
+   "request": {
+    "path": "qiniu://dav-test",
+    "name": "direct.bin"
+   },
+   "body": {
+    "token": "<upload-token>",
+    "key": "<key11>.bin",
+    "path": "qiniu://dav-test/direct.bin",
+    "up_host": "<fake-qiniu>"
+   }
+  },
+  "fm.register.missing": {
+   "method": "POST",
+   "path": "/api/fm/register",
+   "status": 400,
+   "request": {
+    "path": "qiniu://dav-test/direct.bin",
+    "key": "<key11>.bin"
+   },
+   "body": {
+    "detail": "对象未在七牛找到，注册被拒"
+   }
+  },
+  "fm.register.ok": {
+   "method": "POST",
+   "path": "/api/fm/register",
+   "status": 200,
+   "request": {
+    "path": "qiniu://dav-test/direct.bin",
+    "key": "<key11>.bin",
+    "size": 999999,
+    "content_type": "application/x-not-what-qiniu-says"
+   },
+   "body": {
+    "storage": "qiniu",
+    "dir": "qiniu://dav-test",
+    "basename": "direct.bin",
+    "extension": "bin",
+    "path": "qiniu://dav-test/direct.bin",
+    "type": "file",
+    "file_size": 23,
+    "last_modified": "WALL-CLOCK",
+    "mime_type": "text/plain",
+    "visibility": "public"
+   }
+  },
+  "fm.register.calls": {
+   "note": "two stats: the refusal above and the acceptance — nothing else touched",
+   "calls": [
+    {
+     "op": "stat",
+     "key": "<key11>.bin"
+    },
+    {
+     "op": "stat",
+     "key": "<key11>.bin"
+    }
+   ]
+  },
+  "fm.delete": {
+   "method": "POST",
+   "path": "/api/fm/delete",
+   "status": 200,
+   "request": {
+    "path": "qiniu://dav-test",
+    "items": [
+     {
+      "path": "qiniu://dav-test/direct.bin"
+     }
+    ]
+   },
+   "body": {
+    "storages": [
+     "qiniu"
+    ],
+    "dirname": "qiniu://dav-test",
+    "files": [
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "docs",
+      "extension": "",
+      "path": "qiniu://dav-test/docs",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "docs-copy",
+      "extension": "",
+      "path": "qiniu://dav-test/docs-copy",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "docs-refused",
+      "extension": "",
+      "path": "qiniu://dav-test/docs-refused",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "refused",
+      "extension": "",
+      "path": "qiniu://dav-test/refused",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "example-copy.txt",
+      "extension": "txt",
+      "path": "qiniu://dav-test/example-copy.txt",
+      "type": "file",
+      "file_size": 42,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": "text/plain",
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "note.md",
+      "extension": "md",
+      "path": "qiniu://dav-test/note.md",
+      "type": "file",
+      "file_size": 24,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": "text/markdown",
+      "visibility": "public"
+     }
+    ],
+    "read_only": false,
+    "deleted": [
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "direct.bin",
+      "extension": "bin",
+      "path": "qiniu://dav-test/direct.bin",
+      "type": "file",
+      "file_size": 23,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": "text/plain",
+      "visibility": "public"
+     }
+    ]
+   }
+  },
+  "fm.delete.calls": {
+   "note": "the row and the object go together",
+   "calls": [
+    {
+     "op": "delete",
+     "key": "<key11>.bin",
+     "existed": true
+    }
+   ]
+  }
+ }
+}

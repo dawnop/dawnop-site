@@ -340,7 +340,7 @@ fn put_do(a: Auth, req: Request, rel: String, existing: Option[FileRow]) -> Resu
         None -> Err(http_error(500, "请求体未落盘"))
         Some(path) -> {
           let size = as_http(file_size(path), 500)?
-          let _u = as_http(upload_file(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, path, mime, now_s() + a.qiniu.expires), 502)?
+          let _u = as_http(upload_file(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, path, mime, now_s() + a.qiniu.expires), 502)?
           put_commit(a, rel, key, mime, size, existing)
         }
       }

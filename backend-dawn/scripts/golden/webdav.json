@@ -7,10 +7,10 @@
   "qiniu_configured": false
  },
  "skipped": {
-  "get.file": "GET streams object bytes — needs QINIU_* credentials",
-  "put.new": "PUT uploads object bytes — needs QINIU_* credentials",
-  "copy.file": "COPY of a file duplicates the object — needs QINIU_* credentials",
-  "delete.file": "DELETE of a file removes the object — needs QINIU_* credentials"
+  "get.file": "GET streams object bytes — covered in contract_qiniu.py (fake bucket); unconfigured here",
+  "put.new": "PUT uploads object bytes — covered in contract_qiniu.py (fake bucket); unconfigured here",
+  "copy.file": "COPY of a file duplicates the object — covered in contract_qiniu.py (fake bucket); unconfigured here",
+  "delete.file": "DELETE of a file removes the object — covered in contract_qiniu.py (fake bucket); unconfigured here"
  },
  "cases": {
   "options.root": {

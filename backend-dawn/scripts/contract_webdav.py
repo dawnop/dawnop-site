@@ -11,17 +11,20 @@ is the interesting part of this file:
       the MOVE guards (no Destination / onto self / Overwrite: F), COPY of an
       empty directory, LOCK/UNLOCK, DELETE of a directory, DELETE of the root.
 
-  NOT covered (the request reaches qiniu, and a contract run has no credentials)
+  NOT covered HERE (the request reaches qiniu, and this backend has no
+  credentials)
       GET (fetches bytes), PUT (uploads bytes), COPY of a file (really copies
       the object), DELETE of a file (deletes the object). All four are named
       skips, listed in golden/webdav.json and printed by every run. Measured,
       not assumed: with empty credentials each one panics in the HMAC signer
       ("Empty key") and answers 500 — a state not worth recording.
 
-That leaves the PUT->GET byte round trip, which was the differential harness's
-centrepiece, outside CI. It is the one part of this API that cannot be tested
-without a bucket; pretending otherwise by asserting only OPTIONS would be worse
-than saying so.
+      They are not uncovered, though: contract_qiniu.py runs them (plus COPY of
+      a *subtree*, and the PUT->GET byte round trip that was the differential
+      harness's centrepiece) against a fake bucket on loopback. The split is on
+      purpose — these bytes are what an unconfigured backend answers, those are
+      what a configured one does, and the two goldens carry different
+      environment fingerprints so neither can be recorded over the other.
 
 Normally driven by contract_run.py. Standalone:
 
@@ -317,15 +320,13 @@ def main():
 
     # The four that need a bucket. Measured with empty credentials: each panics
     # in the qiniu HMAC signer and answers 500, so there is nothing here worth
-    # recording — only a note that this is where the coverage stops.
-    g.skip("get.file", "GET streams object bytes — needs QINIU_* credentials")
-    g.skip("put.new", "PUT uploads object bytes — needs QINIU_* credentials")
-    g.skip(
-        "copy.file", "COPY of a file duplicates the object — needs QINIU_* credentials"
-    )
-    g.skip(
-        "delete.file", "DELETE of a file removes the object — needs QINIU_* credentials"
-    )
+    # recording — only a note that this is where THIS script's coverage stops.
+    # Each one is a real case in contract_qiniu.py, against the fake bucket.
+    covered = "covered in contract_qiniu.py (fake bucket); unconfigured here"
+    g.skip("get.file", f"GET streams object bytes — {covered}")
+    g.skip("put.new", f"PUT uploads object bytes — {covered}")
+    g.skip("copy.file", f"COPY of a file duplicates the object — {covered}")
+    g.skip("delete.file", f"DELETE of a file removes the object — {covered}")
 
     return g.finish()
 

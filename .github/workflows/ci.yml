@@ -130,11 +130,14 @@ jobs:
       # (contract_fixture.py), boots the jar this job just built on 127.0.0.1,
       # and compares every response with backend-dawn/scripts/golden/*.json.
       #
-      # Six cases need object-storage credentials (fm/stats and the four WebDAV
-      # byte paths). They are named skips, listed in the goldens and printed by
-      # every run, so "CI ran it" cannot quietly become "CI compared nothing".
-      # Re-record with `contract_run.py --record` and review the diff.
-      - name: contract goldens (read / edge / webdav)
+      # The fourth script (qiniu) boots a second backend pointed at a fake
+      # object store on loopback (contract_qiniu_fake.py), which is how the
+      # paths that reach a bucket — subtree COPY, PUT->GET, overwrite, register
+      # — are held to a golden without a credential anywhere near CI. Bucket
+      # usage stats stay a named skip; skips are listed in the goldens and
+      # printed by every run, so "CI ran it" cannot quietly become "CI compared
+      # nothing". Re-record with `contract_run.py --record` and review the diff.
+      - name: contract goldens (read / edge / webdav / qiniu)
         run: python3 backend-dawn/scripts/contract_run.py
 
       # The deployable artifact. The jar is deliberately NOT in git: a build

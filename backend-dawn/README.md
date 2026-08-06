@@ -7,7 +7,10 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 与 `POST /api/fm/upload`（multipart 代理上传，`src/multipart.dawn`）**也已落地**。
 
 契约由 `scripts/golden/*.json` 钉住（`scripts/contract_run.py`，CI 每次 push 都跑）：
-播种固定 fixture → 起后端 → 153 条响应逐字节比对；6 条需七牛密钥的用例是具名 skip。
+播种固定 fixture → 起后端 → 207 条响应逐字节比对。四套脚本里 `contract_qiniu.py` 另起一个
+**指向本地假七牛**（`contract_qiniu_fake.py`）的后端，把子目录 COPY、PUT→GET 字节往返、
+覆盖写换 key、register 的 stat 校验这些必须有对象存储才走得到的路径也钉住；
+剩下的具名 skip 只有一件事——桶用量统计（`fm.stats`，走七牛计费/空间 API，假桶不模拟）。
 
 ## 依赖与构建
 

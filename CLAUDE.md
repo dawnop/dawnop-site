@@ -70,7 +70,8 @@ dawnop-site/
 │   │   # dawn-lang 仓库 tag 归档（url + hash + subdir），实体在 dawn-lang/packages/
 │   ├── dawn.toml               # [java-deps]（sqlite-jdbc / jbcrypt，coursier 解析）
 │   ├── build.sh                # 按 .dawn-version 取编译器 → dawn test → dawn build（生成 lib/）
-│   ├── scripts/contract_*.py   # 只读/边界/WebDAV 契约 golden（fixture + run + golden/*.json）
+│   ├── scripts/contract_*.py   # 只读/边界/WebDAV/七牛 契约 golden（fixture + run + golden/*.json）
+│   │                           # contract_qiniu_fake.py = 本地假七牛桶，让对象存储路径进 CI
 │   └── deploy/
 │       ├── dawnop-dawn.service     # systemd 单元（生产）
 │       ├── deploy.sh               # 从 CI artifact 部署 + 健康检查 + 自动回滚
@@ -287,11 +288,16 @@ ruff check . && ruff format --check .   # 配置见 pyproject.toml，target 钉 
 cd frontend && npm run lint && npm run format:check
 
 # ---- 契约 golden（CI 每次 push 都跑，只需 Dawn 后端的 jar）----
-python3 backend-dawn/scripts/contract_run.py            # 播种 fixture→起后端→跑三套
+python3 backend-dawn/scripts/contract_run.py            # 播种 fixture→起后端→跑四套
 python3 backend-dawn/scripts/contract_run.py --record   # 改了行为后重录，diff 进 review
 python3 backend-dawn/scripts/contract_run.py --only read
-# 期望响应录在 backend-dawn/scripts/golden/*.json；6 条需七牛密钥的用例是具名 skip，
-# 每次运行都打印。不再需要 FastAPI 陪跑（脚本仍可 --base 指向它，golden 就是契约）。
+# 期望响应录在 backend-dawn/scripts/golden/*.json。read/edge/webdav 跑在「没有七牛凭据」
+# 的后端上；qiniu 那套另起一个后端，把 QINIU_RS_HOST/UP_HOST/DOMAIN 指向本地假七牛
+# （contract_qiniu_fake.py，会校验每个 HMAC 签名），于是子目录 COPY、PUT→GET 字节往返、
+# 覆盖写换 key、register 的 stat 校验、七牛拒绝→502 全部有 golden。两边 golden 的
+# 环境指纹不同（qiniu_configured），互相录不进去。**密钥不进 CI**：假桶只在 127.0.0.1。
+# 仅剩的具名 skip 是桶用量统计（fm.stats，走计费/空间 API）。
+# 不再需要 FastAPI 陪跑（脚本仍可 --base 指向它，golden 就是契约）。
 ```
 
 ## 10. 工程约定（机器强制的部分）
