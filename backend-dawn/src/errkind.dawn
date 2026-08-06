@@ -25,7 +25,7 @@ pub type Kind =
 # U+0001 (SOH) separates the kind from the text. No message this backend writes
 # contains it, and it is not legal unescaped inside a JSON string either, so a
 # tag can never be mistaken for message text.
-fn sep() -> String = str.from_char(1)
+fn sep() -> String = str.from_char('\u{0001}')
 
 fn tag(name: String, text: String) -> String = "$name${sep()}$text"
 

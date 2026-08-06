@@ -18,8 +18,8 @@ fn no_double_dash(s: String) -> Bool = not str.contains(s, "--")
 fn only_slug_chars(s: String) -> Bool =
   fold(code_points(s), true, (acc, c) => acc && is_slug_char(c))
 
-fn is_slug_char(c: Int) -> Bool =
-  (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 45 # a-z 0-9 -
+fn is_slug_char(c: Char) -> Bool =
+  (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'
 
 const OUT_COLS: String = "id, slug, name, source, compiled, style, created_at, updated_at"
 

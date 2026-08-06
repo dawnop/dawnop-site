@@ -60,7 +60,7 @@ fn multipart(token: String, key: String, content: Bytes, mime: String) -> Bytes 
 # The multipart framing around the file part, split out so the streaming upload
 # can put a file between the two without ever concatenating it into one buffer.
 fn mp_head(token: String, key: String, mime: String) -> String = {
-  let nl = from_code_points([13, 10]) # CRLF (Dawn has no \r escape)
+  let nl = from_code_points(['\r', '\n']) # CRLF
   let d = "--$BOUNDARY$nl"
   let field = (name: String, value: String) => "${d}Content-Disposition: form-data; name=\"$name\"$nl$nl$value$nl"
   field("token", token) ++ field("key", key) ++
@@ -68,7 +68,7 @@ fn mp_head(token: String, key: String, mime: String) -> String = {
 }
 
 fn mp_tail() -> String = {
-  let nl = from_code_points([13, 10])
+  let nl = from_code_points(['\r', '\n'])
   "$nl--$BOUNDARY--$nl"
 }
 

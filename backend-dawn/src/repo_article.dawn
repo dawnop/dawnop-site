@@ -14,7 +14,7 @@ use jsonx.{obj, jint, jstr, jbool, jopt_int, jopt_str, jdatetime}
 pub fn word_count(content: String) -> Int =
   count_words(code_points(content), 0, false, 0)
 
-fn count_words(cs: List[Int], i: Int, in_word: Bool, acc: Int) -> Int =
+fn count_words(cs: List[Char], i: Int, in_word: Bool, acc: Int) -> Int =
   if i == len(cs) {
     acc
   } else {
@@ -28,10 +28,10 @@ fn count_words(cs: List[Int], i: Int, in_word: Bool, acc: Int) -> Int =
     }
   }
 
-fn is_cjk(c: Int) -> Bool = c >= 19968 && c <= 40959
+fn is_cjk(c: Char) -> Bool = c >= '\u{4E00}' && c <= '\u{9FFF}'
 
-fn is_alnum(c: Int) -> Bool =
-  (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+fn is_alnum(c: Char) -> Bool =
+  (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 
 # ---- tag rows for an article ----
 

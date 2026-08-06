@@ -2,6 +2,7 @@
 # FTS5 query FastAPI runs (simple_query + bm25), so order and totals match
 # exactly — Dawn only reimplements the server-side highlight HTML (escape +
 # <mark> wrapping + a markdown-stripped excerpt window).
+use std/char
 use std/str
 use std/cursor
 use java "java.sql.Connection"
@@ -33,7 +34,7 @@ pub fn mark(escaped: String, terms: List[String]) -> String = {
   if len(esc_terms) == 0 { escaped } else { mark_scan(code_points(escaped), esc_terms, 0, "") }
 }
 
-fn mark_scan(cps: List[Int], terms: List[String], i: Int, acc: String) -> String =
+fn mark_scan(cps: List[Char], terms: List[String], i: Int, acc: String) -> String =
   if i >= len(cps) {
     acc
   } else {
@@ -46,7 +47,7 @@ fn mark_scan(cps: List[Int], terms: List[String], i: Int, acc: String) -> String
     }
   }
 
-fn first_match(cps: List[Int], terms: List[String], i: Int, ti: Int) -> Option[Int] =
+fn first_match(cps: List[Char], terms: List[String], i: Int, ti: Int) -> Option[Int] =
   if ti >= len(terms) {
     None
   } else {
@@ -59,9 +60,10 @@ fn first_match(cps: List[Int], terms: List[String], i: Int, ti: Int) -> Option[I
     }
   }
 
-fn ci_eq(a: List[Int], b: List[Int]) -> Bool = str.to_lower(from_code_points(a)) == str.to_lower(from_code_points(b))
+fn ci_eq(a: List[Char], b: List[Char]) -> Bool =
+  str.to_lower(from_code_points(a)) == str.to_lower(from_code_points(b))
 
-fn slice(xs: List[Int], from: Int, to: Int) -> List[Int] = map(range(from, to), i => xs[i])
+fn slice(xs: List[Char], from: Int, to: Int) -> List[Char] = map(range(from, to), i => xs[i])
 
 # ---- markdown → plain text (rough, for the excerpt window) ----
 #
@@ -128,7 +130,7 @@ fn drop_links(s: String) -> String =
 fn link_text(s: String, i: cursor.Cursor) -> Option[(String, cursor.Cursor)] =
   match cursor.find(s, "]", i) {
     Some(rb) ->
-      if cursor.char(s, cursor.skip(s, rb, "]")) == '(' {
+      if cursor.char(s, cursor.skip(s, rb, "]")) == char.code('(') {
         match cursor.find(s, ")", cursor.skip(s, cursor.skip(s, rb, "]"), "(")) {
           Some(rp) -> Some((cursor.slice(s, cursor.skip(s, i, "["), rb), cursor.skip(s, rp, ")")))
           None -> None
@@ -148,10 +150,10 @@ fn paren_end(s: String, i: cursor.Cursor) -> Option[cursor.Cursor] =
 
 # drop markdown symbols [#>*_~`] (backtick already gone); replace with space
 fn drop_symbols(s: String) -> String =
-  from_code_points(map(code_points(s), c => if is_md_sym(c) { 32 } else { c }))
+  from_code_points(map(code_points(s), c => if is_md_sym(c) { ' ' } else { c }))
 
-fn is_md_sym(c: Int) -> Bool =
-  c == 35 || c == 62 || c == 42 || c == 95 || c == 126 || c == 96 # # > * _ ~ `
+fn is_md_sym(c: Char) -> Bool =
+  c == '#' || c == '>' || c == '*' || c == '_' || c == '~' || c == '`'
 
 # collapse runs of ASCII whitespace to a single space, trim ends
 #
@@ -160,19 +162,20 @@ fn is_md_sym(c: Int) -> Bool =
 # per character, quadratic over the article.
 fn collapse_ws(s: String) -> String = str.trim(from_code_points(collapse(code_points(s), 0, false, [])))
 
-fn collapse(cps: List[Int], i: Int, last_ws: Bool, acc: List[Int]) -> List[Int] =
+fn collapse(cps: List[Char], i: Int, last_ws: Bool, acc: List[Char]) -> List[Char] =
   if i >= len(cps) {
     acc
   } else {
     let c = cps[i]
     if is_ws(c) {
-      if last_ws { collapse(cps, i + 1, true, acc) } else { collapse(cps, i + 1, true, acc ++ [32]) }
+      if last_ws { collapse(cps, i + 1, true, acc) } else { collapse(cps, i + 1, true, acc ++ [' ']) }
     } else {
       collapse(cps, i + 1, false, acc ++ [c])
     }
   }
 
-fn is_ws(c: Int) -> Bool = c == 32 || c == 9 || c == 10 || c == 13 || c == 12
+fn is_ws(c: Char) -> Bool =
+  c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\u{000C}'
 
 # `index_of_from` used to be hand-rolled here, over `code_points(s)` — it
 # re-materialized the whole article on every call, then scanned it in Dawn. It is

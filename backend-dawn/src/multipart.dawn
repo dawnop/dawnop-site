@@ -124,7 +124,7 @@ pub fn part_named(parts: List[Part], name: String) -> Option[Part] =
       })
 
 test "parse a two-field multipart body (a text field and a file)" {
-  let nl = from_code_points([13, 10])
+  let nl = from_code_points(['\r', '\n'])
   let b = "----DawnTest"
   let body =
     "--$b$nl" ++
@@ -157,7 +157,7 @@ test "boundary_of parses and unquotes" {
 }
 
 test "file content with embedded CRLF is preserved, only the trailing one dropped" {
-  let nl = from_code_points([13, 10])
+  let nl = from_code_points(['\r', '\n'])
   let b = "BB"
   let payload = "line1${nl}line2" # an internal CRLF that must survive
   let body =
