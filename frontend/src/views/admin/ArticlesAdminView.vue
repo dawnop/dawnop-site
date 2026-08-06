@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import { Search, Upload, EditPen, MoreFilled } from '@element-plus/icons-vue'
 import { articlesApi, pagesApi, tagsApi } from '../../api'
 import { parseFrontmatter } from '../../utils/frontmatter'
+import { confirmDanger } from '../../utils/confirm'
 import { useColWidths } from '../../utils/colWidths'
 import { useIsMobile } from '../../composables/useIsMobile'
 
@@ -96,16 +97,7 @@ function resetFilters() {
 }
 
 async function remove(a) {
-  try {
-    await ElMessageBox.confirm(`确定删除《${a.title}》？该操作不可撤销。`, '删除文章', {
-      type: 'warning',
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-      confirmButtonClass: 'el-button--danger',
-    })
-  } catch (e) {
-    return // 取消
-  }
+  if (!(await confirmDanger(`确定删除《${a.title}》？该操作不可撤销。`, '删除文章'))) return
   // 失败提示由 axios 拦截器统一给；这里 catch 掉是为了别漏出 unhandled rejection，
   // 且失败时不弹「已删除」。同文件其余变更操作都是这个写法。
   try {

@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
-import { fmtDate } from '../utils/format'
+import { fmtDate, fmtReadMinutes } from '../utils/format'
 import { useRouter } from 'vue-router'
 import { Search, Clock, Close } from '@element-plus/icons-vue'
 import { searchApi } from '../api'
@@ -25,10 +25,6 @@ const listEl = ref(null)
 
 const MODAL_TOP_N = 6 // 面板只取前 N 条，「查看全部」跳整页
 const RECENT_KEY = 'dawnop:recent-search'
-
-function readMinutes(wc) {
-  return Math.max(1, Math.round((wc || 0) / 300))
-}
 
 function loadRecent() {
   try {
@@ -245,7 +241,7 @@ onBeforeUnmount(() => {
               <span class="s-meta">
                 <span>{{ fmtDate(a.created_at) }}</span>
                 <span class="s-dot">·</span>
-                <span>约 {{ readMinutes(a.word_count) }} 分钟</span>
+                <span>约 {{ fmtReadMinutes(a.word_count) }} 分钟</span>
                 <template v-if="a.tags && a.tags.length">
                   <span class="s-dot">·</span>
                   <span v-for="t in a.tags" :key="t.slug" class="s-tag">#{{ t.name }}</span>

@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
-import { fmtDate } from '../utils/format'
+import { fmtDate, fmtReadMinutes } from '../utils/format'
 import { useRoute } from 'vue-router'
 import { articlesApi } from '../api'
 import MarkdownView from '../components/MarkdownView.vue'
@@ -33,9 +33,7 @@ async function load(slug) {
   }
 }
 
-const readMinutes = computed(() =>
-  article.value ? Math.max(1, Math.round((article.value.word_count || 0) / 300)) : 0,
-)
+const readMinutes = computed(() => (article.value ? fmtReadMinutes(article.value.word_count) : 0))
 
 // 标题取自正文 H1 时，渲染前剥离那行，避免与上方标题重复（存储仍是完整原文）
 const displayContent = computed(() => {

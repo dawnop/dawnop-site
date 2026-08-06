@@ -6,6 +6,7 @@ import { MagicStick } from '@element-plus/icons-vue'
 import { vizApi } from '../../api'
 import HelpTip from '../../components/HelpTip.vue'
 import { useColWidths } from '../../utils/colWidths'
+import { confirmDanger } from '../../utils/confirm'
 import { useIsMobile } from '../../composables/useIsMobile'
 
 const { colW, onHeaderDrag } = useColWidths('dawnop_colw_viz')
@@ -28,23 +29,18 @@ async function load() {
 }
 
 async function remove(v) {
+  const ok = await confirmDanger(
+    `确定删除可视化「${v.name || v.slug}」？引用它的文章将显示加载失败。`,
+    '删除可视化',
+  )
+  if (!ok) return
   try {
-    await ElMessageBox.confirm(
-      `确定删除可视化「${v.name || v.slug}」？引用它的文章将显示加载失败。`,
-      '删除可视化',
-      {
-        type: 'warning',
-        confirmButtonText: '删除',
-        cancelButtonText: '取消',
-        confirmButtonClass: 'el-button--danger',
-      },
-    )
-  } catch (e) {
-    return
+    await vizApi.remove(v.id)
+    ElMessage.success('已删除')
+  } catch {
+    // 失败提示由 axios 拦截器统一给
   }
-  await vizApi.remove(v.id)
-  ElMessage.success('已删除')
-  load()
+  load() // 无论成败都刷新：失败时留着旧行更容易误导
 }
 
 onMounted(load)

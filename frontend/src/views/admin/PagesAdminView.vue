@@ -6,6 +6,7 @@ import { Rank, Document, Collection, Top, Bottom } from '@element-plus/icons-vue
 import Sortable from 'sortablejs'
 import { pagesApi } from '../../api'
 import { useColWidths } from '../../utils/colWidths'
+import { confirmDanger } from '../../utils/confirm'
 import { useIsMobile } from '../../composables/useIsMobile'
 
 const { colW, onHeaderDrag } = useColWidths('dawnop_colw_pages')
@@ -94,19 +95,14 @@ async function toggleNav(p) {
 }
 
 async function remove(p) {
+  if (!(await confirmDanger(`确定删除页面「${p.title}」？其下文章会解除归属。`, '删除页面'))) return
   try {
-    await ElMessageBox.confirm(`确定删除页面「${p.title}」？其下文章会解除归属。`, '删除页面', {
-      type: 'warning',
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-      confirmButtonClass: 'el-button--danger',
-    })
-  } catch (e) {
-    return
+    await pagesApi.remove(p.id)
+    ElMessage.success('已删除')
+  } catch {
+    // 失败提示由 axios 拦截器统一给
   }
-  await pagesApi.remove(p.id)
-  ElMessage.success('已删除')
-  load()
+  load() // 无论成败都刷新：失败时留着旧行更容易误导
 }
 
 // 行拖拽排序：sortablejs 绑定到 el-table 内部 tbody，拖完同步数据并提交顺序

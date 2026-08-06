@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch } from 'vue'
-import { fmtDate } from '../utils/format'
+import { fmtDate, fmtReadMinutes } from '../utils/format'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { Search } from '@element-plus/icons-vue'
 import { searchApi } from '../api'
@@ -15,10 +15,6 @@ const page = ref(1)
 const size = 10
 const loading = ref(false)
 const searched = ref(false) // 是否已发起过一次查询（区分「初始空」与「无结果」）
-
-function readMinutes(wc) {
-  return Math.max(1, Math.round((wc || 0) / 300))
-}
 
 // 提交：把关键词写进 URL（可分享/前进后退），由 watch 触发实际查询
 function submit() {
@@ -105,7 +101,7 @@ watch(
         <div class="r-meta">
           <span>{{ fmtDate(a.created_at) }}</span>
           <span class="dot">·</span>
-          <span>约 {{ readMinutes(a.word_count) }} 分钟</span>
+          <span>约 {{ fmtReadMinutes(a.word_count) }} 分钟</span>
           <template v-if="a.tags && a.tags.length">
             <span class="dot">·</span>
             <RouterLink v-for="t in a.tags" :key="t.slug" :to="`/tag/${t.slug}`" class="r-tag"

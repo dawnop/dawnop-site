@@ -25,6 +25,11 @@ export function fmtMonthDay(ms) {
   return `${d.getMonth() + 1}月${d.getDate()}日`
 }
 
+// 字数 → 阅读时长（分钟）：按 300 字/分钟，不足一分钟按一分钟算。
+export function fmtReadMinutes(wc) {
+  return Math.max(1, Math.round((wc || 0) / 300))
+}
+
 // 秒数 → 「N 天 N 小时 / N 小时 N 分 / N 分」。
 export function fmtDuration(sec) {
   sec = Number(sec) || 0

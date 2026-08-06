@@ -23,6 +23,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { fmApi as fm, settingsApi } from '../api'
 import { useIsMobile } from './useIsMobile'
 import { fmtBytes, fmtMonthDay } from '../utils/format'
+import { confirmDanger } from '../utils/confirm'
 
 export function useFileManager() {
   // ---------- 状态 ----------
@@ -454,17 +455,12 @@ export function useFileManager() {
   }
 
   async function doDelete(row) {
+    const ok = await confirmDanger(
+      `确定删除「${row.name}」？${row.is_dir ? '（含其中全部内容）' : ''}`,
+      '删除',
+    )
+    if (!ok) return
     try {
-      await ElMessageBox.confirm(
-        `确定删除「${row.name}」？${row.is_dir ? '（含其中全部内容）' : ''}`,
-        '删除',
-        {
-          type: 'warning',
-          confirmButtonText: '删除',
-          cancelButtonText: '取消',
-          confirmButtonClass: 'el-button--danger',
-        },
-      )
       await fm.remove(cwd.value, [row.path])
       ElMessage.success('已删除')
       if (selectedPath.value === row.path) {
@@ -475,22 +471,17 @@ export function useFileManager() {
       await loadCwd()
       if (row.is_dir) reloadTree()
     } catch {
-      /* 取消或失败：失败已由 axios 拦截器统一提示 */
+      /* 失败已由 axios 拦截器统一提示 */
     }
   }
 
   async function doDeleteMany(rows) {
+    const ok = await confirmDanger(
+      `确定删除选中的 ${rows.length} 项？（文件夹含其中全部内容）`,
+      '批量删除',
+    )
+    if (!ok) return
     try {
-      await ElMessageBox.confirm(
-        `确定删除选中的 ${rows.length} 项？（文件夹含其中全部内容）`,
-        '批量删除',
-        {
-          type: 'warning',
-          confirmButtonText: '删除',
-          cancelButtonText: '取消',
-          confirmButtonClass: 'el-button--danger',
-        },
-      )
       await fm.remove(
         cwd.value,
         rows.map((r) => r.path),
@@ -505,7 +496,7 @@ export function useFileManager() {
       await loadCwd()
       if (hadDir) reloadTree()
     } catch {
-      /* 取消或失败：失败已由 axios 拦截器统一提示 */
+      /* 失败已由 axios 拦截器统一提示 */
     }
   }
 

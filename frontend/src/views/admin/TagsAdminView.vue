@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { Search, Delete, MoreFilled } from '@element-plus/icons-vue'
 import { tagsApi } from '../../api'
 import { useColWidths } from '../../utils/colWidths'
+import { confirmDanger } from '../../utils/confirm'
 import { useIsMobile } from '../../composables/useIsMobile'
 
 const { colW, onHeaderDrag } = useColWidths('dawnop_colw_tags')
@@ -98,42 +99,38 @@ async function doMerge() {
 }
 
 async function remove(tag) {
+  const ok = await confirmDanger(
+    tag.count > 0
+      ? `「${tag.name}」正被 ${tag.count} 篇文章使用，删除后这些文章将失去该标签。`
+      : `确定删除标签「${tag.name}」？`,
+    '删除标签',
+  )
+  if (!ok) return
   try {
-    await ElMessageBox.confirm(
-      tag.count > 0
-        ? `「${tag.name}」正被 ${tag.count} 篇文章使用，删除后这些文章将失去该标签。`
-        : `确定删除标签「${tag.name}」？`,
-      '删除标签',
-      {
-        type: 'warning',
-        confirmButtonText: '删除',
-        cancelButtonText: '取消',
-        confirmButtonClass: 'el-button--danger',
-      },
-    )
-  } catch (e) {
-    return // 取消
+    await tagsApi.remove(tag.id)
+    ElMessage.success('已删除')
+  } catch {
+    // 失败提示由 axios 拦截器统一给
   }
-  await tagsApi.remove(tag.id)
-  ElMessage.success('已删除')
-  load()
+  load() // 无论成败都刷新：失败时留着旧行更容易误导
 }
 
 const orphanCount = computed(() => items.value.filter((t) => t.count === 0).length)
 
 async function cleanup() {
+  const ok = await confirmDanger(
+    `将删除 ${orphanCount.value} 个未被任何文章使用的标签。`,
+    '清理未使用标签',
+    { confirmText: '清理', danger: false },
+  )
+  if (!ok) return
   try {
-    await ElMessageBox.confirm(
-      `将删除 ${orphanCount.value} 个未被任何文章使用的标签。`,
-      '清理未使用标签',
-      { type: 'warning', confirmButtonText: '清理', cancelButtonText: '取消' },
-    )
-  } catch (e) {
-    return // 取消
+    const { data } = await tagsApi.cleanup()
+    ElMessage.success(`已清理 ${data.deleted} 个标签`)
+  } catch {
+    // 失败提示由 axios 拦截器统一给
   }
-  const { data } = await tagsApi.cleanup()
-  ElMessage.success(`已清理 ${data.deleted} 个标签`)
-  load()
+  load() // 无论成败都刷新：失败时留着旧行更容易误导
 }
 
 onMounted(load)

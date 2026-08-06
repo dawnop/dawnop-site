@@ -2,15 +2,11 @@
 // 前台文章列表项（首页 / 文章列表页 / 标签页共用）：
 // 标题 + 摘要 + 「日期 · 约 N 分钟 · #标签」meta 行
 import { RouterLink } from 'vue-router'
-import { fmtDate } from '../utils/format'
+import { fmtDate, fmtReadMinutes } from '../utils/format'
 
 defineProps({
   items: { type: Array, required: true },
 })
-
-function readMinutes(wc) {
-  return Math.max(1, Math.round((wc || 0) / 300))
-}
 </script>
 
 <template>
@@ -21,7 +17,7 @@ function readMinutes(wc) {
       <div class="post-meta">
         <span>{{ fmtDate(a.created_at) }}</span>
         <span class="dot">·</span>
-        <span>约 {{ readMinutes(a.word_count) }} 分钟</span>
+        <span>约 {{ fmtReadMinutes(a.word_count) }} 分钟</span>
         <template v-if="a.tags && a.tags.length">
           <span class="dot">·</span>
           <RouterLink v-for="t in a.tags" :key="t.slug" :to="`/tag/${t.slug}`" class="post-tag"
