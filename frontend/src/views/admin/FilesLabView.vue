@@ -34,91 +34,42 @@ const {
   q,
   viewMode,
   showInfo,
-  selectedPath,
-  selPaths,
-  previewText,
-  previewErr,
   isMobile,
-  selectMode,
   searchOpen,
   searchInputRef,
   sheet,
   effectiveView,
   drive,
   drivePct,
-  tasks,
-  tasksCollapsed,
-  activeCount,
   treeRef,
   treeKey,
   tableRef,
   fileInput,
   dirInput,
+  contentEl,
   sideW,
   infoW,
   viewOptions,
   treeProps,
   filtered,
-  selected,
-  selRows,
-  selFiles,
-  contentEl,
-  dnd,
-  marquee,
-  marqueeStyle,
   crumbs,
-  rowClass,
-  imgViewer,
-  modal,
   destDlg,
-  dragging,
-  ctx,
-  ctxItems,
   openSearch,
   closeSearch,
   goto,
   loadTreeNode,
   onTreeClick,
-  onSelChange,
-  clearSel,
   onRowClick,
   onRowDblclick,
-  onBlankClick,
-  openImgViewer,
-  startEdit,
-  saveEdit,
-  beforeCloseModal,
   onCellTap,
-  toggleSelectMode,
   openSheet,
   sheetDo,
-  doDownload,
-  doDownloadMany,
   newFolder,
   doRename,
   doDeleteMany,
   onRowCommand,
   startMoveCopy,
   confirmDest,
-  onDragStartRow,
-  onDragEndRow,
-  onDestDragOver,
-  onDestDragLeave,
-  onDestDrop,
-  onRowDragOver,
-  onRowDragLeave,
-  onRowDrop,
-  onContentMousedown,
-  openCtxRow,
-  openCtxBlank,
-  onTableRowCtx,
-  runCtx,
-  pickFiles,
-  pickFolder,
-  onFilesPicked,
-  onDragEnter,
-  onDragLeave,
-  onDrop,
   startResize,
   isImage,
   isText,
@@ -126,6 +77,12 @@ const {
   tintOf,
   fmtSize,
   fmtDate,
+  // 分组的五块：选择/框选、预览编辑、传输列表、拖拽、右键菜单
+  sel,
+  preview,
+  transfers,
+  dnd,
+  ctxmenu,
 } = useFileManager()
 </script>
 
@@ -134,7 +91,10 @@ const {
     <div class="fm-card">
       <!-- 左侧：目录树 + 存储条（移动端隐藏，改用面包屑导航） -->
       <aside v-if="!isMobile" class="fm-side" :style="{ width: sideW + 'px' }">
-        <el-dropdown trigger="click" @command="(c) => (c === 'file' ? pickFiles() : pickFolder())">
+        <el-dropdown
+          trigger="click"
+          @command="(c) => (c === 'file' ? transfers.pickFiles() : transfers.pickFolder())"
+        >
           <el-button type="primary" class="fm-upload" :icon="Upload">上传</el-button>
           <template #dropdown>
             <el-dropdown-menu>
@@ -143,8 +103,15 @@ const {
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <input ref="fileInput" type="file" multiple hidden @change="onFilesPicked" />
-        <input ref="dirInput" type="file" multiple webkitdirectory hidden @change="onFilesPicked" />
+        <input ref="fileInput" type="file" multiple hidden @change="transfers.onFilesPicked" />
+        <input
+          ref="dirInput"
+          type="file"
+          multiple
+          webkitdirectory
+          hidden
+          @change="transfers.onFilesPicked"
+        />
 
         <div class="fm-tree">
           <el-tree
@@ -163,10 +130,10 @@ const {
             <template #default="{ node }">
               <span
                 class="tnode"
-                :class="{ 'drop-into': dnd.dragging && dnd.overPath === node.data.path }"
-                @dragover="onDestDragOver($event, node.data.path)"
-                @dragleave="onDestDragLeave(node.data.path)"
-                @drop="onDestDrop($event, node.data.path)"
+                :class="{ 'drop-into': dnd.move.dragging && dnd.move.overPath === node.data.path }"
+                @dragover="dnd.onDestDragOver($event, node.data.path)"
+                @dragleave="dnd.onDestDragLeave(node.data.path)"
+                @drop="dnd.onDestDrop($event, node.data.path)"
               >
                 <el-icon class="ti"><FolderOpened v-if="node.expanded" /><Folder v-else /></el-icon>
                 <span class="tlabel">{{ node.label }}</span>
@@ -192,31 +159,33 @@ const {
       <!-- 中间：工具栏 + 面包屑 + 内容（整块可拖入上传） -->
       <section
         class="fm-main"
-        @dragenter.prevent="onDragEnter"
+        @dragenter.prevent="dnd.onDragEnter"
         @dragover.prevent
-        @dragleave="onDragLeave"
-        @drop.prevent="onDrop"
+        @dragleave="dnd.onDragLeave"
+        @drop.prevent="dnd.onDrop"
       >
         <!-- 桌面工具栏（移动端改用右下角悬浮按钮 + 搜索窗口 + 多选头） -->
         <div v-if="!isMobile" class="fm-toolbar">
           <div class="fm-tb-left">
-            <template v-if="selPaths.length">
-              <span class="fm-selinfo">已选 {{ selPaths.length }} 项</span>
+            <template v-if="sel.selPaths.length">
+              <span class="fm-selinfo">已选 {{ sel.selPaths.length }} 项</span>
               <el-button
                 text
                 :icon="Download"
-                :disabled="!selFiles.length"
-                @click="doDownloadMany(selRows)"
+                :disabled="!sel.selFiles.length"
+                @click="transfers.doDownloadMany(sel.selRows)"
                 >下载</el-button
               >
-              <el-button text :icon="Right" @click="startMoveCopy('move', selRows)">移动</el-button>
-              <el-button text :icon="CopyDocument" @click="startMoveCopy('copy', selRows)"
+              <el-button text :icon="Right" @click="startMoveCopy('move', sel.selRows)"
+                >移动</el-button
+              >
+              <el-button text :icon="CopyDocument" @click="startMoveCopy('copy', sel.selRows)"
                 >复制</el-button
               >
-              <el-button text type="danger" :icon="Delete" @click="doDeleteMany(selRows)"
+              <el-button text type="danger" :icon="Delete" @click="doDeleteMany(sel.selRows)"
                 >删除</el-button
               >
-              <el-button text :icon="Close" @click="clearSel">取消选择</el-button>
+              <el-button text :icon="Close" @click="sel.clearSel">取消选择</el-button>
             </template>
             <template v-else>
               <el-button :icon="FolderAdd" text @click="newFolder">新建文件夹</el-button>
@@ -247,11 +216,11 @@ const {
         </div>
 
         <!-- 移动端多选态顶栏：已选计数 + 取消 -->
-        <div v-if="isMobile && selectMode" class="fm-selhead">
+        <div v-if="isMobile && sel.selectMode" class="fm-selhead">
           <span class="fm-selhead-count">{{
-            selPaths.length ? `已选 ${selPaths.length} 项` : '选择文件'
+            sel.selPaths.length ? `已选 ${sel.selPaths.length} 项` : '选择文件'
           }}</span>
-          <el-button text @click="toggleSelectMode">取消</el-button>
+          <el-button text @click="sel.toggleSelectMode">取消</el-button>
         </div>
 
         <!-- 移动端搜索态顶栏：复用顶部条，就地过滤下方网格 -->
@@ -279,9 +248,9 @@ const {
           v-loading="loading"
           ref="contentEl"
           class="fm-content"
-          @contextmenu="openCtxBlank"
-          @click="onBlankClick"
-          @mousedown="onContentMousedown"
+          @contextmenu="ctxmenu.openBlank"
+          @click="sel.onBlankClick"
+          @mousedown="sel.onContentMousedown"
         >
           <!-- 列表 -->
           <el-table
@@ -289,24 +258,24 @@ const {
             ref="tableRef"
             :data="filtered"
             row-key="path"
-            :row-class-name="rowClass"
+            :row-class-name="sel.rowClass"
             @row-click="onRowClick"
             @row-dblclick="onRowDblclick"
-            @row-contextmenu="onTableRowCtx"
-            @selection-change="onSelChange"
+            @row-contextmenu="ctxmenu.onTableRowCtx"
+            @selection-change="sel.onSelChange"
           >
             <el-table-column type="selection" width="40" :reserve-selection="false" />
             <el-table-column label="名称" min-width="260">
               <template #default="{ row }">
                 <span
                   class="namecell"
-                  :class="{ 'drop-into': row.is_dir && dnd.overPath === row.path }"
+                  :class="{ 'drop-into': row.is_dir && dnd.move.overPath === row.path }"
                   draggable="true"
-                  @dragstart="onDragStartRow($event, row)"
-                  @dragend="onDragEndRow"
-                  @dragover="onRowDragOver($event, row)"
-                  @dragleave="onRowDragLeave(row)"
-                  @drop="onRowDrop($event, row)"
+                  @dragstart="dnd.onDragStartRow($event, row)"
+                  @dragend="dnd.onDragEndRow"
+                  @dragover="dnd.onRowDragOver($event, row)"
+                  @dragleave="dnd.onRowDragLeave(row)"
+                  @drop="dnd.onRowDrop($event, row)"
                 >
                   <el-icon class="nc-ico" :style="{ color: tintOf(row) }"
                     ><component :is="iconOf(row)"
@@ -355,27 +324,31 @@ const {
               :key="row.path"
               class="cell"
               :class="{
-                'is-sel': row.path === selectedPath,
-                'is-checked': selPaths.includes(row.path),
-                'drop-into': row.is_dir && dnd.overPath === row.path,
+                'is-sel': row.path === sel.selectedPath,
+                'is-checked': sel.selPaths.includes(row.path),
+                'drop-into': row.is_dir && dnd.move.overPath === row.path,
               }"
               :draggable="!isMobile"
               @click="onCellTap(row, $event)"
               @dblclick="onRowDblclick(row)"
-              @contextmenu="openCtxRow($event, row)"
-              @dragstart="onDragStartRow($event, row)"
-              @dragend="onDragEndRow"
-              @dragover="onRowDragOver($event, row)"
-              @dragleave="onRowDragLeave(row)"
-              @drop="onRowDrop($event, row)"
+              @contextmenu="ctxmenu.openRow($event, row)"
+              @dragstart="dnd.onDragStartRow($event, row)"
+              @dragend="dnd.onDragEndRow"
+              @dragover="dnd.onRowDragOver($event, row)"
+              @dragleave="dnd.onRowDragLeave(row)"
+              @drop="dnd.onRowDrop($event, row)"
             >
-              <button v-if="isMobile && !selectMode" class="cell-more" @click.stop="openSheet(row)">
+              <button
+                v-if="isMobile && !sel.selectMode"
+                class="cell-more"
+                @click.stop="openSheet(row)"
+              >
                 <el-icon><MoreFilled /></el-icon>
               </button>
               <el-icon
-                v-if="isMobile && selectMode"
+                v-if="isMobile && sel.selectMode"
                 class="cell-check"
-                :class="{ on: selPaths.includes(row.path) }"
+                :class="{ on: sel.selPaths.includes(row.path) }"
                 ><Select
               /></el-icon>
               <div class="cell-thumb">
@@ -402,7 +375,7 @@ const {
         </div>
 
         <!-- 拖入蒙层 -->
-        <div v-if="dragging" class="fm-drop">
+        <div v-if="dnd.uploadHover" class="fm-drop">
           <el-icon :size="36"><Upload /></el-icon>
           <span>释放以上传到「{{ crumbs[crumbs.length - 1].name }}」</span>
         </div>
@@ -413,46 +386,50 @@ const {
         <div class="fm-rs" @mousedown.prevent="startResize('info', $event)"></div>
         <aside class="fm-info" :style="{ width: infoW + 'px' }">
           <div class="fm-info-head">
-            <span class="fm-info-title">{{ selected ? selected.name : '预览' }}</span>
+            <span class="fm-info-title">{{ sel.selected ? sel.selected.name : '预览' }}</span>
             <el-icon class="fm-info-close" title="收起" @click="showInfo = false"
               ><Close
             /></el-icon>
           </div>
-          <template v-if="selected && !selected.is_dir">
+          <template v-if="sel.selected && !sel.selected.is_dir">
             <div class="fm-preview">
               <div
-                v-if="isImage(selected)"
+                v-if="isImage(sel.selected)"
                 class="pv-img-wrap"
                 title="点击放大"
-                @click="openImgViewer(selected)"
+                @click="preview.openImgViewer(sel.selected)"
               >
                 <img
-                  :src="fm.previewUrl(selected.path, { w: 900, mode: 'fit' })"
+                  :src="fm.previewUrl(sel.selected.path, { w: 900, mode: 'fit' })"
                   class="pv-img"
                   alt=""
                 />
               </div>
-              <pre v-else-if="isText(selected)" class="pv-text">{{
-                previewErr || previewText || '加载中…'
+              <pre v-else-if="isText(sel.selected)" class="pv-text">{{
+                preview.previewErr || preview.previewText || '加载中…'
               }}</pre>
               <div v-else class="pv-file">
-                <el-icon :size="56" :style="{ color: tintOf(selected) }"
-                  ><component :is="iconOf(selected)"
+                <el-icon :size="56" :style="{ color: tintOf(sel.selected) }"
+                  ><component :is="iconOf(sel.selected)"
                 /></el-icon>
               </div>
             </div>
             <el-descriptions :column="1" size="small" border class="fm-desc">
               <el-descriptions-item label="类型">{{
-                selected.content_type || '文件'
+                sel.selected.content_type || '文件'
               }}</el-descriptions-item>
-              <el-descriptions-item label="大小">{{ fmtSize(selected.size) }}</el-descriptions-item>
+              <el-descriptions-item label="大小">{{
+                fmtSize(sel.selected.size)
+              }}</el-descriptions-item>
               <el-descriptions-item label="修改时间">{{
-                fmtDate(selected.updated_at)
+                fmtDate(sel.selected.updated_at)
               }}</el-descriptions-item>
             </el-descriptions>
             <div class="fm-info-actions">
-              <el-button :icon="Download" @click="doDownload(selected)">下载</el-button>
-              <el-button :icon="EditPen" @click="doRename(selected)">重命名</el-button>
+              <el-button :icon="Download" @click="transfers.doDownload(sel.selected)"
+                >下载</el-button
+              >
+              <el-button :icon="EditPen" @click="doRename(sel.selected)">重命名</el-button>
             </div>
           </template>
           <el-empty v-else description="选择一个文件查看预览" :image-size="90" />
@@ -462,41 +439,56 @@ const {
 
     <!-- 双击的文本预览/编辑弹窗（图片走 el-image-viewer） -->
     <el-dialog
-      v-model="modal.show"
-      :title="modal.row?.name"
+      v-model="preview.modal.show"
+      :title="preview.modal.row?.name"
       :width="isMobile ? '94%' : '72%'"
       :top="isMobile ? '4vh' : '6vh'"
       append-to-body
-      :before-close="beforeCloseModal"
+      :before-close="preview.beforeCloseModal"
     >
-      <div v-if="modal.row" class="fm-modal-body">
-        <template v-if="isText(modal.row)">
+      <div v-if="preview.modal.row" class="fm-modal-body">
+        <template v-if="isText(preview.modal.row)">
           <el-input
-            v-if="modal.editing"
-            v-model="modal.draft"
+            v-if="preview.modal.editing"
+            v-model="preview.modal.draft"
             type="textarea"
             :rows="22"
             resize="none"
             class="fm-modal-edit"
           />
-          <pre v-else class="fm-modal-text">{{ modal.err || modal.text || '加载中…' }}</pre>
+          <pre v-else class="fm-modal-text">{{
+            preview.modal.err || preview.modal.text || '加载中…'
+          }}</pre>
         </template>
         <div v-else class="fm-modal-file">
-          <el-icon :size="72" :style="{ color: tintOf(modal.row) }"
-            ><component :is="iconOf(modal.row)"
+          <el-icon :size="72" :style="{ color: tintOf(preview.modal.row) }"
+            ><component :is="iconOf(preview.modal.row)"
           /></el-icon>
           <span class="fm-modal-hint">该类型暂不支持在线预览</span>
-          <el-button type="primary" :icon="Download" @click="doDownload(modal.row)">下载</el-button>
+          <el-button
+            type="primary"
+            :icon="Download"
+            @click="transfers.doDownload(preview.modal.row)"
+            >下载</el-button
+          >
         </div>
       </div>
-      <template v-if="modal.row && isText(modal.row)" #footer>
-        <template v-if="modal.editing">
-          <el-button @click="modal.editing = false">取消</el-button>
-          <el-button type="primary" :loading="modal.saving" @click="saveEdit">保存</el-button>
+      <template v-if="preview.modal.row && isText(preview.modal.row)" #footer>
+        <template v-if="preview.modal.editing">
+          <el-button @click="preview.modal.editing = false">取消</el-button>
+          <el-button type="primary" :loading="preview.modal.saving" @click="preview.saveEdit"
+            >保存</el-button
+          >
         </template>
         <template v-else>
-          <el-button :icon="Download" @click="doDownload(modal.row)">下载</el-button>
-          <el-button type="primary" :icon="EditPen" :disabled="!modal.loaded" @click="startEdit"
+          <el-button :icon="Download" @click="transfers.doDownload(preview.modal.row)"
+            >下载</el-button
+          >
+          <el-button
+            type="primary"
+            :icon="EditPen"
+            :disabled="!preview.modal.loaded"
+            @click="preview.startEdit"
             >编辑</el-button
           >
         </template>
@@ -505,29 +497,29 @@ const {
 
     <!-- 图片查看器：滚轮/工具栏缩放、旋转 -->
     <el-image-viewer
-      v-if="imgViewer.show"
-      :url-list="imgViewer.urls"
+      v-if="preview.imgViewer.show"
+      :url-list="preview.imgViewer.urls"
       hide-on-click-modal
       teleported
-      @close="imgViewer.show = false"
+      @close="preview.imgViewer.show = false"
     />
 
     <!-- 传输列表：上传/下载进度（右下角浮层） -->
-    <div v-if="tasks.length" class="fm-tasks">
-      <div class="fm-tasks-head" @click="tasksCollapsed = !tasksCollapsed">
+    <div v-if="transfers.tasks.length" class="fm-tasks">
+      <div class="fm-tasks-head" @click="transfers.tasksCollapsed = !transfers.tasksCollapsed">
         <span class="fm-tasks-title">
-          <el-icon v-if="activeCount" class="spin"><Loading /></el-icon>
-          传输列表{{ activeCount ? `（${activeCount} 进行中）` : '' }}
+          <el-icon v-if="transfers.activeCount" class="spin"><Loading /></el-icon>
+          传输列表{{ transfers.activeCount ? `（${transfers.activeCount} 进行中）` : '' }}
         </span>
         <span class="fm-tasks-ops">
-          <el-icon v-if="!activeCount" title="清除记录" @click.stop="tasks = []"
+          <el-icon v-if="!transfers.activeCount" title="清除记录" @click.stop="transfers.tasks = []"
             ><Delete
           /></el-icon>
-          <el-icon><ArrowDown v-if="!tasksCollapsed" /><ArrowUp v-else /></el-icon>
+          <el-icon><ArrowDown v-if="!transfers.tasksCollapsed" /><ArrowUp v-else /></el-icon>
         </span>
       </div>
-      <div v-show="!tasksCollapsed" class="fm-tasks-body">
-        <div v-for="t in tasks" :key="t.id" class="fm-task">
+      <div v-show="!transfers.tasksCollapsed" class="fm-tasks-body">
+        <div v-for="t in transfers.tasks" :key="t.id" class="fm-task">
           <el-icon class="ft-kind"><Upload v-if="t.kind === 'up'" /><Download v-else /></el-icon>
           <div class="ft-main">
             <div class="ft-name">{{ t.name }}</div>
@@ -551,15 +543,15 @@ const {
     <!-- 右键菜单（teleport 到 body，不用 CSS 变量以免脱离 .fm 作用域后失效） -->
     <Teleport to="body">
       <div
-        v-if="ctx.show"
+        v-if="ctxmenu.menu.show"
         class="fm-ctx"
-        :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }"
+        :style="{ left: ctxmenu.menu.x + 'px', top: ctxmenu.menu.y + 'px' }"
         @contextmenu.prevent
         @click.stop
       >
-        <template v-for="(item, i) in ctxItems" :key="i">
+        <template v-for="(item, i) in ctxmenu.items" :key="i">
           <div v-if="item.divided" class="fm-ctx-divider"></div>
-          <div class="fm-ctx-item" :class="{ danger: item.danger }" @click="runCtx(item)">
+          <div class="fm-ctx-item" :class="{ danger: item.danger }" @click="ctxmenu.run(item)">
             <el-icon><component :is="item.icon" /></el-icon>
             <span>{{ item.label }}</span>
           </div>
@@ -608,16 +600,16 @@ const {
     </el-dialog>
 
     <!-- 框选选择框（视口固定坐标） -->
-    <div v-if="marquee.show" class="fm-marquee" :style="marqueeStyle"></div>
+    <div v-if="sel.marquee.show" class="fm-marquee" :style="sel.marqueeStyle"></div>
 
     <!-- 移动端右下角悬浮按钮组（自下而上：+ / 搜索 / 多选）；多选态与搜索窗内全部隐藏 -->
-    <template v-if="isMobile && !selectMode && !searchOpen">
+    <template v-if="isMobile && !sel.selectMode && !searchOpen">
       <el-button
         circle
         :icon="Select"
         class="fm-fab-mini fm-fab-select"
         title="多选"
-        @click="toggleSelectMode"
+        @click="sel.toggleSelectMode"
       />
       <el-button
         circle
@@ -628,11 +620,18 @@ const {
       />
     </template>
     <el-dropdown
-      v-if="isMobile && !selectMode && !searchOpen"
+      v-if="isMobile && !sel.selectMode && !searchOpen"
       trigger="click"
       class="fm-fab"
       placement="top-end"
-      @command="(c) => (c === 'file' ? pickFiles() : c === 'folder' ? pickFolder() : newFolder())"
+      @command="
+        (c) =>
+          c === 'file'
+            ? transfers.pickFiles()
+            : c === 'folder'
+              ? transfers.pickFolder()
+              : newFolder()
+      "
     >
       <el-button type="primary" circle :icon="Plus" class="fm-fab-btn" />
       <template #dropdown>
@@ -647,17 +646,21 @@ const {
     </el-dropdown>
 
     <!-- 移动端：多选态底部批量操作条 -->
-    <div v-if="isMobile && selectMode && selPaths.length" class="fm-selbar">
-      <button class="fm-selbar-btn" :disabled="!selFiles.length" @click="doDownloadMany(selRows)">
+    <div v-if="isMobile && sel.selectMode && sel.selPaths.length" class="fm-selbar">
+      <button
+        class="fm-selbar-btn"
+        :disabled="!sel.selFiles.length"
+        @click="transfers.doDownloadMany(sel.selRows)"
+      >
         <el-icon><Download /></el-icon><span>下载</span>
       </button>
-      <button class="fm-selbar-btn" @click="startMoveCopy('move', selRows)">
+      <button class="fm-selbar-btn" @click="startMoveCopy('move', sel.selRows)">
         <el-icon><Right /></el-icon><span>移动</span>
       </button>
-      <button class="fm-selbar-btn" @click="startMoveCopy('copy', selRows)">
+      <button class="fm-selbar-btn" @click="startMoveCopy('copy', sel.selRows)">
         <el-icon><CopyDocument /></el-icon><span>复制</span>
       </button>
-      <button class="fm-selbar-btn danger" @click="doDeleteMany(selRows)">
+      <button class="fm-selbar-btn danger" @click="doDeleteMany(sel.selRows)">
         <el-icon><Delete /></el-icon><span>删除</span>
       </button>
     </div>
