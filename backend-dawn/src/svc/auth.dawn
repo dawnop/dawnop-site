@@ -1,0 +1,224 @@
+# Authentication (M6 knife 7): login (jBCrypt verify + JWT issue) and /me
+# (JWT verify). bcrypt hashes are read as-is from the shared users table, so
+# existing passwords keep working; JWTs interoperate with PyJWT (see jwt.dawn).
+use std/str
+use std/map
+use java "java.sql.Connection"
+use java "org.mindrot.jbcrypt.BCrypt"
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, header}
+use web/router.{Route, route_get, route_post}
+use web/server.{parse_form}
+use json/value.{Json}
+use util/jsonx.{obj, jint, jstr, jdatetime}
+use db/db.{Db, with_db}
+use db/sql.{PStr, ColInt, ColStr, query, int_at, str_at, first_str, first_map}
+use util/jwt.{sign, verify}
+
+## App context passed to protected handlers: the db, the JWT secret and token
+## lifetime, the storage quota default (for settings), and the qiniu credentials
+## and bucket/domain (for fm). Named Auth for the authentication it carries.
+pub type Auth = {
+  db: Db,
+  secret: String,
+  expire_min: Int,
+  storage_quota: Int,
+  qiniu: Qiniu,
+}
+
+## Qiniu Kodo config for fm signing.
+##
+## `rs_host` / `up_host` are the management and upload endpoints qiniu/rs talks
+## to. They are configuration rather than constants for one reason: it is the
+## only seam at which a contract run can hold the object-store paths (COPY of a
+## subtree, PUT, DELETE of an object) to a golden without a live bucket — point
+## them, and QINIU_DOMAIN, at a local fake. main.dawn defaults them to the real
+## qiniu hosts, so an unconfigured deployment is byte-identical to before; no
+## code below this line knows whether it is talking to a fake.
+pub type Qiniu = { ak: String, sk: String, bucket: String, domain: String, expires: Int, rs_host: String, up_host: String }
+
+# ---- user lookup ----
+
+# jBCrypt 0.4 only understands the $2a$/$2y$ salt revisions; Python's bcrypt
+# writes $2b$ (the revisions hash identically for passwords ≤72 bytes, differing
+# only in a long-password wraparound flag). Normalize the prefix so existing
+# $2b$ hashes verify unchanged. A malformed hash throws — caught to false, as
+# FastAPI's verify_password does, so it becomes a 401 not a 500.
+#
+# In string literals the prefixes are written `\$`, always. Bare `$2a$` happens
+# to lex the same (a digit cannot start an identifier, so the `$` falls back to
+# a literal), but that is a fallback and not a rule — comments below use the
+# bare form because a comment is not lexed at all.
+fn verify_password(plain: String, hashed: String) -> Bool !io = {
+  let normalized =
+    if str.starts_with(hashed, "\$2b\$") || str.starts_with(hashed, "\$2y\$") {
+      "\$2a\$" ++ str.slice(hashed, 4, str.len(hashed))
+    } else {
+      hashed
+    }
+  match catch_fault(() => BCrypt.checkpw(plain, normalized)) {
+    Ok(b) -> b
+    Err(_) -> false
+  }
+}
+
+## Verify a username/password against the users table (jBCrypt). For WebDAV's
+## HTTP Basic auth — same credential store as JWT login. False on unknown user,
+## wrong password, or a malformed hash (never a 500).
+pub fn check_basic(c: Connection, username: String, password: String) -> Result[Bool, String] !io =
+  match hash_of(c, username)? {
+    Some(h) -> Ok(verify_password(password, h))
+    None -> Ok(false)
+  }
+
+fn hash_of(c: Connection, username: String) -> Result[Option[String], String] !io = {
+  let rows = query(c, "select password_hash from users where username = ?", [PStr(username)], [ColStr])?
+  Ok(first_str(rows))
+}
+
+fn user_json(c: Connection, username: String) -> Result[Option[Json], String] !io = {
+  let rows = query(c, "select id, username, created_at from users where username = ?", [PStr(username)], [ColInt, ColStr, ColStr])?
+  Ok(first_map(rows, r => obj([
+    ("id", jint(int_at(r, 0))),
+    ("username", jstr(str_at(r, 1))),
+    ("created_at", jdatetime(str_at(r, 2))),
+  ])))
+}
+
+# ---- handlers ----
+
+## POST /api/auth/login — OAuth2 password form (username, password) → JWT.
+pub fn login(a: Auth) -> Handler =
+  req => {
+    let form = parse_form(req.body)
+    # OAuth2PasswordRequestForm requires both fields: an absent username/password
+    # is a 422 (a present-but-empty value proceeds to the 401 auth check).
+    if not has_field(form, "username") || not has_field(form, "password") {
+      Err(http_error(422, "username 和 password 必填"))
+    } else {
+      let username = get_or_blank(form, "username")
+      let password = get_or_blank(form, "password")
+      match as_http(with_db(a.db.path, a.db.ext, c => hash_of(c, username)), 500)? {
+        Some(hashed) ->
+          if verify_password(password, hashed) {
+            Ok(json_ok(obj([
+              ("access_token", jstr(sign(a.secret, username, a.expire_min))),
+              ("token_type", jstr("bearer")),
+            ])))
+          } else {
+            Err(http_error(401, "用户名或密码错误"))
+          }
+        None -> Err(http_error(401, "用户名或密码错误"))
+      }
+    }
+  }
+
+fn has_field(m: Map[String, String], k: String) -> Bool =
+  match map.get(m, k) { Some(_v) -> true None -> false }
+
+## GET /api/auth/me — the current user (Bearer token).
+pub fn me(a: Auth) -> Handler =
+  req =>
+  {
+    let username = current_user(a, req)?
+    match as_http(with_db(a.db.path, a.db.ext, c => user_json(c, username)), 500)? {
+      Some(j) -> Ok(json_ok(j))
+      None -> Err(http_error(401, "无效或过期的凭证"))
+    }
+  }
+
+## The authenticated subject, or a 401 HttpError, from the Authorization header
+## ONLY (matches FastAPI's get_current_user). The `?token=` query fallback is NOT
+## accepted here — that would let a URL token authenticate every protected route,
+## whereas FastAPI restricts it to the two browser-GET endpoints below. Protected
+## handlers call this first.
+pub fn current_user(a: Auth, req: Request) -> Result[String, HttpError] !io =
+  auth_with(a, header_token(req))
+
+## Header token, falling back to a `?token=` query param — for the two endpoints
+## whose bytes are fetched by a browser <img>/download link that cannot set an
+## Authorization header (fm preview & download), matching get_current_user_flexible.
+pub fn current_user_flexible(a: Auth, req: Request) -> Result[String, HttpError] !io =
+  auth_with(a, match header_token(req) {
+    "" -> match query_token(req) { Some(t) -> t None -> "" }
+    t -> t
+  })
+
+# ---- guards ----
+#
+# Run a handler body only when the request authenticates, else propagate the 401.
+# These lived as three near-identical private copies in api_articles, api_admin2
+# and api_fm — the api_admin2 and api_fm ones were byte-for-byte the same, and a
+# single change to the guard had to be made three times. They belong next to
+# `current_user`, which is the only thing they do.
+
+## The common case: the body does not care who is logged in.
+pub fn guarded(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io = {
+  let _u = current_user(a, req)?
+  body()
+}
+
+## Accepts `?token=` as well as the header — only for fm preview/download, whose
+## bytes a browser fetches from an <img>/download link that carries no header.
+pub fn guarded_flexible(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !io) -> Result[Response, HttpError] !io = {
+  let _u = current_user_flexible(a, req)?
+  body()
+}
+
+fn header_token(req: Request) -> String =
+  match header(req, "authorization") {
+    Some(h) -> if str.starts_with(h, "Bearer ") { str.slice(h, 7, str.len(h)) } else { h }
+    None -> ""
+  }
+
+fn auth_with(a: Auth, tok: String) -> Result[String, HttpError] !io =
+  if tok == "" {
+    Err(http_error(401, "无效或过期的凭证"))
+  } else {
+    match verify(a.secret, tok) {
+      Ok(sub) -> Ok(sub)
+      Err(_e) -> Err(http_error(401, "无效或过期的凭证"))
+    }
+  }
+
+fn query_token(req: Request) -> Option[String] = map.get(req.query, "token")
+
+## Whether the request carries a valid token (optional auth). Used by endpoints
+## that behave differently for logged-in admins (e.g. draft preview).
+pub fn is_authed(a: Auth, req: Request) -> Bool !io =
+  match current_user(a, req) {
+    Ok(_u) -> true
+    Err(_e) -> false
+  }
+
+fn get_or_blank(m: Map[String, String], k: String) -> String = unwrap_or(map.get(m, k), "")
+
+## The auth routes.
+pub fn routes(a: Auth) -> List[Route] =
+  [
+    route_post("/api/auth/login", login(a)),
+    route_get("/api/auth/me", me(a)),
+  ]
+
+test "verify_password accepts the \$2b hashes the shared users table holds" {
+  # seed_admin.py hashed with Python's bcrypt, which writes the $2b revision;
+  # jBCrypt only parses $2a/$2y. The revisions are the same algorithm for
+  # passwords <= 72 bytes, so the fix is a prefix rewrite — pinned here because
+  # getting it wrong locks every existing account out with a 401.
+  let a2 = BCrypt.hashpw("hunter2", BCrypt.gensalt(4)!)!
+  assert str.starts_with(a2, "\$2a\$")
+  let b2 = "\$2b\$" ++ str.slice(a2, 4, str.len(a2))
+  assert verify_password("hunter2", b2)
+  assert verify_password("hunter2", a2)
+  assert not verify_password("wrong-password", b2)
+  # $2y$ is the third spelling of the same hash
+  assert verify_password("hunter2", "\$2y\$" ++ str.slice(a2, 4, str.len(a2)))
+  # the trap: jBCrypt refuses the $2b revision outright rather than ignoring it,
+  # so without the rewrite this is what every login would hit
+  match catch_fault(() => BCrypt.checkpw("hunter2", b2)) {
+    Ok(_v) -> { assert false }
+    Err(_e) -> { assert true }
+  }
+  # a malformed hash reads as "wrong password", never as a crash (401, not 500)
+  assert not verify_password("hunter2", "not-a-bcrypt-hash")
+  assert not verify_password("hunter2", "")
+}

@@ -1,0 +1,681 @@
+# Read/write WebDAV over the FileObject path<->key tree (M6.5 knife 2), matching
+# app/api/webdav.py. Read: OPTIONS/PROPFIND/HEAD/GET. Write: PUT/DELETE/MKCOL/
+# MOVE/COPY/LOCK/UNLOCK. Broadcasts DAV class 1,2 (LOCK is a fake grant so macOS
+# Finder mounts writable). Writes reuse the fm repo primitives; rename/move only
+# changes path, copy really copies the qiniu object, overwrite writes a new key
+# then deletes the old (CDN caches by URL). HTTP Basic auth (bcrypt + TTL cache).
+#
+# PUT streams: the route is tagged "stream-body", so the server spills the request
+# body to a temp file (constant memory) and put() uploads straight from that path
+# (qiniu/rs.upload_file) — the file is never in the heap.
+#
+# Remaining limit vs FastAPI (documented, not a bug): GET proxies the object
+# through memory, with Range passthrough (forwards the client Range to qiniu,
+# relays 206 + Content-Range) — and clients that follow redirects skip the proxy
+# entirely (302 straight to qiniu), so only webdavfs/mini-redirector pay it.
+use std/str
+use std/bytes
+use std/map
+use std/list
+use util/ferr.{catch_text}
+use java "java.sql.Connection"
+use java "java.lang.String"
+use java "java.util.Base64"
+use java "java.net.URI"
+use java "java.net.URLDecoder"
+use java "java.text.SimpleDateFormat"
+use java "java.util.Date"
+use java "java.util.Locale"
+use java "java.util.TimeZone"
+use java "java.util.concurrent.atomic.AtomicReference"
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, text, raw, binary, streaming, redirect, with_header, header}
+use web/router.{Route, route_method_of, tagged}
+use db/db.{with_db}
+use svc/auth.{Auth, Qiniu, check_basic}
+use svc/fm_service.{signed_url, gc_superseded, delete_object_of, rebase, copy_object}
+use repo/repo_fm.{FileRow, get_row, children, subtree_rows, insert_file, insert_folder, delete_row, reparent}
+use util/fm_paths.{basename, parent_rel, ext, ts, guess_mime}
+use qiniu/rs.{upload_file}
+use java "java.io.File"
+use util/crypto.{sha256_hex, uuid, uuid_hex}
+use util/http.{fetch_stream, ok_stream, close_stream}
+use util/ttl.{cache_get, cache_put, now_s}
+use util/errkind.{KUpstream, as_upstream, split_kind}
+use svc/export.{url_encode}
+
+const AUTH_TTL: Int = 300
+const REDIRECT_CLIENTS: List[String] = ["rclone", "cyberduck", "mountain duck", "raidrive", "webdavlib"]
+
+# ---- small string helpers ----
+
+fn header_or(req: Request, name: String, dflt: String) -> String = unwrap_or(header(req, name), dflt)
+
+fn path_segs(rel: String) -> List[String] = filter(str.split(rel, "/"), s => s != "")
+
+# Normalize a WebDAV path to its non-empty segments: drops leading, trailing
+# and repeated slashes. (Not Python's str.strip("/") — that keeps internal
+# runs; fm_paths.strip_slashes is the one that does. Hrefs are rebuilt from
+# segments anyway, so collapsing here is what the rest of the module expects.)
+fn path_join(s: String) -> String = join(path_segs(s), "/")
+
+fn contains_ci(hay: String, needle: String) -> Bool = str.contains(str.to_lower(hay), needle)
+
+# XML text escaping (& < >), matching xml.sax.saxutils.escape; & must go first.
+fn xml_escape(s: String) -> String = {
+  let a = str.replace(s, "&", "&amp;")
+  let b = str.replace(a, "<", "&lt;")
+  str.replace(b, ">", "&gt;")
+}
+
+# ---- dates (HTTP RFC1123 and ISO8601, both GMT) ----
+
+fn http_date(t: Int) -> String !io = fmt_date("EEE, dd MMM yyyy HH:mm:ss 'GMT'", t)
+
+fn iso_date(t: Int) -> String !io = fmt_date("yyyy-MM-dd'T'HH:mm:ss'Z'", t)
+
+fn fmt_date(pattern: String, t: Int) -> String !io = {
+  let loc = Locale.forLanguageTag("en-US")!
+  let f = SimpleDateFormat.new(pattern, loc)
+  let _z = f.setTimeZone(TimeZone.getTimeZone("GMT")!)
+  f.format(Date.new(t * 1000))!
+}
+
+# ---- prefix / rel / href ----
+
+# The externally visible WebDAV root prefix (drives href and Destination). nginx
+# on dav.dawnop.com sends `X-Dav-Prefix: /` -> "" so hrefs come out /foo; direct
+# :8001/dav access (no header) defaults to /dav.
+fn dav_prefix(req: Request) -> String = {
+  let raw = header_or(req, "x-dav-prefix", "/dav")
+  let p = "/" ++ path_join(raw)
+  if p == "/" { "" } else { p }
+}
+
+fn dav_rel(req: Request) -> String = path_join(unwrap_or(map.get(req.params, "rest"), ""))
+
+fn href(prefix: String, rel: String, is_dir: Bool) -> String !io = {
+  let path = join(map(path_segs(rel), url_encode), "/")
+  let base =
+    if path == "" {
+      if prefix != "" { prefix ++ "/" } else { "/" }
+    } else {
+      "$prefix/$path"
+    }
+  if is_dir && not str.ends_with(base, "/") { base ++ "/" } else { base }
+}
+
+# ---- PROPFIND XML ----
+
+fn multistatus(inner: String) -> String =
+  "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\">$inner</D:multistatus>"
+
+fn response_xml(prefix: String, rel: String, name: String, is_dir: Bool, size: Int, mime: String, mtime: Int, ctime: Int, etag: String) -> String !io = {
+  let typ = if is_dir { "<D:collection/>" } else { "" }
+  let extra =
+    if is_dir {
+      ""
+    } else {
+      let m = if mime == "" { "application/octet-stream" } else { mime }
+      let etag_xml = if etag == "" { "" } else { "<D:getetag>${xml_escape(etag)}</D:getetag>" }
+      "<D:getcontentlength>$size</D:getcontentlength><D:getcontenttype>${xml_escape(m)}</D:getcontenttype>$etag_xml"
+    }
+  "<D:response><D:href>${xml_escape(href(prefix, rel, is_dir))}</D:href>" ++
+    "<D:propstat><D:prop>" ++
+    "<D:displayname>${xml_escape(name)}</D:displayname>" ++
+    "<D:resourcetype>$typ</D:resourcetype>" ++
+    "<D:getlastmodified>${http_date(mtime)}</D:getlastmodified>" ++
+    "<D:creationdate>${iso_date(ctime)}</D:creationdate>" ++
+    "$extra</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>"
+}
+
+# A row's <D:response>. FileRow has no created_at column, so creationdate reuses
+# updated_at (a minor, documented divergence from FastAPI's o.created_at).
+fn entry_xml(prefix: String, o: FileRow) -> String !io = {
+  let t = ts(o.updated_at)
+  let etag = if o.is_dir { "" } else { key_etag(o.key) }
+  response_xml(prefix, o.path, basename(o.path), o.is_dir, o.size, o.content_type, t, t, etag)
+}
+
+fn key_etag(k: Option[String]) -> String = match k { Some(v) -> "\"$v\"" None -> "" }
+
+fn kids_xml(prefix: String, rows: List[FileRow]) -> String !io =
+  fold(rows, "", (acc, o) => acc ++ entry_xml(prefix, o))
+
+fn propfind(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io = {
+  let prefix = dav_prefix(req)
+  let depth = header_or(req, "depth", "1")
+  match as_http(with_db(a.db.path, a.db.ext, c => propfind_body(c, prefix, rel, depth)), 500)? {
+    Some(body) -> Ok(raw(207, "application/xml; charset=\"utf-8\"", body))
+    None -> Err(http_error(404, "资源不存在"))
+  }
+}
+
+fn propfind_body(c: Connection, prefix: String, rel: String, depth: String) -> Result[Option[String], String] !io =
+  if rel == "" {
+    let now = now_s()
+    let self_xml = response_xml(prefix, "", "", true, 0, "", now, now, "")
+    let kids: List[FileRow] = if depth != "0" { children(c, "")? } else { [] }
+    Ok(Some(multistatus(self_xml ++ kids_xml(prefix, kids))))
+  } else {
+    match get_row(c, rel)? {
+      None -> Ok(None)
+      Some(o) -> {
+        let self_xml = entry_xml(prefix, o)
+        let kids: List[FileRow] = if depth != "0" && o.is_dir { children(c, rel)? } else { [] }
+        Ok(Some(multistatus(self_xml ++ kids_xml(prefix, kids))))
+      }
+    }
+  }
+
+# ---- GET / HEAD ----
+
+fn follows_redirect(req: Request) -> Bool = {
+  let ua = header_or(req, "user-agent", "")
+  fold(REDIRECT_CLIENTS, false, (acc, tag) => acc || contains_ci(ua, tag))
+}
+
+fn get_or_head(a: Auth, req: Request, rel: String, head: Bool) -> Result[Response, HttpError] !io =
+  if rel == "" {
+    Err(http_error(405, "不能下载目录"))
+  } else {
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
+      None -> Err(http_error(404, "资源不存在"))
+      Some(o) ->
+        if o.is_dir {
+          Err(http_error(405, "不能下载目录"))
+        } else {
+          match o.key {
+            None -> Err(http_error(405, "不能下载目录"))
+            Some(k) -> serve_file(a, req, o, k, head)
+          }
+        }
+    }
+  }
+
+fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Result[Response, HttpError] !io = {
+  let mime = if o.content_type == "" { "application/octet-stream" } else { o.content_type }
+  let etag = "\"$key\""
+  let lastmod = http_date(ts(o.updated_at))
+  if head {
+    Ok(with_meta(raw(200, mime, ""), o.size, etag, lastmod))
+  } else if o.size <= 0 {
+    # A 0-byte object has nothing to fetch, and qiniu does not answer a plain GET
+    # on one with 0 bytes — it answers {"error":"invalid range: failed to overlap"},
+    # which fetch_bytes (which does not inspect the status) would hand back as the
+    # file's content. Serve the empty body ourselves, ahead of the redirect branch
+    # so 302-following clients don't hit the same thing at qiniu.
+    Ok(add_headers(binary(200, mime, bytes.utf8("")),
+      [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
+  } else if follows_redirect(req) {
+    # redirect-following clients get 302 direct to qiniu, which serves Range itself
+    Ok(redirect(302, signed_url(a.qiniu, key, "")))
+  } else {
+    # proxy clients (macOS webdavfs / Windows redirector) can't be 302'd reliably:
+    # forward a Range so QuickLook/streaming/resume get 206 + Content-Range, matching
+    # FastAPI. qiniu honors Range on GET; if it returns the wrong length (ignored the
+    # Range) fall back to a plain 200 with whatever came back.
+    match range_of(req, o.size) {
+      Some(pair) -> {
+        let (start, end) = pair
+        {
+          let r = as_http(fetch_stream(signed_url(a.qiniu, key, ""), [("Accept-Encoding", "identity"), ("Range", "bytes=$start-$end")]), 502)?
+          # a ranged hit is 206, a server that ignored the Range answers 200 —
+          # anything else is an upstream error whose body is not the file. Streaming
+          # can't measure the returned length, so decide 206-vs-200 by the upstream
+          # status (the interval was already validated against the trusted o.size).
+          if not ok_stream(r) {
+            close_stream(r.stream)
+            Err(http_error(502, "qiniu ${r.status}"))
+          } else if r.status == 206 {
+            Ok(add_headers(streaming(206, mime, r.stream), [("Accept-Ranges", "bytes"), ("Content-Range", "bytes $start-$end/${o.size}"), ("Last-Modified", lastmod), ("ETag", etag)]))
+          } else {
+            Ok(add_headers(streaming(200, mime, r.stream), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
+          }
+        }
+      }
+      None ->
+        {
+          let r = as_http(fetch_stream(signed_url(a.qiniu, key, ""), [("Accept-Encoding", "identity")]), 502)?
+          if not ok_stream(r) {
+            close_stream(r.stream)
+            Err(http_error(502, "qiniu ${r.status}"))
+          } else {
+            Ok(add_headers(streaming(200, mime, r.stream), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
+          }
+        }
+    }
+  }
+}
+
+# parse a single-range request header against the total size → Some((start,end))
+# inclusive, or None (absent / multi-range / unsatisfiable → serve the whole file).
+# Forms: bytes=start-end, bytes=start-, bytes=-suffix.
+fn range_of(req: Request, total: Int) -> Option[(Int, Int)] =
+  match header(req, "range") {
+    None -> None
+    Some(rng) ->
+      if not str.starts_with(rng, "bytes=") || total <= 0 {
+        None
+      } else {
+        let spec = str.slice(rng, 6, str.len(rng))
+        if str.contains(spec, ",") {
+          None
+        } else {
+          let parts = str.split(spec, "-")
+          if len(parts) != 2 { None } else { range_pair(parts[0], parts[1], total) }
+        }
+      }
+  }
+
+fn range_pair(a: String, b: String, total: Int) -> Option[(Int, Int)] =
+  if a == "" {
+    # suffix: the last b bytes
+    match parse_int(b) {
+      Some(n) -> if n <= 0 { None } else { Some((if total - n < 0 { 0 } else { total - n }, total - 1)) }
+      None -> None
+    }
+  } else {
+    match parse_int(a) {
+      None -> None
+      Some(s) ->
+        if s >= total || s < 0 {
+          None
+        } else {
+          let e = if b == "" { total - 1 } else { match parse_int(b) { Some(x) -> if x > total - 1 { total - 1 } else { x } None -> total - 1 } }
+          if e < s { None } else { Some((s, e)) }
+        }
+    }
+  }
+
+fn with_meta(r: Response, size: Int, etag: String, lastmod: String) -> Response =
+  add_headers(r, [("Content-Length", to_string(size)), ("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)])
+
+fn add_headers(r: Response, hs: List[(String, String)]) -> Response =
+  fold(hs, r, (acc, kv) => {
+    let (k, v) = kv
+    with_header(acc, k, v)
+  })
+
+# ---- write helpers ----
+
+fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {
+  let parent = parent_rel(rel)
+  if parent == "" { Ok(true) } else {
+    match with_db(a.db.path, a.db.ext, c => get_row(c, parent))? {
+      Some(_) -> Ok(true)
+      None -> Ok(false)
+    }
+  }
+}
+
+# ---- PUT ----
+
+# Size of the spilled body. The Content-Length header would be a client's claim;
+# the file on disk is what we actually received and are about to upload.
+fn file_size(path: String) -> Result[Int, String] !io =
+  catch_text(() => File.new(path).length())
+
+fn put(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io =
+  if rel == "" {
+    Err(http_error(405, "不能写入根"))
+  } else {
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
+      Some(o) -> if o.is_dir { Err(http_error(405, "目标是目录")) } else { put_do(a, req, rel, Some(o)) }
+      None -> put_do(a, req, rel, None)
+    }
+  }
+
+fn put_do(a: Auth, req: Request, rel: String, existing: Option[FileRow]) -> Result[Response, HttpError] !io =
+  {
+    let ok = as_http(parent_exists(a, rel), 500)?
+    if not ok {
+      Err(http_error(409, "父目录不存在"))
+    } else {
+      let mime = guess_mime(basename(rel))
+      let e = ext(basename(rel))
+      let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
+      # the body was streamed to disk by the server (route tag "stream-body"), so
+      # upload it straight from there: constant memory, whatever the size.
+      match req.body_file {
+        None -> Err(http_error(500, "请求体未落盘"))
+        Some(path) -> {
+          let size = as_http(file_size(path), 500)?
+          let _u = as_http(upload_file(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, path, mime, now_s() + a.qiniu.expires), 502)?
+          put_commit(a, rel, key, mime, size, existing)
+        }
+      }
+    }
+  }
+
+fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int, existing: Option[FileRow]) -> Result[Response, HttpError] !io =
+  {
+    let _i = as_http(with_db(a.db.path, a.db.ext, c => insert_file(c, rel, key, mime, size)), 500)?
+    let _d = gc_superseded(a.qiniu, existing, key)
+    match existing {
+      Some(_) -> Ok(text(204, ""))
+      None -> Ok(text(201, ""))
+    }
+  }
+
+# ---- DELETE ----
+
+fn del(a: Auth, rel: String) -> Result[Response, HttpError] !io =
+  if rel == "" {
+    Err(http_error(405, "不能删除根"))
+  } else {
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
+      None -> Err(http_error(404, "资源不存在"))
+      Some(_) -> purge(a, rel)
+    }
+  }
+
+fn purge(a: Auth, rel: String) -> Result[Response, HttpError] !io =
+  {
+    let rows = as_http(with_db(a.db.path, a.db.ext, c => subtree_rows(c, rel)), 500)?
+    let _q = del_qiniu(a.qiniu, rows, 0)
+    let _d = as_http(with_db(a.db.path, a.db.ext, c => del_rows(c, rows, 0)), 500)?
+    Ok(text(204, ""))
+  }
+
+fn del_qiniu(q: Qiniu, rows: List[FileRow], i: Int) -> Int !io =
+  if i >= len(rows) { 0 } else {
+    let o = rows[i]
+    let _r: Result[Unit, String] = delete_object_of(q, o)
+    del_qiniu(q, rows, i + 1)
+  }
+
+fn del_rows(c: Connection, rows: List[FileRow], i: Int) -> Result[Int, String] !io =
+  if i >= len(rows) { Ok(0) } else {
+    let _d = delete_row(c, rows[i].path)?
+    del_rows(c, rows, i + 1)
+  }
+
+# ---- MKCOL ----
+
+fn mkcol(a: Auth, rel: String) -> Result[Response, HttpError] !io =
+  if rel == "" {
+    Err(http_error(405, "根已存在"))
+  } else {
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
+      Some(_) -> Err(http_error(405, "已存在同名项"))
+      None -> {
+        let ok = as_http(parent_exists(a, rel), 500)?
+        if not ok {
+          Err(http_error(409, "父目录不存在"))
+        } else {
+          let _i = as_http(with_db(a.db.path, a.db.ext, c => insert_folder(c, rel)), 500)?
+          Ok(text(201, ""))
+        }
+      }
+    }
+  }
+
+# ---- MOVE / COPY ----
+
+# the Destination's path, undecoded (getRawPath, not getPath — getPath already
+# percent-decodes, so the old URLDecoder pass double-decoded). urlparse-equivalent.
+fn uri_path(u: String) -> String !io = URI.create(u)!.getRawPath()!
+
+fn dest_rel(req: Request) -> Option[String] !io =
+  match header(req, "destination") {
+    None -> None
+    Some(d) -> {
+      let path = uri_path(d)
+      let prefix = dav_prefix(req)
+      let stripped = if prefix != "" && str.starts_with(path, prefix) { str.slice(path, str.len(prefix), str.len(path)) } else { path }
+      # single percent-decode like Python's unquote: %XX resolves, a literal '+'
+      # stays '+' (URLDecoder would turn it into a space), so protect '+' as %2B first
+      let decoded = URLDecoder.decode(join(str.split(stripped, "+"), "%2B"), "UTF-8")!
+      Some(path_join(decoded))
+    }
+  }
+
+# FastAPI checks the source exists (404) BEFORE parsing Destination (400) or the
+# self/subdir guard (409); reproduce that ordering here.
+fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Response, HttpError] !io =
+  if rel == "" {
+    Err(http_error(405, "不能操作根"))
+  } else {
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
+      None -> Err(http_error(404, "源不存在"))
+      Some(_) ->
+        match dest_rel(req) {
+          None -> Err(http_error(400, "缺少 Destination"))
+          Some(dst) ->
+            if dst == "" {
+              Err(http_error(400, "非法目标"))
+            } else if dst == rel || str.starts_with(dst, rel ++ "/") {
+              Err(http_error(409, "不能移动/复制到自身或子目录"))
+            } else {
+              mc_check_dst(a, req, rel, dst, is_move)
+            }
+        }
+    }
+  }
+
+fn mc_check_dst(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) -> Result[Response, HttpError] !io =
+  {
+    let dst_existing = as_http(with_db(a.db.path, a.db.ext, c => get_row(c, dst)), 500)?
+    let overwrite = str.to_upper(header_or(req, "overwrite", "T")) != "F"
+    match dst_existing {
+      Some(_) -> if not overwrite { Err(http_error(412, "目标已存在")) } else { mc_purge_then(a, rel, dst, is_move, true) }
+      None -> mc_require_parent(a, rel, dst, is_move, false)
+    }
+  }
+
+fn mc_purge_then(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =
+  {
+    let _p = as_http(purge_silent(a, dst), 500)?
+    mc_require_parent(a, rel, dst, is_move, dst_existed)
+  }
+
+# delete the dst subtree (rows + qiniu) without producing a Response
+fn purge_silent(a: Auth, rel: String) -> Result[Int, String] !io =
+  match with_db(a.db.path, a.db.ext, c => subtree_rows(c, rel))? {
+    rows -> {
+      let _q = del_qiniu(a.qiniu, rows, 0)
+      with_db(a.db.path, a.db.ext, c => del_rows(c, rows, 0))
+    }
+  }
+
+fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =
+  {
+    let ok = as_http(parent_exists(a, dst), 500)?
+    if not ok { Err(http_error(409, "父目录不存在")) } else { mc_apply(a, rel, dst, is_move, dst_existed) }
+  }
+
+fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io = {
+  let outcome: Result[Int, String] =
+    if is_move {
+      with_db(a.db.path, a.db.ext, c => reparent(c, rel, dst))
+    } else {
+      copy_subtree(a, rel, dst)
+    }
+  match outcome {
+    Err(m) -> {
+      # an object-store refusal is a 502 (the FastAPI reference raises 502 around
+      # qiniu_client.copy); a database failure stays a 500
+      let (k, t) = split_kind(m)
+      match k {
+        KUpstream -> Err(http_error(502, t))
+        _ -> Err(http_error(500, t))
+      }
+    }
+    Ok(_) -> if dst_existed { Ok(text(204, "")) } else { Ok(text(201, "")) }
+  }
+}
+
+# COPY: recreate dirs, and for each file copy the qiniu object to a fresh key.
+fn copy_subtree(a: Auth, rel: String, dst: String) -> Result[Int, String] !io =
+  match with_db(a.db.path, a.db.ext, c => subtree_rows(c, rel))? {
+    rows -> copy_rows(a, rel, dst, rows, 0)
+  }
+
+fn copy_rows(a: Auth, rel: String, dst: String, rows: List[FileRow], i: Int) -> Result[Int, String] !io =
+  if i >= len(rows) { Ok(0) } else {
+    let o = rows[i]
+    let dst_path = rebase(rel, dst, o.path)
+    let _step =
+      if o.is_dir {
+        with_db(a.db.path, a.db.ext, c => insert_folder(c, dst_path))?
+      } else {
+        copy_one_file(a, o, dst_path)?
+      }
+    copy_rows(a, rel, dst, rows, i + 1)
+  }
+
+fn copy_one_file(a: Auth, o: FileRow, dst_path: String) -> Result[Int, String] !io = {
+  let src_key = unwrap_or(o.key, "")
+  let new_key = as_upstream(copy_object(a.qiniu, src_key))?
+  with_db(a.db.path, a.db.ext, c => insert_file(c, dst_path, new_key, o.content_type, o.size))
+}
+
+# ---- LOCK (fake) / UNLOCK ----
+
+fn lock_response(req: Request, rel: String) -> Response !io = {
+  let prefix = dav_prefix(req)
+  let token = "opaquelocktoken:" ++ uuid()
+  let body =
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:prop xmlns:D=\"DAV:\"><D:lockdiscovery><D:activelock>" ++
+    "<D:locktype><D:write/></D:locktype><D:lockscope><D:exclusive/></D:lockscope>" ++
+    "<D:depth>infinity</D:depth><D:timeout>Second-3600</D:timeout>" ++
+    "<D:locktoken><D:href>$token</D:href></D:locktoken>" ++
+    "<D:lockroot><D:href>${xml_escape(href(prefix, rel, false))}</D:href></D:lockroot>" ++
+    "</D:activelock></D:lockdiscovery></D:prop>"
+  with_header(raw(200, "application/xml; charset=\"utf-8\"", body), "Lock-Token", "<$token>")
+}
+
+# ---- OPTIONS ----
+
+# The verbs dav_routes actually registers. Also the source of `Allow` — the two
+# used to be independent literals that could drift apart silently, so the inline
+# test below pins Allow to this list.
+const DAV_VERBS: List[String] =
+  ["OPTIONS", "PROPFIND", "HEAD", "GET", "PUT", "DELETE", "MKCOL", "MOVE", "COPY", "LOCK", "UNLOCK"]
+
+const ALLOW: String = "OPTIONS, PROPFIND, HEAD, GET, PUT, DELETE, MKCOL, MOVE, COPY, LOCK, UNLOCK"
+
+fn options_response() -> Response =
+  add_headers(text(200, ""), [("DAV", "1, 2"), ("Allow", ALLOW), ("MS-Author-Via", "DAV"), ("Content-Length", "0")])
+
+# ---- auth ----
+
+# 401 body matches FastAPI's HTTPException(401,"需要认证") → {"detail":...} JSON
+fn unauthorized() -> Response =
+  with_header(
+    raw(401, "application/json; charset=utf-8", "{\"detail\":\"需要认证\"}"),
+    "WWW-Authenticate", "Basic realm=\"dawnop-webdav\"")
+
+# None = authorized; Some(resp) = the 401 to return. A single-admin TTL cache
+# (keyed by sha256("user:pass")) skips bcrypt on the mount's high-frequency calls.
+fn dav_auth(a: Auth, cell: AtomicReference, req: Request) -> Option[Response] !io =
+  match header(req, "authorization") {
+    None -> Some(unauthorized())
+    Some(h) ->
+      if not str.starts_with(h, "Basic ") {
+        Some(unauthorized())
+      } else {
+        # malformed base64 is a 401, not a 500 (FastAPI wraps b64decode in try/except)
+        match b64_decode_try(str.slice(h, 6, str.len(h))) {
+          Err(_e) -> Some(unauthorized())
+          Ok(raw_cred) -> {
+            let parts = str.split(raw_cred, ":")
+            if len(parts) < 2 {
+              Some(unauthorized())
+            } else {
+              let user = parts[0]
+              let pass = join(list.drop(parts, 1), ":")
+              let key = sha256_hex(raw_cred)
+              match cache_get(cell, AUTH_TTL) {
+                Some(cached) -> if cached == key { None } else { verify_cache(a, cell, user, pass, key) }
+                None -> verify_cache(a, cell, user, pass, key)
+              }
+            }
+          }
+        }
+      }
+  }
+
+fn b64_decode(s: String) -> String !io =
+  bytes.decode_utf8(Base64.getDecoder()!.decode(s)!)
+
+# base64-decode that turns malformed input into an Err instead of a panic
+fn b64_decode_try(s: String) -> Result[String, String] !io =
+  catch_text(() => b64_decode(s))
+
+fn verify_cache(a: Auth, cell: AtomicReference, user: String, pass: String, key: String) -> Option[Response] !io =
+  match with_db(a.db.path, a.db.ext, c => check_basic(c, user, pass)) {
+    Ok(true) -> {
+      let _p = cache_put(cell, key)
+      None
+    }
+    _ -> Some(unauthorized())
+  }
+
+# ---- routes ----
+
+fn dav_handler(a: Auth, cell: AtomicReference, method: String) -> Handler =
+  req =>
+  if method == "OPTIONS" {
+    Ok(options_response())
+  } else {
+    match dav_auth(a, cell, req) {
+      Some(resp) -> Ok(resp)
+      None -> {
+        let rel = dav_rel(req)
+        match method {
+          "PROPFIND" -> propfind(a, req, rel)
+          "HEAD" -> get_or_head(a, req, rel, true)
+          "GET" -> get_or_head(a, req, rel, false)
+          "PUT" -> put(a, req, rel)
+          "DELETE" -> del(a, rel)
+          "MKCOL" -> mkcol(a, rel)
+          "MOVE" -> move_or_copy(a, req, rel, true)
+          "COPY" -> move_or_copy(a, req, rel, false)
+          "LOCK" -> Ok(lock_response(req, rel))
+          "UNLOCK" -> Ok(text(204, ""))
+          _ -> Err(http_error(405, "method not allowed"))
+        }
+      }
+    }
+  }
+
+## All WebDAV routes under /dav/{rest*} (the tail matches /dav and any depth).
+pub fn dav_routes(a: Auth, cell: AtomicReference) -> List[Route] = {
+  let verbs = DAV_VERBS
+  # raw-body: WebDAV PUT carries file bytes (bounded by nginx, not the JSON limit).
+  # no-cors: WebDAV is not browser traffic — skip the CORS middleware entirely.
+  # stream-body: PUT only — the server spills the body to a temp file instead of
+  # reading it into memory, and put() uploads straight from that path. The other
+  # verbs carry small XML bodies (PROPFIND/LOCK) that handlers read from `body`.
+  map(verbs, v => tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, cell, v)),
+    if v == "PUT" { ["raw-body", "no-cors", "stream-body"] } else { ["raw-body", "no-cors"] }))
+}
+
+test "range_pair parses the WebDAV Range forms against a total size" {
+  # explicit start-end (inclusive), clamped to total-1
+  assert range_pair("0", "1023", 5000) == Some((0, 1023))
+  assert range_pair("100", "999999", 5000) == Some((100, 4999))
+  # open-ended start-
+  assert range_pair("500", "", 5000) == Some((500, 4999))
+  # suffix -N = last N bytes
+  assert range_pair("", "500", 5000) == Some((4500, 4999))
+  assert range_pair("", "999999", 5000) == Some((0, 4999))
+  # unsatisfiable / malformed
+  assert range_pair("5000", "", 5000) == None
+  assert range_pair("", "0", 5000) == None
+  assert range_pair("x", "", 5000) == None
+}
+
+test "OPTIONS advertises DAV class 1,2 and an Allow matching the routed verbs" {
+  # `DAV: 1, 2` is the header a client reads to decide the mount is writable
+  # (class 2 = LOCK). Losing it degrades macOS Finder to read-only while every
+  # verb keeps working, so no functional test would notice — pin it explicitly.
+  # Note the wire spelling is `Dav: 1, 2`: the JDK http server title-cases header
+  # names on emission. Field names are case-insensitive (RFC 9110 §5.1), so that
+  # is conforming, but a case-sensitive `grep '^DAV:'` will miss it.
+  assert options_response().headers ==
+    [("DAV", "1, 2"), ("Allow", ALLOW), ("MS-Author-Via", "DAV"), ("Content-Length", "0")]
+  # Allow cannot drift from the verbs dav_routes actually registers.
+  assert ALLOW == fold(DAV_VERBS, "", (acc, v) => if acc == "" { v } else { acc ++ ", " ++ v })
+}

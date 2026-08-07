@@ -1,0 +1,306 @@
+# Page and tag write model (M6 knife 9): create/update/delete/reorder pages,
+# rename/merge/cleanup/delete tags. Mirrors app/api/pages.py and tags.py.
+use std/str
+use java "java.sql.Connection"
+use db/sql.{SqlV, PInt, PStr, ColInt, ColStr, query, exec, last_id, str_at, first_str, first_str_or, first_bool_or, first_int_or, bool_int, open, scalar_int}
+use repo/repo_write.{unique_slug, clip}
+
+# ---- pages ----
+
+pub type NewPage = {
+  title: String,
+  slug_hint: String,
+  kind: String,
+  description: String,
+  content: String,
+  auto_title: Bool,
+  nav_visible: Bool,
+  nav_order: Int,
+  # optional publish time; None = datetime('now'). Stored via datetime(?), see NewArticle.
+  created_at: Option[String],
+}
+
+## Create a page, returning its new id.
+pub fn create_page(c: Connection, p: NewPage) -> Result[Int, String] !io = {
+  let base = if p.slug_hint == "" { p.title } else { p.slug_hint }
+  let slug = unique_slug(c, "pages", base, None)?
+  let created_expr = match p.created_at { Some(_x) -> "datetime(?)" None -> "datetime('now')" }
+  let created_params: List[SqlV] = match p.created_at { Some(s) -> [PStr(s)] None -> [] }
+  let _i = exec(c,
+    "insert into pages (title, slug, type, description, content, nav_visible, nav_order, auto_title, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, $created_expr, datetime('now'))",
+    [PStr(p.title), PStr(slug), PStr(p.kind), PStr(p.description), PStr(p.content), PInt(bool_int(p.nav_visible)), PInt(p.nav_order), PInt(bool_int(p.auto_title))] ++ created_params)?
+  last_id(c)
+}
+
+## Whether a page id exists, and whether it is a builtin page.
+pub fn page_kind(c: Connection, id: Int) -> Result[Option[String], String] !io = {
+  let rows = query(c, "select type from pages where id = ?", [PInt(id)], [ColStr])?
+  Ok(first_str(rows))
+}
+
+pub fn set_page_str(c: Connection, id: Int, col: String, v: String) -> Result[Int, String] !io =
+  exec(c, "update pages set $col = ? where id = ?", [PStr(v), PInt(id)])
+
+pub fn set_page_int(c: Connection, id: Int, col: String, v: Int) -> Result[Int, String] !io =
+  exec(c, "update pages set $col = ? where id = ?", [PInt(v), PInt(id)])
+
+pub fn touch_page(c: Connection, id: Int) -> Result[Int, String] !io =
+  exec(c, "update pages set updated_at = datetime('now') where id = ?", [PInt(id)])
+
+# set created_at from a client ISO-8601 string, normalized via datetime(?)
+pub fn set_page_created(c: Connection, id: Int, iso: String) -> Result[Int, String] !io =
+  exec(c, "update pages set created_at = datetime(?) where id = ?", [PStr(iso), PInt(id)])
+
+pub fn regen_page_slug(c: Connection, id: Int, base: String) -> Result[Int, String] !io = {
+  let slug = unique_slug(c, "pages", base, Some(id))?
+  exec(c, "update pages set slug = ? where id = ?", [PStr(slug), PInt(id)])
+}
+
+pub fn page_title(c: Connection, id: Int) -> Result[String, String] !io = {
+  let rows = query(c, "select title from pages where id = ?", [PInt(id)], [ColStr])?
+  Ok(first_str_or(rows, ""))
+}
+
+## Delete a page; articles pointing at it have page_id nulled first.
+pub fn delete_page(c: Connection, id: Int) -> Result[Int, String] !io = {
+  let _u = exec(c, "update articles set page_id = null where page_id = ?", [PInt(id)])?
+  exec(c, "delete from pages where id = ?", [PInt(id)])
+}
+
+## Reorder: assign nav_order by position in the id list. Duplicate ids are
+## dropped preserving first-seen order (matches FastAPI's dedup) so a repeated id
+## doesn't shift later positions.
+pub fn reorder_pages(c: Connection, ids: List[Int]) -> Result[Int, String] !io =
+  reorder_loop(c, dedup_ints(ids), 0)
+
+fn reorder_loop(c: Connection, ids: List[Int], i: Int) -> Result[Int, String] !io =
+  if i == len(ids) {
+    Ok(0)
+  } else {
+    let _u = exec(c, "update pages set nav_order = ? where id = ?", [PInt(i), PInt(ids[i])])?
+    reorder_loop(c, ids, i + 1)
+  }
+
+fn dedup_ints(xs: List[Int]) -> List[Int] =
+  fold(xs, [], (acc, x) => if int_member(acc, x) { acc } else { acc ++ [x] })
+
+fn int_member(xs: List[Int], x: Int) -> Bool =
+  fold(xs, false, (acc, y) => acc || y == x)
+
+# ---- tags ----
+
+fn tag_name(c: Connection, id: Int) -> Result[String, String] !io = {
+  let rows = query(c, "select name from tags where id = ?", [PInt(id)], [ColStr])?
+  Ok(first_str_or(rows, ""))
+}
+
+pub fn tag_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
+  let rows = query(c, "select count(*) from tags where id = ?", [PInt(id)], [ColInt])?
+  Ok(first_bool_or(rows, false))
+}
+
+## Rename a tag, regenerating slug. Err on empty name or a duplicate name.
+pub fn rename_tag(c: Connection, id: Int, raw: String) -> Result[Bool, String] !io = {
+  let name = clip(str.trim(raw), 64)
+  if name == "" {
+    Err("标签名不能为空")
+  } else {
+    let dup = query(c, "select name from tags where lower(name) = ? and id != ?", [PStr(str.to_lower(name)), PInt(id)], [ColStr])?
+    match get(dup, 0) {
+      Some(r) -> Err("已存在同名标签「${str_at(r, 0)}」，如需归并请用合并功能")
+      None -> {
+        # only rewrite (and regenerate slug) when the name actually changes, like
+        # FastAPI's `if name != tag.name` — a same-name rename must not disturb slug
+        let cur = tag_name(c, id)?
+        if name == cur {
+          Ok(true)
+        } else {
+          let slug = unique_slug(c, "tags", name, Some(id))?
+          let _u = exec(c, "update tags set name = ?, slug = ? where id = ?", [PStr(name), PStr(slug), PInt(id)])?
+          Ok(true)
+        }
+      }
+    }
+  }
+}
+
+## Merge source into target: move article links (skipping dups), delete source.
+pub fn merge_tags(c: Connection, source_id: Int, target_id: Int) -> Result[Int, String] !io = {
+  let _m = exec(c,
+    "insert into article_tags (article_id, tag_id) select at.article_id, ? from article_tags at where at.tag_id = ? and at.article_id not in (select article_id from article_tags where tag_id = ?)",
+    [PInt(target_id), PInt(source_id), PInt(target_id)])?
+  let _d = exec(c, "delete from article_tags where tag_id = ?", [PInt(source_id)])?
+  let _dt = exec(c, "delete from tags where id = ?", [PInt(source_id)])?
+  target_published_count(c, target_id)
+}
+
+pub fn target_published_count(c: Connection, target_id: Int) -> Result[Int, String] !io = {
+  let rows = query(c, "select count(*) from article_tags where tag_id = ?", [PInt(target_id)], [ColInt])?
+  Ok(first_int_or(rows, 0))
+}
+
+## Delete tags used by no article; returns how many were removed.
+pub fn cleanup_tags(c: Connection) -> Result[Int, String] !io = {
+  let rows = query(c, "select count(*) from tags where id not in (select distinct tag_id from article_tags)", [], [ColInt])?
+  let n = first_int_or(rows, 0)
+  let _d = exec(c, "delete from tags where id not in (select distinct tag_id from article_tags)", [])?
+  Ok(n)
+}
+
+## Delete a tag and its article links.
+pub fn delete_tag(c: Connection, id: Int) -> Result[Int, String] !io = {
+  let _l = exec(c, "delete from article_tags where tag_id = ?", [PInt(id)])?
+  exec(c, "delete from tags where id = ?", [PInt(id)])
+}
+
+# ---- tests (need --cp lib/sqlite-jdbc-*.jar) ----
+#
+# The schema here is the shape create_all builds, trimmed to the columns this
+# module touches. Everything below runs against an in-memory database, so no
+# fixture file, no libsimple, and no network.
+
+# a schema or seed typo must fail loudly here, not as a puzzling assertion later
+fn must(r: Result[Int, String]) -> Int =
+  match r {
+    Ok(n) -> n
+    Err(m) -> panic(m)
+  }
+
+fn test_db() -> Connection !io = {
+  let c = open("jdbc:sqlite::memory:")
+  let _p = must(exec(c, "create table pages (id integer primary key, title text, slug text unique, type text, description text, content text, nav_visible integer, nav_order integer, auto_title integer, created_at text, updated_at text)", []))
+  let _t = must(exec(c, "create table tags (id integer primary key, name text, slug text unique, created_at text)", []))
+  let _a = must(exec(c, "create table articles (id integer primary key, title text, slug text unique, page_id integer)", []))
+  let _l = must(exec(c, "create table article_tags (article_id integer, tag_id integer)", []))
+  c
+}
+
+fn a_page(title: String, hint: String) -> NewPage =
+  NewPage {
+    title: title, slug_hint: hint, kind: "content", description: "", content: "",
+    auto_title: false, nav_visible: true, nav_order: 0, created_at: None,
+  }
+
+test "create_page derives a unique slug and reads back its type and title" {
+  let c = test_db()
+  let id = create_page(c, a_page("Hello World", ""))
+  assert id == Ok(1)
+  assert page_kind(c, 1) == Ok(Some("content"))
+  assert page_title(c, 1) == Ok("Hello World")
+  # a second page with the same title cannot take the same slug
+  let id2 = create_page(c, a_page("Hello World", ""))
+  assert id2 == Ok(2)
+  assert scalar_int(c, "select count(*) from pages where slug = 'hello-world'", []) == Ok(1)
+  assert scalar_int(c, "select count(*) from pages where slug = 'hello-world-2'", []) == Ok(1)
+  # slug_hint wins over the title when supplied
+  let _id3 = create_page(c, a_page("Ignored", "chosen-slug"))
+  assert scalar_int(c, "select count(*) from pages where slug = 'chosen-slug'", []) == Ok(1)
+  # a missing page answers None/"" rather than failing
+  assert page_kind(c, 99) == Ok(None)
+  assert page_title(c, 99) == Ok("")
+}
+
+test "delete_page detaches its articles instead of deleting them" {
+  let c = test_db()
+  let _p = create_page(c, a_page("Notes", ""))
+  assert exec(c, "insert into articles (title, slug, page_id) values ('a', 'a', 1)", []) == Ok(1)
+  assert exec(c, "insert into articles (title, slug, page_id) values ('b', 'b', 1)", []) == Ok(1)
+  assert delete_page(c, 1) == Ok(1)
+  # the articles survive with page_id nulled — the FastAPI contract, and the
+  # reason this is not a foreign-key cascade
+  assert scalar_int(c, "select count(*) from articles", []) == Ok(2)
+  assert scalar_int(c, "select count(*) from articles where page_id is null", []) == Ok(2)
+  assert scalar_int(c, "select count(*) from pages", []) == Ok(0)
+}
+
+test "reorder_pages numbers by position and drops repeated ids" {
+  let c = test_db()
+  for i in range(0, 4) {
+    let _p = create_page(c, a_page("P$i", "p$i"))
+  }
+  assert reorder_pages(c, [4, 2, 3, 1]) == Ok(0)
+  assert scalar_int(c, "select nav_order from pages where id = 4", []) == Ok(0)
+  assert scalar_int(c, "select nav_order from pages where id = 2", []) == Ok(1)
+  assert scalar_int(c, "select nav_order from pages where id = 3", []) == Ok(2)
+  assert scalar_int(c, "select nav_order from pages where id = 1", []) == Ok(3)
+  # a repeated id keeps its first position and does not shift the ones after it
+  assert reorder_pages(c, [1, 2, 1, 3]) == Ok(0)
+  assert scalar_int(c, "select nav_order from pages where id = 1", []) == Ok(0)
+  assert scalar_int(c, "select nav_order from pages where id = 2", []) == Ok(1)
+  assert scalar_int(c, "select nav_order from pages where id = 3", []) == Ok(2)
+}
+
+test "regen_page_slug keeps a page out of its own uniqueness check" {
+  let c = test_db()
+  let _a = create_page(c, a_page("One", "one"))
+  let _b = create_page(c, a_page("Two", "two"))
+  # renaming page 1 to a base it already owns must not append -2
+  assert regen_page_slug(c, 1, "One") == Ok(1)
+  assert scalar_int(c, "select count(*) from pages where id = 1 and slug = 'one'", []) == Ok(1)
+  # but it must still dodge another page's slug
+  assert regen_page_slug(c, 1, "Two") == Ok(1)
+  assert scalar_int(c, "select count(*) from pages where id = 1 and slug = 'two-2'", []) == Ok(1)
+}
+
+fn seed_tag(c: Connection, name: String, slug: String) -> Unit !io = {
+  let _t = must(exec(c, "insert into tags (name, slug, created_at) values (?, ?, datetime('now'))", [PStr(name), PStr(slug)]))
+  ()
+}
+
+test "rename_tag refuses duplicates and leaves a same-name rename alone" {
+  let c = test_db()
+  seed_tag(c, "Rust", "rust")
+  seed_tag(c, "Dawn", "dawn")
+  assert tag_exists(c, 1) == Ok(true)
+  assert tag_exists(c, 9) == Ok(false)
+  # a rename that only changes case of its own name must not disturb the slug
+  assert rename_tag(c, 1, "Rust") == Ok(true)
+  assert scalar_int(c, "select count(*) from tags where id = 1 and slug = 'rust'", []) == Ok(1)
+  # a real rename regenerates the slug
+  assert rename_tag(c, 1, "  Systems  ") == Ok(true)
+  assert scalar_int(c, "select count(*) from tags where id = 1 and name = 'Systems' and slug = 'systems'", []) == Ok(1)
+  # colliding with another tag's name (case-insensitively) is refused, not merged
+  assert rename_tag(c, 1, "dawn") == Err("已存在同名标签「Dawn」，如需归并请用合并功能")
+  assert rename_tag(c, 1, "   ") == Err("标签名不能为空")
+}
+
+test "merge_tags moves links without duplicating, then drops the source" {
+  let c = test_db()
+  seed_tag(c, "src", "src")
+  seed_tag(c, "dst", "dst")
+  # article 1 carries both tags; article 2 only the source
+  assert exec(c, "insert into article_tags values (1, 1), (1, 2), (2, 1)", []) == Ok(3)
+  # article 1 must not end up linked to the target twice
+  assert merge_tags(c, 1, 2) == Ok(2)
+  assert scalar_int(c, "select count(*) from article_tags where tag_id = 2", []) == Ok(2)
+  assert scalar_int(c, "select count(*) from article_tags where tag_id = 1", []) == Ok(0)
+  assert tag_exists(c, 1) == Ok(false)
+  assert tag_exists(c, 2) == Ok(true)
+}
+
+test "cleanup_tags removes only the unreferenced ones, and reports how many" {
+  let c = test_db()
+  seed_tag(c, "used", "used")
+  seed_tag(c, "loose", "loose")
+  seed_tag(c, "also-loose", "also-loose")
+  assert exec(c, "insert into article_tags values (1, 1)", []) == Ok(1)
+  assert cleanup_tags(c) == Ok(2)
+  assert scalar_int(c, "select count(*) from tags", []) == Ok(1)
+  assert tag_exists(c, 1) == Ok(true)
+  # a second sweep finds nothing left to do
+  assert cleanup_tags(c) == Ok(0)
+}
+
+test "delete_tag takes its article links with it" {
+  let c = test_db()
+  seed_tag(c, "gone", "gone")
+  seed_tag(c, "kept", "kept")
+  assert exec(c, "insert into article_tags values (1, 1), (2, 1), (1, 2)", []) == Ok(3)
+  assert delete_tag(c, 1) == Ok(1)
+  assert scalar_int(c, "select count(*) from tags", []) == Ok(1)
+  # the other tag's links are untouched
+  assert scalar_int(c, "select count(*) from article_tags", []) == Ok(1)
+  assert scalar_int(c, "select count(*) from article_tags where tag_id = 2", []) == Ok(1)
+  # deleting a tag that is not there is a no-op, not an error
+  assert delete_tag(c, 99) == Ok(0)
+}

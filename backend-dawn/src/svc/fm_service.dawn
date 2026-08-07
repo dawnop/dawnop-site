@@ -1,0 +1,375 @@
+# File-manager tree operations, one layer below the HTTP handlers (M6 knife 11).
+# Two groups live here:
+#
+#  1. The object-store primitives api_fm and webdav both need — minting a signed
+#     URL, rebasing a path onto a new subtree root, deciding which superseded key
+#     to collect, copying an object to a fresh key, deleting a row's object. They
+#     return Result and never map to a status code, because the two callers map
+#     failures differently (fm answers 502/conflict JSON, WebDAV answers 502/500
+#     through errkind) and hold their database handles differently (fm runs a
+#     whole tree walk on one connection, WebDAV opens one per step).
+#
+#  2. api_fm's own tree walks (rename/move/copy/delete/save/upload), lifted out of
+#     the route file so that file is handlers and wire shapes only.
+#
+# The invariants the rest of the system relies on are unchanged: rename and move
+# only rewrite `path` and never touch the qiniu object, copy really duplicates the
+# object under a fresh uuid key, and an overwrite writes a new key then drops the
+# old one (a CDN caches by URL, so writing the same key would serve stale bytes).
+use std/str
+use std/map
+use std/bytes
+use java "java.sql.Connection"
+use svc/auth.{Auth, Qiniu}
+use db/db.{with_db}
+use util/fm_paths.{fm_split, basename, ext, fm_join, full, guess_mime, strip_slashes, strip_trailing_slash}
+use repo/repo_fm.{FileRow, fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, delete_row, subtree_rows, entry_json}
+use util/crypto.{uuid_hex}
+use qiniu/sign.{private_url}
+use qiniu/rs.{delete_obj, copy_obj, upload_text, upload_bytes}
+use util/errkind.{conflict}
+use util/jsonx.{obj, jstr}
+use util/ttl.{now_s}
+use json/value.{Json, JArr, JObj, JStr}
+
+# ---- object-store primitives (shared with webdav.dawn) ----
+
+## A signed private-bucket URL for `key`, valid for the configured window.
+## `suffix` carries the extras fm appends to the signed base (an `imageView2`
+## fop, an `attname`); WebDAV passes "".
+pub fn signed_url(q: Qiniu, key: String, suffix: String) -> String !io = {
+  let domain = strip_trailing_slash(q.domain)
+  private_url(q.ak, q.sk, "$domain/$key$suffix", now_s() + q.expires)
+}
+
+## Move `path` from under `src_root` to under `dst_root`, keeping the tail. Both
+## subtree copies walk rows this way, so a child lands at the mirrored spot.
+pub fn rebase(src_root: String, dst_root: String, path: String) -> String =
+  dst_root ++ str.slice(path, str.len(src_root), str.len(path))
+
+## The object key that an overwrite orphans, if any: the row's current key when it
+## differs from the one just written. Directories carry no key (insert_folder
+## stores NULL), so a normal directory answers None and is never touched.
+##
+## Keyed off the key alone, deliberately. The three call sites this replaced did
+## not agree: fm's register also required `is_dir == false`, while fm's save and
+## WebDAV's put looked at the key only. That only diverges for a row that is both
+## a directory and an object — which `insert_file`'s upsert can mint, since it
+## rewrites `key` without clearing `is_dir`. In that state the old key is
+## unreferenced either way (the row now names the new one), so collecting it can
+## never strand a live file; the `is_dir` variant just leaked the object.
+pub fn superseded_key(existing: Option[FileRow], new_key: String) -> Option[String] =
+  match existing {
+    Some(o) ->
+      match o.key {
+        Some(k) -> if k != new_key { Some(k) } else { None }
+        None -> None
+      }
+    None -> None
+  }
+
+## Best-effort collection of the object an overwrite superseded. Failure is
+## ignored on purpose: the new object is already written and the row already
+## points at it, so a stuck delete must not fail the request — it leaves an
+## orphan for the sweeper instead.
+pub fn gc_superseded(q: Qiniu, existing: Option[FileRow], new_key: String) -> Unit !io = {
+  let _r: Result[Unit, String] =
+    match superseded_key(existing, new_key) {
+      Some(k) -> delete_obj(q.rs_host, q.ak, q.sk, q.bucket, k)
+      None -> Ok(())
+    }
+  ()
+}
+
+## Duplicate an object under a fresh uuid key; Ok carries the new key. This is
+## what makes copy (unlike rename/move) a real object-store operation.
+pub fn copy_object(q: Qiniu, src_key: String) -> Result[String, String] !io = {
+  let new_key = uuid_hex()
+  let _c = copy_obj(q.rs_host, q.ak, q.sk, q.bucket, src_key, new_key)?
+  Ok(new_key)
+}
+
+## Delete the object a row points at. A directory, or a file row with no key,
+## has nothing to delete. Callers decide whether a failure is fatal.
+pub fn delete_object_of(q: Qiniu, o: FileRow) -> Result[Unit, String] !io =
+  match o.key {
+    Some(k) -> if o.is_dir { Ok(()) } else { delete_obj(q.rs_host, q.ak, q.sk, q.bucket, k) }
+    None -> Ok(())
+  }
+
+# ---- create folder ----
+
+## Create `rel` (with any missing ancestors) and return the listing of `cur`.
+## None when something already sits at `rel`.
+pub fn mk_folder(c: Connection, rel: String, cur: String) -> Result[Option[Json], String] !io = {
+  let t = taken(c, rel)?
+  if t {
+    Ok(None)
+  } else {
+    let _e = ensure_dirs(c, rel)?
+    let _i = insert_folder(c, rel)?
+    let d = fs_data(c, cur)?
+    Ok(Some(d))
+  }
+}
+
+# ---- rename / move (path-only: the qiniu objects are never touched) ----
+
+pub fn do_rename(c: Connection, old: String, new_rel: String, cur: String) -> Result[Option[Json], String] !io =
+  if new_rel == old {
+    let d = fs_data(c, cur)?
+    Ok(Some(d))
+  } else {
+    let t = taken(c, new_rel)?
+    if t {
+      Ok(None)
+    } else {
+      let _r = reparent(c, old, new_rel)?
+      let d = fs_data(c, cur)?
+      Ok(Some(d))
+    }
+  }
+
+pub fn do_move(c: Connection, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
+  if i >= len(sources) {
+    fs_data(c, cur)
+  } else {
+    let src = fm_split(sources[i])
+    if src == "" {
+      do_move(c, sources, dest, cur, i + 1)
+    } else {
+      let new_rel = fm_join(dest, basename(src))
+      if new_rel == src || str.starts_with(new_rel, "$src/") {
+        do_move(c, sources, dest, cur, i + 1)
+      } else {
+        let t = taken(c, new_rel)?
+        if t {
+          Err(conflict("已存在同名项：${basename(new_rel)}"))
+        } else {
+          let _e = ensure_dirs(c, new_rel)?
+          let _r = reparent(c, src, new_rel)?
+          do_move(c, sources, dest, cur, i + 1)
+        }
+      }
+    }
+  }
+
+# ---- copy (dirs are recreated, files get a fresh qiniu object) ----
+
+pub fn do_copy(q: Qiniu, c: Connection, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
+  if i >= len(sources) {
+    fs_data(c, cur)
+  } else {
+    let src = fm_split(sources[i])
+    if src == "" {
+      do_copy(q, c, sources, dest, cur, i + 1)
+    } else {
+      let new_rel = fm_join(dest, basename(src))
+      if str.starts_with(new_rel, "$src/") {
+        do_copy(q, c, sources, dest, cur, i + 1)
+      } else {
+        let t = taken(c, new_rel)?
+        if t {
+          Err(conflict("已存在同名项：${basename(new_rel)}"))
+        } else {
+          let _e = ensure_dirs(c, new_rel)?
+          let rows = subtree_rows(c, src)?
+          let _cp = copy_rows(q, c, rows, src, new_rel, 0)?
+          do_copy(q, c, sources, dest, cur, i + 1)
+        }
+      }
+    }
+  }
+
+fn copy_rows(q: Qiniu, c: Connection, rows: List[FileRow], src: String, new_rel: String, i: Int) -> Result[Int, String] !io =
+  if i >= len(rows) {
+    Ok(0)
+  } else {
+    let o = rows[i]
+    let dst_path = rebase(src, new_rel, o.path)
+    let _one = if o.is_dir {
+      insert_folder(c, dst_path)?
+    } else {
+      match o.key {
+        Some(k) -> {
+          let new_key = copy_object(q, k)?
+          insert_file(c, dst_path, new_key, o.content_type, o.size)?
+        }
+        None -> 0
+      }
+    }
+    copy_rows(q, c, rows, src, new_rel, i + 1)
+  }
+
+# ---- delete ----
+
+## items is [{path: "qiniu://..."}]; extract the split rel paths.
+pub fn item_paths(m: Map[String, Json]) -> List[String] =
+  match map.get(m, "items") {
+    Some(JArr(xs)) -> fold(xs, [], (acc, j) =>
+        match j {
+          JObj(im) ->
+            match map.get(im, "path") {
+              Some(JStr(p)) -> acc ++ [fm_split(p)]
+              _ -> acc
+            }
+          _ -> acc
+        })
+    _ -> []
+  }
+
+pub fn do_delete(q: Qiniu, c: Connection, items: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
+  if i >= len(items) {
+    Ok(acc)
+  } else {
+    let rel = items[i]
+    if rel == "" {
+      do_delete(q, c, items, i + 1, acc)
+    } else {
+      let rows = subtree_rows(c, rel)?
+      let d2 = delete_rows(q, c, rows, 0, acc)?
+      do_delete(q, c, items, i + 1, d2)
+    }
+  }
+
+fn delete_rows(q: Qiniu, c: Connection, rows: List[FileRow], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
+  if i >= len(rows) {
+    Ok(acc)
+  } else {
+    let o = rows[i]
+    let _obj = delete_object_of(q, o)?
+    let e = entry_json(o)
+    let _d = delete_row(c, o.path)?
+    delete_rows(q, c, rows, i + 1, acc ++ [e])
+  }
+
+pub fn merge_deleted(base: Json, deleted: List[Json]) -> Json =
+  match base {
+    JObj(bm) -> JObj(map.insert(bm, "deleted", JArr(deleted)))
+    _ -> base
+  }
+
+# ---- create empty file / save text ----
+
+pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json], String] !io = {
+  let t = with_db(a.db.path, a.db.ext, c => taken(c, rel))?
+  if t {
+    Ok(None)
+  } else {
+    let mime = guess_mime(rel)
+    let key = uuid_hex()
+    let _up = upload_text(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, "", mime, now_s() + a.qiniu.expires)?
+    let d = with_db(a.db.path, a.db.ext, c => create_file_db(c, rel, key, mime, cur))?
+    Ok(Some(d))
+  }
+}
+
+fn create_file_db(c: Connection, rel: String, key: String, mime: String, cur: String) -> Result[Json, String] !io = {
+  let _e = ensure_dirs(c, rel)?
+  let _i = insert_file(c, rel, key, mime, 0)?
+  fs_data(c, cur)
+}
+
+## Write text to a NEW qiniu key, repoint the row, drop the old key. Returns {path}.
+pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !io = {
+  let existing = with_db(a.db.path, a.db.ext, c => get_row(c, rel))?
+  let mime = save_mime(existing, rel)
+  let new_key = save_key(rel)
+  let _up = upload_text(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, new_key, content, mime, now_s() + a.qiniu.expires)?
+  let _db = with_db(a.db.path, a.db.ext, c => save_db(c, rel, new_key, mime, str.len(content)))?
+  let _gc = gc_superseded(a.qiniu, existing, new_key)
+  Ok(obj([("path", jstr(full(rel)))]))
+}
+
+fn save_db(c: Connection, rel: String, key: String, mime: String, size: Int) -> Result[Int, String] !io = {
+  let _e = ensure_dirs(c, rel)?
+  insert_file(c, rel, key, mime, size)
+}
+
+fn save_mime(existing: Option[FileRow], rel: String) -> String =
+  match existing {
+    Some(o) -> if o.content_type != "" { o.content_type } else { guess_mime(rel) }
+    None -> guess_mime(rel)
+  }
+
+fn save_key(rel: String) -> String !io = {
+  let e = ext(basename(rel))
+  if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
+}
+
+# ---- proxy upload ----
+
+pub fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int) -> Result[Json, String] !io = {
+  let existing = with_db(a.db.path, a.db.ext, c => get_row(c, rel))?
+  let key = upload_key(existing)
+  let _up = upload_bytes(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_s() + a.qiniu.expires)?
+  with_db(a.db.path, a.db.ext, c => upsert_upload(c, rel, key, mime, size))
+}
+
+# reuse an existing file's key (overwrite in place, matching FastAPI), else a fresh
+# uuid; a directory at that path is not a file so it gets a fresh key too.
+fn upload_key(existing: Option[FileRow]) -> String !io =
+  match existing {
+    Some(o) ->
+      match o.key {
+        Some(k) -> if o.is_dir { uuid_hex() } else { k }
+        None -> uuid_hex()
+      }
+    None -> uuid_hex()
+  }
+
+fn upsert_upload(c: Connection, rel: String, key: String, mime: String, size: Int) -> Result[Json, String] !io = {
+  let _e = ensure_dirs(c, rel)?
+  let _i = insert_file(c, rel, key, mime, size)?
+  match get_row(c, rel)? {
+    Some(o) -> Ok(entry_json(o))
+    None -> Err("uploaded file vanished")
+  }
+}
+
+# ---- upload-token path shaping ----
+
+# FastAPI: name = (filename or "file").replace("\\","/").strip("/") — backslashes
+# to slashes, then strip leading/trailing slashes (internal ones survive).
+pub fn sanitize_name(n: String) -> String = {
+  let base = if n == "" { "file" } else { n }
+  strip_slashes(join(str.split(base, "\\"), "/"))
+}
+
+# The path returned by /upload-token (echoed to /register) must be the full FILE
+# path, not the bare directory. The regression this guards: dropping `name`
+# returned the dir, so a root upload came back as "qiniu://" → /register saw an
+# empty rel → 400 "缺少 path / key".
+pub fn token_rel(dir: String, raw_name: String) -> String =
+  fm_join(fm_split(dir), sanitize_name(raw_name))
+
+test "upload-token path joins the filename (not the bare dir)" {
+  # subdir upload: full file path, key extension from the filename
+  assert full(token_rel("qiniu://docs", "pic.png")) == "qiniu://docs/pic.png"
+  assert ext(sanitize_name("pic.png")) == "png"
+  # root upload: the file lands at root, not the empty directory
+  assert full(token_rel("", "a.txt")) == "qiniu://a.txt"
+  assert full(token_rel("qiniu://", "a.txt")) == "qiniu://a.txt"
+  # folder upload keeps internal subpath; ext still from the trailing name
+  assert full(token_rel("qiniu://up", "sub/b.md")) == "qiniu://up/sub/b.md"
+  assert ext(sanitize_name("sub/b.md")) == "md"
+  # extensionless file: no dot appended (caller uses a bare uuid key)
+  assert ext(sanitize_name("README")) == ""
+}
+
+test "rebase moves a subtree row onto its new root" {
+  assert rebase("a", "b", "a") == "b"
+  assert rebase("a", "b", "a/c/d.txt") == "b/c/d.txt"
+  assert rebase("docs/x", "arch/y", "docs/x/deep/f.md") == "arch/y/deep/f.md"
+}
+
+test "superseded_key names only a genuinely orphaned object" {
+  let file = FileRow { path: "a.txt", is_dir: false, key: Some("k1"), content_type: "", size: 0, updated_at: "" }
+  let dir = FileRow { path: "d", is_dir: true, key: None, content_type: "", size: 0, updated_at: "" }
+  # a real overwrite: the previous key is orphaned
+  assert superseded_key(Some(file), "k2") == Some("k1")
+  # same key rewritten in place, a directory, or nothing there: no object to drop
+  assert superseded_key(Some(file), "k1") == None
+  assert superseded_key(Some(dir), "k2") == None
+  assert superseded_key(None, "k2") == None
+}

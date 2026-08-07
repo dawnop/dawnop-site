@@ -3,21 +3,21 @@
 # during the gradual cutover from the FastAPI backend.
 use java "java.lang.System"
 use config.{load, get_or}
-use db.{Db}
+use db/db.{Db}
 use web/server.{serve_app_with, ServerConfig, DEFAULT_MAX_BODY}
-use jsonx.{fastapi_errors}
+use util/jsonx.{fastapi_errors}
 use web/middleware.{with_logging, with_cors, with_body_limit}
-use api_public
-use api_articles
-use api_settings
-use api_tags
-use api_pages
-use api_viz
-use api_fm
-use api_monitor.{MonCfg, mon_routes}
-use auth.{Auth, Qiniu, routes}
-use webdav.{dav_routes}
-use ttl.{new_cell}
+use api/api_public
+use api/api_articles
+use api/api_settings
+use api/api_tags
+use api/api_pages
+use api/api_viz
+use api/api_fm
+use api/api_monitor.{MonCfg, mon_routes}
+use svc/auth.{Auth, Qiniu, routes}
+use api/webdav.{dav_routes}
+use util/ttl.{new_cell}
 
 pub fn main() -> Unit !io = {
   let cfg = load(env_or("DAWNOP_ENV", "backend/.env"))

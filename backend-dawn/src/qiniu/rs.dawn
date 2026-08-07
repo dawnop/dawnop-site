@@ -1,0 +1,198 @@
+# Qiniu Kodo management API (M6 knife 11): stat / delete / copy over the bucket
+# manager REST endpoints, authenticated with QBox management tokens (qiniu/sign).
+# Pure Dawn over the http client — the official SDK drags okhttp+gson, so this
+# hand-rolls the three verbs fm needs.
+use std/str
+use std/bytes
+use std/map
+use java "java.net.http.HttpRequest.BodyPublisher"
+use java "java.net.http.HttpRequest.BodyPublishers"
+use java "java.io.File"
+use java "java.io.FileInputStream"
+use java "java.io.FileOutputStream"
+use java "java.io.ByteArrayOutputStream"
+use java "com.sun.net.httpserver.HttpServer"
+use java "java.net.InetSocketAddress"
+use util/ferr.{fe_text}
+use util/http.{HttpResp, post, post_bytes, post_publisher, fetch}
+use qiniu/sign.{entry_uri, entry_token, management_token, upload_token}
+
+const BOUNDARY: String = "----DawnFmBoundary7MA4YWxkTrZu0gW"
+
+# The endpoints arrive as a parameter (`Qiniu.rs_host` / `Qiniu.up_host`, from
+# main.dawn's config with the real qiniu hosts as defaults) rather than as the
+# constants they used to be. Signing does not depend on the host — the QBox
+# signature covers the path only — so redirecting these at a local fake exercises
+# this file's real request shaping, which is the whole point: the contract
+# harness holds copy/upload/delete to a golden without a live bucket.
+
+## Upload TEXT content to a key via qiniu's multipart form API (save/create-file).
+## `deadline` is the upload-token expiry (unix seconds).
+pub fn upload_text(up_host: String, ak: String, sk: String, bucket: String, key: String, content: String, mime: String, deadline: Int) -> Result[Unit, String] !io =
+  upload_bytes(up_host, ak, sk, bucket, key, bytes.utf8(content), mime, deadline)
+
+## Upload BINARY content to a key via qiniu's multipart form API. `content` is the
+## exact file Bytes; the multipart body is assembled as Bytes (ASCII framing +
+## content ++ ASCII tail) and POSTed verbatim. The byte-exact path for
+## /api/fm/upload (proxy upload) and for text uploads (which utf8 their content).
+pub fn upload_bytes(up_host: String, ak: String, sk: String, bucket: String, key: String, content: Bytes, mime: String, deadline: Int) -> Result[Unit, String] !io = {
+  let token = upload_token(ak, sk, bucket, key, deadline)
+  let body = multipart(token, key, content, mime)
+  let ct = "multipart/form-data; boundary=$BOUNDARY"
+  let r = post_bytes("$up_host/", [("Content-Type", ct)], body)?
+  ok_status(r, "upload")
+}
+
+# A qiniu call either succeeded or it did not — the outcome is not a Bool.
+#
+# Until 2026-07-19 the four operations below ended in `Ok(r.status == 200)`, so a
+# refusal (a bad token, a quota stop, a 4xx of any kind) travelled as Ok(false).
+# Every caller discarded that Bool with `let _ = ...?`, which is how
+# /api/fm/create-file came to record a FileObject row for an object qiniu had
+# rejected — breaking the "registered ⟺ really present in qiniu" invariant that
+# /register maintains so carefully with the pending_uploads ledger. Verified
+# against fake credentials: the endpoint answered 200 and left a phantom row.
+#
+# The status and body go into the message because these surface only to an
+# authenticated admin (every fm route is behind `guarded`), and "qiniu 401
+# {"error":"bad token"}" is the difference between a five-minute fix and an hour.
+fn ok_status(r: HttpResp, what: String) -> Result[Unit, String] =
+  if r.status == 200 { Ok(()) } else { Err("$what: qiniu ${r.status} ${r.body}") }
+
+fn multipart(token: String, key: String, content: Bytes, mime: String) -> Bytes =
+  bytes.utf8(mp_head(token, key, mime)) ++ content ++ bytes.utf8(mp_tail())
+
+# The multipart framing around the file part, split out so the streaming upload
+# can put a file between the two without ever concatenating it into one buffer.
+fn mp_head(token: String, key: String, mime: String) -> String = {
+  let nl = from_code_points(['\r', '\n']) # CRLF
+  let d = "--$BOUNDARY$nl"
+  let field = (name: String, value: String) => "${d}Content-Disposition: form-data; name=\"$name\"$nl$nl$value$nl"
+  field("token", token) ++ field("key", key) ++
+    "${d}Content-Disposition: form-data; name=\"file\"; filename=\"$key\"${nl}Content-Type: $mime$nl$nl"
+}
+
+fn mp_tail() -> String = {
+  let nl = from_code_points(['\r', '\n'])
+  "$nl--$BOUNDARY--$nl"
+}
+
+## Upload a file from DISK to a key with CONSTANT memory: the multipart body is
+## the ASCII framing with BodyPublishers.ofFile spliced between the two halves,
+## so the file is read from disk in chunks at send time and never lands in the
+## heap — that is what lets WebDAV PUT take a big file, where upload_bytes spikes
+## to ~3x the file size (raw body + assembled body + publisher copy). concat sums
+## its parts' lengths, giving the exact contentLength qiniu's form API requires.
+pub fn upload_file(up_host: String, ak: String, sk: String, bucket: String, key: String, path: String, mime: String, deadline: Int) -> Result[Unit, String] !io = {
+  let token = upload_token(ak, sk, bucket, key, deadline)
+  let body = multipart_streaming(mp_head(token, key, mime), path, mp_tail())?
+  let ct = "multipart/form-data; boundary=$BOUNDARY"
+  let r = post_publisher("$up_host/", [("Content-Type", ct)], body)?
+  ok_status(r, "upload_file")
+}
+
+# head ++ <the file, streamed off disk> ++ tail, as one publisher
+fn multipart_streaming(head: String, src: String, tail: String) -> Result[BodyPublisher, String] !io =
+  match catch_fault(() => {
+    let h = BodyPublishers.ofByteArray(bytes.utf8(head))!
+    let f = BodyPublishers.ofFile(File.new(src).toPath()!)!
+    let t = BodyPublishers.ofByteArray(bytes.utf8(tail))!
+    BodyPublishers.concat(h, f, t)!
+  }) {
+    Err(e) -> Err("upload_file: ${fe_text(e)}")
+    Ok(p) -> Ok(p)
+  }
+
+fn hdr(ak: String, sk: String, op: String, entry: String) -> List[(String, String)] !io =
+  [("Authorization", entry_token(ak, sk, op, entry))]
+
+## stat an object; Ok(HttpResp) — status 200 with a JSON body when it exists,
+## 612 when it does not. Transport failure is Err.
+pub fn stat(rs_host: String, ak: String, sk: String, bucket: String, key: String) -> Result[HttpResp, String] !io = {
+  let entry = entry_uri(bucket, key)
+  fetch("$rs_host/stat/$entry", hdr(ak, sk, "stat", entry))
+}
+
+## delete an object. Ok on 200; a missing object (612) is also Ok (idempotent).
+pub fn delete_obj(rs_host: String, ak: String, sk: String, bucket: String, key: String) -> Result[Unit, String] !io = {
+  let entry = entry_uri(bucket, key)
+  let r = post("$rs_host/delete/$entry", hdr(ak, sk, "delete", entry), "")?
+  if r.status == 612 { Ok(()) } else { ok_status(r, "delete") }
+}
+
+## copy src→dst within a bucket (force overwrite). The signed path spans both
+## entries plus /force/true.
+pub fn copy_obj(rs_host: String, ak: String, sk: String, bucket: String, src_key: String, dst_key: String) -> Result[Unit, String] !io = {
+  let src = entry_uri(bucket, src_key)
+  let dst = entry_uri(bucket, dst_key)
+  let path = "/copy/$src/$dst/force/true"
+  let auth = management_token(ak, sk, "$path\n")
+  let r = post("$rs_host$path", [("Authorization", auth)], "")?
+  ok_status(r, "copy")
+}
+
+# ---- tests ----
+
+test "the streaming multipart body goes on the wire byte-exactly, across many chunks" {
+  # 20000 bytes: many times over the chunk size ofFile reads with, so the file
+  # part really arrives in pieces — the case a single-chunk test would not catch.
+  let payload = join(map(range(0, 2000), i => "0123456789"), "")
+  let src = File.createTempFile("dawn-test-src-", ".bin")!
+  let out = FileOutputStream.new(src)
+  out.write(bytes.utf8(payload))
+  out.close()
+  let src_path = src.getPath()!
+
+  # an echo server on an ephemeral port: whatever body arrives comes straight
+  # back, so the assertion compares what the publisher actually put on the wire —
+  # contentLength alone would not catch a wrong order or a mangled part
+  let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
+  server.createContext("/", ex => {
+    let buf = ByteArrayOutputStream.new()
+    let _n = ex.getRequestBody()!.transferTo(buf)
+    let got = buf.toByteArray()!
+    ex.sendResponseHeaders(200, bytes.len(got))
+    let os = ex.getResponseBody()!
+    os.write(got)
+    os.close()
+  })
+  server.start()
+  let port = server.getAddress()!.getPort()
+  let no_headers: List[(String, String)] = []
+
+  match multipart_streaming("HEAD:", src_path, ":TAIL") {
+    Err(m) -> { assert m == "unreachable" }
+    Ok(body) -> match post_publisher("http://127.0.0.1:$port/", no_headers, body) {
+      Err(m) -> { assert m == "unreachable" }
+      Ok(r) -> {
+        assert r.status == 200
+        # byte-exact: the framing sits either side of the file's bytes, untouched
+        assert r.body == "HEAD:" ++ payload ++ ":TAIL"
+        assert str.len(r.body) == 5 + 20000 + 5
+      }
+    }
+  }
+  server.stop(0)
+  let _b = File.new(src_path).delete()
+  ()
+}
+
+test "a refused qiniu call is an Err, not Ok(false)" {
+  # The regression this pins: these operations used to end in `Ok(r.status == 200)`,
+  # so a 401 came back as Ok(false). Every caller discarded the Bool, so
+  # /api/fm/create-file recorded a FileObject for an object qiniu never accepted.
+  match ok_status(HttpResp { status: 200, body: "{}" }, "upload") {
+    Ok(_) -> ()
+    Err(m) -> panic("a 200 must be Ok, got $m")
+  }
+
+  match ok_status(HttpResp { status: 401, body: "{\"error\":\"bad token\"}" }, "upload") {
+    Ok(_) -> panic("a 401 must not be Ok")
+    Err(m) -> {
+      # the status and qiniu's own message survive into the error
+      assert str.contains(m, "upload")
+      assert str.contains(m, "401")
+      assert str.contains(m, "bad token")
+    }
+  }
+}
