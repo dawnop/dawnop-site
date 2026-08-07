@@ -60,12 +60,12 @@ dawnop-site/
 │   │   ├── main.dawn           # 入口：读 config、装路由/中间件、绑 127.0.0.1:8001
 │   │   ├── config.dawn         # 根只留这两个
 │   │   ├── api/                # HTTP 表面：api_public/articles/settings/tags/pages/viz/fm/monitor + webdav
-│   │   ├── svc/                # 服务层：auth search export monitor fm_service（文件树操作，api_fm 与 webdav 共用）
+│   │   ├── svc/                # 服务层：auth search export monitor files（文件树操作，api_fm 与 webdav 共用）
 │   │   ├── repo/               # 数据层：repo_article/page/tag/pagetag/viz/settings/fm/write
 │   │   ├── db/                 # db（每请求一连接）sql（JDBC 薄包装）
 │   │   ├── qiniu/              # 对象存储（丢前缀）：sign 签名 / rs 管理 REST / stats 用量统计
 │   │   ├── tencent/            # 腾讯云（丢前缀）：sign TC3 签名 / client v3 请求装配
-│   │   ├── util/               # crypto jwt ttl slugify multipart fm_paths ferr errkind
+│   │   ├── util/               # crypto jwt ttl slugify multipart paths ferr errkind
 │   │   │                       #   http（出站 HTTP 客户端）jsonx/jsonread（构造 wire 形状 / 读请求体字段）
 │   │   # json 与 web 已不再 vendored：dawn.toml 的 [deps.json]/[deps.web] 指向
 │   │   # dawn-lang 仓库 tag 归档（url + hash + subdir），实体在 dawn-lang/packages/

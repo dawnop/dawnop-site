@@ -22,7 +22,7 @@ use std/bytes
 use java "java.sql.Connection"
 use svc/auth.{Auth, Qiniu}
 use db/db.{with_db}
-use util/fm_paths.{fm_split, basename, ext, fm_join, full, guess_mime, strip_slashes, strip_trailing_slash}
+use util/paths.{fm_split, basename, ext, fm_join, full, guess_mime, strip_slashes, strip_trailing_slash}
 use repo/repo_fm.{FileRow, fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, delete_row, subtree_rows, entry_json}
 use util/crypto.{uuid_hex}
 use qiniu/sign.{private_url}

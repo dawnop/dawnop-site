@@ -32,9 +32,9 @@ use web/types.{Request, Response, HttpError, Handler, http_error, as_http, text,
 use web/router.{Route, route_method_of, tagged}
 use db/db.{with_db}
 use svc/auth.{Auth, Qiniu, check_basic}
-use svc/fm_service.{signed_url, gc_superseded, delete_object_of, rebase, copy_object}
+use svc/files.{signed_url, gc_superseded, delete_object_of, rebase, copy_object}
 use repo/repo_fm.{FileRow, get_row, children, subtree_rows, insert_file, insert_folder, delete_row, reparent}
-use util/fm_paths.{basename, parent_rel, ext, ts, guess_mime}
+use util/paths.{basename, parent_rel, ext, ts, guess_mime}
 use qiniu/rs.{upload_file}
 use java "java.io.File"
 use util/crypto.{sha256_hex, uuid, uuid_hex}
@@ -54,7 +54,7 @@ fn path_segs(rel: String) -> List[String] = filter(str.split(rel, "/"), s => s !
 
 # Normalize a WebDAV path to its non-empty segments: drops leading, trailing
 # and repeated slashes. (Not Python's str.strip("/") — that keeps internal
-# runs; fm_paths.strip_slashes is the one that does. Hrefs are rebuilt from
+# runs; paths.strip_slashes is the one that does. Hrefs are rebuilt from
 # segments anyway, so collapsing here is what the rest of the module expects.)
 fn path_join(s: String) -> String = join(path_segs(s), "/")
 

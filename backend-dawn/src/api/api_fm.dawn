@@ -16,9 +16,9 @@ use util/jsonx.{obj, jstr, jint}
 use db/db.{with_db}
 use svc/auth.{Auth, guarded, guarded_flexible}
 use util/jsonread.{body_obj, str_or, str_list, opt_int}
-use util/fm_paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime}
+use util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime}
 use repo/repo_fm.{fs_data, ensure_dirs, insert_file, get_row, ledger_insert, ledger_delete, search_files, entry_json, stats_db}
-use svc/fm_service.{signed_url, gc_superseded, mk_folder, do_rename, do_move, do_copy, do_delete,
+use svc/files.{signed_url, gc_superseded, mk_folder, do_rename, do_move, do_copy, do_delete,
   item_paths, merge_deleted, do_create_file, do_save, run_upload, sanitize_name, token_rel }
 use repo/repo_settings.{setting_int}
 use util/errkind.{KConflict, split_kind}

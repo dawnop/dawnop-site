@@ -6,7 +6,7 @@ use java "java.sql.Connection"
 use db/sql.{PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
 use json/value.{Json, JNull, JInt, JStr, JArr}
 use util/jsonx.{obj, jstr, jbool}
-use util/fm_paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts}
+use util/paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts}
 
 pub type FileRow = { path: String, is_dir: Bool, key: Option[String], content_type: String, size: Int, updated_at: String }
 
