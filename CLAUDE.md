@@ -56,16 +56,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 dawnop-site/
 ├── backend-dawn/               # 生产后端（Dawn → JVM 字节码）。src/ 内联 test 块
-│   ├── src/
+│   ├── src/                    # 按层分目录，依赖单向向下：util → db → qiniu → repo → tencent → svc → api → 根
 │   │   ├── main.dawn           # 入口：读 config、装路由/中间件、绑 127.0.0.1:8001
-│   │   ├── config.dawn db.dawn crypto.dawn jwt.dawn auth.dawn slugify.dawn ttl.dawn
-│   │   ├── api_*.dawn          # 路由层：public / articles / settings / tags / pages / viz / fm / monitor
-│   │   ├── repo_*.dawn sql.dawn  # 数据层：article/page/tag/pagetag/viz/settings/fm/write
-│   │   ├── webdav.dawn export.dawn multipart.dawn search.dawn monitor.dawn
-│   │   ├── fm_paths.dawn fm_service.dawn  # 路径原语 / 文件树操作层（api_fm 与 webdav 共用）
-│   │   ├── http.dawn           # 出站 HTTP 客户端（七牛/腾讯管理 API、register stat、探针）
-│   │   ├── qiniu_*.dawn tencent_*.dawn  # 对象存储：签名 / rs 操作 / 用量统计
-│   │   ├── jsonx.dawn jsonread.dawn      # 应用层 JSON：构造 wire 形状 / 读请求体字段
+│   │   ├── config.dawn         # 根只留这两个
+│   │   ├── api/                # HTTP 表面：api_public/articles/settings/tags/pages/viz/fm/monitor + webdav
+│   │   ├── svc/                # 服务层：auth search export monitor fm_service（文件树操作，api_fm 与 webdav 共用）
+│   │   ├── repo/               # 数据层：repo_article/page/tag/pagetag/viz/settings/fm/write
+│   │   ├── db/                 # db（每请求一连接）sql（JDBC 薄包装）
+│   │   ├── qiniu/              # 对象存储（丢前缀）：sign 签名 / rs 管理 REST / stats 用量统计
+│   │   ├── tencent/            # 腾讯云（丢前缀）：sign TC3 签名 / client v3 请求装配
+│   │   ├── util/               # crypto jwt ttl slugify multipart fm_paths ferr errkind
+│   │   │                       #   http（出站 HTTP 客户端）jsonx/jsonread（构造 wire 形状 / 读请求体字段）
 │   │   # json 与 web 已不再 vendored：dawn.toml 的 [deps.json]/[deps.web] 指向
 │   │   # dawn-lang 仓库 tag 归档（url + hash + subdir），实体在 dawn-lang/packages/
 │   ├── dawn.toml               # [java-deps]（sqlite-jdbc / jbcrypt，coursier 解析）
