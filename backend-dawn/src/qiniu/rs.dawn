@@ -8,7 +8,6 @@ use std/map
 use java "java.net.http.HttpRequest.BodyPublisher"
 use java "java.net.http.HttpRequest.BodyPublishers"
 use java "java.io.File"
-use java "java.io.FileInputStream"
 use java "java.io.FileOutputStream"
 use java "java.io.ByteArrayOutputStream"
 use java "com.sun.net.httpserver.HttpServer"

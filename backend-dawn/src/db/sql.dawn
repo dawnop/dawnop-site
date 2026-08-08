@@ -9,7 +9,6 @@ use java "java.sql.Connection"
 use java "java.sql.DriverManager"
 use java "java.sql.PreparedStatement"
 use java "java.sql.ResultSet"
-use java "java.sql.ResultSetMetaData"
 use java "java.util.Properties"
 
 ## A bind parameter. Dawn lists are homogeneous, so mixed-type binds travel

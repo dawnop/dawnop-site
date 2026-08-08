@@ -5,7 +5,6 @@ use std/str
 use std/bytes
 use std/map
 use java "java.sql.Connection"
-use java "java.lang.Object"
 use java "java.lang.String"
 use java "java.util.concurrent.atomic.AtomicReference"
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, query, redirect, streaming, header}

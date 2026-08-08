@@ -8,7 +8,6 @@ use std/str
 use std/map
 use java "java.time.LocalDateTime"
 use java "java.time.ZoneId"
-use java "java.time.ZonedDateTime"
 use java "java.time.format.DateTimeFormatter"
 use util/http.{fetch, post}
 use qiniu/sign.{qiniu_mac}
