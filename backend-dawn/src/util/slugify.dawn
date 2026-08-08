@@ -5,12 +5,11 @@
 use std/char
 use std/str
 use std/list
-use java "java.lang.Character"
 
-fn is_word(cp: Char) -> Bool !io = Character.isLetterOrDigit(char.code(cp)) || cp == '_'
+fn is_word(cp: Char) -> Bool = char.is_alnum(cp) || cp == '_'
 
 ## Slugify a title. Deterministic; does not touch the database.
-pub fn slugify(text: String) -> String !io = {
+pub fn slugify(text: String) -> String = {
   let cps = code_points(str.to_lower(str.trim(text)))
   let out = collapse(cps, 0, [], false)
   let stripped = strip_edges(out)
@@ -18,7 +17,7 @@ pub fn slugify(text: String) -> String !io = {
 }
 
 # fold characters, turning non-word runs into single dashes
-fn collapse(cps: List[Char], i: Int, acc: List[Char], last_dash: Bool) -> List[Char] !io =
+fn collapse(cps: List[Char], i: Int, acc: List[Char], last_dash: Bool) -> List[Char] =
   if i == len(cps) {
     acc
   } else {
@@ -52,4 +51,10 @@ test "slugify matches the Python vectors" {
   assert slugify("---") == "article"
   assert slugify("café résumé") == "café-résumé"
   assert slugify("a...b") == "a-b"
+  assert slugify("A \u{10428} \u{1D7E0}!") == "a-\u{10428}-\u{1D7E0}"
+}
+
+test "slugify is a pure function value" {
+  let pure_slugify: fn(String) -> String = slugify
+  assert pure_slugify("Pure Context") == "pure-context"
 }
