@@ -28,7 +28,7 @@ use java "java.util.Date"
 use java "java.util.Locale"
 use java "java.util.TimeZone"
 use java "java.util.concurrent.atomic.AtomicReference"
-use web/types.{Request, Response, HttpError, Handler, http_error, as_http, text, raw, binary, streaming, redirect, with_header, header}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, text, raw, binary, streaming, redirect, with_header, header, param_segs}
 use web/router.{Route, route_method_of, tagged}
 use db/db.{with_db}
 use svc/auth.{Auth, Qiniu, check_basic}
@@ -91,7 +91,27 @@ fn dav_prefix(req: Request) -> String = {
   if p == "/" { "" } else { p }
 }
 
-fn dav_rel(req: Request) -> String = path_join(unwrap_or(map.get(req.params, "rest"), ""))
+# The path a WebDAV request names, from the tail capture of /dav/{rest*}.
+#
+# web3 hands a tail capture over as its segments rather than pre-joined, which
+# is what makes the refusal below possible at all. A segment that arrived
+# percent-encoded as `a%2Fb` decodes to one segment holding a literal "/", and
+# joining it back into the path made it indistinguishable from the two segments
+# `a` and `b`: `/dav/a%2Fb/c` and `/dav/a/b/c` resolved to the same object, so
+# the URL did not determine the file. FileObject.path is a "/"-separated key, so
+# a segment containing "/" names no object at all; 400 says that, and no client
+# sends one for a real file (a filename cannot contain "/" on any host).
+#
+# Empty segments are still dropped, as path_join always did: /dav/a//b is a/b.
+fn dav_rel(req: Request) -> Result[String, HttpError] = {
+  let segs = filter(param_segs(req, "rest"), s => s != "")
+  for s in segs {
+    if str.contains(s, "/") {
+      return Err(http_error(400, "path segment contains an encoded slash"))
+    }
+  }
+  Ok(join(segs, "/"))
+}
 
 fn href(prefix: String, rel: String, is_dir: Bool) -> String !io = {
   let path = join(map(path_segs(rel), url_encode), "/")
@@ -622,7 +642,7 @@ fn dav_handler(a: Auth, cell: AtomicReference, method: String) -> Handler =
     match dav_auth(a, cell, req) {
       Some(resp) -> Ok(resp)
       None -> {
-        let rel = dav_rel(req)
+        let rel = dav_rel(req)?
         match method {
           "PROPFIND" -> propfind(a, req, rel)
           "HEAD" -> get_or_head(a, req, rel, true)
@@ -650,6 +670,31 @@ pub fn dav_routes(a: Auth, cell: AtomicReference) -> List[Route] = {
   # verbs carry small XML bodies (PROPFIND/LOCK) that handlers read from `body`.
   map(verbs, v => tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, cell, v)),
     if v == "PUT" { ["raw-body", "no-cors", "stream-body"] } else { ["raw-body", "no-cors"] }))
+}
+
+# A bare request carrying only the tail capture dav_rel reads.
+fn rest_req(segs: List[String]) -> Request =
+  Request {
+    method: "GET", path: "/dav", raw_path: "/dav",
+    params: map.from([("rest", segs)]),
+    query: map.empty(), headers: map.empty(),
+    body: "", raw: bytes.utf8(""), body_file: None, route: None,
+  }
+
+test "dav_rel joins the tail segments and refuses one holding a slash" {
+  # the ordinary path, unchanged
+  assert dav_rel(rest_req(["a", "b", "c.txt"])) == Ok("a/b/c.txt")
+  # the bare mount point
+  assert dav_rel(rest_req([])) == Ok("")
+  # empty segments still collapse, as path_join always did
+  assert dav_rel(rest_req(["a", "", "b"])) == Ok("a/b")
+  # /dav/a%2Fb/c: one segment holding a literal "/". web2 handed the tail over
+  # pre-joined, so this reached here as "a/b/c" and served the same object as
+  # /dav/a/b/c; there is no object whose path segment contains "/", so refuse it
+  match dav_rel(rest_req(["a/b", "c"])) {
+    Err(e) -> { assert e.status == 400 }
+    Ok(_) -> { assert false }
+  }
 }
 
 test "range_pair parses the WebDAV Range forms against a total size" {
