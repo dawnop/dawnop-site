@@ -4,7 +4,7 @@
 use std/str
 use std/map
 use java "java.sql.Connection"
-use web/types.{Request, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text, raw, with_header, query_int_bounded_with}
+use web/types.{Request, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text, raw, with_header, param_segs, query, query_int_bounded_with}
 use svc/export.{export_markdown, url_encode}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json}
@@ -16,12 +16,15 @@ use repo/repo_article
 use repo/repo_write.{NewArticle, ArticlePatch, create_article, update_article, delete_article}
 use util/errkind.{KInvalid, split_kind}
 
-fn param(req: Request, name: String) -> String = unwrap_or(map.get(req.params, name), "")
+# A `{name}` path capture, or "" when the route table and the handler disagree.
+# web3 holds a capture as the segments it matched; every route here is a single
+# `{name}`, which always has exactly one.
+fn param(req: Request, name: String) -> String = unwrap_or(get(param_segs(req, name), 0), "")
 
 # An optional integer query param: absent → None, present-and-numeric → Some,
 # present-but-non-integer → 422 (matches FastAPI's `int | None` Query coercion).
 fn opt_query_int(req: Request, name: String) -> Result[Option[Int], HttpError] =
-  match map.get(req.query, name) {
+  match query(req, name) {
     None -> Ok(None)
     Some(s) -> match parse_int(s) {
       Some(n) -> Ok(Some(n))
@@ -35,13 +38,13 @@ pub fn list_admin(a: Auth) -> Handler =
   guarded(a, req, () => {
     let page = query_int_bounded_with(fastapi_errors(), req, "page", 1, 1, -1)?
     let size = query_int_bounded_with(fastapi_errors(), req, "size", 10, 1, 100)?
-    let pub_filter: Option[Bool] = match map.get(req.query, "published") {
+    let pub_filter: Option[Bool] = match query(req, "published") {
       Some("true") -> Some(true)
       Some("false") -> Some(false)
       _ -> None
     }
     let page_id = opt_query_int(req, "page_id")?
-    let q = map.get(req.query, "q")
+    let q = query(req, "q")
     let (total, items) = as_http(with_db(a.db.path, a.db.ext, c => repo_article.list_admin(c, pub_filter, page_id, q, page, size)), 500)?
     Ok(json_ok(paginated(total, page, size, items)))
   })
