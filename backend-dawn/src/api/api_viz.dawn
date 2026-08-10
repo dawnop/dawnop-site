@@ -106,11 +106,11 @@ fn viz_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Optio
     # PATCH semantics: a present, non-null field is applied; an explicit null is
     # skipped (FastAPI's exclude_unset + `if value is not None`), NOT written as ""
     # — writing "" here was silent data loss.
-    let _sl = match opt_str(m, "slug") { Some(s) -> update_viz_slug(c, id, s)? None -> 0 }
-    let _na = match opt_str(m, "name") { Some(s) -> set_viz_str(c, id, "name", s)? None -> 0 }
-    let _so = match opt_str(m, "source") { Some(s) -> set_viz_source(c, id, s)? None -> 0 }
-    let _co = match opt_str(m, "compiled") { Some(s) -> set_viz_str(c, id, "compiled", s)? None -> 0 }
-    let _st = match opt_str(m, "style") { Some(s) -> set_viz_str(c, id, "style", s)? None -> 0 }
+    let _sl = match opt_str(m, "slug") { Some(s) -> update_viz_slug(c, id, s)?, None -> 0 }
+    let _na = match opt_str(m, "name") { Some(s) -> set_viz_str(c, id, "name", s)?, None -> 0 }
+    let _so = match opt_str(m, "source") { Some(s) -> set_viz_source(c, id, s)?, None -> 0 }
+    let _co = match opt_str(m, "compiled") { Some(s) -> set_viz_str(c, id, "compiled", s)?, None -> 0 }
+    let _st = match opt_str(m, "style") { Some(s) -> set_viz_str(c, id, "style", s)?, None -> 0 }
     let _t = touch_viz(c, id)?
     by_id(c, id)
   }

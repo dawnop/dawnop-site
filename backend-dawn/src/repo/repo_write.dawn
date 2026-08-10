@@ -122,8 +122,8 @@ pub fn create_article(c: Connection, a: NewArticle) -> Result[Int, String] !io =
     Some(id) -> PInt(id)
     None -> PNull
   }
-  let created_expr = match a.created_at { Some(_x) -> "datetime(?)" None -> "datetime('now')" }
-  let created_params: List[SqlV] = match a.created_at { Some(s) -> [PStr(s)] None -> [] }
+  let created_expr = match a.created_at { Some(_x) -> "datetime(?)", None -> "datetime('now')" }
+  let created_params: List[SqlV] = match a.created_at { Some(s) -> [PStr(s)], None -> [] }
   let _i = exec(c,
     "insert into articles (title, slug, summary, content, published, auto_title, page_id, views, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, 0, $created_expr, datetime('now'))",
     [PStr(a.title), PStr(slug), PStr(a.summary), PStr(a.content), PInt(bool_int(a.published)), PInt(bool_int(a.auto_title)), pid] ++ created_params)?
@@ -163,7 +163,7 @@ pub fn update_article(c: Connection, id: Int, p: ArticlePatch) -> Result[Bool, S
     let _pu = if p.has_published { set_int(c, id, "published", bool_int(p.published))? } else { 0 }
     let _at = if p.has_auto_title { set_int(c, id, "auto_title", bool_int(p.auto_title))? } else { 0 }
     let _pi = if p.has_page_id { set_page_id(c, id, p.page_id)? } else { 0 }
-    let _ca = match p.created_at { Some(s) -> exec(c, "update articles set created_at = datetime(?) where id = ?", [PStr(s), PInt(id)])? None -> 0 }
+    let _ca = match p.created_at { Some(s) -> exec(c, "update articles set created_at = datetime(?) where id = ?", [PStr(s), PInt(id)])?, None -> 0 }
     let _sl = if p.has_slug { set_slug(c, id, p)? } else { 0 }
     let _tg = if p.has_tags {
       let ids = resolve_tags(c, p.tags)?

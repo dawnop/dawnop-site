@@ -64,7 +64,7 @@ fn write_all_settings(c: Connection, keys: List[String], m: Map[String, Json], i
     Ok(true)
   } else {
     let key = keys[i]
-    let v = match strict_int(m, key) { Some(n) -> n None -> 0 }
+    let v = match strict_int(m, key) { Some(n) -> n, None -> 0 }
     let _p = repo_settings.put_one(c, key, v)?
     write_all_settings(c, keys, m, i + 1)
   }

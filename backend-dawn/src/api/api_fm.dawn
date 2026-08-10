@@ -244,7 +244,7 @@ pub fn preview(a: Auth) -> Handler =
 fn preview_params(req: Request) -> Result[(Option[Int], Option[Int], String), HttpError] = {
   let w = bounded_opt(req, "w", 1, 2000)?
   let h = bounded_opt(req, "h", 1, 2000)?
-  let mode = match query(req, "mode") { Some(mm) -> mm None -> "fit" }
+  let mode = match query(req, "mode") { Some(mm) -> mm, None -> "fit" }
   if mode != "fit" && mode != "fill" {
     Err(http_error(422, "mode 只能是 fit 或 fill"))
   } else {
@@ -273,8 +273,8 @@ fn thumb_fop(content_type: String, size: Int, w: Option[Int], h: Option[Int], mo
         None
       } else {
         let code = if mode == "fill" { "1" } else { "2" } # 1=裁剪铺满, 2=等比缩放
-        let ww = match w { Some(n) -> "/w/$n" None -> "" }
-        let hh = match h { Some(n) -> "/h/$n" None -> "" }
+        let ww = match w { Some(n) -> "/w/$n", None -> "" }
+        let hh = match h { Some(n) -> "/h/$n", None -> "" }
         Some("imageView2/$code$ww$hh/format/webp/q/82")
       }
   }
@@ -453,7 +453,7 @@ fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint:
 fn reg_size(stat_body: String, hint: Option[Int]) -> Int !io = {
   let fs = stat_int(stat_body, "fsize")
   if fs != 0 { fs } else {
-    match hint { Some(n) -> n None -> 0 }
+    match hint { Some(n) -> n, None -> 0 }
   }
 }
 

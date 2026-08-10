@@ -136,7 +136,7 @@ fn entry_xml(prefix: String, o: FileRow) -> String !io = {
   response_xml(prefix, o.path, basename(o.path), o.is_dir, o.size, o.content_type, t, t, etag)
 }
 
-fn key_etag(k: Option[String]) -> String = match k { Some(v) -> "\"$v\"" None -> "" }
+fn key_etag(k: Option[String]) -> String = match k { Some(v) -> "\"$v\"", None -> "" }
 
 fn kids_xml(prefix: String, rows: List[FileRow]) -> String !io =
   fold(rows, "", (acc, o) => acc ++ entry_xml(prefix, o))
@@ -281,7 +281,7 @@ fn range_pair(a: String, b: String, total: Int) -> Option[(Int, Int)] =
         if s >= total || s < 0 {
           None
         } else {
-          let e = if b == "" { total - 1 } else { match parse_int(b) { Some(x) -> if x > total - 1 { total - 1 } else { x } None -> total - 1 } }
+          let e = if b == "" { total - 1 } else { match parse_int(b) { Some(x) -> if x > total - 1 { total - 1 } else { x }, None -> total - 1 } }
           if e < s { None } else { Some((s, e)) }
         }
     }

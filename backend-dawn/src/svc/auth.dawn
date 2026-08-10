@@ -113,7 +113,7 @@ pub fn login(a: Auth) -> Handler =
   }
 
 fn has_field(m: Map[String, String], k: String) -> Bool =
-  match map.get(m, k) { Some(_v) -> true None -> false }
+  match map.get(m, k) { Some(_v) -> true, None -> false }
 
 ## GET /api/auth/me — the current user (Bearer token).
 pub fn me(a: Auth) -> Handler =
@@ -139,7 +139,7 @@ pub fn current_user(a: Auth, req: Request) -> Result[String, HttpError] !io =
 ## Authorization header (fm preview & download), matching get_current_user_flexible.
 pub fn current_user_flexible(a: Auth, req: Request) -> Result[String, HttpError] !io =
   auth_with(a, match header_token(req) {
-    "" -> match query_token(req) { Some(t) -> t None -> "" }
+    "" -> match query_token(req) { Some(t) -> t, None -> "" }
     t -> t
   })
 
