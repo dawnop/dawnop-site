@@ -23,6 +23,7 @@ use util/http.{fetch}
 use json/value.{Json, JNull, JNum, JInt, JStr, JArr, JObj}
 use json/render.{render}
 use json/parser.{parse}
+use util/jsonread.{parse_text}
 use util/jsonx.{obj, jint, jstr, jbool}
 
 # ---- server: the local machine, /proc first (production is Linux), JMX fallback ----
@@ -382,7 +383,7 @@ fn trend_int(times: List[Int], values: List[Int]) -> Json = {
 ## fm stats shares this cell so directory listings stay cheap).
 pub fn respack_cached(a: Auth, cell: AtomicReference) -> Result[Json, String] !io =
   match cache_get(cell, 300) {
-    Some(s) -> parse(s)
+    Some(s) -> parse_text(s)
     None -> {
       let j = respack_summary(a.qiniu.ak, a.qiniu.sk)?
       cache_put(cell, render(j))

@@ -7,7 +7,7 @@ use std/map
 use util/crypto.{hmac_sha256_b64url_nopad, b64url_encode_nopad, b64url_decode, eq_const}
 use util/ttl.{now_s}
 use json/value.{JObj, JNum, JInt, JStr}
-use json/parser.{parse}
+use util/jsonread.{parse_text}
 
 const HEADER_JSON: String = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}"
 
@@ -39,7 +39,7 @@ pub fn verify(secret: String, token: String) -> Result[String, String] !io = {
 }
 
 fn claims_of(payload_json: String) -> Result[String, String] !io = {
-  let j = parse(payload_json)?
+  let j = parse_text(payload_json)?
   match j {
     JObj(m) -> {
       # exp is an integer unix time; PyJWT emits it without a fraction, so it
