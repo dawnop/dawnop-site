@@ -249,6 +249,16 @@
    },
    "body": "{\"detail\":\"资源不存在\"}"
   },
+  "propfind.encoded.slash": {
+   "method": "PROPFIND",
+   "path": "/dav/docs%2Fnotes.txt",
+   "status": 400,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "51"
+   },
+   "body": "{\"detail\":\"path segment contains an encoded slash\"}"
+  },
   "propfind.prefix": {
    "method": "PROPFIND",
    "path": "/dav/",
