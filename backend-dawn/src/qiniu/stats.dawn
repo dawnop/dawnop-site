@@ -14,7 +14,7 @@ use qiniu/sign.{qiniu_mac}
 use json/value.{Json, JNull, JNum, JInt, JStr, JArr, JObj}
 use json/render.{render}
 use util/jsonx.{obj, jstr}
-use json/parser.{parse}
+use util/jsonread.{parse_text}
 
 const STAT_HOST: String = "api.qiniuapi.com"
 const API_HOST: String = "api.qiniu.com"
@@ -27,7 +27,7 @@ fn stat_get(ak: String, sk: String, path_query: String) -> Result[Json, String] 
   let ct = "application/x-www-form-urlencoded"
   let auth = qiniu_mac(ak, sk, "GET", path_query, STAT_HOST, ct, "")
   let r = fetch("http://$STAT_HOST$path_query", [("Authorization", auth), ("Content-Type", ct)])?
-  if r.status == 200 { parse(r.body) } else { Err("七牛统计失败 $path_query: ${to_string(r.status)}") }
+  if r.status == 200 { parse_text(r.body) } else { Err("七牛统计失败 $path_query: ${to_string(r.status)}") }
 }
 
 fn mac_json(ak: String, sk: String, method: String, host: String, path_query: String, body: String) -> Result[Json, String] !io = {
@@ -36,7 +36,7 @@ fn mac_json(ak: String, sk: String, method: String, host: String, path_query: St
   let headers = [("Authorization", auth), ("Content-Type", ct)]
   let url = "http://$host$path_query"
   let r = if method == "POST" { post(url, headers, body)? } else { fetch(url, headers)? }
-  if r.status == 200 { parse(r.body) } else { Err("七牛 CDN 接口失败 $path_query: ${to_string(r.status)}") }
+  if r.status == 200 { parse_text(r.body) } else { Err("七牛 CDN 接口失败 $path_query: ${to_string(r.status)}") }
 }
 
 # ---- kodo v6 series (space / count / blob_io) ----

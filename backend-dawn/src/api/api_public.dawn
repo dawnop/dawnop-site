@@ -3,7 +3,7 @@
 # {"detail": ...} through the web framework's Err branch.
 use std/map
 use java "java.sql.Connection"
-use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, query, query_int_bounded_with}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, param_segs, query, query_int_bounded_with}
 use web/router.{Route, route_get}
 use json/value.{Json, JArr}
 use util/jsonx.{paginated, detail, obj, jstr, fastapi_errors}
@@ -42,7 +42,7 @@ pub fn list_articles(db: Db) -> Handler =
 ## left unchanged on a view (a documented refinement of the FastAPI behavior).
 pub fn get_article(db: Db, a: Auth) -> Handler =
   req => {
-    let slug = map_get_or(req.params, "slug", "")
+    let slug = map_get_or(req, "slug", "")
     let authed = is_authed(a, req)
     match as_http(with_db(db.path, db.ext, c => fetch_detail(c, slug, authed)), 500)? {
       Some(j) -> Ok(json_ok(j))
@@ -62,8 +62,12 @@ fn fetch_detail(c: Connection, slug: String, authed: Bool) -> Result[Option[Json
       }
   }
 
-fn map_get_or(m: Map[String, String], k: String, fallback: String) -> String =
-  unwrap_or(map.get(m, k), fallback)
+# A `{name}` path capture, or `fallback` when the route table and the handler
+# disagree. web3 holds a capture as the segments it matched, so this reads the
+# one segment a `{name}` capture always has; a tail `{name*}` would need
+# `param_segs`, and no route here has one.
+fn map_get_or(req: Request, k: String, fallback: String) -> String =
+  unwrap_or(get(param_segs(req, k), 0), fallback)
 
 ## GET /api/pages/nav — visible nav items.
 pub fn get_nav(db: Db) -> Handler =
@@ -73,7 +77,7 @@ pub fn get_nav(db: Db) -> Handler =
 ## GET /api/pages/{slug} — one page, 404 when absent.
 pub fn get_page(db: Db) -> Handler =
   req => {
-    let slug = map_get_or(req.params, "slug", "")
+    let slug = map_get_or(req, "slug", "")
     match as_http(with_db(db.path, db.ext, c => repo_page.by_slug(c, slug)), 500)? {
       Some(j) -> Ok(json_ok(j))
       None -> Err(http_error(404, "页面不存在"))
@@ -83,7 +87,7 @@ pub fn get_page(db: Db) -> Handler =
 ## GET /api/pages/{slug}/articles — a page's published articles, paginated.
 pub fn get_page_articles(db: Db) -> Handler =
   req => {
-    let slug = map_get_or(req.params, "slug", "")
+    let slug = map_get_or(req, "slug", "")
     let page = query_int_bounded_with(fastapi_errors(), req, "page", 1, 1, -1)?
     let size = query_int_bounded_with(fastapi_errors(), req, "size", 10, 1, 100)?
     match as_http(with_db(db.path, db.ext, c => fetch_page_articles(c, slug, page, size)), 500)? {
@@ -112,7 +116,7 @@ pub fn get_tags(db: Db) -> Handler =
 ## GET /api/tags/{slug} — one tag, 404 when absent.
 pub fn get_tag(db: Db) -> Handler =
   req => {
-    let slug = map_get_or(req.params, "slug", "")
+    let slug = map_get_or(req, "slug", "")
     match as_http(with_db(db.path, db.ext, c => repo_tag.by_slug(c, slug)), 500)? {
       Some(j) -> Ok(json_ok(j))
       None -> Err(http_error(404, "标签不存在"))
@@ -134,7 +138,7 @@ pub fn search(db: Db) -> Handler =
 ## GET /api/viz/{slug} — public component for readers to mount.
 pub fn get_viz(db: Db) -> Handler =
   req => {
-    let slug = map_get_or(req.params, "slug", "")
+    let slug = map_get_or(req, "slug", "")
     match as_http(with_db(db.path, db.ext, c => repo_viz.by_slug_public(c, slug)), 500)? {
       Some(j) -> Ok(json_ok(j))
       None -> Err(http_error(404, "组件不存在"))

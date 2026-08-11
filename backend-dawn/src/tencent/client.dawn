@@ -12,7 +12,7 @@ use util/ttl.{now_s}
 use tencent/sign.{tc3_signature}
 use util/http.{post}
 use json/value.{Json}
-use json/parser.{parse}
+use util/jsonread.{parse_text}
 
 ## Call a Tencent Cloud v3 action. `payload` is a compact JSON body string.
 ## Returns the parsed Response JSON, or Err on transport / non-200.
@@ -44,7 +44,7 @@ pub fn call(secret_id: String, secret_key: String, service: String, action: Stri
   ]
   let r = post("https://$host", headers, payload)?
   if r.status == 200 {
-    parse(r.body)
+    parse_text(r.body)
   } else {
     Err("tencent $action HTTP ${to_string(r.status)}: ${r.body}")
   }

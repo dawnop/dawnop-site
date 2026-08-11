@@ -6,8 +6,10 @@ use std/map
 use java "java.sql.Connection"
 use java "org.mindrot.jbcrypt.BCrypt"
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, header}
+# db/sql exports a `query` too, so web's is reached through the module name.
+use web/types as wtypes
 use web/router.{Route, route_get, route_post}
-use web/server.{parse_form}
+use web/server.{parse_form, form_value}
 use json/value.{Json}
 use util/jsonx.{obj, jint, jstr, jdatetime}
 use db/db.{Db, with_db}
@@ -112,8 +114,8 @@ pub fn login(a: Auth) -> Handler =
     }
   }
 
-fn has_field(m: Map[String, String], k: String) -> Bool =
-  match map.get(m, k) { Some(_v) -> true, None -> false }
+fn has_field(m: Map[String, List[String]], k: String) -> Bool =
+  match form_value(m, k) { Some(_v) -> true, None -> false }
 
 ## GET /api/auth/me — the current user (Bearer token).
 pub fn me(a: Auth) -> Handler =
@@ -180,7 +182,7 @@ fn auth_with(a: Auth, tok: String) -> Result[String, HttpError] !io =
     }
   }
 
-fn query_token(req: Request) -> Option[String] = map.get(req.query, "token")
+fn query_token(req: Request) -> Option[String] = wtypes.query(req, "token")
 
 ## Whether the request carries a valid token (optional auth). Used by endpoints
 ## that behave differently for logged-in admins (e.g. draft preview).
@@ -190,7 +192,7 @@ pub fn is_authed(a: Auth, req: Request) -> Bool !io =
     Err(_e) -> false
   }
 
-fn get_or_blank(m: Map[String, String], k: String) -> String = unwrap_or(map.get(m, k), "")
+fn get_or_blank(m: Map[String, List[String]], k: String) -> String = unwrap_or(form_value(m, k), "")
 
 ## The auth routes.
 pub fn routes(a: Auth) -> List[Route] =

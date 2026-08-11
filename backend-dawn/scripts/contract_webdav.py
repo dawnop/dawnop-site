@@ -6,10 +6,11 @@ is the interesting part of this file:
 
   covered (metadata lives in SQLite, so the fixture owns the answer)
       OPTIONS, the Basic-auth challenge, PROPFIND (root/dir/file/404/Depth
-      0+1/non-ASCII/X-Dav-Prefix), HEAD, MKCOL (+ duplicate, + missing parent,
-      + root), MOVE of a file and of a directory (rename only rewrites `path`),
-      the MOVE guards (no Destination / onto self / Overwrite: F), COPY of an
-      empty directory, LOCK/UNLOCK, DELETE of a directory, DELETE of the root.
+      0+1/non-ASCII/encoded-slash/X-Dav-Prefix), HEAD, MKCOL (+ duplicate,
+      + missing parent, + root), MOVE of a file and of a directory (rename only
+      rewrites `path`), the MOVE guards (no Destination / onto self /
+      Overwrite: F), COPY of an empty directory, LOCK/UNLOCK, DELETE of a
+      directory, DELETE of the root.
 
   NOT covered HERE (the request reaches qiniu, and this backend has no
   credentials)
@@ -208,6 +209,11 @@ def main():
         with_facts=True,
     )
     case("propfind.404", "PROPFIND", "/dav/zzz-nope", {"Depth": "0"})
+    # an encoded slash inside one segment: files.path is a "/"-separated key, so
+    # such a segment names no object. The pre-web3 tail capture arrived joined,
+    # which made this the same request as /dav/docs/notes.txt and let two URLs
+    # name one file; it is a 400 now.
+    case("propfind.encoded.slash", "PROPFIND", "/dav/docs%2Fnotes.txt", {"Depth": "0"})
     # the subdomain vhost sends X-Dav-Prefix: / so hrefs come back as /foo.txt
     # rather than /dav/foo.txt (otherwise dav.dawnop.com serves /dav/dav/...)
     case(

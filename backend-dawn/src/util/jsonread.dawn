@@ -2,12 +2,23 @@
 # the JObj entries map; presence checks support FastAPI's exclude_unset (PATCH)
 # semantics — a key absent from the body is left untouched on update.
 use std/map
-use json/value.{Json, JObj, JBool, JNum, JInt, JStr, JArr, JNull}
+use json/value.{Json, JObj, JBool, JNum, JInt, JStr, JArr, JNull, error_text}
 use json/parser.{parse}
+
+# json2's parse fails with a structured value.JsonError. Every layer here
+# reports Result[_, String], so this is where the structure is rendered down to
+# the one-line text it used to be; a caller that wants the kind or the offset
+# calls json/parser.parse itself.
+## `json/parser.parse` with its error rendered as text.
+pub fn parse_text(body: String) -> Result[Json, String] =
+  match parse(body) {
+    Ok(j) -> Ok(j)
+    Err(e) -> Err(error_text(e))
+  }
 
 ## Parse a request body into its top-level object entries. Err on non-objects.
 pub fn body_obj(body: String) -> Result[Map[String, Json], String] !io = {
-  let j = parse(body)?
+  let j = parse_text(body)?
   match j {
     JObj(m) -> Ok(m)
     _ -> Err("request body must be a JSON object")
