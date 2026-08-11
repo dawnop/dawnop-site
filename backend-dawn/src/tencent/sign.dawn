@@ -3,8 +3,6 @@
 # next — byte[] keys that never leave this function body (spec §9.5), so the Mac
 # chain is inlined. Cross-checked against the Python reference byte-for-byte.
 use std/bytes
-use java "java.lang.String"
-use java "java.util.HexFormat"
 use java "javax.crypto.Mac"
 use java "javax.crypto.spec.SecretKeySpec"
 
@@ -27,7 +25,7 @@ pub fn tc3_signature(secret_key: String, date: String, service: String, string_t
   let mac4 = Mac.getInstance("HmacSHA256")!
   mac4.init(SecretKeySpec.new(signing_key, "HmacSHA256"))
   let sig = mac4.doFinal(bytes.utf8(string_to_sign))!
-  HexFormat.of()!.formatHex(sig)!
+  bytes.to_hex(sig)
 }
 
 test "tc3 signature matches the Python reference" {

@@ -9,9 +9,9 @@ name = "backend_dawn"
 sqlite = "org.xerial:sqlite-jdbc:3.36.0.3"
 bcrypt = "org.mindrot:jbcrypt:0.4"
 
-# Dawn source packages: the web framework and JSON library live in the dawn-lang
-# repo (packages/), pinned to the same tag as the compiler. One archive serves
-# both (subdir), and web's internal "../json" path dep resolves inside it. The
+# Dawn source packages live in the dawn-lang repo (packages/), pinned to the
+# same tag as the compiler. One archive serves web, JSON, and SHA-256 through
+# their subdirectories; web's internal "../json" path dep resolves inside it. The
 # hash is the d1 tree hash of the unpacked archive — `dawn __pkghash <dir>` prints
 # one, and a mismatch error shows the actual value, which is how you get it for a
 # new tag. Tag archives fetch straight from GitHub with no proxy; it is deploy.sh's
@@ -27,3 +27,9 @@ url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.64.0.zip"
 version = "2.0.0"
 hash = "d1:8f6a3e59747db490c4c509ac0a11dfccb64ed010aa0bf28aeb101c8e533616a5"
 subdir = "packages/json"
+
+[deps.sha2]
+url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.64.0.zip"
+version = "1.0.0"
+hash = "d1:8f6a3e59747db490c4c509ac0a11dfccb64ed010aa0bf28aeb101c8e533616a5"
+subdir = "packages/sha2"

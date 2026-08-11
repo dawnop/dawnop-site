@@ -5,7 +5,6 @@ use std/str
 use std/list
 use std/io
 use std/map
-use java "java.lang.System"
 
 pub type Config = { values: Map[String, String] }
 
@@ -47,7 +46,7 @@ fn unquote(s: String) -> String =
 ## matches pydantic-settings' precedence (env var wins over .env), so the Dawn
 ## and FastAPI backends resolve shared keys like SECRET_KEY identically.
 pub fn lookup(cfg: Config, key: String) -> Option[String] !io =
-  match System.getenv(key) {
+  match io.getenv(key) {
     Some(v) -> Some(v)
     None -> map.get(cfg.values, key)
   }

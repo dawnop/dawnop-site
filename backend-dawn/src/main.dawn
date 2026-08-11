@@ -1,7 +1,7 @@
 # backend-dawn entry point (M6). Reads config, wires routes and middleware,
 # binds 127.0.0.1:PORT. nginx terminates TLS and reverse-proxies /api here
 # during the gradual cutover from the FastAPI backend.
-use java "java.lang.System"
+use std/io
 use config.{load, get_or}
 use db/db.{Db}
 use web/server.{serve_app_with, ServerConfig, DEFAULT_MAX_BODY}
@@ -73,7 +73,7 @@ pub fn main() -> Unit !io = {
   ])
 }
 
-fn env_or(key: String, fallback: String) -> String !io = unwrap_or(System.getenv(key), fallback)
+fn env_or(key: String, fallback: String) -> String !io = unwrap_or(io.getenv(key), fallback)
 
 fn parse_or(s: String, fallback: Int) -> Int =
   match parse_int(s) {

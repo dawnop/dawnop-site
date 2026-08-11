@@ -19,7 +19,6 @@ use std/map
 use std/list
 use util/ferr.{catch_text}
 use java "java.sql.Connection"
-use java "java.lang.String"
 use java "java.util.Base64"
 use java "java.net.URI"
 use java "java.net.URLDecoder"
