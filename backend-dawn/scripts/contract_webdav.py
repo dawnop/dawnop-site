@@ -9,8 +9,9 @@ is the interesting part of this file:
       0+1/non-ASCII/encoded-slash/X-Dav-Prefix), HEAD, MKCOL (+ duplicate,
       + missing parent, + root), MOVE of a file and of a directory (rename only
       rewrites `path`), the MOVE guards (no Destination / onto self /
-      Overwrite: F), COPY of an empty directory, LOCK/UNLOCK, DELETE of a
-      directory, DELETE of the root.
+      Overwrite: F / an encoded slash in the Destination), COPY of an empty
+      directory (plus the same Destination decoding: %2E, a literal '+'),
+      LOCK/UNLOCK, DELETE of a directory, DELETE of the root.
 
   NOT covered HERE (the request reaches qiniu, and this backend has no
   credentials)
@@ -255,6 +256,24 @@ def main():
         {"Destination": f"/dav/{PREFIX}/deeper"},
     )
     case("move.404", "MOVE", "/dav/zzz-nope", {"Destination": f"/dav/{PREFIX}/x"})
+    # An encoded slash in a Destination segment, the rule the request path
+    # already enforces (see propfind.encoded.slash). Decoding the whole path
+    # before splitting it made /dav/a%2Fb/c and /dav/a/b/c one target, so a MOVE
+    # could land where its URL did not say it would. Both verbs read the header
+    # through the same parser, so both refuse; the source exists in both, which
+    # is what puts the answer past the 404 check and onto the Destination.
+    case(
+        "move.dest.encoded.slash",
+        "MOVE",
+        f"/dav/{PREFIX}/sub",
+        {"Destination": f"/dav/{PREFIX}/a%2Fb"},
+    )
+    case(
+        "copy.dest.encoded.slash",
+        "COPY",
+        f"/dav/{PREFIX}/sub",
+        {"Destination": f"/dav/{PREFIX}/a%2Fb"},
+    )
     case(
         "move.dir",
         "MOVE",
@@ -293,6 +312,39 @@ def main():
         "propfind.copied",
         "PROPFIND",
         f"/dav/{PREFIX}/copied",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    # The two above refuse an encoded slash; these two say what was refused. A
+    # Destination is still percent-decoded, so %2E is a dot and the collection
+    # lands at dot.name. Without this, the refusals above would pass just as
+    # well if the parser had stopped decoding altogether.
+    case(
+        "copy.dest.encoded.dot",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/dot%2Ename"},
+    )
+    case(
+        "propfind.dest.encoded.dot",
+        "PROPFIND",
+        f"/dav/{PREFIX}/dot.name",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    # And a literal '+' stays a '+' rather than becoming a space: the decode is
+    # Python's unquote, not a form decode. The href comes back as a%2Bb because
+    # that is how '+' is written in a path once encoded again.
+    case(
+        "copy.dest.plus",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/a+b"},
+    )
+    case(
+        "propfind.dest.plus",
+        "PROPFIND",
+        f"/dav/{PREFIX}/a+b",
         {"Depth": "0"},
         with_facts=True,
     )
