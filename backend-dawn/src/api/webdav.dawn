@@ -103,8 +103,13 @@ fn dav_prefix(req: Request) -> String = {
 # sends one for a real file (a filename cannot contain "/" on any host).
 #
 # Empty segments are still dropped, as path_join always did: /dav/a//b is a/b.
-fn dav_rel(req: Request) -> Result[String, HttpError] = {
-  let segs = filter(param_segs(req, "rest"), s => s != "")
+fn dav_rel(req: Request) -> Result[String, HttpError] =
+  join_rel(filter(param_segs(req, "rest"), s => s != ""))
+
+# Join already-decoded segments into a rel, refusing any that holds a literal
+# "/". Shared with dest_rel so the request path and the Destination header cannot
+# drift apart in judgement or in wording: both refusals are this one.
+fn join_rel(segs: List[String]) -> Result[String, HttpError] = {
   for s in segs {
     if str.contains(s, "/") {
       return Err(http_error(400, "path segment contains an encoded slash"))
@@ -436,17 +441,27 @@ fn mkcol(a: Auth, rel: String) -> Result[Response, HttpError] !io =
 # percent-decodes, so the old URLDecoder pass double-decoded). urlparse-equivalent.
 fn uri_path(u: String) -> String !io = URI.create(u)!.getRawPath()!
 
-fn dest_rel(req: Request) -> Option[String] !io =
+# single percent-decode of one path segment, like Python's unquote: %XX resolves,
+# a literal '+' stays '+' (URLDecoder would turn it into a space), so protect '+'
+# as %2B first. Per segment, because the split has to happen while the separators
+# are still the only "/" in the string.
+fn pct_decode_seg(s: String) -> String !io =
+  URLDecoder.decode(join(str.split(s, "+"), "%2B"), "UTF-8")!
+
+# The rel a Destination header names. Three outcomes, so three shapes: Err = the
+# header named something no object can be (400), Ok(None) = no Destination at
+# all, Ok(Some) = a rel to resolve. Splitting before decoding is what makes the
+# refusal reachable: decoding the whole path first turned a %2F into a separator,
+# so `/dav/a%2Fb/c` collapsed onto `/dav/a/b/c`, the same two-URLs-one-object hole
+# dav_rel closed on the request path. Same predicate, same message.
+fn dest_rel(req: Request) -> Result[Option[String], HttpError] !io =
   match header(req, "destination") {
-    None -> None
+    None -> Ok(None)
     Some(d) -> {
       let path = uri_path(d)
       let prefix = dav_prefix(req)
       let stripped = if prefix != "" && str.starts_with(path, prefix) { str.slice(path, str.len(prefix), str.len(path)) } else { path }
-      # single percent-decode like Python's unquote: %XX resolves, a literal '+'
-      # stays '+' (URLDecoder would turn it into a space), so protect '+' as %2B first
-      let decoded = URLDecoder.decode(join(str.split(stripped, "+"), "%2B"), "UTF-8")!
-      Some(path_join(decoded))
+      Ok(Some(join_rel(map(path_segs(stripped), pct_decode_seg))?))
     }
   }
 
@@ -459,7 +474,7 @@ fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Res
     match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
       None -> Err(http_error(404, "源不存在"))
       Some(_) ->
-        match dest_rel(req) {
+        match dest_rel(req)? {
           None -> Err(http_error(400, "缺少 Destination"))
           Some(dst) ->
             if dst == "" {
@@ -692,6 +707,33 @@ test "dav_rel joins the tail segments and refuses one holding a slash" {
   # pre-joined, so this reached here as "a/b/c" and served the same object as
   # /dav/a/b/c; there is no object whose path segment contains "/", so refuse it
   match dav_rel(rest_req(["a/b", "c"])) {
+    Err(e) -> { assert e.status == 400 }
+    Ok(_) -> { assert false }
+  }
+}
+
+# The same bare request, carrying the Destination header MOVE/COPY read.
+fn dest_req(dest: String) -> Request =
+  Request {
+    method: "MOVE", path: "/dav", raw_path: "/dav",
+    params: map.from([("rest", ["x"])]),
+    query: map.empty(), headers: map.from([("destination", [dest])]),
+    body: "", raw: bytes.utf8(""), body_file: None, route: None,
+  }
+
+test "dest_rel decodes each Destination segment and refuses one holding a slash" {
+  # an absolute Destination, which is what most clients send
+  assert dest_rel(dest_req("http://dav.example/dav/a/b/c.txt")) == Ok(Some("a/b/c.txt"))
+  # a percent-encoding that is not a separator still decodes: %2E is a dot
+  assert dest_rel(dest_req("/dav/a/notes%2Ebak")) == Ok(Some("a/notes.bak"))
+  # unquote semantics, per segment: a literal '+' stays '+' and never becomes a space
+  assert dest_rel(dest_req("/dav/a+b.txt")) == Ok(Some("a+b.txt"))
+  # no header at all is not a refusal; the caller turns that into 缺少 Destination
+  assert dest_rel(rest_req([])) == Ok(None)
+  # /dav/a%2Fb/c: decoding the whole path first made this "a/b/c", so a MOVE
+  # landed where its URL did not say. Split first, and the segment holding "/"
+  # names no object, exactly as on the request path
+  match dest_rel(dest_req("/dav/a%2Fb/c")) {
     Err(e) -> { assert e.status == 400 }
     Ok(_) -> { assert false }
   }
