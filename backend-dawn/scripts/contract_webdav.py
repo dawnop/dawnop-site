@@ -358,6 +358,21 @@ def main():
         {"Depth": "0"},
     )
     case(
+        "copy.dest.host.malformed",
+        "COPY",
+        "/dav/empty-dir",
+        {
+            "Host": "[bad",
+            "Destination": f"http://{authority}/dav/{PREFIX}/rejected-host",
+        },
+    )
+    case(
+        "propfind.dest.host.rejected",
+        "PROPFIND",
+        f"/dav/{PREFIX}/rejected-host",
+        {"Depth": "0"},
+    )
+    case(
         "copy.dest.prefix.partial",
         "COPY",
         "/dav/empty-dir",
@@ -371,6 +386,18 @@ def main():
         {"Destination": "/outside"},
     )
     case("propfind.dest.prefix.outside", "PROPFIND", "/dav/outside", {"Depth": "0"})
+    case(
+        "copy.dest.prefix.reserved-slash",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/d%2Fav/{PREFIX}/reserved-prefix"},
+    )
+    case(
+        "propfind.dest.prefix.reserved-slash",
+        "PROPFIND",
+        f"/dav/{PREFIX}/reserved-prefix",
+        {"Depth": "0"},
+    )
     case(
         "copy.dest.malformed",
         "COPY",
@@ -417,6 +444,24 @@ def main():
         "propfind.dest.fragment.rejected",
         "PROPFIND",
         f"/dav/{PREFIX}/rejected-fragment",
+        {"Depth": "0"},
+    )
+    case(
+        "copy.dest.utf8.invalid-ff",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/invalid-%FF"},
+    )
+    case(
+        "copy.dest.utf8.invalid-fe",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/invalid-%FE"},
+    )
+    case(
+        "propfind.dest.utf8.no-replacement-alias",
+        "PROPFIND",
+        f"/dav/{PREFIX}/invalid-%EF%BF%BD",
         {"Depth": "0"},
     )
     case(
@@ -469,6 +514,34 @@ def main():
         "propfind.dest.absolute-https",
         "PROPFIND",
         f"/dav/{PREFIX}/absolute-https",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    case(
+        "copy.dest.prefix-unreserved.path",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/d%61v/{PREFIX}/prefix-unreserved-path"},
+    )
+    case(
+        "propfind.dest.prefix-unreserved.path",
+        "PROPFIND",
+        f"/dav/{PREFIX}/prefix-unreserved-path",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    case(
+        "copy.dest.prefix-unreserved.absolute",
+        "COPY",
+        "/dav/empty-dir",
+        {
+            "Destination": f"http://{authority}/d%61v/{PREFIX}/prefix-unreserved-absolute"
+        },
+    )
+    case(
+        "propfind.dest.prefix-unreserved.absolute",
+        "PROPFIND",
+        f"/dav/{PREFIX}/prefix-unreserved-absolute",
         {"Depth": "0"},
         with_facts=True,
     )
@@ -550,6 +623,32 @@ def main():
         "propfind.dest.encoded-fragment",
         "PROPFIND",
         f"/dav/{PREFIX}/fragment%23name",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    case(
+        "copy.dest.utf8.multibyte",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/%E5%90%88%E6%B3%95"},
+    )
+    case(
+        "propfind.dest.utf8.multibyte",
+        "PROPFIND",
+        f"/dav/{PREFIX}/%E5%90%88%E6%B3%95",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    case(
+        "copy.dest.utf8.replacement-character",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/valid-%EF%BF%BD"},
+    )
+    case(
+        "propfind.dest.utf8.replacement-character",
+        "PROPFIND",
+        f"/dav/{PREFIX}/valid-%EF%BF%BD",
         {"Depth": "0"},
         with_facts=True,
     )

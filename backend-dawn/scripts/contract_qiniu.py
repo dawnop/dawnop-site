@@ -45,6 +45,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import contract_fixture
 from contract_golden import TRANSPORT_STATUS, Golden, transport_error
 from contract_webdav import KEEP_HEADERS, PREFIX, facts
 from contract_webdav import normalize as dav_normalize
@@ -292,6 +293,50 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
     g.case(
         "fake.rejects.badsignature",
         {"note": "harness self-check", "status": st, "body": body_value(raw)},
+    )
+    fake.clear_calls()
+
+    print("\n== WebDAV overwrite validates a legacy file parent before purge ==")
+    legacy_row = next(
+        row
+        for row in contract_fixture.FILES
+        if row[1] == "legacy-parent.txt/existing-target.txt"
+    )
+    legacy_key = legacy_row[3]
+    overwrite_f_status, _, _ = dav(
+        B,
+        "COPY",
+        "/dav/empty-dir",
+        auth,
+        {
+            "Destination": "/dav/legacy-parent.txt/existing-target.txt",
+            "Overwrite": "F",
+        },
+    )
+    copy_status, _, _ = dav(
+        B,
+        "COPY",
+        "/dav/empty-dir",
+        auth,
+        {"Destination": "/dav/legacy-parent.txt/existing-target.txt"},
+    )
+    row_status, _, _ = dav(
+        B,
+        "PROPFIND",
+        "/dav/legacy-parent.txt/existing-target.txt",
+        auth,
+        {"Depth": "0"},
+    )
+    g.case(
+        "copy.dest.file-parent-existing.preserved",
+        {
+            "note": "409 precedes purge for a legacy child whose parent is a file",
+            "overwrite_f_status": overwrite_f_status,
+            "copy_status": copy_status,
+            "row_status": row_status,
+            "object_present": legacy_key in fake.keys(),
+            "object_calls": scrub(fake.calls()),
+        },
     )
     fake.clear_calls()
 

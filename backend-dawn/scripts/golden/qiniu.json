@@ -1,7 +1,7 @@
 {
  "_note": "Recorded by contract_qiniu.py --record via contract_run.py. Do not hand-edit: re-record and review the diff.",
  "_env": {
-  "fixture": "7303e1f8fd74dcd4",
+  "fixture": "33f4d4b29cf83f22",
   "tz": "UTC",
   "search_backend": "like",
   "qiniu_configured": true
@@ -16,6 +16,14 @@
    "body": {
     "error": "bad token"
    }
+  },
+  "copy.dest.file-parent-existing.preserved": {
+   "note": "409 precedes purge for a legacy child whose parent is a file",
+   "overwrite_f_status": 412,
+   "copy_status": 409,
+   "row_status": 207,
+   "object_present": true,
+   "object_calls": []
   },
   "mkcol.sandbox": {
    "method": "MKCOL",

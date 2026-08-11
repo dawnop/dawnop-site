@@ -33,15 +33,34 @@ fi
 printf 'PASS  base WebDAV Destination assertions\n'
 
 declare -a mutants=()
+declare -a roles=()
 declare -a owners=()
 while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$line" || "$line" == \#* || "$line" == version=* ]] && continue
-  mutants+=("${line%%|*}")
-  owners+=("${line#*|}")
+  IFS='|' read -r mutant role owner <<<"$line"
+  mutants+=("$mutant")
+  roles+=("$role")
+  owners+=("$owner")
 done <"$MATRIX"
+
+if printf '%s\n' "${roles[@]}" | grep -qx qiniu; then
+  base_build_log="$work/base.build.log"
+  if ! "$DAWN" build "$BACKEND" -o "$work/base.jar" >"$base_build_log" 2>&1; then
+    cat "$base_build_log" >&2
+    exit 1
+  fi
+  base_qiniu_log="$work/base.qiniu.log"
+  if ! python3 "$BACKEND/scripts/contract_run.py" \
+    --jar "$work/base.jar" --only qiniu >"$base_qiniu_log" 2>&1; then
+    cat "$base_qiniu_log" >&2
+    exit 1
+  fi
+  printf 'PASS  base qiniu Destination contract\n'
+fi
 
 for index in "${!mutants[@]}"; do
   mutant="${mutants[$index]}"
+  role="${roles[$index]}"
   owner="${owners[$index]}"
   project="$work/$mutant/backend-dawn"
   mkdir -p "$project"
@@ -65,25 +84,67 @@ for index in "${!mutants[@]}"; do
   "$DAWN" test "$project" >"$test_log" 2>&1
   status=$?
   set -e
-  if [[ $status -eq 0 ]]; then
-    printf 'FAIL  %s did not turn its owner red\n' "$mutant" >&2
-    cat "$test_log" >&2
-    exit 1
-  fi
+  if [[ "$role" == test ]]; then
+    if [[ $status -eq 0 ]]; then
+      printf 'FAIL  %s did not turn its owner red\n' "$mutant" >&2
+      cat "$test_log" >&2
+      exit 1
+    fi
 
-  mapfile -t failures < <(sed -n 's/^FAIL  //p' "$test_log")
-  if [[ ${#failures[@]} -ne 1 ]]; then
-    printf 'FAIL  %s produced %s failing assertions, expected one\n' \
-      "$mutant" "${#failures[@]}" >&2
-    cat "$test_log" >&2
-    exit 1
-  fi
+    mapfile -t failures < <(sed -n 's/^FAIL  //p' "$test_log")
+    if [[ ${#failures[@]} -ne 1 ]]; then
+      printf 'FAIL  %s produced %s failing assertions, expected one\n' \
+        "$mutant" "${#failures[@]}" >&2
+      cat "$test_log" >&2
+      exit 1
+    fi
 
-  actual="${failures[0]}"
-  if [[ "$actual" != "$owner" && "$actual" != *" :: $owner" ]]; then
-    printf 'FAIL  %s turned the wrong assertion red: %s\n' "$mutant" "$actual" >&2
-    cat "$test_log" >&2
+    actual="${failures[0]}"
+    if [[ "$actual" != "$owner" && "$actual" != *" :: $owner" ]]; then
+      printf 'FAIL  %s turned the wrong assertion red: %s\n' "$mutant" "$actual" >&2
+      cat "$test_log" >&2
+      exit 1
+    fi
+  elif [[ "$role" == qiniu ]]; then
+    if [[ $status -ne 0 ]]; then
+      printf 'FAIL  %s unexpectedly failed Dawn assertions\n' "$mutant" >&2
+      cat "$test_log" >&2
+      exit 1
+    fi
+
+    contract_log="$work/$mutant.qiniu.log"
+    set +e
+    python3 "$BACKEND/scripts/contract_run.py" \
+      --jar "$work/$mutant.jar" --only qiniu >"$contract_log" 2>&1
+    contract_status=$?
+    set -e
+    if [[ $contract_status -eq 0 ]]; then
+      printf 'FAIL  %s did not turn its qiniu owner red\n' "$mutant" >&2
+      cat "$contract_log" >&2
+      exit 1
+    fi
+    mapfile -t failures < <(
+      python3 - "$contract_log" <<'PY'
+import pathlib
+import re
+import sys
+
+ansi = re.compile(r"\x1b\[[0-9;]*m")
+for raw in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    line = ansi.sub("", raw)
+    match = re.match(r"\s*\[DIFF\]\s+(.+)$", line)
+    if match:
+        print(match.group(1))
+PY
+    )
+    if [[ ${#failures[@]} -ne 1 || "${failures[0]}" != "$owner" ]]; then
+      printf 'FAIL  %s produced the wrong qiniu red set\n' "$mutant" >&2
+      cat "$contract_log" >&2
+      exit 1
+    fi
+  else
+    printf 'FAIL  matrix checker let unknown role through: %s\n' "$role" >&2
     exit 1
   fi
-  printf 'PASS  %s uniquely turns red: %s\n' "$mutant" "$owner"
+  printf 'PASS  %s (%s) uniquely turns red: %s\n' "$mutant" "$role" "$owner"
 done

@@ -1,7 +1,7 @@
 {
  "_note": "Recorded by contract_read.py --record via contract_run.py. Do not hand-edit: re-record and review the diff.",
  "_env": {
-  "fixture": "7303e1f8fd74dcd4",
+  "fixture": "33f4d4b29cf83f22",
   "tz": "UTC",
   "search_backend": "like",
   "qiniu_configured": false
@@ -1470,6 +1470,18 @@
      {
       "storage": "qiniu",
       "dir": "qiniu://",
+      "basename": "legacy-parent.txt",
+      "extension": "txt",
+      "path": "qiniu://legacy-parent.txt",
+      "type": "file",
+      "file_size": 64,
+      "last_modified": 1768219200,
+      "mime_type": "text/plain",
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
       "basename": "readme.md",
       "extension": "md",
       "path": "qiniu://readme.md",
@@ -1552,6 +1564,18 @@
      {
       "storage": "qiniu",
       "dir": "qiniu://",
+      "basename": "legacy-parent.txt",
+      "extension": "txt",
+      "path": "qiniu://legacy-parent.txt",
+      "type": "file",
+      "file_size": 64,
+      "last_modified": 1768219200,
+      "mime_type": "text/plain",
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
       "basename": "readme.md",
       "extension": "md",
       "path": "qiniu://readme.md",
@@ -1590,6 +1614,30 @@
       "type": "file",
       "file_size": 42,
       "last_modified": 1767873600,
+      "mime_type": "text/plain",
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://",
+      "basename": "legacy-parent.txt",
+      "extension": "txt",
+      "path": "qiniu://legacy-parent.txt",
+      "type": "file",
+      "file_size": 64,
+      "last_modified": 1768219200,
+      "mime_type": "text/plain",
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://legacy-parent.txt",
+      "basename": "existing-target.txt",
+      "extension": "txt",
+      "path": "qiniu://legacy-parent.txt/existing-target.txt",
+      "type": "file",
+      "file_size": 96,
+      "last_modified": 1768305600,
       "mime_type": "text/plain",
       "visibility": "public"
      },

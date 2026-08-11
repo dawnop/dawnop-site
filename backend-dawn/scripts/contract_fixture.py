@@ -364,6 +364,24 @@ FILES = [
         65536,
         11,
     ),
+    (
+        11,
+        "legacy-parent.txt",
+        0,
+        "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+        "text/plain",
+        64,
+        12,
+    ),
+    (
+        12,
+        "legacy-parent.txt/existing-target.txt",
+        0,
+        "cccccccc-dddd-eeee-ffff-000000000000",
+        "text/plain",
+        96,
+        13,
+    ),
 ]
 
 # non-default values so GET /api/settings proves the merge, not just DEFAULTS

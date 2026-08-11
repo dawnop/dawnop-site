@@ -15,6 +15,7 @@
 # entirely (302 straight to qiniu), so only webdavfs/mini-redirector pay it.
 use std/str
 use std/bytes
+use std/char
 use std/map
 use std/list
 use util/ferr.{catch_text}
@@ -474,6 +475,12 @@ fn destination_default_port(scheme: String) -> Int =
 fn effective_port(scheme: String, port: Int) -> Int =
   if port >= 0 { port } else { destination_default_port(scheme) }
 
+fn parse_destination_host_uri(scheme: String, raw_host: String) -> Option[URI] !io =
+  match catch_text(() => URI.create("$scheme://$raw_host")!) {
+    Ok(uri) -> Some(uri)
+    Err(_) -> None
+  }
+
 # Request has no trusted external-scheme field. For a same-host absolute URI,
 # compare an omitted Host port using the Destination scheme's default. This
 # intentionally accepts both http and https when Host itself omits the port.
@@ -481,9 +488,9 @@ fn destination_authority_matches(req: Request, uri: URI, scheme: String) -> Bool
   match header(req, "host") {
     None -> false
     Some(raw_host) ->
-      match catch_text(() => URI.create("$scheme://$raw_host")!) {
-        Err(_) -> false
-        Ok(host_uri) ->
+      match parse_destination_host_uri(scheme, raw_host) {
+        None -> false
+        Some(host_uri) ->
           match (host_uri.getHost(), uri.getHost()) {
             (Some(host_name), Some(destination_host)) -> {
               let host_shape_ok =
@@ -558,23 +565,148 @@ fn destination_path(req: Request, raw: String, uri: URI) -> Result[String, HttpE
   }
 }
 
-fn strip_destination_prefix(path: String, prefix: String) -> Result[String, HttpError] =
-  if prefix == "" {
-    Ok(path)
-  } else if path == prefix {
+fn hex_value(c: Char) -> Option[Int] = {
+  let n = char.code(c)
+  if n >= char.code('0') && n <= char.code('9') {
+    Some(n - char.code('0'))
+  } else if n >= char.code('A') && n <= char.code('F') {
+    Some(n - char.code('A') + 10)
+  } else if n >= char.code('a') && n <= char.code('f') {
+    Some(n - char.code('a') + 10)
+  } else {
+    None
+  }
+}
+
+fn percent_octet(cps: List[Char], i: Int) -> Option[Int] =
+  if i + 2 >= len(cps) || cps[i] != '%' {
+    None
+  } else {
+    match (hex_value(cps[i + 1]), hex_value(cps[i + 2])) {
+      (Some(hi), Some(lo)) -> Some(hi * 16 + lo)
+      _ -> None
+    }
+  }
+
+fn unreserved_octet(n: Int) -> Bool =
+  (n >= 65 && n <= 90) || (n >= 97 && n <= 122) || (n >= 48 && n <= 57) ||
+  n == 45 || n == 46 || n == 95 || n == 126
+
+# RFC 3986 treats percent-encoded unreserved octets as equivalent to their
+# literal spelling. Reserved octets stay encoded until segment decoding, so a
+# %2F cannot become a prefix separator.
+fn normalize_destination_unreserved(path: String) -> String =
+  normalize_destination_unreserved_loop(code_points(path), 0, "")
+
+fn normalize_destination_unreserved_loop(cps: List[Char], i: Int, acc: String) -> String =
+  if i >= len(cps) {
+    acc
+  } else {
+    match percent_octet(cps, i) {
+      Some(n) ->
+        if unreserved_octet(n) {
+          normalize_destination_unreserved_loop(
+            cps, i + 3, acc ++ str.from_char(char.of(n).expect("an unreserved ASCII byte")))
+        } else {
+          normalize_destination_unreserved_loop(
+            cps, i + 3, acc ++ str.from_char(cps[i]) ++ str.from_char(cps[i + 1]) ++ str.from_char(cps[i + 2]))
+        }
+      None -> normalize_destination_unreserved_loop(cps, i + 1, acc ++ str.from_char(cps[i]))
+    }
+  }
+
+fn strip_destination_prefix(path: String, prefix: String) -> Result[String, HttpError] = {
+  let normalized_path = normalize_destination_unreserved(path)
+  let normalized_prefix = normalize_destination_unreserved(prefix)
+  if normalized_prefix == "" {
+    Ok(normalized_path)
+  } else if normalized_path == normalized_prefix {
     Ok("")
-  } else if str.starts_with(path, prefix ++ "/") {
-    Ok(str.slice(path, str.len(prefix), str.len(path)))
+  } else if str.starts_with(normalized_path, normalized_prefix ++ "/") {
+    Ok(str.slice(normalized_path, str.len(normalized_prefix), str.len(normalized_path)))
   } else {
     Err(http_error(400, "Destination 不在 WebDAV 根下"))
+  }
+}
+
+fn percent_run(cps: List[Char], i: Int, acc: List[Int]) -> (List[Int], Int) =
+  match percent_octet(cps, i) {
+    Some(n) -> percent_run(cps, i + 3, acc ++ [n])
+    None -> (acc, i)
+  }
+
+fn utf8_continuation(n: Int) -> Bool = n >= 128 && n <= 191
+
+fn utf8_percent_bytes_valid(bs: List[Int], i: Int) -> Bool =
+  if i >= len(bs) {
+    true
+  } else {
+    let b0 = bs[i]
+    if b0 <= 127 {
+      utf8_percent_bytes_valid(bs, i + 1)
+    } else if b0 >= 194 && b0 <= 223 {
+      i + 1 < len(bs) && utf8_continuation(bs[i + 1]) &&
+        utf8_percent_bytes_valid(bs, i + 2)
+    } else if b0 == 224 {
+      i + 2 < len(bs) && bs[i + 1] >= 160 && bs[i + 1] <= 191 &&
+        utf8_continuation(bs[i + 2]) && utf8_percent_bytes_valid(bs, i + 3)
+    } else if (b0 >= 225 && b0 <= 236) || (b0 >= 238 && b0 <= 239) {
+      i + 2 < len(bs) && utf8_continuation(bs[i + 1]) &&
+        utf8_continuation(bs[i + 2]) && utf8_percent_bytes_valid(bs, i + 3)
+    } else if b0 == 237 {
+      i + 2 < len(bs) && bs[i + 1] >= 128 && bs[i + 1] <= 159 &&
+        utf8_continuation(bs[i + 2]) && utf8_percent_bytes_valid(bs, i + 3)
+    } else if b0 == 240 {
+      i + 3 < len(bs) && bs[i + 1] >= 144 && bs[i + 1] <= 191 &&
+        utf8_continuation(bs[i + 2]) && utf8_continuation(bs[i + 3]) &&
+        utf8_percent_bytes_valid(bs, i + 4)
+    } else if b0 >= 241 && b0 <= 243 {
+      i + 3 < len(bs) && utf8_continuation(bs[i + 1]) &&
+        utf8_continuation(bs[i + 2]) && utf8_continuation(bs[i + 3]) &&
+        utf8_percent_bytes_valid(bs, i + 4)
+    } else if b0 == 244 {
+      i + 3 < len(bs) && bs[i + 1] >= 128 && bs[i + 1] <= 143 &&
+        utf8_continuation(bs[i + 2]) && utf8_continuation(bs[i + 3]) &&
+        utf8_percent_bytes_valid(bs, i + 4)
+    } else {
+      false
+    }
+  }
+
+fn valid_percent_utf8(s: String) -> Bool =
+  valid_percent_utf8_loop(code_points(s), 0)
+
+fn valid_percent_utf8_loop(cps: List[Char], i: Int) -> Bool =
+  if i >= len(cps) {
+    true
+  } else if cps[i] != '%' {
+    valid_percent_utf8_loop(cps, i + 1)
+  } else {
+    let (run, next) = percent_run(cps, i, [])
+    len(run) > 0 && utf8_percent_bytes_valid(run, 0) && valid_percent_utf8_loop(cps, next)
   }
 
 # single percent-decode of one path segment, like Python's unquote: %XX resolves,
 # a literal '+' stays '+' (URLDecoder would turn it into a space), so protect '+'
 # as %2B first. Per segment, because the split has to happen while the separators
 # are still the only "/" in the string.
-fn pct_decode_seg(s: String) -> String !io =
-  URLDecoder.decode(join(str.split(s, "+"), "%2B"), "UTF-8")!
+fn pct_decode_seg(s: String) -> Result[String, HttpError] !io =
+  if not valid_percent_utf8(s) {
+    Err(http_error(400, "Destination 包含非法 UTF-8"))
+  } else {
+    match catch_text(() => URLDecoder.decode(join(str.split(s, "+"), "%2B"), "UTF-8")!) {
+      Ok(decoded) -> Ok(decoded)
+      Err(_) -> Err(http_error(400, "非法目标"))
+    }
+  }
+
+fn decode_destination_segments(segs: List[String], i: Int, acc: List[String]) -> Result[List[String], HttpError] !io =
+  if i >= len(segs) {
+    Ok(acc)
+  } else {
+    let decoded = pct_decode_seg(segs[i])?
+    decode_destination_segments(segs, i + 1, acc ++ [decoded])
+  }
 
 # The rel a Destination header names. Three outcomes, so three shapes: Err = the
 # header named something no object can be (400), Ok(None) = no Destination at
@@ -590,7 +722,8 @@ fn dest_rel(req: Request) -> Result[Option[String], HttpError] !io =
       let path = destination_path(req, d, uri)?
       let prefix = dav_prefix(req)
       let stripped = strip_destination_prefix(path, prefix)?
-      Ok(Some(join_rel(map(path_segs(stripped), pct_decode_seg))?))
+      let decoded = decode_destination_segments(path_segs(stripped), 0, [])?
+      Ok(Some(join_rel(decoded)?))
     }
   }
 
@@ -622,7 +755,7 @@ fn mc_check_dst(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) 
     let dst_existing = as_http(with_db(a.db.path, a.db.ext, c => get_row(c, dst)), 500)?
     let overwrite = str.to_upper(header_or(req, "overwrite", "T")) != "F"
     match dst_existing {
-      Some(_) -> if not overwrite { Err(http_error(412, "目标已存在")) } else { mc_purge_then(a, rel, dst, is_move, true) }
+      Some(_) -> if not overwrite { Err(http_error(412, "目标已存在")) } else { mc_require_parent(a, rel, dst, is_move, true) }
       None -> mc_require_parent(a, rel, dst, is_move, false)
     }
   }
@@ -630,7 +763,7 @@ fn mc_check_dst(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) 
 fn mc_purge_then(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =
   {
     let _p = as_http(purge_silent(a, dst), 500)?
-    mc_require_parent(a, rel, dst, is_move, dst_existed)
+    mc_apply(a, rel, dst, is_move, dst_existed)
   }
 
 # delete the dst subtree (rows + qiniu) without producing a Response
@@ -645,7 +778,13 @@ fn purge_silent(a: Auth, rel: String) -> Result[Int, String] !io =
 fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =
   {
     let ok = as_http(parent_exists(a, dst), 500)?
-    if not ok { Err(http_error(409, "父目录不存在")) } else { mc_apply(a, rel, dst, is_move, dst_existed) }
+    if not ok {
+      Err(http_error(409, "父目录不存在"))
+    } else if dst_existed {
+      mc_purge_then(a, rel, dst, is_move, true)
+    } else {
+      mc_apply(a, rel, dst, is_move, false)
+    }
   }
 
 fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io = {
@@ -913,6 +1052,12 @@ test "dest_rel rejects a foreign authority" {
   assert dest_error(dest_rel(dest_req_at("http://dav.example/dav/a", "dav.example/path", "/dav")), wrong)
 }
 
+test "dest_rel maps malformed Host syntax to 400" {
+  let wrong = "Destination 不属于当前服务器"
+  assert dest_error(dest_rel(dest_req_at("http://dav.example/dav/a", "[bad", "/dav")), wrong)
+  assert dest_rel(dest_req_at("http://dav.example/dav/a", "dav.example", "/dav")) == Ok(Some("a"))
+}
+
 test "dest_rel rejects non-Simple-ref relative forms" {
   let message = "Destination 必须是绝对路径或 absolute URI"
   assert dest_error(dest_rel(dest_req("dav/a")), message)
@@ -950,9 +1095,29 @@ test "dest_rel confines paths to the DAV prefix" {
   let message = "Destination 不在 WebDAV 根下"
   assert dest_error(dest_rel(dest_req("/davx")), message)
   assert dest_error(dest_rel(dest_req("/outside")), message)
+  assert dest_error(dest_rel(dest_req("/d%2Fav/reserved")), message)
+  assert dest_error(dest_rel(dest_req("http://dav.example/dav%2Freserved")), message)
   assert dest_rel(dest_req("/dav")) == Ok(Some(""))
   assert dest_rel(dest_req("/dav/a")) == Ok(Some("a"))
   assert dest_rel(dest_req_at("/a", "dav.example", "/")) == Ok(Some("a"))
+}
+
+test "dest_rel normalizes unreserved prefix octets" {
+  assert dest_rel(dest_req("/d%61v/path-form")) == Ok(Some("path-form"))
+  assert dest_rel(dest_req("http://dav.example/d%61v/absolute-form")) == Ok(Some("absolute-form"))
+  assert dest_rel(dest_req_at("/dav/prefix-form", "dav.example", "/d%61v")) == Ok(Some("prefix-form"))
+}
+
+test "dest_rel rejects invalid percent UTF-8 without aliasing" {
+  let invalid = "Destination 包含非法 UTF-8"
+  assert dest_error(dest_rel(dest_req("/dav/%FF")), invalid)
+  assert dest_error(dest_rel(dest_req("/dav/%FE")), invalid)
+  assert dest_error(dest_rel(dest_req("/dav/%C0%AF")), invalid)
+  assert dest_error(dest_rel(dest_req("/dav/%ED%A0%80")), invalid)
+  assert dest_error(dest_rel(dest_req("/dav/%F4%90%80%80")), invalid)
+  assert dest_rel(dest_req("/dav/%EF%BF%BD")) == Ok(Some("�"))
+  assert dest_rel(dest_req("/dav/%E5%9B%BE%E7%89%87")) == Ok(Some("图片"))
+  assert dest_rel(dest_req("/dav/a+b%3F%23")) == Ok(Some("a+b?#"))
 }
 
 fn is_dot_segment_error(r: Result[Option[String], HttpError]) -> Bool =

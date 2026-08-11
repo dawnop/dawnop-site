@@ -144,8 +144,8 @@ jobs:
 
       # The contract scripts (read / edge / WebDAV) were written during M6 to
       # diff Dawn against FastAPI request by request. That needed both backends
-      # up at once, so CI never ran them — 150 recorded wire shapes, exercised
-      # only by hand, against whatever happened to be in the author's database.
+      # up at once, so CI never ran them. The current four goldens hold 272 wire
+      # shapes, all exercised against a freshly seeded fixture on every run.
       # They are golden-based now: contract_run.py seeds a pinned SQLite fixture
       # (contract_fixture.py), boots the jar this job just built on 127.0.0.1,
       # and compares every response with backend-dawn/scripts/golden/*.json.

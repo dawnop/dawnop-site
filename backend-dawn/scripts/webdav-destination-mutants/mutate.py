@@ -14,12 +14,16 @@ MUTANTS = (
     "compare-ports-literally",
     "use-http-default-for-https",
     "allow-foreign-authority",
+    "uncatch-host-uri",
     "accept-non-simple-reference",
     "uncatch-destination-uri",
     "unwrap-opaque-raw-path",
     "ignore-destination-query",
     "ignore-destination-fragment",
     "destination-prefix-fail-open",
+    "skip-unreserved-prefix-normalization",
+    "restore-replacement-utf8",
+    "purge-before-parent-check",
     "accept-file-parent",
 )
 
@@ -93,8 +97,19 @@ def main() -> int:
     elif args.mutant == "allow-foreign-authority":
         replace_once(
             source,
-            "      } else if not destination_authority_matches(req, uri, scheme) {\n",
-            "      } else if false {\n",
+            "                str.to_lower(host_name) == str.to_lower(destination_host) &&\n",
+            "                true &&\n",
+        )
+    elif args.mutant == "uncatch-host-uri":
+        replace_once(
+            source,
+            "fn parse_destination_host_uri(scheme: String, raw_host: String) -> Option[URI] !io =\n"
+            '  match catch_text(() => URI.create("$scheme://$raw_host")!) {\n'
+            "    Ok(uri) -> Some(uri)\n"
+            "    Err(_) -> None\n"
+            "  }\n",
+            "fn parse_destination_host_uri(scheme: String, raw_host: String) -> Option[URI] !io =\n"
+            '  Some(URI.create("$scheme://$raw_host")!)\n',
         )
     elif args.mutant == "accept-non-simple-reference":
         replace_once(
@@ -159,7 +174,41 @@ def main() -> int:
             '    Err(http_error(400, "Destination 不在 WebDAV 根下"))\n',
             "    Ok(path)\n",
         )
-    else:
+    elif args.mutant == "skip-unreserved-prefix-normalization":
+        replace_once(
+            source,
+            "  let normalized_path = normalize_destination_unreserved(path)\n"
+            "  let normalized_prefix = normalize_destination_unreserved(prefix)\n",
+            "  let normalized_path = path\n  let normalized_prefix = prefix\n",
+        )
+    elif args.mutant == "restore-replacement-utf8":
+        replace_once(
+            source,
+            "  if not valid_percent_utf8(s) {\n",
+            "  if false {\n",
+        )
+    elif args.mutant == "purge-before-parent-check":
+        replace_once(
+            source,
+            "fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =\n"
+            "  {\n"
+            "    let ok = as_http(parent_exists(a, dst), 500)?\n"
+            "    if not ok {\n"
+            '      Err(http_error(409, "父目录不存在"))\n'
+            "    } else if dst_existed {\n"
+            "      mc_purge_then(a, rel, dst, is_move, true)\n"
+            "    } else {\n"
+            "      mc_apply(a, rel, dst, is_move, false)\n"
+            "    }\n"
+            "  }\n",
+            "fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =\n"
+            "  {\n"
+            "    let _p = if dst_existed { as_http(purge_silent(a, dst), 500)? } else { 0 }\n"
+            "    let ok = as_http(parent_exists(a, dst), 500)?\n"
+            '    if not ok { Err(http_error(409, "父目录不存在")) } else { mc_apply(a, rel, dst, is_move, dst_existed) }\n'
+            "  }\n",
+        )
+    elif args.mutant == "accept-file-parent":
         replace_once(
             source,
             "      Some(o) -> o.is_dir\n",
