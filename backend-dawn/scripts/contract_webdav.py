@@ -9,8 +9,9 @@ is the interesting part of this file:
       0+1/non-ASCII/encoded-slash/X-Dav-Prefix), HEAD, MKCOL (+ duplicate,
       + missing parent, + root), MOVE of a file and of a directory (rename only
       rewrites `path`), the MOVE guards (no Destination / onto self /
-      Overwrite: F / an encoded slash in the Destination), COPY of an empty
-      directory (plus the same Destination decoding: %2E, a literal '+'),
+      Overwrite: F / an encoded slash / dot segments in the Destination), COPY
+      of an empty directory (plus source preservation after a rejected target,
+      the same Destination decoding: %2E, a literal '+'),
       LOCK/UNLOCK, DELETE of a directory, DELETE of the root.
 
   NOT covered HERE (the request reaches qiniu, and this backend has no
@@ -275,6 +276,19 @@ def main():
         {"Destination": f"/dav/{PREFIX}/a%2Fb"},
     )
     case(
+        "move.dest.dot",
+        "MOVE",
+        f"/dav/{PREFIX}/sub",
+        {"Destination": "/dav/."},
+    )
+    case(
+        "propfind.move.dot.source",
+        "PROPFIND",
+        f"/dav/{PREFIX}/sub",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    case(
         "move.dir",
         "MOVE",
         f"/dav/{PREFIX}/sub",
@@ -303,6 +317,19 @@ def main():
 
     print("\n== COPY (empty collection: nothing to copy in the bucket) ==")
     case(
+        "copy.dest.encoded.dotdot",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": "/dav/%2E%2E"},
+    )
+    case(
+        "propfind.copy.dotdot.source",
+        "PROPFIND",
+        "/dav/empty-dir",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    case(
         "copy.emptydir",
         "COPY",
         "/dav/empty-dir",
@@ -315,10 +342,22 @@ def main():
         {"Depth": "0"},
         with_facts=True,
     )
-    # The two above refuse an encoded slash; these two say what was refused. A
-    # Destination is still percent-decoded, so %2E is a dot and the collection
-    # lands at dot.name. Without this, the refusals above would pass just as
-    # well if the parser had stopped decoding altogether.
+    case(
+        "copy.dest.hidden",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/.hidden"},
+    )
+    case(
+        "propfind.dest.hidden",
+        "PROPFIND",
+        f"/dav/{PREFIX}/.hidden",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    # Refusing encoded slashes and exact dot segments must not disable decoding
+    # generally. %2E inside a name is a dot, so the collection lands at dot.name.
+    # Without this, the refusals would pass if the parser stopped decoding.
     case(
         "copy.dest.encoded.dot",
         "COPY",

@@ -106,13 +106,19 @@ fn dav_prefix(req: Request) -> String = {
 fn dav_rel(req: Request) -> Result[String, HttpError] =
   join_rel(filter(param_segs(req, "rest"), s => s != ""))
 
-# Join already-decoded segments into a rel, refusing any that holds a literal
-# "/". Shared with dest_rel so the request path and the Destination header cannot
-# drift apart in judgement or in wording: both refusals are this one.
+# Join already-decoded segments into a rel. A literal "/" cannot belong to one
+# path segment, and the exact segments "." and ".." cannot be addressed again
+# through WebDAV because the request path rejects them before dispatch.
+fn is_dot_segment(s: String) -> Bool =
+  s == "." || s == ".."
+
 fn join_rel(segs: List[String]) -> Result[String, HttpError] = {
   for s in segs {
     if str.contains(s, "/") {
       return Err(http_error(400, "path segment contains an encoded slash"))
+    }
+    if is_dot_segment(s) {
+      return Err(http_error(400, "path contains a dot segment"))
     }
   }
   Ok(join(segs, "/"))
@@ -698,7 +704,7 @@ fn rest_req(segs: List[String]) -> Request =
 
 test "dav_rel joins the tail segments and refuses one holding a slash" {
   # the ordinary path, unchanged
-  assert dav_rel(rest_req(["a", "b", "c.txt"])) == Ok("a/b/c.txt")
+  assert dav_rel(rest_req(["a", "b", "c"])) == Ok("a/b/c")
   # the bare mount point
   assert dav_rel(rest_req([])) == Ok("")
   # empty segments still collapse, as path_join always did
@@ -723,11 +729,9 @@ fn dest_req(dest: String) -> Request =
 
 test "dest_rel decodes each Destination segment and refuses one holding a slash" {
   # an absolute Destination, which is what most clients send
-  assert dest_rel(dest_req("http://dav.example/dav/a/b/c.txt")) == Ok(Some("a/b/c.txt"))
-  # a percent-encoding that is not a separator still decodes: %2E is a dot
-  assert dest_rel(dest_req("/dav/a/notes%2Ebak")) == Ok(Some("a/notes.bak"))
+  assert dest_rel(dest_req("http://dav.example/dav/a/b/c")) == Ok(Some("a/b/c"))
   # unquote semantics, per segment: a literal '+' stays '+' and never becomes a space
-  assert dest_rel(dest_req("/dav/a+b.txt")) == Ok(Some("a+b.txt"))
+  assert dest_rel(dest_req("/dav/a+b")) == Ok(Some("a+b"))
   # no header at all is not a refusal; the caller turns that into 缺少 Destination
   assert dest_rel(rest_req([])) == Ok(None)
   # /dav/a%2Fb/c: decoding the whole path first made this "a/b/c", so a MOVE
@@ -737,6 +741,29 @@ test "dest_rel decodes each Destination segment and refuses one holding a slash"
     Err(e) -> { assert e.status == 400 }
     Ok(_) -> { assert false }
   }
+}
+
+fn is_dot_segment_error(r: Result[Option[String], HttpError]) -> Bool =
+  match r {
+    Err(e) -> e.status == 400 && e.message == "path contains a dot segment"
+    Ok(_) -> false
+  }
+
+test "dest_rel rejects one-dot segments after one decode" {
+  assert is_dot_segment_error(dest_rel(dest_req("/dav/.")))
+  assert is_dot_segment_error(dest_rel(dest_req("/dav/%2e")))
+}
+
+test "dest_rel rejects two-dot segments after one decode" {
+  assert is_dot_segment_error(dest_rel(dest_req("/dav/..")))
+  assert is_dot_segment_error(dest_rel(dest_req("/dav/%2E%2E")))
+}
+
+test "dest_rel accepts names that merely contain dots" {
+  assert dest_rel(dest_req("/dav/.hidden")) == Ok(Some(".hidden"))
+  assert dest_rel(dest_req("/dav/a..b")) == Ok(Some("a..b"))
+  assert dest_rel(dest_req("/dav/...")) == Ok(Some("..."))
+  assert dest_rel(dest_req("/dav/notes%2Ebak")) == Ok(Some("notes.bak"))
 }
 
 test "range_pair parses the WebDAV Range forms against a total size" {

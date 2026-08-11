@@ -482,6 +482,43 @@
    },
    "body": "{\"detail\":\"path segment contains an encoded slash\"}"
   },
+  "move.dest.dot": {
+   "method": "MOVE",
+   "path": "/dav/dav-test/sub",
+   "status": 400,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "40"
+   },
+   "body": "{\"detail\":\"path contains a dot segment\"}"
+  },
+  "propfind.move.dot.source": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/sub",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "425"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/sub/</D:href><D:propstat><D:prop><D:displayname>sub</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/sub/"
+    ],
+    "displaynames": [
+     "sub"
+    ],
+    "contentlengths": [],
+    "contenttypes": [],
+    "lastmodified": [
+     "WALL-CLOCK"
+    ],
+    "collections": 1,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
   "move.dir": {
    "method": "MOVE",
    "path": "/dav/dav-test/sub",
@@ -556,6 +593,43 @@
    },
    "body": "{\"detail\":\"目标已存在\"}"
   },
+  "copy.dest.encoded.dotdot": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 400,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "40"
+   },
+   "body": "{\"detail\":\"path contains a dot segment\"}"
+  },
+  "propfind.copy.dotdot.source": {
+   "method": "PROPFIND",
+   "path": "/dav/empty-dir",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "428"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/empty-dir/</D:href><D:propstat><D:prop><D:displayname>empty-dir</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>Wed, 07 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-07T12:00:00Z</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/empty-dir/"
+    ],
+    "displaynames": [
+     "empty-dir"
+    ],
+    "contentlengths": [],
+    "contenttypes": [],
+    "lastmodified": [
+     "Wed, 07 Jan 2026 12:00:00 GMT"
+    ],
+    "collections": 1,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
   "copy.emptydir": {
    "method": "COPY",
    "path": "/dav/empty-dir",
@@ -581,6 +655,43 @@
     ],
     "displaynames": [
      "copied"
+    ],
+    "contentlengths": [],
+    "contenttypes": [],
+    "lastmodified": [
+     "WALL-CLOCK"
+    ],
+    "collections": 1,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "copy.dest.hidden": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 201,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
+   },
+   "body": ""
+  },
+  "propfind.dest.hidden": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/.hidden",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "433"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/.hidden/</D:href><D:propstat><D:prop><D:displayname>.hidden</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/.hidden/"
+    ],
+    "displaynames": [
+     ".hidden"
     ],
     "contentlengths": [],
     "contenttypes": [],

@@ -77,7 +77,9 @@ jobs:
       # they get, and it is the one that caught `rm -rf "$APP/lib"` running as root
       # with no guard on $APP being non-empty.
       - name: shellcheck deploy scripts
-        run: shellcheck backend-dawn/deploy/*.sh backend-dawn/build.sh scripts/fetch-dawn.sh
+        run: >-
+          shellcheck backend-dawn/deploy/*.sh backend-dawn/build.sh
+          backend-dawn/scripts/webdav-dot-segment-mutants/run.sh scripts/fetch-dawn.sh
 
   backend:
     runs-on: ubuntu-latest
@@ -121,6 +123,9 @@ jobs:
       # which is what the jar's relative manifest Class-Path points at.
       - name: backend tests + jar
         run: ./backend-dawn/build.sh
+
+      - name: WebDAV dot segment mutation contract
+        run: backend-dawn/scripts/webdav-dot-segment-mutants/run.sh
 
       # The contract scripts (read / edge / WebDAV) were written during M6 to
       # diff Dawn against FastAPI request by request. That needed both backends
