@@ -1,0 +1,18 @@
+# Versioned, hand-owned red set. There is no record mode.
+version=1
+drop-dot-check|dest_rel rejects one-dot segments after one decode
+drop-dotdot-check|dest_rel rejects two-dot segments after one decode
+reject-dot-containing-names|dest_rel accepts names that merely contain dots
+drop-https-scheme|dest_rel accepts supported HTTP schemes
+allow-unsupported-scheme|dest_rel rejects unsupported schemes
+compare-host-case-sensitively|dest_rel compares authority hosts case-insensitively
+compare-ports-literally|dest_rel normalizes default HTTP ports
+use-http-default-for-https|destination default ports are scheme-correct
+allow-foreign-authority|dest_rel rejects a foreign authority
+accept-non-simple-reference|dest_rel rejects non-Simple-ref relative forms
+uncatch-destination-uri|dest_rel maps malformed URI syntax to 400
+unwrap-opaque-raw-path|dest_rel rejects opaque URI forms
+ignore-destination-query|dest_rel rejects query components
+ignore-destination-fragment|dest_rel rejects fragment components
+destination-prefix-fail-open|dest_rel confines paths to the DAV prefix
+accept-file-parent|parent check accepts only root or a directory row

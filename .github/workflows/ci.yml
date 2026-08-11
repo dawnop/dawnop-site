@@ -82,7 +82,7 @@ jobs:
           backend-dawn/scripts/db-connection-boundary-mutants/run.sh
           backend-dawn/scripts/http-body-boundary-mutants/run.sh
           backend-dawn/scripts/response-stream-boundary-mutants/run.sh
-          backend-dawn/scripts/webdav-dot-segment-mutants/run.sh scripts/fetch-dawn.sh
+          backend-dawn/scripts/webdav-destination-mutants/run.sh scripts/fetch-dawn.sh
 
   backend:
     runs-on: ubuntu-latest
@@ -139,8 +139,8 @@ jobs:
       - name: Response stream boundary mutation contract
         run: backend-dawn/scripts/response-stream-boundary-mutants/run.sh
 
-      - name: WebDAV dot segment mutation contract
-        run: backend-dawn/scripts/webdav-dot-segment-mutants/run.sh
+      - name: WebDAV Destination mutation contract
+        run: backend-dawn/scripts/webdav-destination-mutants/run.sh
 
       # The contract scripts (read / edge / WebDAV) were written during M6 to
       # diff Dawn against FastAPI request by request. That needed both backends

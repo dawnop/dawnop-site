@@ -630,6 +630,519 @@
     ]
    }
   },
+  "copy.dest.scheme.unsupported": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 400,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "44"
+   },
+   "body": "{\"detail\":\"Destination scheme 不受支持\"}"
+  },
+  "propfind.dest.scheme.rejected": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/rejected-scheme",
+   "status": 404,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
+   },
+   "body": "{\"detail\":\"资源不存在\"}"
+  },
+  "copy.dest.authority.foreign": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 400,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "49"
+   },
+   "body": "{\"detail\":\"Destination 不属于当前服务器\"}"
+  },
+  "propfind.dest.authority.rejected": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/rejected-authority",
+   "status": 404,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
+   },
+   "body": "{\"detail\":\"资源不存在\"}"
+  },
+  "copy.dest.prefix.partial": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 400,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "45"
+   },
+   "body": "{\"detail\":\"Destination 不在 WebDAV 根下\"}"
+  },
+  "propfind.dest.prefix.partial": {
+   "method": "PROPFIND",
+   "path": "/dav/x",
+   "status": 404,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
+   },
+   "body": "{\"detail\":\"资源不存在\"}"
+  },
+  "copy.dest.prefix.outside": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 400,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "45"
+   },
+   "body": "{\"detail\":\"Destination 不在 WebDAV 根下\"}"
+  },
+  "propfind.dest.prefix.outside": {
+   "method": "PROPFIND",
+   "path": "/dav/outside",
+   "status": 404,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
+   },
+   "body": "{\"detail\":\"资源不存在\"}"
+  },
+  "copy.dest.malformed": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 400,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "25"
+   },
+   "body": "{\"detail\":\"非法目标\"}"
+  },
+  "copy.dest.opaque": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 400,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "44"
+   },
+   "body": "{\"detail\":\"Destination 必须是分层 URI\"}"
+  },
+  "copy.dest.query": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 400,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "46"
+   },
+   "body": "{\"detail\":\"Destination 不支持查询参数\"}"
+  },
+  "copy.dest.query.empty": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 400,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "46"
+   },
+   "body": "{\"detail\":\"Destination 不支持查询参数\"}"
+  },
+  "propfind.dest.query.rejected": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/rejected-query",
+   "status": 404,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
+   },
+   "body": "{\"detail\":\"资源不存在\"}"
+  },
+  "copy.dest.fragment": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 400,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "40"
+   },
+   "body": "{\"detail\":\"Destination 不支持片段\"}"
+  },
+  "copy.dest.fragment.empty": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 400,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "40"
+   },
+   "body": "{\"detail\":\"Destination 不支持片段\"}"
+  },
+  "propfind.dest.fragment.rejected": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/rejected-fragment",
+   "status": 404,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
+   },
+   "body": "{\"detail\":\"资源不存在\"}"
+  },
+  "copy.dest.file-parent": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 409,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "31"
+   },
+   "body": "{\"detail\":\"父目录不存在\"}"
+  },
+  "propfind.dest.file-parent.rejected": {
+   "method": "PROPFIND",
+   "path": "/dav/example.txt/child",
+   "status": 404,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
+   },
+   "body": "{\"detail\":\"资源不存在\"}"
+  },
+  "copy.dest.path-absolute": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 201,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
+   },
+   "body": ""
+  },
+  "propfind.dest.path-absolute": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/path-absolute",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "445"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/path-absolute/</D:href><D:propstat><D:prop><D:displayname>path-absolute</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/path-absolute/"
+    ],
+    "displaynames": [
+     "path-absolute"
+    ],
+    "contentlengths": [],
+    "contenttypes": [],
+    "lastmodified": [
+     "WALL-CLOCK"
+    ],
+    "collections": 1,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "copy.dest.absolute-http": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 201,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
+   },
+   "body": ""
+  },
+  "propfind.dest.absolute-http": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/absolute-http",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "445"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/absolute-http/</D:href><D:propstat><D:prop><D:displayname>absolute-http</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/absolute-http/"
+    ],
+    "displaynames": [
+     "absolute-http"
+    ],
+    "contentlengths": [],
+    "contenttypes": [],
+    "lastmodified": [
+     "WALL-CLOCK"
+    ],
+    "collections": 1,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "copy.dest.absolute-https": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 201,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
+   },
+   "body": ""
+  },
+  "propfind.dest.absolute-https": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/absolute-https",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "447"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/absolute-https/</D:href><D:propstat><D:prop><D:displayname>absolute-https</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/absolute-https/"
+    ],
+    "displaynames": [
+     "absolute-https"
+    ],
+    "contentlengths": [],
+    "contenttypes": [],
+    "lastmodified": [
+     "WALL-CLOCK"
+    ],
+    "collections": 1,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "copy.dest.authority-normalized": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 201,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
+   },
+   "body": ""
+  },
+  "propfind.dest.authority-normalized": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/authority-normalized",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "459"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/authority-normalized/</D:href><D:propstat><D:prop><D:displayname>authority-normalized</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/authority-normalized/"
+    ],
+    "displaynames": [
+     "authority-normalized"
+    ],
+    "contentlengths": [],
+    "contenttypes": [],
+    "lastmodified": [
+     "WALL-CLOCK"
+    ],
+    "collections": 1,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "copy.dest.double-slash": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 201,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
+   },
+   "body": ""
+  },
+  "propfind.dest.double-slash": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/double-slash",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "443"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/double-slash/</D:href><D:propstat><D:prop><D:displayname>double-slash</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/double-slash/"
+    ],
+    "displaynames": [
+     "double-slash"
+    ],
+    "contentlengths": [],
+    "contenttypes": [],
+    "lastmodified": [
+     "WALL-CLOCK"
+    ],
+    "collections": 1,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "copy.dest.trailing-slash": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 201,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
+   },
+   "body": ""
+  },
+  "propfind.dest.trailing-slash": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/trailing-slash",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "447"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/trailing-slash/</D:href><D:propstat><D:prop><D:displayname>trailing-slash</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/trailing-slash/"
+    ],
+    "displaynames": [
+     "trailing-slash"
+    ],
+    "contentlengths": [],
+    "contenttypes": [],
+    "lastmodified": [
+     "WALL-CLOCK"
+    ],
+    "collections": 1,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "copy.dest.root-prefix": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 201,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
+   },
+   "body": ""
+  },
+  "propfind.dest.root-prefix": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/root-prefix",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "441"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/root-prefix/</D:href><D:propstat><D:prop><D:displayname>root-prefix</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/root-prefix/"
+    ],
+    "displaynames": [
+     "root-prefix"
+    ],
+    "contentlengths": [],
+    "contenttypes": [],
+    "lastmodified": [
+     "WALL-CLOCK"
+    ],
+    "collections": 1,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "copy.dest.encoded-question": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 201,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
+   },
+   "body": ""
+  },
+  "propfind.dest.encoded-question": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/question%3Fname",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "447"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/question%3Fname/</D:href><D:propstat><D:prop><D:displayname>question?name</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/question%3Fname/"
+    ],
+    "displaynames": [
+     "question?name"
+    ],
+    "contentlengths": [],
+    "contenttypes": [],
+    "lastmodified": [
+     "WALL-CLOCK"
+    ],
+    "collections": 1,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "copy.dest.encoded-fragment": {
+   "method": "COPY",
+   "path": "/dav/empty-dir",
+   "status": 201,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": "0"
+   },
+   "body": ""
+  },
+  "propfind.dest.encoded-fragment": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/fragment%23name",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "447"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/fragment%23name/</D:href><D:propstat><D:prop><D:displayname>fragment#name</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/fragment%23name/"
+    ],
+    "displaynames": [
+     "fragment#name"
+    ],
+    "contentlengths": [],
+    "contenttypes": [],
+    "lastmodified": [
+     "WALL-CLOCK"
+    ],
+    "collections": 1,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
   "copy.emptydir": {
    "method": "COPY",
    "path": "/dav/empty-dir",

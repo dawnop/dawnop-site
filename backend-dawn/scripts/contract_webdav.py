@@ -40,6 +40,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from contract_golden import TRANSPORT_STATUS, Golden, transport_error
@@ -150,6 +151,7 @@ def main():
     ap.add_argument("--record", action="store_true")
     args = ap.parse_args()
     B = args.base
+    authority = urllib.parse.urlsplit(B).netloc
     user, pw = os.environ.get("DAV_USER"), os.environ.get("DAV_PASS")
     if not user or not pw:
         print("FATAL: DAV_USER/DAV_PASS not set", file=sys.stderr)
@@ -326,6 +328,228 @@ def main():
         "propfind.copy.dotdot.source",
         "PROPFIND",
         "/dav/empty-dir",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+
+    print("\n== Destination URI validation ==")
+    case(
+        "copy.dest.scheme.unsupported",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"ftp://{authority}/dav/{PREFIX}/rejected-scheme"},
+    )
+    case(
+        "propfind.dest.scheme.rejected",
+        "PROPFIND",
+        f"/dav/{PREFIX}/rejected-scheme",
+        {"Depth": "0"},
+    )
+    case(
+        "copy.dest.authority.foreign",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"https://foreign.invalid/dav/{PREFIX}/rejected-authority"},
+    )
+    case(
+        "propfind.dest.authority.rejected",
+        "PROPFIND",
+        f"/dav/{PREFIX}/rejected-authority",
+        {"Depth": "0"},
+    )
+    case(
+        "copy.dest.prefix.partial",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": "/davx"},
+    )
+    case("propfind.dest.prefix.partial", "PROPFIND", "/dav/x", {"Depth": "0"})
+    case(
+        "copy.dest.prefix.outside",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": "/outside"},
+    )
+    case("propfind.dest.prefix.outside", "PROPFIND", "/dav/outside", {"Depth": "0"})
+    case(
+        "copy.dest.malformed",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": "http://[bad"},
+    )
+    case(
+        "copy.dest.opaque",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": "urn:dawnop:target"},
+    )
+    case(
+        "copy.dest.query",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/rejected-query?rev=1"},
+    )
+    case(
+        "copy.dest.query.empty",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/rejected-query?"},
+    )
+    case(
+        "propfind.dest.query.rejected",
+        "PROPFIND",
+        f"/dav/{PREFIX}/rejected-query",
+        {"Depth": "0"},
+    )
+    case(
+        "copy.dest.fragment",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/rejected-fragment#part"},
+    )
+    case(
+        "copy.dest.fragment.empty",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/rejected-fragment#"},
+    )
+    case(
+        "propfind.dest.fragment.rejected",
+        "PROPFIND",
+        f"/dav/{PREFIX}/rejected-fragment",
+        {"Depth": "0"},
+    )
+    case(
+        "copy.dest.file-parent",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": "/dav/example.txt/child"},
+    )
+    case(
+        "propfind.dest.file-parent.rejected",
+        "PROPFIND",
+        "/dav/example.txt/child",
+        {"Depth": "0"},
+    )
+
+    print("\n== Destination URI legal controls ==")
+    case(
+        "copy.dest.path-absolute",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/path-absolute"},
+    )
+    case(
+        "propfind.dest.path-absolute",
+        "PROPFIND",
+        f"/dav/{PREFIX}/path-absolute",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    case(
+        "copy.dest.absolute-http",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"{B}/dav/{PREFIX}/absolute-http"},
+    )
+    case(
+        "propfind.dest.absolute-http",
+        "PROPFIND",
+        f"/dav/{PREFIX}/absolute-http",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    case(
+        "copy.dest.absolute-https",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"https://{authority}/dav/{PREFIX}/absolute-https"},
+    )
+    case(
+        "propfind.dest.absolute-https",
+        "PROPFIND",
+        f"/dav/{PREFIX}/absolute-https",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    case(
+        "copy.dest.authority-normalized",
+        "COPY",
+        "/dav/empty-dir",
+        {
+            "Host": "DAV.EXAMPLE",
+            "Destination": f"HTTP://dav.example:80/dav/{PREFIX}/authority-normalized",
+        },
+    )
+    case(
+        "propfind.dest.authority-normalized",
+        "PROPFIND",
+        f"/dav/{PREFIX}/authority-normalized",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    case(
+        "copy.dest.double-slash",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav//{PREFIX}//double-slash"},
+    )
+    case(
+        "propfind.dest.double-slash",
+        "PROPFIND",
+        f"/dav/{PREFIX}/double-slash",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    case(
+        "copy.dest.trailing-slash",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/trailing-slash/"},
+    )
+    case(
+        "propfind.dest.trailing-slash",
+        "PROPFIND",
+        f"/dav/{PREFIX}/trailing-slash",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    case(
+        "copy.dest.root-prefix",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/{PREFIX}/root-prefix", "X-Dav-Prefix": "/"},
+    )
+    case(
+        "propfind.dest.root-prefix",
+        "PROPFIND",
+        f"/dav/{PREFIX}/root-prefix",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    case(
+        "copy.dest.encoded-question",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/question%3Fname"},
+    )
+    case(
+        "propfind.dest.encoded-question",
+        "PROPFIND",
+        f"/dav/{PREFIX}/question%3Fname",
+        {"Depth": "0"},
+        with_facts=True,
+    )
+    case(
+        "copy.dest.encoded-fragment",
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": f"/dav/{PREFIX}/fragment%23name"},
+    )
+    case(
+        "propfind.dest.encoded-fragment",
+        "PROPFIND",
+        f"/dav/{PREFIX}/fragment%23name",
         {"Depth": "0"},
         with_facts=True,
     )

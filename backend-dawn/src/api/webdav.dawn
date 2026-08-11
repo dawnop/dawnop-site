@@ -327,13 +327,23 @@ fn add_headers(r: Response, hs: List[(String, String)]) -> Response =
 
 # ---- write helpers ----
 
+fn parent_is_directory(parent: String, row: Option[FileRow]) -> Bool =
+  if parent == "" {
+    true
+  } else {
+    match row {
+      Some(o) -> o.is_dir
+      None -> false
+    }
+  }
+
 fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {
   let parent = parent_rel(rel)
-  if parent == "" { Ok(true) } else {
-    match with_db(a.db.path, a.db.ext, c => get_row(c, parent))? {
-      Some(_) -> Ok(true)
-      None -> Ok(false)
-    }
+  if parent == "" {
+    Ok(true)
+  } else {
+    let row = with_db(a.db.path, a.db.ext, c => get_row(c, parent))?
+    Ok(parent_is_directory(parent, row))
   }
 }
 
@@ -441,9 +451,123 @@ fn mkcol(a: Auth, rel: String) -> Result[Response, HttpError] !io =
 
 # ---- MOVE / COPY ----
 
-# the Destination's path, undecoded (getRawPath, not getPath — getPath already
-# percent-decodes, so the old URLDecoder pass double-decoded). urlparse-equivalent.
-fn uri_path(u: String) -> String !io = URI.create(u)!.getRawPath()!
+# Parse the Destination behind the FFI fault barrier. URI.create throws for
+# malformed syntax, which is a bad request rather than an internal server error.
+fn parse_destination_uri(raw: String) -> Result[URI, HttpError] !io =
+  match catch_text(() => URI.create(raw)!) {
+    Ok(uri) -> Ok(uri)
+    Err(_) -> Err(http_error(400, "非法目标"))
+  }
+
+fn no_text_part(part: Option[String]) -> Bool =
+  match part {
+    None -> true
+    Some(_) -> false
+  }
+
+fn destination_scheme_supported(scheme: String) -> Bool =
+  scheme == "http" || scheme == "https"
+
+fn destination_default_port(scheme: String) -> Int =
+  if scheme == "http" { 80 } else if scheme == "https" { 443 } else { -1 }
+
+fn effective_port(scheme: String, port: Int) -> Int =
+  if port >= 0 { port } else { destination_default_port(scheme) }
+
+# Request has no trusted external-scheme field. For a same-host absolute URI,
+# compare an omitted Host port using the Destination scheme's default. This
+# intentionally accepts both http and https when Host itself omits the port.
+fn destination_authority_matches(req: Request, uri: URI, scheme: String) -> Bool !io =
+  match header(req, "host") {
+    None -> false
+    Some(raw_host) ->
+      match catch_text(() => URI.create("$scheme://$raw_host")!) {
+        Err(_) -> false
+        Ok(host_uri) ->
+          match (host_uri.getHost(), uri.getHost()) {
+            (Some(host_name), Some(destination_host)) -> {
+              let host_shape_ok =
+                match host_uri.getRawPath() {
+                  Some(path) -> path == ""
+                  None -> false
+                }
+              host_shape_ok &&
+                no_text_part(host_uri.getRawUserInfo()) &&
+                no_text_part(host_uri.getRawQuery()) &&
+                no_text_part(host_uri.getRawFragment()) &&
+                no_text_part(uri.getRawUserInfo()) &&
+                str.to_lower(host_name) == str.to_lower(destination_host) &&
+                effective_port(scheme, host_uri.getPort()) == effective_port(scheme, uri.getPort())
+            }
+            _ -> false
+          }
+      }
+  }
+
+fn require_hierarchical_destination(uri: URI) -> Result[Unit, HttpError] !io =
+  if uri.isOpaque() {
+    Err(http_error(400, "Destination 必须是分层 URI"))
+  } else {
+    Ok(())
+  }
+
+fn reject_destination_query(uri: URI) -> Result[Unit, HttpError] !io =
+  match uri.getRawQuery() {
+    None -> Ok(())
+    Some(_) -> Err(http_error(400, "Destination 不支持查询参数"))
+  }
+
+fn reject_destination_fragment(uri: URI) -> Result[Unit, HttpError] !io =
+  match uri.getRawFragment() {
+    None -> Ok(())
+    Some(_) -> Err(http_error(400, "Destination 不支持片段"))
+  }
+
+fn is_path_absolute_reference(raw: String, uri: URI) -> Bool !io =
+  str.starts_with(raw, "/") &&
+  not str.starts_with(raw, "//") &&
+  no_text_part(uri.getRawAuthority())
+
+fn destination_raw_path(uri: URI) -> Result[String, HttpError] !io =
+  match uri.getRawPath() {
+    Some(path) -> Ok(path)
+    None -> Err(http_error(400, "非法目标"))
+  }
+
+fn destination_path(req: Request, raw: String, uri: URI) -> Result[String, HttpError] !io = {
+  let _h = require_hierarchical_destination(uri)?
+  let _q = reject_destination_query(uri)?
+  let _f = reject_destination_fragment(uri)?
+  match uri.getScheme() {
+    None ->
+      if is_path_absolute_reference(raw, uri) {
+        destination_raw_path(uri)
+      } else {
+        Err(http_error(400, "Destination 必须是绝对路径或 absolute URI"))
+      }
+    Some(raw_scheme) -> {
+      let scheme = str.to_lower(raw_scheme)
+      if not destination_scheme_supported(scheme) {
+        Err(http_error(400, "Destination scheme 不受支持"))
+      } else if not destination_authority_matches(req, uri, scheme) {
+        Err(http_error(400, "Destination 不属于当前服务器"))
+      } else {
+        destination_raw_path(uri)
+      }
+    }
+  }
+}
+
+fn strip_destination_prefix(path: String, prefix: String) -> Result[String, HttpError] =
+  if prefix == "" {
+    Ok(path)
+  } else if path == prefix {
+    Ok("")
+  } else if str.starts_with(path, prefix ++ "/") {
+    Ok(str.slice(path, str.len(prefix), str.len(path)))
+  } else {
+    Err(http_error(400, "Destination 不在 WebDAV 根下"))
+  }
 
 # single percent-decode of one path segment, like Python's unquote: %XX resolves,
 # a literal '+' stays '+' (URLDecoder would turn it into a space), so protect '+'
@@ -462,9 +586,10 @@ fn dest_rel(req: Request) -> Result[Option[String], HttpError] !io =
   match header(req, "destination") {
     None -> Ok(None)
     Some(d) -> {
-      let path = uri_path(d)
+      let uri = parse_destination_uri(d)?
+      let path = destination_path(req, d, uri)?
       let prefix = dav_prefix(req)
-      let stripped = if prefix != "" && str.starts_with(path, prefix) { str.slice(path, str.len(prefix), str.len(path)) } else { path }
+      let stripped = strip_destination_prefix(path, prefix)?
       Ok(Some(join_rel(map(path_segs(stripped), pct_decode_seg))?))
     }
   }
@@ -717,12 +842,24 @@ test "dav_rel joins the tail segments and refuses one holding a slash" {
 }
 
 # The same bare request, carrying the Destination header MOVE/COPY read.
-fn dest_req(dest: String) -> Request =
+fn dest_req_at(dest: String, host: String, prefix: String) -> Request =
   Request {
     method: "MOVE", path: "/dav", raw_path: "/dav",
     params: map.from([("rest", ["x"])]),
-    query: map.empty(), headers: map.from([("destination", [dest])]),
+    query: map.empty(), headers: map.from([
+      ("destination", [dest]),
+      ("host", [host]),
+      ("x-dav-prefix", [prefix]),
+    ]),
     body: "", raw: bytes.utf8(""), body_file: None, route: None,
+  }
+
+fn dest_req(dest: String) -> Request = dest_req_at(dest, "dav.example", "/dav")
+
+fn dest_error(r: Result[Option[String], HttpError], message: String) -> Bool =
+  match r {
+    Err(e) -> e.status == 400 && e.message == message
+    Ok(_) -> false
   }
 
 test "dest_rel decodes each Destination segment and refuses one holding a slash" {
@@ -739,6 +876,83 @@ test "dest_rel decodes each Destination segment and refuses one holding a slash"
     Err(e) -> { assert e.status == 400 }
     Ok(_) -> { assert false }
   }
+}
+
+test "dest_rel accepts supported HTTP schemes" {
+  assert dest_rel(dest_req("http://dav.example/dav/a")) == Ok(Some("a"))
+  assert dest_rel(dest_req("https://dav.example/dav/b")) == Ok(Some("b"))
+}
+
+test "dest_rel rejects unsupported schemes" {
+  assert dest_error(dest_rel(dest_req("ftp://dav.example/dav/a")), "Destination scheme 不受支持")
+}
+
+test "dest_rel compares authority hosts case-insensitively" {
+  assert dest_rel(dest_req_at("HTTP://DAV.EXAMPLE/dav/a", "dav.example", "/dav")) == Ok(Some("a"))
+  assert dest_rel(dest_req_at("http://dav.example/dav/b", "DAV.EXAMPLE", "/dav")) == Ok(Some("b"))
+}
+
+test "dest_rel normalizes default HTTP ports" {
+  assert dest_rel(dest_req_at("http://dav.example:80/dav/a", "dav.example", "/dav")) == Ok(Some("a"))
+  assert dest_rel(dest_req_at("http://dav.example/dav/b", "dav.example:80", "/dav")) == Ok(Some("b"))
+  assert dest_rel(dest_req_at("http://[::1]:80/dav/c", "[::1]", "/dav")) == Ok(Some("c"))
+}
+
+test "destination default ports are scheme-correct" {
+  assert destination_default_port("http") == 80
+  assert destination_default_port("https") == 443
+  assert destination_default_port("ftp") == -1
+}
+
+test "dest_rel rejects a foreign authority" {
+  let wrong = "Destination 不属于当前服务器"
+  assert dest_error(dest_rel(dest_req("http://evil.example/dav/a")), wrong)
+  assert dest_error(dest_rel(dest_req("http://dav.example:81/dav/a")), wrong)
+  assert dest_error(dest_rel(dest_req("http://user@dav.example/dav/a")), wrong)
+  assert dest_error(dest_rel(dest_req("http:///dav/a")), wrong)
+  assert dest_error(dest_rel(dest_req_at("http://dav.example/dav/a", "dav.example/path", "/dav")), wrong)
+}
+
+test "dest_rel rejects non-Simple-ref relative forms" {
+  let message = "Destination 必须是绝对路径或 absolute URI"
+  assert dest_error(dest_rel(dest_req("dav/a")), message)
+  assert dest_error(dest_rel(dest_req("//dav.example/dav/a")), message)
+  assert dest_error(dest_rel(dest_req("///dav/a")), message)
+  assert dest_rel(dest_req("/dav/a")) == Ok(Some("a"))
+}
+
+test "dest_rel maps malformed URI syntax to 400" {
+  assert dest_error(dest_rel(dest_req("http://[bad")), "非法目标")
+  assert dest_error(dest_rel(dest_req("/dav/%zz")), "非法目标")
+  assert dest_rel(dest_req("/dav/percent%25name")) == Ok(Some("percent%name"))
+}
+
+test "dest_rel rejects opaque URI forms" {
+  assert dest_error(dest_rel(dest_req("urn:dawnop:target")), "Destination 必须是分层 URI")
+  assert dest_error(dest_rel(dest_req("http:dav/a")), "Destination 必须是分层 URI")
+}
+
+test "dest_rel rejects query components" {
+  let message = "Destination 不支持查询参数"
+  assert dest_error(dest_rel(dest_req("/dav/a?rev=1")), message)
+  assert dest_error(dest_rel(dest_req("/dav/a?")), message)
+  assert dest_rel(dest_req("/dav/a%3Frev")) == Ok(Some("a?rev"))
+}
+
+test "dest_rel rejects fragment components" {
+  let message = "Destination 不支持片段"
+  assert dest_error(dest_rel(dest_req("/dav/a#part")), message)
+  assert dest_error(dest_rel(dest_req("/dav/a#")), message)
+  assert dest_rel(dest_req("/dav/a%23part")) == Ok(Some("a#part"))
+}
+
+test "dest_rel confines paths to the DAV prefix" {
+  let message = "Destination 不在 WebDAV 根下"
+  assert dest_error(dest_rel(dest_req("/davx")), message)
+  assert dest_error(dest_rel(dest_req("/outside")), message)
+  assert dest_rel(dest_req("/dav")) == Ok(Some(""))
+  assert dest_rel(dest_req("/dav/a")) == Ok(Some("a"))
+  assert dest_rel(dest_req_at("/a", "dav.example", "/")) == Ok(Some("a"))
 }
 
 fn is_dot_segment_error(r: Result[Option[String], HttpError]) -> Bool =
@@ -762,6 +976,23 @@ test "dest_rel accepts names that merely contain dots" {
   assert dest_rel(dest_req("/dav/a..b")) == Ok(Some("a..b"))
   assert dest_rel(dest_req("/dav/...")) == Ok(Some("..."))
   assert dest_rel(dest_req("/dav/notes%2Ebak")) == Ok(Some("notes.bak"))
+}
+
+fn parent_row(path: String, is_dir: Bool) -> FileRow =
+  FileRow {
+    path: path,
+    is_dir: is_dir,
+    key: None,
+    content_type: "",
+    size: 0,
+    updated_at: "2026-01-01 00:00:00",
+  }
+
+test "parent check accepts only root or a directory row" {
+  assert parent_is_directory("", None)
+  assert parent_is_directory("docs", Some(parent_row("docs", true)))
+  assert not parent_is_directory("missing", None)
+  assert not parent_is_directory("example.txt", Some(parent_row("example.txt", false)))
 }
 
 test "range_pair parses the WebDAV Range forms against a total size" {
