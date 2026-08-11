@@ -81,6 +81,7 @@ jobs:
           shellcheck backend-dawn/deploy/*.sh backend-dawn/build.sh
           backend-dawn/scripts/db-connection-boundary-mutants/run.sh
           backend-dawn/scripts/http-body-boundary-mutants/run.sh
+          backend-dawn/scripts/response-stream-boundary-mutants/run.sh
           backend-dawn/scripts/webdav-dot-segment-mutants/run.sh scripts/fetch-dawn.sh
 
   backend:
@@ -134,6 +135,9 @@ jobs:
 
       - name: HTTP request body boundary mutation contract
         run: backend-dawn/scripts/http-body-boundary-mutants/run.sh
+
+      - name: Response stream boundary mutation contract
+        run: backend-dawn/scripts/response-stream-boundary-mutants/run.sh
 
       - name: WebDAV dot segment mutation contract
         run: backend-dawn/scripts/webdav-dot-segment-mutants/run.sh

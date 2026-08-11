@@ -1,0 +1,9 @@
+# Hand-owned red set. The runner rejects changed membership, ownership, or order.
+make-response-stream-transparent|ffi.response-stream-opaque
+leak-java-input-stream|ffi.java-input-stream-explicit-token-confined
+leak-raw-input-stream|ffi.response-stream-raw-confined
+break-owner-adapter|ffi.response-stream-owner-adapter
+bypass-owner-adapter|ffi.web3-response-body-seam-confined
+bypass-streaming-symbol|ffi.web3-streaming-symbol-confined
+# This independently owns the same semantic assertion through string interpolation.
+bypass-interpolated-streaming|ffi.web3-streaming-symbol-confined

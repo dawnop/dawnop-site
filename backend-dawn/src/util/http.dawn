@@ -5,6 +5,7 @@
 use std/str
 use std/bytes
 use util/ferr.{fe_text, catch_text}
+use web/types.{Response, streaming}
 use java "java.net.URI"
 use java "java.net.http.HttpClient"
 use java "java.net.http.HttpRequest"
@@ -26,17 +27,20 @@ pub type HttpResp = { status: Int, body: String }
 ## `post_body` sends it without exposing java.net.http to callers.
 pub opaque type RequestBody = BodyPublisher
 
+## A live response stream whose Java representation stays inside this module.
+pub opaque type ResponseStream = InputStream
+
 # The binary counterpart of HttpResp. It carries the status for the same reason
 # HttpResp does: the caller decides what a non-2xx means. Returning bare Bytes
 # made that impossible and cost us a bug — qiniu's error JSON was served as file
 # content with a 200 (see webdav.serve_file).
 pub type BytesResp = { status: Int, bytes: Bytes }
 
-# The streaming counterpart of BytesResp: the body is a live InputStream, not a
-# materialized Bytes. Carries only status + stream — the upstream Content-Range /
-# mime aren't threaded through; the handler recomputes them from trusted local data
-# (the object's own size / content_type). See docs/streaming-response-design.md §4.1.
-pub type StreamResp = { status: Int, stream: InputStream }
+# The streaming counterpart of BytesResp: the body is a live ResponseStream, not
+# materialized Bytes. Carries only status + stream; the upstream Content-Range and
+# mime are not threaded through because handlers recompute them from trusted local
+# data. See docs/streaming-response-design.md §4.1.
+pub type StreamResp = { status: Int, stream: ResponseStream }
 
 ## A binary GET: the body comes back as first-class Bytes (spec §9.5.1). Ok on 2xx,
 ## Err otherwise. For the fm content proxy (fetch bytes from qiniu, stream out).
@@ -101,13 +105,20 @@ pub fn fetch_stream(url: String, headers: List[(String, String)]) -> Result[Stre
 ## closes the stream (close_stream) so the connection frees.
 pub fn ok_stream(r: StreamResp) -> Bool = r.status >= 200 && r.status < 300
 
+## Hand a live upstream stream to web3 without exposing its Java representation.
+pub fn stream_response(status: Int, content_type: String, stream: ResponseStream) -> Response =
+  streaming(status, content_type, raw_response_stream(stream))
+
 ## Close an upstream stream, swallowing a close failure (non-fatal — the response is
 ## already committed, or was never sent). The server calls this after pumping; a
 ## handler rejecting a non-2xx upstream calls it before returning Err.
-pub fn close_stream(s: InputStream) -> Unit !io = {
-  let _ = catch_fault(() => s.close())
+pub fn close_stream(s: ResponseStream) -> Unit !io = {
+  let raw = raw_response_stream(s)
+  let _ = catch_fault(() => raw.close())
   ()
 }
+
+fn raw_response_stream(s: ResponseStream) -> InputStream = s
 
 fn shared_client() -> HttpClient !io = {
   let timeout = Duration.ofSeconds(10)!
@@ -251,7 +262,7 @@ test "fetch_stream hands back a readable upstream stream" {
       assert r.status == 200
       assert ok_stream(r)
       # the body is a live stream, not materialized up front; drain it here
-      let raw = r.stream.readAllBytes()!
+      let raw = raw_response_stream(r.stream).readAllBytes()!
       close_stream(r.stream)
       assert bytes.decode_utf8(raw) == "streamed:s"
     }

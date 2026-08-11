@@ -26,7 +26,7 @@ use java "java.text.SimpleDateFormat"
 use java "java.util.Date"
 use java "java.util.Locale"
 use java "java.util.TimeZone"
-use web/types.{Request, Response, HttpError, Handler, http_error, as_http, text, raw, binary, streaming, redirect, with_header, header, param_segs}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, text, raw, binary, redirect, with_header, header, param_segs}
 use web/router.{Route, route_method_of, tagged}
 use db/db.{with_db}
 use svc/auth.{Auth, Qiniu, check_basic}
@@ -36,7 +36,7 @@ use util/paths.{basename, parent_rel, ext, ts, guess_mime}
 use qiniu/rs.{upload_file}
 use java "java.io.File"
 use util/crypto.{sha256_hex, uuid, uuid_hex}
-use util/http.{fetch_stream, ok_stream, close_stream}
+use util/http.{fetch_stream, ok_stream, stream_response, close_stream}
 use util/ttl.{TtlCell, cache_get, cache_put, now_s}
 use util/errkind.{KUpstream, as_upstream, split_kind}
 use svc/export.{url_encode}
@@ -256,9 +256,9 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
             close_stream(r.stream)
             Err(http_error(502, "qiniu ${r.status}"))
           } else if r.status == 206 {
-            Ok(add_headers(streaming(206, mime, r.stream), [("Accept-Ranges", "bytes"), ("Content-Range", "bytes $start-$end/${o.size}"), ("Last-Modified", lastmod), ("ETag", etag)]))
+            Ok(add_headers(stream_response(206, mime, r.stream), [("Accept-Ranges", "bytes"), ("Content-Range", "bytes $start-$end/${o.size}"), ("Last-Modified", lastmod), ("ETag", etag)]))
           } else {
-            Ok(add_headers(streaming(200, mime, r.stream), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
+            Ok(add_headers(stream_response(200, mime, r.stream), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
           }
         }
       }
@@ -269,7 +269,7 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
             close_stream(r.stream)
             Err(http_error(502, "qiniu ${r.status}"))
           } else {
-            Ok(add_headers(streaming(200, mime, r.stream), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
+            Ok(add_headers(stream_response(200, mime, r.stream), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
           }
         }
     }

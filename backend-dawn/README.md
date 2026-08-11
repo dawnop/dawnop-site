@@ -59,7 +59,11 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `db/db.dawn` — 每请求一连接（`with_db`）：WAL + `load_extension(libsimple)`。
 - `util/crypto.dawn` — sha256 / hmac-sha1 / hmac-sha256 / base64url / uuid（auth、七牛、JWT、腾讯共用）。
 - `util/http.dawn` — java.net.http 出站客户端：`fetch/post/post_form` + `fetch_bytes`（二进制体，G6）；
-  `RequestBody` 不透明边界封装流式文件请求体，调用方不传播 Java publisher 类型。
+  `RequestBody` 不透明边界封装流式文件请求体，调用方不传播 Java publisher 类型；
+  `ResponseStream` 不透明边界封装实时响应流，业务模块只经 owner adapter 进入 web3 streaming。
+  FFI 门禁只约束显式 `InputStream` 源码名，不阻止 Java 返回类型由推断得到；响应侧另以
+  `Stream`/`ResponseBody` 与 `streaming` 两个独立 seam 门禁阻止业务模块绕过 owner。扫描时忽略
+  普通、三引号与 raw string 的文本，但 `$name` 和 `${expr}` 插值表达式仍按 Dawn 代码检查。
 - `util/jsonx.dawn` / `util/jsonread.dawn` — JSON 构造（`obj/jint/jstr/jopt_*`）/ 请求体读取（`opt_int/str_or/str_list`）。
 - `json` — **dawn-lang 的 `packages/json`**（`[deps.json]` url+hash 依赖，vendored 副本已删）；游标版解析器，整数字面量产 `JInt`（保真、免 round-trip 变 `x.0`）。
 - `config.dawn` — .env 读取，env 优先（对齐 pydantic-settings 精度）。

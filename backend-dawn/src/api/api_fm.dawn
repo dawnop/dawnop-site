@@ -5,9 +5,9 @@ use std/str
 use std/bytes
 use std/map
 use db/sql.{DbConn}
-use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, query, redirect, streaming, header}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, query, redirect, header}
 use util/multipart.{Part, boundary_of, parse_multipart, part_named}
-use util/http.{fetch_stream, ok_stream, close_stream}
+use util/http.{fetch_stream, ok_stream, stream_response, close_stream}
 use web/router.{Route, route_get, route_post, tagged}
 use util/jsonx.{obj, jstr, jint}
 use db/db.{with_db}
@@ -192,7 +192,7 @@ pub fn content(a: Auth) -> Handler =
               close_stream(r.stream)
               Err(http_error(502, "qiniu ${r.status}"))
             } else {
-              Ok(streaming(200, content_type_of(o.content_type), r.stream))
+              Ok(stream_response(200, content_type_of(o.content_type), r.stream))
             }
           }
           None -> Err(http_error(404, "文件不存在"))
