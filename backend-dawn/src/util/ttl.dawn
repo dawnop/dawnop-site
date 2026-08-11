@@ -1,19 +1,22 @@
 # A TTL cache cell (M6 knife 12): the monitor page and fm stats memoize
 # third-party API snapshots (tencent / qiniu billing) the way the FastAPI
-# backend's TTLCache does. The cell is an AtomicReference[String] holding
-# "epoch|payload"; Dawn has no global mutable state, so main creates cells and
-# threads them into the route closures.
+# backend's TTLCache does. The cell holds "epoch|payload"; Dawn has no global
+# mutable state, so main creates cells and threads them into the route closures.
 use std/str
 use std/list
 use java "java.util.concurrent.atomic.AtomicReference"
 use java "java.lang.System"
 use java "java.lang.String"
 
-pub fn new_cell() -> AtomicReference !io = AtomicReference.new("")
+pub opaque type TtlCell = AtomicReference
+
+pub fn new_cell() -> TtlCell !io = AtomicReference.new("")
+
+fn atomic(cell: TtlCell) -> AtomicReference = cell
 
 ## The cached payload when the cell holds one younger than `ttl_s` seconds.
-pub fn cache_get(cell: AtomicReference, ttl_s: Int) -> Option[String] !io = {
-  let s = String.valueOf(cell.get()!)!
+pub fn cache_get(cell: TtlCell, ttl_s: Int) -> Option[String] !io = {
+  let s = String.valueOf(atomic(cell).get()!)!
   if s == "" {
     None
   } else {
@@ -32,8 +35,8 @@ pub fn cache_get(cell: AtomicReference, ttl_s: Int) -> Option[String] !io = {
 
 ## Store a payload with the current time. The payload may contain "|" (only the
 ## first separator is structural).
-pub fn cache_put(cell: AtomicReference, payload: String) -> Unit !io =
-  cell.set("${now_s()}|$payload")
+pub fn cache_put(cell: TtlCell, payload: String) -> Unit !io =
+  atomic(cell).set("${now_s()}|$payload")
 
 ## Wall-clock seconds since the epoch. The cache stamps entries with it, and
 ## everything else that needs "now" in seconds (JWT exp, qiniu URL deadlines,

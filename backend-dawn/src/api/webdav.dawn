@@ -26,7 +26,6 @@ use java "java.text.SimpleDateFormat"
 use java "java.util.Date"
 use java "java.util.Locale"
 use java "java.util.TimeZone"
-use java "java.util.concurrent.atomic.AtomicReference"
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, text, raw, binary, streaming, redirect, with_header, header, param_segs}
 use web/router.{Route, route_method_of, tagged}
 use db/db.{with_db}
@@ -38,7 +37,7 @@ use qiniu/rs.{upload_file}
 use java "java.io.File"
 use util/crypto.{sha256_hex, uuid, uuid_hex}
 use util/http.{fetch_stream, ok_stream, close_stream}
-use util/ttl.{cache_get, cache_put, now_s}
+use util/ttl.{TtlCell, cache_get, cache_put, now_s}
 use util/errkind.{KUpstream, as_upstream, split_kind}
 use svc/export.{url_encode}
 
@@ -608,7 +607,7 @@ fn unauthorized() -> Response =
 
 # None = authorized; Some(resp) = the 401 to return. A single-admin TTL cache
 # (keyed by sha256("user:pass")) skips bcrypt on the mount's high-frequency calls.
-fn dav_auth(a: Auth, cell: AtomicReference, req: Request) -> Option[Response] !io =
+fn dav_auth(a: Auth, cell: TtlCell, req: Request) -> Option[Response] !io =
   match header(req, "authorization") {
     None -> Some(unauthorized())
     Some(h) ->
@@ -643,7 +642,7 @@ fn b64_decode(s: String) -> String !io =
 fn b64_decode_try(s: String) -> Result[String, String] !io =
   catch_text(() => b64_decode(s))
 
-fn verify_cache(a: Auth, cell: AtomicReference, user: String, pass: String, key: String) -> Option[Response] !io =
+fn verify_cache(a: Auth, cell: TtlCell, user: String, pass: String, key: String) -> Option[Response] !io =
   match with_db(a.db.path, a.db.ext, c => check_basic(c, user, pass)) {
     Ok(true) -> {
       let _p = cache_put(cell, key)
@@ -654,7 +653,7 @@ fn verify_cache(a: Auth, cell: AtomicReference, user: String, pass: String, key:
 
 # ---- routes ----
 
-fn dav_handler(a: Auth, cell: AtomicReference, method: String) -> Handler =
+fn dav_handler(a: Auth, cell: TtlCell, method: String) -> Handler =
   req =>
   if method == "OPTIONS" {
     Ok(options_response())
@@ -681,7 +680,7 @@ fn dav_handler(a: Auth, cell: AtomicReference, method: String) -> Handler =
   }
 
 ## All WebDAV routes under /dav/{rest*} (the tail matches /dav and any depth).
-pub fn dav_routes(a: Auth, cell: AtomicReference) -> List[Route] = {
+pub fn dav_routes(a: Auth, cell: TtlCell) -> List[Route] = {
   let verbs = DAV_VERBS
   # raw-body: WebDAV PUT carries file bytes (bounded by nginx, not the JSON limit).
   # no-cors: WebDAV is not browser traffic — skip the CORS middleware entirely.

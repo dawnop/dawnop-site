@@ -14,10 +14,9 @@ use java "java.time.Instant"
 use java "java.time.LocalDateTime"
 use java "java.time.ZoneOffset"
 use java "java.time.format.DateTimeFormatter"
-use java "java.util.concurrent.atomic.AtomicReference"
 use svc/auth.{Auth}
 use tencent/client
-use util/ttl.{cache_get, cache_put, now_s}
+use util/ttl.{TtlCell, cache_get, cache_put, now_s}
 use qiniu/stats.{field, int_of, last_nonzero, kodo_series, flow_series, cdn_domains, cdn_tune, respack_summary}
 use util/http.{fetch}
 use json/value.{Json, JNull, JNum, JInt, JStr, JArr, JObj}
@@ -317,7 +316,7 @@ fn arr_of(j: Json) -> List[Json] =
 
 ## The qiniu block WITHOUT quota — the caller injects quota from the settings
 ## table after the cache, exactly like the FastAPI handler.
-pub fn qiniu_block(a: Auth, respack_cell: AtomicReference) -> Json !io =
+pub fn qiniu_block(a: Auth, respack_cell: TtlCell) -> Json !io =
   if a.qiniu.ak == "" {
     obj([("configured", jbool(false))])
   } else {
@@ -381,7 +380,7 @@ fn trend_int(times: List[Int], values: List[Int]) -> Json = {
 
 ## respack balances through a 300s TTL cell (the billing API is rate-limited;
 ## fm stats shares this cell so directory listings stay cheap).
-pub fn respack_cached(a: Auth, cell: AtomicReference) -> Result[Json, String] !io =
+pub fn respack_cached(a: Auth, cell: TtlCell) -> Result[Json, String] !io =
   match cache_get(cell, 300) {
     Some(s) -> parse_text(s)
     None -> {

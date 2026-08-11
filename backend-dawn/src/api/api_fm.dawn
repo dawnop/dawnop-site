@@ -5,7 +5,6 @@ use std/str
 use std/bytes
 use std/map
 use java "java.sql.Connection"
-use java "java.util.concurrent.atomic.AtomicReference"
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, query, redirect, streaming, header}
 use util/multipart.{Part, boundary_of, parse_multipart, part_named}
 use util/http.{fetch_stream, ok_stream, close_stream}
@@ -26,7 +25,7 @@ use qiniu/sign.{upload_token}
 use qiniu/rs.{stat}
 use qiniu/stats.{kodo_series, last_nonzero, field, int_of}
 use svc/monitor.{respack_cached}
-use util/ttl.{cache_get, cache_put, now_s}
+use util/ttl.{TtlCell, cache_get, cache_put, now_s}
 use json/value.{Json, JNull, JObj, JStr, JNum, JInt}
 use json/render.{render}
 use json/parser.{parse}
@@ -114,7 +113,7 @@ pub fn sign(a: Auth) -> Handler =
 ## dirs, quota}. Local (DB) figures are exact; remote is the 600s-cached qiniu
 ## bucket space (null when unavailable); quota prefers the storage respack
 ## capacity over the settings value, like the FastAPI handler.
-pub fn stats(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReference) -> Handler =
+pub fn stats(a: Auth, space_cell: TtlCell, respack_cell: TtlCell) -> Handler =
   req =>
   guarded(a, req, () =>
       {
@@ -136,7 +135,7 @@ pub fn stats(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReference
 
 # qiniu bucket space through a 600s TTL cell: 7-day series, last non-zero point;
 # JNull on failure or no data (stats lag by up to an hour) — the null caches too
-fn remote_space(a: Auth, cell: AtomicReference) -> Json !io =
+fn remote_space(a: Auth, cell: TtlCell) -> Json !io =
   match cache_get(cell, 600) {
     Some(s) ->
       match parse(s) {
@@ -158,7 +157,7 @@ fn remote_space(a: Auth, cell: AtomicReference) -> Json !io =
   }
 
 # quota: storage respack capacity when present, else the settings-table value
-fn quota_bytes(a: Auth, respack_cell: AtomicReference) -> Int !io = {
+fn quota_bytes(a: Auth, respack_cell: TtlCell) -> Int !io = {
   let cap = match respack_cached(a, respack_cell) {
     Ok(j) -> int_of(field(field(j, "storage"), "capacity"))
     Err(_m) -> 0
@@ -536,7 +535,7 @@ fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpErro
   Ok(json_ok(as_http(run_upload(a, rel, fp.content, mime, size), 502)?))
 }
 
-pub fn routes(a: Auth, space_cell: AtomicReference, respack_cell: AtomicReference) -> List[Route] =
+pub fn routes(a: Auth, space_cell: TtlCell, respack_cell: TtlCell) -> List[Route] =
   [
     route_get("/api/fm", fm_list(a)),
     route_get("/api/fm/sign", sign(a)),
