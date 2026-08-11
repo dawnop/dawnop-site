@@ -5,8 +5,7 @@
 use std/char
 use std/str
 use std/cursor
-use java "java.sql.Connection"
-use db/sql.{PInt, PStr, ColInt, ColStr, query, str_at, int_at, first_int_or}
+use db/sql.{DbConn, PInt, PStr, ColInt, ColStr, query, str_at, int_at, first_int_or}
 use json/value.{Json, JArr}
 use util/jsonx.{obj, jint, jstr, jdatetime}
 use repo/repo_article.{word_count, tags_json}
@@ -237,7 +236,7 @@ fn first_term_pos(low: String, terms: List[String]) -> Option[cursor.Cursor] = {
 
 ## Search published articles. Returns the full response JSON. Uses the simple
 ## FTS tokenizer (production/local); falls back to LIKE via catch_fault on FTS error.
-pub fn search_published(c: Connection, q: String, page: Int, size: Int) -> Result[Json, String] !io = {
+pub fn search_published(c: DbConn, q: String, page: Int, size: Int) -> Result[Json, String] !io = {
   let query_str = str.trim(q)
   # highlight terms split on ANY whitespace run (Python's str.split()), not just
   # the space char — a tab/newline-separated query still highlights each term
@@ -263,7 +262,7 @@ fn empty_result(page: Int, size: Int, q: String) -> Json =
   obj([("total", jint(0)), ("page", jint(page)), ("size", jint(size)), ("query", jstr(q)), ("items", JArr([]))])
 
 # simple tokenizer path (matches _simple_query); LIKE fallback on FTS error
-fn collect_ids(c: Connection, q: String, terms: List[String], offset: Int, size: Int) -> Result[(Int, List[Int]), String] !io = {
+fn collect_ids(c: DbConn, q: String, terms: List[String], offset: Int, size: Int) -> Result[(Int, List[Int]), String] !io = {
   let fts = simple_query(c, q, offset, size)
   match fts {
     Ok(pair) -> Ok(pair)
@@ -271,7 +270,7 @@ fn collect_ids(c: Connection, q: String, terms: List[String], offset: Int, size:
   }
 }
 
-fn simple_query(c: Connection, q: String, offset: Int, size: Int) -> Result[(Int, List[Int]), String] !io = {
+fn simple_query(c: DbConn, q: String, offset: Int, size: Int) -> Result[(Int, List[Int]), String] !io = {
   let tot = query(c,
     "select count(*) from article_fts join articles a on a.id = article_fts.rowid where article_fts match simple_query(?) and a.published = 1",
     [PStr(q)], [ColInt])?
@@ -283,7 +282,7 @@ fn simple_query(c: Connection, q: String, offset: Int, size: Int) -> Result[(Int
 }
 
 # LIKE fallback (single-term subset; matches the common case). Terms ANDed.
-fn like_query(c: Connection, terms: List[String], offset: Int, size: Int) -> Result[(Int, List[Int]), String] !io = {
+fn like_query(c: DbConn, terms: List[String], offset: Int, size: Int) -> Result[(Int, List[Int]), String] !io = {
   let first = terms[0]
   let pat = "%$first%"
   let tot = query(c, "select count(*) from articles where published = 1 and (title like ? or summary like ? or content like ?)", [PStr(pat), PStr(pat), PStr(pat)], [ColInt])?
@@ -292,7 +291,7 @@ fn like_query(c: Connection, terms: List[String], offset: Int, size: Int) -> Res
   Ok((total, map(rows, r => int_at(r, 0))))
 }
 
-fn build_items(c: Connection, ids: List[Int], terms: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
+fn build_items(c: DbConn, ids: List[Int], terms: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
   if i >= len(ids) {
     Ok(acc)
   } else {
@@ -303,7 +302,7 @@ fn build_items(c: Connection, ids: List[Int], terms: List[String], i: Int, acc: 
     }
   }
 
-fn item_for(c: Connection, id: Int, terms: List[String]) -> Result[Option[Json], String] !io = {
+fn item_for(c: DbConn, id: Int, terms: List[String]) -> Result[Option[Json], String] !io = {
   let rows = query(c, "select id, title, slug, created_at, content, summary from articles where id = ?", [PInt(id)], [ColInt, ColStr, ColStr, ColStr, ColStr, ColStr])?
   match get(rows, 0) {
     Some(r) -> {

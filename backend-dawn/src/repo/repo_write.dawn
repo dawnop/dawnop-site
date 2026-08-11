@@ -3,8 +3,7 @@
 # All writes need the connection to have the FTS `simple` extension loaded
 # (the article_fts triggers use it) — db.connect handles that.
 use std/str
-use java "java.sql.Connection"
-use db/sql.{SqlV, PInt, PStr, PNull, ColInt, ColStr, open, query, exec, scalar_int, last_id, int_at, first_bool_or, first_str_or, bool_int}
+use db/sql.{DbConn, SqlV, PInt, PStr, PNull, ColInt, ColStr, open, query, exec, scalar_int, last_id, int_at, first_bool_or, first_str_or, bool_int}
 use util/errkind.{invalid}
 use util/slugify.{slugify}
 
@@ -12,12 +11,12 @@ use util/slugify.{slugify}
 
 ## slugify(base) then append -2, -3, ... until free. `exclude` skips one id
 ## (for update). `table` is "articles" or "tags".
-pub fn unique_slug(c: Connection, table: String, base: String, exclude: Option[Int]) -> Result[String, String] !io = {
+pub fn unique_slug(c: DbConn, table: String, base: String, exclude: Option[Int]) -> Result[String, String] !io = {
   let root = slugify(base)
   dedup(c, table, root, root, 2, exclude)
 }
 
-fn dedup(c: Connection, table: String, root: String, candidate: String, n: Int, exclude: Option[Int]) -> Result[String, String] !io = {
+fn dedup(c: DbConn, table: String, root: String, candidate: String, n: Int, exclude: Option[Int]) -> Result[String, String] !io = {
   let taken = slug_taken(c, table, candidate, exclude)?
   if taken {
     dedup(c, table, root, "$root-$n", n + 1, exclude)
@@ -26,7 +25,7 @@ fn dedup(c: Connection, table: String, root: String, candidate: String, n: Int, 
   }
 }
 
-fn slug_taken(c: Connection, table: String, candidate: String, exclude: Option[Int]) -> Result[Bool, String] !io = {
+fn slug_taken(c: DbConn, table: String, candidate: String, exclude: Option[Int]) -> Result[Bool, String] !io = {
   let rows = match exclude {
     Some(id) -> query(c, "select count(*) from $table where slug = ? and id != ?", [PStr(candidate), PInt(id)], [ColInt])?
     None -> query(c, "select count(*) from $table where slug = ?", [PStr(candidate)], [ColInt])?
@@ -38,10 +37,10 @@ fn slug_taken(c: Connection, table: String, candidate: String, exclude: Option[I
 
 ## Resolve tag names to ids, creating missing tags. De-duplicates by lowercase
 ## name, trims, caps length at 64 and count at 20 (matches resolve_tags).
-pub fn resolve_tags(c: Connection, names: List[String]) -> Result[List[Int], String] !io =
+pub fn resolve_tags(c: DbConn, names: List[String]) -> Result[List[Int], String] !io =
   resolve_loop(c, names, 0, [], [])
 
-fn resolve_loop(c: Connection, names: List[String], i: Int, seen: List[String], acc: List[Int]) -> Result[List[Int], String] !io =
+fn resolve_loop(c: DbConn, names: List[String], i: Int, seen: List[String], acc: List[Int]) -> Result[List[Int], String] !io =
   if i == len(names) || len(acc) >= 20 {
     Ok(acc)
   } else {
@@ -55,7 +54,7 @@ fn resolve_loop(c: Connection, names: List[String], i: Int, seen: List[String], 
     }
   }
 
-fn tag_id_of(c: Connection, name: String, key: String) -> Result[Int, String] !io = {
+fn tag_id_of(c: DbConn, name: String, key: String) -> Result[Int, String] !io = {
   let existing = query(c, "select id from tags where lower(name) = ?", [PStr(key)], [ColInt])?
   match get(existing, 0) {
     Some(r) -> Ok(int_at(r, 0))
@@ -67,12 +66,12 @@ fn tag_id_of(c: Connection, name: String, key: String) -> Result[Int, String] !i
   }
 }
 
-fn set_article_tags(c: Connection, article_id: Int, tag_ids: List[Int]) -> Result[Int, String] !io = {
+fn set_article_tags(c: DbConn, article_id: Int, tag_ids: List[Int]) -> Result[Int, String] !io = {
   let _d = exec(c, "delete from article_tags where article_id = ?", [PInt(article_id)])?
   link_tags(c, article_id, tag_ids, 0)
 }
 
-fn link_tags(c: Connection, article_id: Int, tag_ids: List[Int], i: Int) -> Result[Int, String] !io =
+fn link_tags(c: DbConn, article_id: Int, tag_ids: List[Int], i: Int) -> Result[Int, String] !io =
   if i == len(tag_ids) {
     Ok(0)
   } else {
@@ -87,7 +86,7 @@ fn link_tags(c: Connection, article_id: Int, tag_ids: List[Int], i: Int) -> Resu
 const BAD_PAGE_REF: String = "所属页面不存在或不是文章列表页"
 
 ## A page_id must reference an existing article_list page (or be None).
-pub fn validate_page_ref(c: Connection, page_id: Option[Int]) -> Result[Bool, String] !io =
+pub fn validate_page_ref(c: DbConn, page_id: Option[Int]) -> Result[Bool, String] !io =
   match page_id {
     None -> Ok(true)
     Some(id) -> {
@@ -114,7 +113,7 @@ pub type NewArticle = {
 }
 
 ## Insert an article, returning its new id. Validates page_id and tags.
-pub fn create_article(c: Connection, a: NewArticle) -> Result[Int, String] !io = {
+pub fn create_article(c: DbConn, a: NewArticle) -> Result[Int, String] !io = {
   let _v = validate_page_ref(c, a.page_id)?
   let base = if a.slug_hint == "" { a.title } else { a.slug_hint }
   let slug = unique_slug(c, "articles", base, None)?
@@ -151,7 +150,7 @@ pub type ArticlePatch = {
 }
 
 ## Update an article. Ok(true) on success, Ok(false) when the id is absent.
-pub fn update_article(c: Connection, id: Int, p: ArticlePatch) -> Result[Bool, String] !io = {
+pub fn update_article(c: DbConn, id: Int, p: ArticlePatch) -> Result[Bool, String] !io = {
   let exists = article_exists(c, id)?
   if not exists {
     Ok(false)
@@ -176,13 +175,13 @@ pub fn update_article(c: Connection, id: Int, p: ArticlePatch) -> Result[Bool, S
   }
 }
 
-fn set_str(c: Connection, id: Int, col: String, v: String) -> Result[Int, String] !io =
+fn set_str(c: DbConn, id: Int, col: String, v: String) -> Result[Int, String] !io =
   exec(c, "update articles set $col = ? where id = ?", [PStr(v), PInt(id)])
 
-fn set_int(c: Connection, id: Int, col: String, v: Int) -> Result[Int, String] !io =
+fn set_int(c: DbConn, id: Int, col: String, v: Int) -> Result[Int, String] !io =
   exec(c, "update articles set $col = ? where id = ?", [PInt(v), PInt(id)])
 
-fn set_page_id(c: Connection, id: Int, page_id: Option[Int]) -> Result[Int, String] !io = {
+fn set_page_id(c: DbConn, id: Int, page_id: Option[Int]) -> Result[Int, String] !io = {
   let pid = match page_id {
     Some(x) -> PInt(x)
     None -> PNull
@@ -190,25 +189,25 @@ fn set_page_id(c: Connection, id: Int, page_id: Option[Int]) -> Result[Int, Stri
   exec(c, "update articles set page_id = ? where id = ?", [pid, PInt(id)])
 }
 
-fn set_slug(c: Connection, id: Int, p: ArticlePatch) -> Result[Int, String] !io = {
+fn set_slug(c: DbConn, id: Int, p: ArticlePatch) -> Result[Int, String] !io = {
   let base = if p.slug != "" { p.slug } else if p.has_title { p.title } else { current_title(c, id)? }
   let slug = unique_slug(c, "articles", base, Some(id))?
   exec(c, "update articles set slug = ? where id = ?", [PStr(slug), PInt(id)])
 }
 
-fn current_title(c: Connection, id: Int) -> Result[String, String] !io = {
+fn current_title(c: DbConn, id: Int) -> Result[String, String] !io = {
   let rows = query(c, "select title from articles where id = ?", [PInt(id)], [ColStr])?
   Ok(first_str_or(rows, ""))
 }
 
 ## Delete an article and its tag links. Ok(rows) — 0 means it did not exist.
-pub fn delete_article(c: Connection, id: Int) -> Result[Int, String] !io = {
+pub fn delete_article(c: DbConn, id: Int) -> Result[Int, String] !io = {
   let _l = exec(c, "delete from article_tags where article_id = ?", [PInt(id)])?
   exec(c, "delete from articles where id = ?", [PInt(id)])
 }
 
 ## Whether an article id exists.
-pub fn article_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
+pub fn article_exists(c: DbConn, id: Int) -> Result[Bool, String] !io = {
   let rows = query(c, "select count(*) from articles where id = ?", [PInt(id)], [ColInt])?
   Ok(first_bool_or(rows, false))
 }

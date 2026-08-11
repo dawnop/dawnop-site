@@ -4,8 +4,7 @@
 use std/char
 use std/str
 use std/bytes
-use java "java.sql.Connection"
-use db/sql.{PInt, ColInt, ColStr, query, str_at, bool_at, first_row}
+use db/sql.{DbConn, PInt, ColInt, ColStr, query, str_at, bool_at, first_row}
 
 ## Percent-encode matching Python's urllib.parse.quote (default safe): the
 ## unreserved set A-Za-z0-9-._~ passes through, every other byte of the UTF-8
@@ -80,7 +79,7 @@ fn is_special(c: Char) -> Bool =
   c == '\n'
 
 ## Build the article's markdown (frontmatter + content). Returns (slug, body).
-pub fn export_markdown(c: Connection, id: Int) -> Result[Option[(String, String)], String] !io = {
+pub fn export_markdown(c: DbConn, id: Int) -> Result[Option[(String, String)], String] !io = {
   let rows = query(c, "select title, slug, summary, content, published, auto_title from articles where id = ?", [PInt(id)], [ColStr, ColStr, ColStr, ColStr, ColInt, ColInt])?
   match first_row(rows) {
     Some(r) -> {
@@ -98,7 +97,7 @@ pub fn export_markdown(c: Connection, id: Int) -> Result[Option[(String, String)
   }
 }
 
-fn tag_names(c: Connection, id: Int) -> Result[List[String], String] !io = {
+fn tag_names(c: DbConn, id: Int) -> Result[List[String], String] !io = {
   let rows = query(c, "select t.name from tags t join article_tags at on at.tag_id = t.id where at.article_id = ? order by t.name", [PInt(id)], [ColStr])?
   Ok(map(rows, r => str_at(r, 0)))
 }

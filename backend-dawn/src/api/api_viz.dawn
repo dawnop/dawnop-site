@@ -2,7 +2,7 @@
 # Components are Vue SFCs compiled in the browser; the backend only stores the
 # source, the compiled output and the style, keyed by a slug.
 use std/str
-use java "java.sql.Connection"
+use db/sql.{DbConn}
 use web/types.{HttpError, Handler, http_error, as_http, as_http_with, opt_param_int, json_ok, json_response, text}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json, JArr}
@@ -63,7 +63,7 @@ pub fn viz_create(a: Auth) -> Handler =
         }
       })
 
-fn viz_create_read(c: Connection, nv: NewViz) -> Result[Option[Json], String] !io = {
+fn viz_create_read(c: DbConn, nv: NewViz) -> Result[Option[Json], String] !io = {
   let free = slug_free(c, nv.slug, None)?
   if not free {
     Ok(None)
@@ -98,7 +98,7 @@ fn classify_viz(msg: String) -> HttpError = {
   }
 }
 
-fn viz_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Option[Json], String] !io = {
+fn viz_update_read(c: DbConn, id: Int, m: Map[String, Json]) -> Result[Option[Json], String] !io = {
   let ex = viz_exists(c, id)?
   if not ex {
     Ok(None)
@@ -116,7 +116,7 @@ fn viz_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Optio
   }
 }
 
-fn update_viz_slug(c: Connection, id: Int, raw: String) -> Result[Int, String] !io = {
+fn update_viz_slug(c: DbConn, id: Int, raw: String) -> Result[Int, String] !io = {
   # _clean_slug lowercases+trims before validating; VizUpdate.slug is max_length=255
   let slug = str.to_lower(str.trim(raw))
   if str.len(raw) > 255 {
@@ -130,7 +130,7 @@ fn update_viz_slug(c: Connection, id: Int, raw: String) -> Result[Int, String] !
 }
 
 # _clean_source: a present source must be non-blank (422), else stored verbatim
-fn set_viz_source(c: Connection, id: Int, s: String) -> Result[Int, String] !io =
+fn set_viz_source(c: DbConn, id: Int, s: String) -> Result[Int, String] !io =
   if str.trim(s) == "" { Err("组件源码不能为空") } else { set_viz_str(c, id, "source", s) }
 
 ## DELETE /api/viz/{viz_id} — 204.

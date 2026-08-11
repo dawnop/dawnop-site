@@ -18,7 +18,7 @@ use std/bytes
 use std/map
 use std/list
 use util/ferr.{catch_text}
-use java "java.sql.Connection"
+use db/sql.{DbConn}
 use java "java.util.Base64"
 use java "java.net.URI"
 use java "java.net.URLDecoder"
@@ -179,7 +179,7 @@ fn propfind(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !
   }
 }
 
-fn propfind_body(c: Connection, prefix: String, rel: String, depth: String) -> Result[Option[String], String] !io =
+fn propfind_body(c: DbConn, prefix: String, rel: String, depth: String) -> Result[Option[String], String] !io =
   if rel == "" {
     let now = now_s()
     let self_xml = response_xml(prefix, "", "", true, 0, "", now, now, "")
@@ -413,7 +413,7 @@ fn del_qiniu(q: Qiniu, rows: List[FileRow], i: Int) -> Int !io =
     del_qiniu(q, rows, i + 1)
   }
 
-fn del_rows(c: Connection, rows: List[FileRow], i: Int) -> Result[Int, String] !io =
+fn del_rows(c: DbConn, rows: List[FileRow], i: Int) -> Result[Int, String] !io =
   if i >= len(rows) { Ok(0) } else {
     let _d = delete_row(c, rows[i].path)?
     del_rows(c, rows, i + 1)

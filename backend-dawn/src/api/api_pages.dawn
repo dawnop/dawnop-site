@@ -4,11 +4,10 @@
 use std/str
 use std/map
 use std/list
-use java "java.sql.Connection"
 use web/types.{Handler, http_error, as_http, opt_param_int, json_ok, json_response, text}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json, JArr, JInt}
-use db/sql.{bool_int}
+use db/sql.{DbConn, bool_int}
 use db/db.{with_db}
 use svc/auth.{Auth, guarded}
 use util/jsonread.{body_obj, has, str_or, opt_str, bool_or, opt_int}
@@ -73,7 +72,7 @@ fn page_over_len(s: String) -> Bool = str.len(s) > 255
 fn bad_page_type(t: String) -> Bool = t != "content" && t != "article_list"
 
 # a key present with an explicit JSON null — a non-optional str field rejects it (422)
-fn page_create_read(c: Connection, np: NewPage) -> Result[Json, String] !io = {
+fn page_create_read(c: DbConn, np: NewPage) -> Result[Json, String] !io = {
   let id = create_page(c, np)?
   match repo_page.by_id_admin(c, id)? {
     Some(j) -> Ok(j)
@@ -107,7 +106,7 @@ pub fn page_update(a: Auth) -> Handler =
         None -> Err(http_error(422, "page_id must be an integer"))
       })
 
-fn page_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Option[Json], String] !io =
+fn page_update_read(c: DbConn, id: Int, m: Map[String, Json]) -> Result[Option[Json], String] !io =
   match page_kind(c, id)? {
     None -> Ok(None)
     Some(kind) -> {
@@ -129,7 +128,7 @@ fn page_update_read(c: Connection, id: Int, m: Map[String, Json]) -> Result[Opti
     }
   }
 
-fn slug_base(c: Connection, id: Int, m: Map[String, Json]) -> Result[String, String] !io = {
+fn slug_base(c: DbConn, id: Int, m: Map[String, Json]) -> Result[String, String] !io = {
   let s = str_or(m, "slug", "")
   if s != "" {
     Ok(s)
@@ -161,7 +160,7 @@ pub fn page_delete(a: Auth) -> Handler =
       })
 
 # returns 0=absent, 1=deleted, 2=builtin-refused
-fn page_delete_guarded(c: Connection, id: Int) -> Result[Int, String] !io =
+fn page_delete_guarded(c: DbConn, id: Int) -> Result[Int, String] !io =
   match page_kind(c, id)? {
     None -> Ok(0)
     Some(kind) ->
@@ -205,7 +204,7 @@ fn all_ints(xs: List[Json], acc: List[Int]) -> Option[List[Int]] =
     }
   }
 
-fn reorder_read(c: Connection, ids: List[Int]) -> Result[List[Json], String] !io = {
+fn reorder_read(c: DbConn, ids: List[Int]) -> Result[List[Json], String] !io = {
   let _r = reorder_pages(c, ids)?
   repo_page.list_admin(c)
 }

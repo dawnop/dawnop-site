@@ -3,7 +3,7 @@
 # (create/update). Writes run on a connection with the FTS extension loaded.
 use std/str
 use std/map
-use java "java.sql.Connection"
+use db/sql.{DbConn}
 use web/types.{Request, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text, raw, with_header, param_segs, query, query_int_bounded_with}
 use svc/export.{export_markdown, url_encode}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
@@ -97,7 +97,7 @@ pub fn create(a: Auth) -> Handler =
 # title/slug carry Field(max_length=255); an over-length value is a 422 in FastAPI
 fn over_len(s: String) -> Bool = str.len(s) > 255
 
-fn create_then_read(c: Connection, na: NewArticle) -> Result[Json, String] !io = {
+fn create_then_read(c: DbConn, na: NewArticle) -> Result[Json, String] !io = {
   let id = create_article(c, na)?
   match repo_article.by_id_admin(c, id)? {
     Some(j) -> Ok(j)
@@ -143,7 +143,7 @@ fn patch_of(m: Map[String, Json]) -> ArticlePatch =
     created_at: opt_str(m, "created_at"),
   }
 
-fn update_then_read(c: Connection, id: Int, p: ArticlePatch) -> Result[Option[Json], String] !io = {
+fn update_then_read(c: DbConn, id: Int, p: ArticlePatch) -> Result[Option[Json], String] !io = {
   let ok = update_article(c, id, p)?
   if ok { repo_article.by_id_admin(c, id) } else { Ok(None) }
 }

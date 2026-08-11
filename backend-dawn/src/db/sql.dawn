@@ -11,6 +11,11 @@ use java "java.sql.PreparedStatement"
 use java "java.sql.ResultSet"
 use java "java.util.Properties"
 
+## A database connection whose JDBC representation is owned by this module.
+pub opaque type DbConn = Connection
+
+fn raw(c: DbConn) -> Connection = c
+
 ## A bind parameter. Dawn lists are homogeneous, so mixed-type binds travel
 ## in this ADT: `[PInt(1), PStr("x"), PNull]`.
 pub type SqlV =
@@ -42,16 +47,22 @@ pub type Row = { cells: List[Cell], names: Map[String, Int] }
 
 ## Open a database. Panics when the connection cannot be made — a service
 ## that cannot reach its database has no useful degraded mode.
-pub fn open(url: String) -> Connection !io =
+pub fn open(url: String) -> DbConn !io =
   DriverManager.getConnection(url).expect("db connect failed: $url")
 
 ## Open with `enable_load_extension` so `select load_extension(...)` works
 ## (the FTS `simple` tokenizer rides in via this).
-pub fn open_ext(url: String) -> Connection !io = {
+pub fn open_ext(url: String) -> DbConn !io = {
   let props = Properties.new()
   props.setProperty("enable_load_extension", "true")
   DriverManager.getConnection(url, props).expect("db connect failed: $url")
 }
+
+## Run `body` and close the connection on both normal and panic paths.
+pub fn with_connection[T](c: DbConn, body: fn(DbConn) -> T !io) -> T !io =
+  bracket(c, h => close_conn(h), body)
+
+fn close_conn(c: DbConn) -> Unit !io = raw(c).close()
 
 fn bind(st: PreparedStatement, ps: List[SqlV]) -> Unit !io = {
   for i in range(0, len(ps)) {
@@ -89,9 +100,9 @@ fn rows_of(rs: ResultSet, cols: List[Col]) -> List[List[Cell]] !io =
 
 ## Run a select; `cols` declares the select list's types in order.
 ## Rows are fully materialized and the statement is closed before returning.
-pub fn query(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[List[Cell]], String] !io =
+pub fn query(c: DbConn, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[List[Cell]], String] !io =
   catch_text(() => {
-    let st = c.prepareStatement(q)!
+    let st = raw(c).prepareStatement(q)!
     bind(st, ps)
     let rs = st.executeQuery()!
     let rows = rows_of(rs, cols)
@@ -110,9 +121,9 @@ fn names_of(rs: ResultSet) -> Map[String, Int] !io = {
 ## Like `query`, but each row carries its column names for read-by-name access
 ## (`row.col_int("id")`, `row.col_opt_str("summary")`, ...). `cols` still declares
 ## the select list's types in order; the names come from the driver's metadata.
-pub fn query_rows(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[Row], String] !io =
+pub fn query_rows(c: DbConn, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[Row], String] !io =
   catch_text(() => {
-    let st = c.prepareStatement(q)!
+    let st = raw(c).prepareStatement(q)!
     bind(st, ps)
     let rs = st.executeQuery()!
     let names = names_of(rs)
@@ -122,9 +133,9 @@ pub fn query_rows(c: Connection, q: String, ps: List[SqlV], cols: List[Col]) -> 
   })
 
 ## Run an insert/update/delete/DDL; Ok carries the affected row count.
-pub fn exec(c: Connection, q: String, ps: List[SqlV]) -> Result[Int, String] !io =
+pub fn exec(c: DbConn, q: String, ps: List[SqlV]) -> Result[Int, String] !io =
   catch_text(() => {
-    let st = c.prepareStatement(q)!
+    let st = raw(c).prepareStatement(q)!
     bind(st, ps)
     let n = st.executeUpdate()
     st.close()
@@ -133,7 +144,7 @@ pub fn exec(c: Connection, q: String, ps: List[SqlV]) -> Result[Int, String] !io
 
 ## Single-value convenience: first column of the first row as Int.
 ## Err when the query fails or returns no rows.
-pub fn scalar_int(c: Connection, q: String, ps: List[SqlV]) -> Result[Int, String] !io = {
+pub fn scalar_int(c: DbConn, q: String, ps: List[SqlV]) -> Result[Int, String] !io = {
   let rows = query(c, q, ps, [ColInt])?
   match first_row(rows) {
     Some(row) -> Ok(int_at(row, 0))
@@ -142,7 +153,7 @@ pub fn scalar_int(c: Connection, q: String, ps: List[SqlV]) -> Result[Int, Strin
 }
 
 ## rowid of the last insert on this connection.
-pub fn last_id(c: Connection) -> Result[Int, String] !io =
+pub fn last_id(c: DbConn) -> Result[Int, String] !io =
   scalar_int(c, "select last_insert_rowid()", [])
 
 ## Run `body` in a transaction: commit on Ok, roll back on Err. A transaction
@@ -150,22 +161,23 @@ pub fn last_id(c: Connection) -> Result[Int, String] !io =
 ## now belt and braces rather than the only recovery point: `db.with_db` closes
 ## the per-request handle through `bracket`, so a panicking request takes its
 ## open transaction down with the connection instead of leaving one behind.
-pub fn with_tx[T](c: Connection, body: fn() -> Result[T, String] !io) -> Result[T, String] !io = {
-  if not c.getAutoCommit() {
-    c.rollback()
-    c.setAutoCommit(true)
+pub fn with_tx[T](c: DbConn, body: fn() -> Result[T, String] !io) -> Result[T, String] !io = {
+  let conn = raw(c)
+  if not conn.getAutoCommit() {
+    conn.rollback()
+    conn.setAutoCommit(true)
   }
-  c.setAutoCommit(false)
+  conn.setAutoCommit(false)
   let r = body()
   match r {
     Ok(v) -> {
-      c.commit()
-      c.setAutoCommit(true)
+      conn.commit()
+      conn.setAutoCommit(true)
       Ok(v)
     }
     Err(m) -> {
-      c.rollback()
-      c.setAutoCommit(true)
+      conn.rollback()
+      conn.setAutoCommit(true)
       Err(m)
     }
   }
@@ -295,6 +307,20 @@ pub fn col_opt_str(r: Row, name: String) -> Option[String] = opt_str_at(r.cells,
 pub fn col_opt_int(r: Row, name: String) -> Option[Int] = opt_int_at(r.cells, col_idx(r, name))
 
 # ---- tests (need --cp lib/sqlite-jdbc-*.jar) ----
+
+test "with_connection closes on both paths" {
+  let ok_conn = open("jdbc:sqlite::memory:")
+  assert with_connection(ok_conn, _h => 7) == 7
+  assert raw(ok_conn).isClosed()
+
+  let bad_conn = open("jdbc:sqlite::memory:")
+  let r: Result[Int, ForeignError] = catch_panic(() => with_connection(bad_conn, _h => panic("boom")))
+  match r {
+    Ok(_) -> { assert false }
+    Err(e) -> { assert str.contains(e.message, "boom") }
+  }
+  assert raw(bad_conn).isClosed()
+}
 
 test "exec and query round-trip, nulls map to VNull" {
   let c = open("jdbc:sqlite::memory:")

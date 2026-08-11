@@ -2,7 +2,7 @@
 # GET returns the DEFAULTS-merged table; PUT validates every key before writing
 # any of them, so an invalid key persists nothing.
 use std/map
-use java "java.sql.Connection"
+use db/sql.{DbConn}
 use web/types.{Handler, as_http, json_ok}
 use web/router.{Route, route_get, route_put}
 use json/value.{Json, JInt}
@@ -26,14 +26,14 @@ pub fn put_settings(a: Auth) -> Handler =
         Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, c => write_settings(c, m, a.storage_quota)), 400)?))
       })
 
-fn write_settings(c: Connection, m: Map[String, Json], storage_quota: Int) -> Result[Json, String] !io = {
+fn write_settings(c: DbConn, m: Map[String, Json], storage_quota: Int) -> Result[Json, String] !io = {
   let _w = apply_settings(c, map.keys(m), m, 0)?
   repo_settings.read_all(c, storage_quota)
 }
 
 # FastAPI validates every key then commits once: an invalid key persists nothing.
 # Pass 1 validates all (unknown key / non-int value / out-of-range), pass 2 writes.
-fn apply_settings(c: Connection, keys: List[String], m: Map[String, Json], i: Int) -> Result[Bool, String] !io = {
+fn apply_settings(c: DbConn, keys: List[String], m: Map[String, Json], i: Int) -> Result[Bool, String] !io = {
   let _v = validate_settings(keys, m, 0)?
   write_all_settings(c, keys, m, 0)
 }
@@ -59,7 +59,7 @@ fn validate_settings(keys: List[String], m: Map[String, Json], i: Int) -> Result
     }
   }
 
-fn write_all_settings(c: Connection, keys: List[String], m: Map[String, Json], i: Int) -> Result[Bool, String] !io =
+fn write_all_settings(c: DbConn, keys: List[String], m: Map[String, Json], i: Int) -> Result[Bool, String] !io =
   if i == len(keys) {
     Ok(true)
   } else {

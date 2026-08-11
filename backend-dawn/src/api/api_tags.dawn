@@ -1,6 +1,6 @@
 # Tag admin (M6 knife 9, split out of api_admin2 2026-07-19): admin listing with
 # draft counts, rename (slug follows the name), merge, cleanup, delete.
-use java "java.sql.Connection"
+use db/sql.{DbConn}
 use web/types.{Handler, http_error, as_http, opt_param_int, json_ok, text}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json, JArr}
@@ -39,7 +39,7 @@ pub fn tag_rename(a: Auth) -> Handler =
         None -> Err(http_error(422, "tag_id must be an integer"))
       })
 
-fn rename_then_read(c: Connection, id: Int, name: String) -> Result[Option[Json], String] !io = {
+fn rename_then_read(c: DbConn, id: Int, name: String) -> Result[Option[Json], String] !io = {
   let ex = tag_exists(c, id)?
   if not ex {
     Ok(None)
@@ -71,7 +71,7 @@ pub fn tag_merge(a: Auth) -> Handler =
         }
       })
 
-fn merge_then_read(c: Connection, s: Int, t: Int) -> Result[Option[Json], String] !io = {
+fn merge_then_read(c: DbConn, s: Int, t: Int) -> Result[Option[Json], String] !io = {
   let se = tag_exists(c, s)?
   let te = tag_exists(c, t)?
   if not se || not te {

@@ -4,7 +4,7 @@
 use std/str
 use std/bytes
 use std/map
-use java "java.sql.Connection"
+use db/sql.{DbConn}
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, query, redirect, streaming, header}
 use util/multipart.{Part, boundary_of, parse_multipart, part_named}
 use util/http.{fetch_stream, ok_stream, close_stream}
@@ -333,7 +333,7 @@ pub fn upload_token_ep(a: Auth) -> Handler =
     ])))
   })
 
-fn ledger(c: Connection, key: String, rel: String) -> Result[Int, String] !io =
+fn ledger(c: DbConn, key: String, rel: String) -> Result[Int, String] !io =
   ledger_insert(c, key, full(rel))
 
 fn qparam(req: Request, name: String) -> String = unwrap_or(query(req, name), "")

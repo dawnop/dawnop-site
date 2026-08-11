@@ -19,7 +19,7 @@
 use std/str
 use std/map
 use std/bytes
-use java "java.sql.Connection"
+use db/sql.{DbConn}
 use svc/auth.{Auth, Qiniu}
 use db/db.{with_db}
 use util/paths.{fm_split, basename, ext, fm_join, full, guess_mime, strip_slashes, strip_trailing_slash}
@@ -101,7 +101,7 @@ pub fn delete_object_of(q: Qiniu, o: FileRow) -> Result[Unit, String] !io =
 
 ## Create `rel` (with any missing ancestors) and return the listing of `cur`.
 ## None when something already sits at `rel`.
-pub fn mk_folder(c: Connection, rel: String, cur: String) -> Result[Option[Json], String] !io = {
+pub fn mk_folder(c: DbConn, rel: String, cur: String) -> Result[Option[Json], String] !io = {
   let t = taken(c, rel)?
   if t {
     Ok(None)
@@ -115,7 +115,7 @@ pub fn mk_folder(c: Connection, rel: String, cur: String) -> Result[Option[Json]
 
 # ---- rename / move (path-only: the qiniu objects are never touched) ----
 
-pub fn do_rename(c: Connection, old: String, new_rel: String, cur: String) -> Result[Option[Json], String] !io =
+pub fn do_rename(c: DbConn, old: String, new_rel: String, cur: String) -> Result[Option[Json], String] !io =
   if new_rel == old {
     let d = fs_data(c, cur)?
     Ok(Some(d))
@@ -130,7 +130,7 @@ pub fn do_rename(c: Connection, old: String, new_rel: String, cur: String) -> Re
     }
   }
 
-pub fn do_move(c: Connection, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
+pub fn do_move(c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
   if i >= len(sources) {
     fs_data(c, cur)
   } else {
@@ -156,7 +156,7 @@ pub fn do_move(c: Connection, sources: List[String], dest: String, cur: String, 
 
 # ---- copy (dirs are recreated, files get a fresh qiniu object) ----
 
-pub fn do_copy(q: Qiniu, c: Connection, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
+pub fn do_copy(q: Qiniu, c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
   if i >= len(sources) {
     fs_data(c, cur)
   } else {
@@ -181,7 +181,7 @@ pub fn do_copy(q: Qiniu, c: Connection, sources: List[String], dest: String, cur
     }
   }
 
-fn copy_rows(q: Qiniu, c: Connection, rows: List[FileRow], src: String, new_rel: String, i: Int) -> Result[Int, String] !io =
+fn copy_rows(q: Qiniu, c: DbConn, rows: List[FileRow], src: String, new_rel: String, i: Int) -> Result[Int, String] !io =
   if i >= len(rows) {
     Ok(0)
   } else {
@@ -218,7 +218,7 @@ pub fn item_paths(m: Map[String, Json]) -> List[String] =
     _ -> []
   }
 
-pub fn do_delete(q: Qiniu, c: Connection, items: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
+pub fn do_delete(q: Qiniu, c: DbConn, items: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
   if i >= len(items) {
     Ok(acc)
   } else {
@@ -232,7 +232,7 @@ pub fn do_delete(q: Qiniu, c: Connection, items: List[String], i: Int, acc: List
     }
   }
 
-fn delete_rows(q: Qiniu, c: Connection, rows: List[FileRow], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
+fn delete_rows(q: Qiniu, c: DbConn, rows: List[FileRow], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
   if i >= len(rows) {
     Ok(acc)
   } else {
@@ -264,7 +264,7 @@ pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json],
   }
 }
 
-fn create_file_db(c: Connection, rel: String, key: String, mime: String, cur: String) -> Result[Json, String] !io = {
+fn create_file_db(c: DbConn, rel: String, key: String, mime: String, cur: String) -> Result[Json, String] !io = {
   let _e = ensure_dirs(c, rel)?
   let _i = insert_file(c, rel, key, mime, 0)?
   fs_data(c, cur)
@@ -281,7 +281,7 @@ pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !i
   Ok(obj([("path", jstr(full(rel)))]))
 }
 
-fn save_db(c: Connection, rel: String, key: String, mime: String, size: Int) -> Result[Int, String] !io = {
+fn save_db(c: DbConn, rel: String, key: String, mime: String, size: Int) -> Result[Int, String] !io = {
   let _e = ensure_dirs(c, rel)?
   insert_file(c, rel, key, mime, size)
 }
@@ -318,7 +318,7 @@ fn upload_key(existing: Option[FileRow]) -> String !io =
     None -> uuid_hex()
   }
 
-fn upsert_upload(c: Connection, rel: String, key: String, mime: String, size: Int) -> Result[Json, String] !io = {
+fn upsert_upload(c: DbConn, rel: String, key: String, mime: String, size: Int) -> Result[Json, String] !io = {
   let _e = ensure_dirs(c, rel)?
   let _i = insert_file(c, rel, key, mime, size)?
   match get_row(c, rel)? {

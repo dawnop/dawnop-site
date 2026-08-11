@@ -1,8 +1,7 @@
 # Global settings (M6 knife 9): four integer keys stored JSON-encoded in the
 # settings table, merged over defaults on read. Unknown keys and out-of-range
 # values are rejected on write (matching app/api/settings.py).
-use java "java.sql.Connection"
-use db/sql.{PStr, ColStr, query, exec, first_str_or}
+use db/sql.{DbConn, PStr, ColStr, query, exec, first_str_or}
 use json/value.{Json}
 use util/jsonx.{obj, jint}
 
@@ -35,13 +34,13 @@ pub fn check_setting(key: String, value: Int) -> Result[Bool, String] =
   }
 
 ## Read all settings, defaults overlaid by stored rows (dirty rows fall back).
-pub fn read_all(c: Connection, storage_quota_gb: Int) -> Result[Json, String] !io = {
+pub fn read_all(c: DbConn, storage_quota_gb: Int) -> Result[Json, String] !io = {
   let ds = defaults(storage_quota_gb)
   let pairs = read_loop(c, ds, 0, [])?
   Ok(obj(pairs))
 }
 
-fn read_loop(c: Connection, ds: List[(String, Int)], i: Int, acc: List[(String, Json)]) -> Result[List[(String, Json)], String] !io =
+fn read_loop(c: DbConn, ds: List[(String, Int)], i: Int, acc: List[(String, Json)]) -> Result[List[(String, Json)], String] !io =
   if i == len(ds) {
     Ok(acc)
   } else {
@@ -50,19 +49,19 @@ fn read_loop(c: Connection, ds: List[(String, Int)], i: Int, acc: List[(String, 
     read_loop(c, ds, i + 1, acc ++ [(key, jint(v))])
   }
 
-fn stored_int(c: Connection, key: String, dflt: Int) -> Result[Int, String] !io = {
+fn stored_int(c: DbConn, key: String, dflt: Int) -> Result[Int, String] !io = {
   let rows = query(c, "select value from settings where key = ?", [PStr(key)], [ColStr])?
   Ok(unwrap_or(parse_int(first_str_or(rows, "")), dflt))
 }
 
 ## One integer setting: the stored row over the supplied default. The monitor
 ## and fm stats quota reads this (admin edits beat the .env default).
-pub fn setting_int(c: Connection, key: String, dflt: Int) -> Result[Int, String] !io =
+pub fn setting_int(c: DbConn, key: String, dflt: Int) -> Result[Int, String] !io =
   stored_int(c, key, dflt)
 
 ## Apply one setting write: reject unknown key (400) or out-of-range value (400),
 ## else upsert. Value is stored as its plain integer text (JSON for an int).
-pub fn put_one(c: Connection, key: String, value: Int) -> Result[Bool, String] !io =
+pub fn put_one(c: DbConn, key: String, value: Int) -> Result[Bool, String] !io =
   match range_of(key) {
     None -> Err("未知配置项：$key")
     Some((lo, hi)) ->

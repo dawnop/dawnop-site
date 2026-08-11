@@ -79,6 +79,7 @@ jobs:
       - name: shellcheck deploy scripts
         run: >-
           shellcheck backend-dawn/deploy/*.sh backend-dawn/build.sh
+          backend-dawn/scripts/db-connection-boundary-mutants/run.sh
           backend-dawn/scripts/http-body-boundary-mutants/run.sh
           backend-dawn/scripts/webdav-dot-segment-mutants/run.sh scripts/fetch-dawn.sh
 
@@ -125,8 +126,11 @@ jobs:
       - name: backend tests + jar
         run: ./backend-dawn/build.sh
 
-      - name: Java HTTP FFI boundary
+      - name: Java FFI boundaries
         run: python3 backend-dawn/scripts/check-ffi-boundaries.py
+
+      - name: Database connection boundary mutation contract
+        run: backend-dawn/scripts/db-connection-boundary-mutants/run.sh
 
       - name: HTTP request body boundary mutation contract
         run: backend-dawn/scripts/http-body-boundary-mutants/run.sh

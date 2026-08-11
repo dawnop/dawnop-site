@@ -2,7 +2,7 @@
 # a connection per request via with_db. Errors map to the FastAPI JSON shape
 # {"detail": ...} through the web framework's Err branch.
 use std/map
-use java "java.sql.Connection"
+use db/sql.{DbConn}
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, param_segs, query, query_int_bounded_with}
 use web/router.{Route, route_get}
 use json/value.{Json, JArr}
@@ -50,7 +50,7 @@ pub fn get_article(db: Db, a: Auth) -> Handler =
     }
   }
 
-fn fetch_detail(c: Connection, slug: String, authed: Bool) -> Result[Option[Json], String] !io =
+fn fetch_detail(c: DbConn, slug: String, authed: Bool) -> Result[Option[Json], String] !io =
   match published_of(c, slug)? {
     None -> Ok(None)
     Some(published) ->
@@ -99,7 +99,7 @@ pub fn get_page_articles(db: Db) -> Handler =
     }
   }
 
-fn fetch_page_articles(c: Connection, slug: String, page: Int, size: Int) -> Result[Option[(Int, List[Json])], String] !io =
+fn fetch_page_articles(c: DbConn, slug: String, page: Int, size: Int) -> Result[Option[(Int, List[Json])], String] !io =
   match repo_page.id_of(c, slug)? {
     Some(pid) -> {
       let pair = list_by_page(c, pid, page, size)?

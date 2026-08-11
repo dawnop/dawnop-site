@@ -2,8 +2,7 @@
 # FsData serialization, ancestor-dir backfill, and reparent — all pure metadata
 # on the `files` table (rename/move only rewrite paths, never touch qiniu).
 use std/str
-use java "java.sql.Connection"
-use db/sql.{PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
+use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
 use json/value.{Json, JNull, JInt, JStr, JArr}
 use util/jsonx.{obj, jstr, jbool}
 use util/paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts}
@@ -49,7 +48,7 @@ fn entry(o: FileRow) -> Json !io = {
 }
 
 ## Direct children of a directory, dirs-first then case-insensitive path order.
-pub fn children(c: Connection, parent: String) -> Result[List[FileRow], String] !io = {
+pub fn children(c: DbConn, parent: String) -> Result[List[FileRow], String] !io = {
   let rows = if parent == "" {
     query(c, "select $COLS from files", [], col_types())?
   } else {
@@ -71,7 +70,7 @@ fn cmp_entry(a: FileRow, b: FileRow) -> Int =
 fn cmp_str(a: String, b: String) -> Int = if a < b { -1 } else if a > b { 1 } else { 0 }
 
 ## The FsData for a directory listing.
-pub fn fs_data(c: Connection, dir_rel: String) -> Result[Json, String] !io = {
+pub fn fs_data(c: DbConn, dir_rel: String) -> Result[Json, String] !io = {
   let kids = children(c, dir_rel)?
   let files = entries_of(kids, 0, [])?
   Ok(obj([
@@ -92,7 +91,7 @@ fn entries_of(rows: List[FileRow], i: Int, acc: List[Json]) -> Result[List[Json]
 
 ## GET /api/fm/search: files under `base` (deep or direct children) whose
 ## basename contains `needle` (case-insensitive). Returns {files:[entry...]}.
-pub fn search_files(c: Connection, base: String, needle: String, deep: Bool) -> Result[Json, String] !io = {
+pub fn search_files(c: DbConn, base: String, needle: String, deep: Bool) -> Result[Json, String] !io = {
   let rows = if base == "" {
     query(c, "select $COLS from files", [], col_types())?
   } else {
@@ -106,25 +105,25 @@ pub fn search_files(c: Connection, base: String, needle: String, deep: Bool) -> 
   Ok(obj([("files", JArr(files))]))
 }
 
-pub fn get_row(c: Connection, rel: String) -> Result[Option[FileRow], String] !io = {
+pub fn get_row(c: DbConn, rel: String) -> Result[Option[FileRow], String] !io = {
   let rows = query(c, "select $COLS from files where path = ?", [PStr(rel)], col_types())?
   Ok(first_map(rows, r => row_of(r)))
 }
 
 ## True when a path is already taken.
-pub fn taken(c: Connection, rel: String) -> Result[Bool, String] !io = {
+pub fn taken(c: DbConn, rel: String) -> Result[Bool, String] !io = {
   let rows = query(c, "select count(*) from files where path = ?", [PStr(rel)], [ColInt])?
   Ok(first_bool_or(rows, false))
 }
 
 ## Backfill ancestor directory rows for `rel` (not rel itself), idempotently.
-pub fn ensure_dirs(c: Connection, rel: String) -> Result[Int, String] !io = {
+pub fn ensure_dirs(c: DbConn, rel: String) -> Result[Int, String] !io = {
   let parent = parent_rel(rel)
   let parts = filter(str.split(parent, "/"), s => s != "")
   ensure_loop(c, parts, 0, "")
 }
 
-fn ensure_loop(c: Connection, parts: List[String], i: Int, acc: String) -> Result[Int, String] !io =
+fn ensure_loop(c: DbConn, parts: List[String], i: Int, acc: String) -> Result[Int, String] !io =
   if i >= len(parts) {
     Ok(0)
   } else {
@@ -134,11 +133,11 @@ fn ensure_loop(c: Connection, parts: List[String], i: Int, acc: String) -> Resul
   }
 
 ## Insert a folder row.
-pub fn insert_folder(c: Connection, rel: String) -> Result[Int, String] !io =
+pub fn insert_folder(c: DbConn, rel: String) -> Result[Int, String] !io =
   exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, datetime('now'), datetime('now'))", [PStr(rel)])
 
 ## A rel plus its whole subtree (for delete), leaf files first is not required.
-pub fn subtree_rows(c: Connection, rel: String) -> Result[List[FileRow], String] !io = {
+pub fn subtree_rows(c: DbConn, rel: String) -> Result[List[FileRow], String] !io = {
   let rows = query(c, "select $COLS from files where path = ? or path like ?", [PStr(rel), PStr("$rel/%")], col_types())?
   Ok(map(rows, row_of))
 }
@@ -146,42 +145,42 @@ pub fn subtree_rows(c: Connection, rel: String) -> Result[List[FileRow], String]
 ## The DirEntry JSON for a row (public — delete returns these).
 pub fn entry_json(o: FileRow) -> Json !io = entry(o)
 
-pub fn delete_row(c: Connection, path: String) -> Result[Int, String] !io =
+pub fn delete_row(c: DbConn, path: String) -> Result[Int, String] !io =
   exec(c, "delete from files where path = ?", [PStr(path)])
 
 ## Insert a file row (register). key/content_type/size from the verified object.
-pub fn insert_file(c: Connection, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =
+pub fn insert_file(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =
   exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, ?, ?, datetime('now'), datetime('now')) on conflict(path) do update set key = excluded.key, content_type = excluded.content_type, size = excluded.size, updated_at = datetime('now')",
     [PStr(rel), PStr(key), PStr(content_type), PInt(size)])
 
-pub fn ledger_delete(c: Connection, key: String) -> Result[Int, String] !io =
+pub fn ledger_delete(c: DbConn, key: String) -> Result[Int, String] !io =
   exec(c, "delete from pending_uploads where key = ?", [PStr(key)])
 
 ## Local storage stats from the metadata: (used_bytes, file_count, dir_count).
-pub fn stats_db(c: Connection) -> Result[(Int, Int, Int), String] !io = {
+pub fn stats_db(c: DbConn) -> Result[(Int, Int, Int), String] !io = {
   let used = scalar_or0(c, "select coalesce(sum(size), 0) from files where is_dir = 0")?
   let files = scalar_or0(c, "select count(*) from files where is_dir = 0")?
   let dirs = scalar_or0(c, "select count(*) from files where is_dir = 1")?
   Ok((used, files, dirs))
 }
 
-fn scalar_or0(c: Connection, q: String) -> Result[Int, String] !io = {
+fn scalar_or0(c: DbConn, q: String) -> Result[Int, String] !io = {
   let rows = query(c, q, [], [ColInt])?
   Ok(first_int_or(rows, 0))
 }
 
 ## Record a signed upload key in the pending_uploads ledger (orphan tracking).
-pub fn ledger_insert(c: Connection, key: String, path: String) -> Result[Int, String] !io =
+pub fn ledger_insert(c: DbConn, key: String, path: String) -> Result[Int, String] !io =
   exec(c, "insert into pending_uploads (key, path, created_at) values (?, ?, datetime('now')) on conflict(key) do update set path = excluded.path", [PStr(key), PStr(path)])
 
 ## Reparent old_rel and its whole subtree to new_rel (path-prefix rewrite).
-pub fn reparent(c: Connection, old_rel: String, new_rel: String) -> Result[Int, String] !io = {
+pub fn reparent(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io = {
   let rows = query(c, "select path from files where path = ? or path like ?", [PStr(old_rel), PStr("$old_rel/%")], [ColStr])?
   let paths = map(rows, r => str_at(r, 0))
   reparent_loop(c, paths, old_rel, new_rel, 0)
 }
 
-fn reparent_loop(c: Connection, paths: List[String], old_rel: String, new_rel: String, i: Int) -> Result[Int, String] !io =
+fn reparent_loop(c: DbConn, paths: List[String], old_rel: String, new_rel: String, i: Int) -> Result[Int, String] !io =
   if i >= len(paths) {
     Ok(0)
   } else {

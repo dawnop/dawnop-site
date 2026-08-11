@@ -1,8 +1,7 @@
 # Viz component model (M6 knife 10): CRUD for the embedded Vue components that
 # ```viz fences mount. slug must match ^[a-z0-9]+(-[a-z0-9]+)*$; source required.
 use std/str
-use java "java.sql.Connection"
-use db/sql.{PInt, PStr, Col, ColInt, ColStr, Row, query, query_rows, exec, last_id, str_at, first_map, first_named_map, first_bool_or, col_int, col_str}
+use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Row, query, query_rows, exec, last_id, str_at, first_map, first_named_map, first_bool_or, col_int, col_str}
 use json/value.{Json}
 use util/jsonx.{obj, jint, jstr, jdatetime}
 
@@ -39,19 +38,19 @@ fn out_json(r: Row) -> Json =
 
 ## GET /api/viz — all components (admin, full VizOut). Ordered newest-edited
 ## first to match app/api/viz.py (order_by updated_at desc).
-pub fn list_all(c: Connection) -> Result[List[Json], String] !io = {
+pub fn list_all(c: DbConn) -> Result[List[Json], String] !io = {
   let rows = query_rows(c, "select $OUT_COLS from viz_components order by updated_at desc", [], out_col_types())?
   Ok(map(rows, out_json))
 }
 
 ## Full component by id (VizOut) — create/update response.
-pub fn by_id(c: Connection, id: Int) -> Result[Option[Json], String] !io = {
+pub fn by_id(c: DbConn, id: Int) -> Result[Option[Json], String] !io = {
   let rows = query_rows(c, "select $OUT_COLS from viz_components where id = ?", [PInt(id)], out_col_types())?
   Ok(first_named_map(rows, r => out_json(r)))
 }
 
 ## GET /api/viz/{slug} — public component {slug, name, compiled, style}.
-pub fn by_slug_public(c: Connection, slug: String) -> Result[Option[Json], String] !io = {
+pub fn by_slug_public(c: DbConn, slug: String) -> Result[Option[Json], String] !io = {
   let rows = query(c, "select slug, name, compiled, style from viz_components where slug = ?", [PStr(slug)], [ColStr, ColStr, ColStr, ColStr])?
   Ok(first_map(rows, r => obj([
     ("slug", jstr(str_at(r, 0))),
@@ -61,7 +60,7 @@ pub fn by_slug_public(c: Connection, slug: String) -> Result[Option[Json], Strin
   ])))
 }
 
-pub fn slug_free(c: Connection, slug: String, exclude: Option[Int]) -> Result[Bool, String] !io = {
+pub fn slug_free(c: DbConn, slug: String, exclude: Option[Int]) -> Result[Bool, String] !io = {
   let rows = match exclude {
     Some(id) -> query(c, "select count(*) from viz_components where slug = ? and id != ?", [PStr(slug), PInt(id)], [ColInt])?
     None -> query(c, "select count(*) from viz_components where slug = ?", [PStr(slug)], [ColInt])?
@@ -69,7 +68,7 @@ pub fn slug_free(c: Connection, slug: String, exclude: Option[Int]) -> Result[Bo
   Ok(not first_bool_or(rows, false))
 }
 
-pub fn viz_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
+pub fn viz_exists(c: DbConn, id: Int) -> Result[Bool, String] !io = {
   let rows = query(c, "select count(*) from viz_components where id = ?", [PInt(id)], [ColInt])?
   Ok(first_bool_or(rows, false))
 }
@@ -77,20 +76,20 @@ pub fn viz_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
 pub type NewViz = { slug: String, name: String, source: String, compiled: String, style: String }
 
 ## Create a component; caller validates slug/source and uniqueness first.
-pub fn create_viz(c: Connection, v: NewViz) -> Result[Int, String] !io = {
+pub fn create_viz(c: DbConn, v: NewViz) -> Result[Int, String] !io = {
   let _i = exec(c,
     "insert into viz_components (slug, name, source, compiled, style, created_at, updated_at) values (?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
     [PStr(v.slug), PStr(v.name), PStr(v.source), PStr(v.compiled), PStr(v.style)])?
   last_id(c)
 }
 
-pub fn set_viz_str(c: Connection, id: Int, col: String, val: String) -> Result[Int, String] !io =
+pub fn set_viz_str(c: DbConn, id: Int, col: String, val: String) -> Result[Int, String] !io =
   exec(c, "update viz_components set $col = ? where id = ?", [PStr(val), PInt(id)])
 
-pub fn touch_viz(c: Connection, id: Int) -> Result[Int, String] !io =
+pub fn touch_viz(c: DbConn, id: Int) -> Result[Int, String] !io =
   exec(c, "update viz_components set updated_at = datetime('now') where id = ?", [PInt(id)])
 
-pub fn delete_viz(c: Connection, id: Int) -> Result[Int, String] !io =
+pub fn delete_viz(c: DbConn, id: Int) -> Result[Int, String] !io =
   exec(c, "delete from viz_components where id = ?", [PInt(id)])
 
 test "valid_slug accepts clean slugs, rejects the rest" {

@@ -24,7 +24,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
 - 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、80 个本仓单测，连 web/json/sha2 三个包
-  共 148 个；`use java` import 共 82 条、分布在 31 个文件；无需 .env / 库 /
+  共 148 个；`use java` import 共 61 条、分布在 12 个文件；无需 .env / 库 /
   libsimple / 网络，CI 每次 push 都跑）。用到 SQLite 的几个跑内存库（`jdbc:sqlite::memory:`），
   自带建表，不碰 fixture。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
@@ -48,6 +48,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 **基础设施（预备刀 1–5）**
 - `db/sql.dawn` — SQLite JDBC 薄包装：`SqlV/Col/Cell` ADT、`query/exec/with_tx`、类型化取值、
   `first_*` 首行取值（`match get(rows, 0)` 的样板收在这里）。
+  JDBC `Connection` 只在本模块可见，其他模块统一使用公开不透明的 `DbConn`。
   **按列名读行（`query_rows` + `row.col_int("id")`）只用在选择列表是共享常量的三处**：
   `repo_article` 的 `LIST_COLS`(12 列)、`repo_page` 的 `PAGE_COLS`(11 列)、`repo_viz` 的
   `OUT_COLS`(8 列)——这类列表被多条查询共用，加一列就得数所有下标，位置索引在这里是负担。

@@ -1,8 +1,7 @@
 # Page and tag write model (M6 knife 9): create/update/delete/reorder pages,
 # rename/merge/cleanup/delete tags. Mirrors app/api/pages.py and tags.py.
 use std/str
-use java "java.sql.Connection"
-use db/sql.{SqlV, PInt, PStr, ColInt, ColStr, query, exec, last_id, str_at, first_str, first_str_or, first_bool_or, first_int_or, bool_int, open, scalar_int}
+use db/sql.{DbConn, SqlV, PInt, PStr, ColInt, ColStr, query, exec, last_id, str_at, first_str, first_str_or, first_bool_or, first_int_or, bool_int, open, scalar_int}
 use repo/repo_write.{unique_slug, clip}
 
 # ---- pages ----
@@ -21,7 +20,7 @@ pub type NewPage = {
 }
 
 ## Create a page, returning its new id.
-pub fn create_page(c: Connection, p: NewPage) -> Result[Int, String] !io = {
+pub fn create_page(c: DbConn, p: NewPage) -> Result[Int, String] !io = {
   let base = if p.slug_hint == "" { p.title } else { p.slug_hint }
   let slug = unique_slug(c, "pages", base, None)?
   let created_expr = match p.created_at { Some(_x) -> "datetime(?)", None -> "datetime('now')" }
@@ -33,36 +32,36 @@ pub fn create_page(c: Connection, p: NewPage) -> Result[Int, String] !io = {
 }
 
 ## Whether a page id exists, and whether it is a builtin page.
-pub fn page_kind(c: Connection, id: Int) -> Result[Option[String], String] !io = {
+pub fn page_kind(c: DbConn, id: Int) -> Result[Option[String], String] !io = {
   let rows = query(c, "select type from pages where id = ?", [PInt(id)], [ColStr])?
   Ok(first_str(rows))
 }
 
-pub fn set_page_str(c: Connection, id: Int, col: String, v: String) -> Result[Int, String] !io =
+pub fn set_page_str(c: DbConn, id: Int, col: String, v: String) -> Result[Int, String] !io =
   exec(c, "update pages set $col = ? where id = ?", [PStr(v), PInt(id)])
 
-pub fn set_page_int(c: Connection, id: Int, col: String, v: Int) -> Result[Int, String] !io =
+pub fn set_page_int(c: DbConn, id: Int, col: String, v: Int) -> Result[Int, String] !io =
   exec(c, "update pages set $col = ? where id = ?", [PInt(v), PInt(id)])
 
-pub fn touch_page(c: Connection, id: Int) -> Result[Int, String] !io =
+pub fn touch_page(c: DbConn, id: Int) -> Result[Int, String] !io =
   exec(c, "update pages set updated_at = datetime('now') where id = ?", [PInt(id)])
 
 # set created_at from a client ISO-8601 string, normalized via datetime(?)
-pub fn set_page_created(c: Connection, id: Int, iso: String) -> Result[Int, String] !io =
+pub fn set_page_created(c: DbConn, id: Int, iso: String) -> Result[Int, String] !io =
   exec(c, "update pages set created_at = datetime(?) where id = ?", [PStr(iso), PInt(id)])
 
-pub fn regen_page_slug(c: Connection, id: Int, base: String) -> Result[Int, String] !io = {
+pub fn regen_page_slug(c: DbConn, id: Int, base: String) -> Result[Int, String] !io = {
   let slug = unique_slug(c, "pages", base, Some(id))?
   exec(c, "update pages set slug = ? where id = ?", [PStr(slug), PInt(id)])
 }
 
-pub fn page_title(c: Connection, id: Int) -> Result[String, String] !io = {
+pub fn page_title(c: DbConn, id: Int) -> Result[String, String] !io = {
   let rows = query(c, "select title from pages where id = ?", [PInt(id)], [ColStr])?
   Ok(first_str_or(rows, ""))
 }
 
 ## Delete a page; articles pointing at it have page_id nulled first.
-pub fn delete_page(c: Connection, id: Int) -> Result[Int, String] !io = {
+pub fn delete_page(c: DbConn, id: Int) -> Result[Int, String] !io = {
   let _u = exec(c, "update articles set page_id = null where page_id = ?", [PInt(id)])?
   exec(c, "delete from pages where id = ?", [PInt(id)])
 }
@@ -70,10 +69,10 @@ pub fn delete_page(c: Connection, id: Int) -> Result[Int, String] !io = {
 ## Reorder: assign nav_order by position in the id list. Duplicate ids are
 ## dropped preserving first-seen order (matches FastAPI's dedup) so a repeated id
 ## doesn't shift later positions.
-pub fn reorder_pages(c: Connection, ids: List[Int]) -> Result[Int, String] !io =
+pub fn reorder_pages(c: DbConn, ids: List[Int]) -> Result[Int, String] !io =
   reorder_loop(c, dedup_ints(ids), 0)
 
-fn reorder_loop(c: Connection, ids: List[Int], i: Int) -> Result[Int, String] !io =
+fn reorder_loop(c: DbConn, ids: List[Int], i: Int) -> Result[Int, String] !io =
   if i == len(ids) {
     Ok(0)
   } else {
@@ -89,18 +88,18 @@ fn int_member(xs: List[Int], x: Int) -> Bool =
 
 # ---- tags ----
 
-fn tag_name(c: Connection, id: Int) -> Result[String, String] !io = {
+fn tag_name(c: DbConn, id: Int) -> Result[String, String] !io = {
   let rows = query(c, "select name from tags where id = ?", [PInt(id)], [ColStr])?
   Ok(first_str_or(rows, ""))
 }
 
-pub fn tag_exists(c: Connection, id: Int) -> Result[Bool, String] !io = {
+pub fn tag_exists(c: DbConn, id: Int) -> Result[Bool, String] !io = {
   let rows = query(c, "select count(*) from tags where id = ?", [PInt(id)], [ColInt])?
   Ok(first_bool_or(rows, false))
 }
 
 ## Rename a tag, regenerating slug. Err on empty name or a duplicate name.
-pub fn rename_tag(c: Connection, id: Int, raw: String) -> Result[Bool, String] !io = {
+pub fn rename_tag(c: DbConn, id: Int, raw: String) -> Result[Bool, String] !io = {
   let name = clip(str.trim(raw), 64)
   if name == "" {
     Err("标签名不能为空")
@@ -125,7 +124,7 @@ pub fn rename_tag(c: Connection, id: Int, raw: String) -> Result[Bool, String] !
 }
 
 ## Merge source into target: move article links (skipping dups), delete source.
-pub fn merge_tags(c: Connection, source_id: Int, target_id: Int) -> Result[Int, String] !io = {
+pub fn merge_tags(c: DbConn, source_id: Int, target_id: Int) -> Result[Int, String] !io = {
   let _m = exec(c,
     "insert into article_tags (article_id, tag_id) select at.article_id, ? from article_tags at where at.tag_id = ? and at.article_id not in (select article_id from article_tags where tag_id = ?)",
     [PInt(target_id), PInt(source_id), PInt(target_id)])?
@@ -134,13 +133,13 @@ pub fn merge_tags(c: Connection, source_id: Int, target_id: Int) -> Result[Int, 
   target_published_count(c, target_id)
 }
 
-pub fn target_published_count(c: Connection, target_id: Int) -> Result[Int, String] !io = {
+pub fn target_published_count(c: DbConn, target_id: Int) -> Result[Int, String] !io = {
   let rows = query(c, "select count(*) from article_tags where tag_id = ?", [PInt(target_id)], [ColInt])?
   Ok(first_int_or(rows, 0))
 }
 
 ## Delete tags used by no article; returns how many were removed.
-pub fn cleanup_tags(c: Connection) -> Result[Int, String] !io = {
+pub fn cleanup_tags(c: DbConn) -> Result[Int, String] !io = {
   let rows = query(c, "select count(*) from tags where id not in (select distinct tag_id from article_tags)", [], [ColInt])?
   let n = first_int_or(rows, 0)
   let _d = exec(c, "delete from tags where id not in (select distinct tag_id from article_tags)", [])?
@@ -148,7 +147,7 @@ pub fn cleanup_tags(c: Connection) -> Result[Int, String] !io = {
 }
 
 ## Delete a tag and its article links.
-pub fn delete_tag(c: Connection, id: Int) -> Result[Int, String] !io = {
+pub fn delete_tag(c: DbConn, id: Int) -> Result[Int, String] !io = {
   let _l = exec(c, "delete from article_tags where tag_id = ?", [PInt(id)])?
   exec(c, "delete from tags where id = ?", [PInt(id)])
 }
@@ -166,7 +165,7 @@ fn must(r: Result[Int, String]) -> Int =
     Err(m) -> panic(m)
   }
 
-fn test_db() -> Connection !io = {
+fn test_db() -> DbConn !io = {
   let c = open("jdbc:sqlite::memory:")
   let _p = must(exec(c, "create table pages (id integer primary key, title text, slug text unique, type text, description text, content text, nav_visible integer, nav_order integer, auto_title integer, created_at text, updated_at text)", []))
   let _t = must(exec(c, "create table tags (id integer primary key, name text, slug text unique, created_at text)", []))
@@ -242,7 +241,7 @@ test "regen_page_slug keeps a page out of its own uniqueness check" {
   assert scalar_int(c, "select count(*) from pages where id = 1 and slug = 'two-2'", []) == Ok(1)
 }
 
-fn seed_tag(c: Connection, name: String, slug: String) -> Unit !io = {
+fn seed_tag(c: DbConn, name: String, slug: String) -> Unit !io = {
   let _t = must(exec(c, "insert into tags (name, slug, created_at) values (?, ?, datetime('now'))", [PStr(name), PStr(slug)]))
   ()
 }

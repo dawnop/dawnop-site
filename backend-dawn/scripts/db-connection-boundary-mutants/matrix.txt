@@ -1,0 +1,4 @@
+# Hand-owned red set. The runner has no record mode and rejects every extra red.
+make-dbconn-transparent|ffi.db-conn-opaque
+leak-java-sql|ffi.java-sql-confined
+leak-raw-connection|ffi.db-conn-raw-confined
