@@ -1,0 +1,4 @@
+# Hand-owned red set. The runner has no record mode and rejects every extra red.
+swap-file-tail|the streaming multipart body goes on the wire byte-exactly, across many chunks
+drop-upload-prefix|a missing upload file keeps the upload_file error prefix
+leak-java-net-http|ffi.java-net-http-confined

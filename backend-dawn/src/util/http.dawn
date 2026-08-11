@@ -12,6 +12,7 @@ use java "java.net.http.HttpRequest.Builder"
 use java "java.net.http.HttpRequest.BodyPublisher"
 use java "java.net.http.HttpRequest.BodyPublishers"
 use java "java.net.http.HttpResponse.BodyHandlers"
+use java "java.io.File"
 use java "java.io.InputStream"
 use java "java.time.Duration"
 use java "java.lang.String"
@@ -19,6 +20,11 @@ use java "com.sun.net.httpserver.HttpServer"
 use java "java.net.InetSocketAddress"
 
 pub type HttpResp = { status: Int, body: String }
+
+## A request body whose Java publisher representation stays inside this module.
+## `file_body` builds the one streaming shape needed by qiniu uploads, while
+## `post_body` sends it without exposing java.net.http to callers.
+pub opaque type RequestBody = BodyPublisher
 
 # The binary counterpart of HttpResp. It carries the status for the same reason
 # HttpResp does: the caller decides what a non-2xx means. Returning bare Bytes
@@ -145,18 +151,30 @@ pub fn post_form(url: String, headers: List[(String, String)], body: String) -> 
 ## POST a raw Bytes body, sent verbatim via ofByteArray. For binary proxy upload:
 ## the assembled multipart body carries the file bytes exactly.
 pub fn post_bytes(url: String, headers: List[(String, String)], body: Bytes) -> Result[HttpResp, String] !io =
-  post_publisher(url, headers, BodyPublishers.ofByteArray(body)!)
+  post_body(url, headers, BodyPublishers.ofByteArray(body)!)
 
-## POST whatever a BodyPublisher produces. The streaming door: qiniu/rs.upload_file
-## passes `concat(ofByteArray(head), ofFile(path), ofByteArray(tail))`, so the file
-## part is read from disk in chunks and never sits in the heap. ofByteArray keeps
-## the in-memory path for small bodies.
-pub fn post_publisher(url: String, headers: List[(String, String)], publisher: BodyPublisher) -> Result[HttpResp, String] !io =
+## Build head ++ file ++ tail without materializing the file in the heap.
+## `ofFile` streams from disk, and `concat` preserves an exact Content-Length.
+pub fn file_body(head: Bytes, src: String, tail: Bytes) -> Result[RequestBody, String] !io =
+  match catch_fault(() => {
+    let h = BodyPublishers.ofByteArray(head)!
+    let f = BodyPublishers.ofFile(File.new(src).toPath()!)!
+    let t = BodyPublishers.ofByteArray(tail)!
+    BodyPublishers.concat(h, f, t)!
+  }) {
+    Err(e) -> Err(fe_text(e))
+    Ok(p) -> Ok(p)
+  }
+
+## POST a request body produced by this module. Transport failures retain
+## `catch_text`'s original text so callers keep their established error surface.
+pub fn post_body(url: String, headers: List[(String, String)], publisher: RequestBody) -> Result[HttpResp, String] !io =
   catch_text(() => {
     let uri = URI.create(url)!
     let base = HttpRequest.newBuilder()!.uri(uri)!
     let withHeaders = add_headers(base, headers, 0)
-    let req = withHeaders.method("POST", publisher)!.build()!
+    let raw: BodyPublisher = publisher
+    let req = withHeaders.method("POST", raw)!.build()!
     let resp = shared_client().send(req, BodyHandlers.ofString()!)!
     HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! }
   })

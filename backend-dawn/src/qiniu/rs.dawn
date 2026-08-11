@@ -5,15 +5,12 @@
 use std/str
 use std/bytes
 use std/map
-use java "java.net.http.HttpRequest.BodyPublisher"
-use java "java.net.http.HttpRequest.BodyPublishers"
 use java "java.io.File"
 use java "java.io.FileOutputStream"
 use java "java.io.ByteArrayOutputStream"
 use java "com.sun.net.httpserver.HttpServer"
 use java "java.net.InetSocketAddress"
-use util/ferr.{fe_text}
-use util/http.{HttpResp, post, post_bytes, post_publisher, fetch}
+use util/http.{HttpResp, RequestBody, post, post_bytes, file_body, post_body, fetch}
 use qiniu/sign.{entry_uri, entry_token, management_token, upload_token}
 
 const BOUNDARY: String = "----DawnFmBoundary7MA4YWxkTrZu0gW"
@@ -77,29 +74,23 @@ fn mp_tail() -> String = {
 }
 
 ## Upload a file from DISK to a key with CONSTANT memory: the multipart body is
-## the ASCII framing with BodyPublishers.ofFile spliced between the two halves,
+## the ASCII framing with a streaming file body between the two halves,
 ## so the file is read from disk in chunks at send time and never lands in the
 ## heap — that is what lets WebDAV PUT take a big file, where upload_bytes spikes
 ## to ~3x the file size (raw body + assembled body + publisher copy). concat sums
 ## its parts' lengths, giving the exact contentLength qiniu's form API requires.
 pub fn upload_file(up_host: String, ak: String, sk: String, bucket: String, key: String, path: String, mime: String, deadline: Int) -> Result[Unit, String] !io = {
   let token = upload_token(ak, sk, bucket, key, deadline)
-  let body = multipart_streaming(mp_head(token, key, mime), path, mp_tail())?
+  let body = upload_body(bytes.utf8(mp_head(token, key, mime)), path, bytes.utf8(mp_tail()))?
   let ct = "multipart/form-data; boundary=$BOUNDARY"
-  let r = post_publisher("$up_host/", [("Content-Type", ct)], body)?
+  let r = post_body("$up_host/", [("Content-Type", ct)], body)?
   ok_status(r, "upload_file")
 }
 
-# head ++ <the file, streamed off disk> ++ tail, as one publisher
-fn multipart_streaming(head: String, src: String, tail: String) -> Result[BodyPublisher, String] !io =
-  match catch_fault(() => {
-    let h = BodyPublishers.ofByteArray(bytes.utf8(head))!
-    let f = BodyPublishers.ofFile(File.new(src).toPath()!)!
-    let t = BodyPublishers.ofByteArray(bytes.utf8(tail))!
-    BodyPublishers.concat(h, f, t)!
-  }) {
-    Err(e) -> Err("upload_file: ${fe_text(e)}")
-    Ok(p) -> Ok(p)
+fn upload_body(head: Bytes, src: String, tail: Bytes) -> Result[RequestBody, String] !io =
+  match file_body(head, src, tail) {
+    Err(e) -> Err("upload_file: $e")
+    Ok(body) -> Ok(body)
   }
 
 fn hdr(ak: String, sk: String, op: String, entry: String) -> List[(String, String)] !io =
@@ -142,38 +133,64 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
   out.close()
   let src_path = src.getPath()!
 
-  # an echo server on an ephemeral port: whatever body arrives comes straight
-  # back, so the assertion compares what the publisher actually put on the wire —
-  # contentLength alone would not catch a wrong order or a mangled part
+  let ak = "test-ak"
+  let sk = "test-sk"
+  let bucket = "test-bucket"
+  let key = "many-chunks.bin"
+  let mime = "application/octet-stream"
+  let deadline = 1234567890
+  let expected = multipart(upload_token(ak, sk, bucket, key, deadline), key, bytes.utf8(payload), mime)
+
+  # The server accepts only an exact body and exact Content-Length. A successful
+  # upload therefore proves the public upload_file path kept both contracts.
   let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
   server.createContext("/", ex => {
     let buf = ByteArrayOutputStream.new()
     let _n = ex.getRequestBody()!.transferTo(buf)
     let got = buf.toByteArray()!
-    ex.sendResponseHeaders(200, bytes.len(got))
+    let content_length = ex.getRequestHeaders()!.getFirst("Content-Length")!
+    let exact = got == expected && content_length == "${bytes.len(expected)}"
+    let status = if exact { 200 } else { 422 }
+    let response = if exact { bytes.utf8("{}") } else { bytes.utf8("mismatch") }
+    ex.sendResponseHeaders(status, bytes.len(response))
     let os = ex.getResponseBody()!
-    os.write(got)
+    os.write(response)
     os.close()
   })
   server.start()
   let port = server.getAddress()!.getPort()
-  let no_headers: List[(String, String)] = []
 
-  match multipart_streaming("HEAD:", src_path, ":TAIL") {
-    Err(m) -> { assert m == "unreachable" }
-    Ok(body) -> match post_publisher("http://127.0.0.1:$port/", no_headers, body) {
-      Err(m) -> { assert m == "unreachable" }
-      Ok(r) -> {
-        assert r.status == 200
-        # byte-exact: the framing sits either side of the file's bytes, untouched
-        assert r.body == "HEAD:" ++ payload ++ ":TAIL"
-        assert str.len(r.body) == 5 + 20000 + 5
-      }
-    }
+  match upload_file("http://127.0.0.1:$port", ak, sk, bucket, key, src_path, mime, deadline) {
+    Err(m) -> panic("byte-exact upload failed: $m")
+    Ok(_) -> ()
   }
   server.stop(0)
+
+  # A transport error passes through post_body unchanged. upload_file must not
+  # add its operation label to a failure that occurs after body construction.
+  match upload_file("http://127.0.0.1:$port", ak, sk, bucket, key, src_path, mime, deadline) {
+    Ok(_) -> panic("a stopped server must refuse the upload")
+    Err(m) -> {
+      assert not str.starts_with(m, "upload_file: ")
+      ()
+    }
+  }
   let _b = File.new(src_path).delete()
   ()
+}
+
+test "a missing upload file keeps the upload_file error prefix" {
+  let src = File.createTempFile("dawn-test-missing-", ".bin")!
+  let path = src.getPath()!
+  let _deleted = src.delete()
+  match upload_file("http://127.0.0.1:1", "ak", "sk", "bucket", "key", path,
+    "application/octet-stream", 1234567890) {
+    Ok(_) -> panic("a missing file must not produce a request body")
+    Err(m) -> {
+      assert str.starts_with(m, "upload_file: ")
+      ()
+    }
+  }
 }
 
 test "a refused qiniu call is an Err, not Ok(false)" {
@@ -192,6 +209,14 @@ test "a refused qiniu call is an Err, not Ok(false)" {
       assert str.contains(m, "upload")
       assert str.contains(m, "401")
       assert str.contains(m, "bad token")
+    }
+  }
+
+  match ok_status(HttpResp { status: 503, body: "down" }, "upload_file") {
+    Ok(_) -> panic("a refused file upload must not be Ok")
+    Err(m) -> {
+      assert m == "upload_file: qiniu 503 down"
+      ()
     }
   }
 }

@@ -23,8 +23,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   **jar 与 `lib/` 都是构建产物，不入库**——jar 曾经入库，结果是它悄悄落后于 `src/`（要靠手动
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
-- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、79 个本仓单测，连 web/json/sha2 三个包
-  共 147 个；`use java` import 共 83 条、分布在 31 个文件；无需 .env / 库 /
+- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、80 个本仓单测，连 web/json/sha2 三个包
+  共 148 个；`use java` import 共 82 条、分布在 31 个文件；无需 .env / 库 /
   libsimple / 网络，CI 每次 push 都跑）。用到 SQLite 的几个跑内存库（`jdbc:sqlite::memory:`），
   自带建表，不碰 fixture。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
@@ -57,7 +57,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   `catch_fault`/`cast` 返回结构化 `ForeignError`，各屏障模块经它转回 `Result[T, String]`，错误文案与升级前逐字节一致。
 - `db/db.dawn` — 每请求一连接（`with_db`）：WAL + `load_extension(libsimple)`。
 - `util/crypto.dawn` — sha256 / hmac-sha1 / hmac-sha256 / base64url / uuid（auth、七牛、JWT、腾讯共用）。
-- `util/http.dawn` — java.net.http 出站客户端：`fetch/post/post_form` + `fetch_bytes`（二进制体，G6）。
+- `util/http.dawn` — java.net.http 出站客户端：`fetch/post/post_form` + `fetch_bytes`（二进制体，G6）；
+  `RequestBody` 不透明边界封装流式文件请求体，调用方不传播 Java publisher 类型。
 - `util/jsonx.dawn` / `util/jsonread.dawn` — JSON 构造（`obj/jint/jstr/jopt_*`）/ 请求体读取（`opt_int/str_or/str_list`）。
 - `json` — **dawn-lang 的 `packages/json`**（`[deps.json]` url+hash 依赖，vendored 副本已删）；游标版解析器，整数字面量产 `JInt`（保真、免 round-trip 变 `x.0`）。
 - `config.dawn` — .env 读取，env 优先（对齐 pydantic-settings 精度）。

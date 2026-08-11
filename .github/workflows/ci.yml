@@ -79,6 +79,7 @@ jobs:
       - name: shellcheck deploy scripts
         run: >-
           shellcheck backend-dawn/deploy/*.sh backend-dawn/build.sh
+          backend-dawn/scripts/http-body-boundary-mutants/run.sh
           backend-dawn/scripts/webdav-dot-segment-mutants/run.sh scripts/fetch-dawn.sh
 
   backend:
@@ -123,6 +124,12 @@ jobs:
       # which is what the jar's relative manifest Class-Path points at.
       - name: backend tests + jar
         run: ./backend-dawn/build.sh
+
+      - name: Java HTTP FFI boundary
+        run: python3 backend-dawn/scripts/check-ffi-boundaries.py
+
+      - name: HTTP request body boundary mutation contract
+        run: backend-dawn/scripts/http-body-boundary-mutants/run.sh
 
       - name: WebDAV dot segment mutation contract
         run: backend-dawn/scripts/webdav-dot-segment-mutants/run.sh
