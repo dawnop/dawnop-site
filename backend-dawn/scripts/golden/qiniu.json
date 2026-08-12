@@ -189,31 +189,20 @@
   "copy.upstream.partial": {
    "method": "PROPFIND",
    "path": "/dav/dav-test/docs-refused",
-   "status": 207,
+   "status": 404,
    "headers": {
-    "content-type": "application/xml; charset=\"utf-8\"",
-    "content-length": "797"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
    },
-   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/docs-refused/</D:href><D:propstat><D:prop><D:displayname>docs-refused</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/docs-refused/img/</D:href><D:propstat><D:prop><D:displayname>img</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "body": "{\"detail\":\"资源不存在\"}",
    "facts": {
-    "hrefs": [
-     "/dav/dav-test/docs-refused/",
-     "/dav/dav-test/docs-refused/img/"
-    ],
-    "displaynames": [
-     "docs-refused",
-     "img"
-    ],
+    "hrefs": [],
+    "displaynames": [],
     "contentlengths": [],
     "contenttypes": [],
-    "lastmodified": [
-     "WALL-CLOCK",
-     "WALL-CLOCK"
-    ],
-    "collections": 2,
-    "statuses": [
-     "HTTP/1.1 200 OK"
-    ]
+    "lastmodified": [],
+    "collections": 0,
+    "statuses": []
    }
   },
   "get.file": {
@@ -413,18 +402,6 @@
      {
       "storage": "qiniu",
       "dir": "qiniu://dav-test",
-      "basename": "docs-refused",
-      "extension": "",
-      "path": "qiniu://dav-test/docs-refused",
-      "type": "dir",
-      "file_size": null,
-      "last_modified": "WALL-CLOCK",
-      "mime_type": null,
-      "visibility": "public"
-     },
-     {
-      "storage": "qiniu",
-      "dir": "qiniu://dav-test",
       "basename": "example-copy.txt",
       "extension": "txt",
       "path": "qiniu://dav-test/example-copy.txt",
@@ -487,18 +464,6 @@
       "basename": "docs-copy",
       "extension": "",
       "path": "qiniu://dav-test/docs-copy",
-      "type": "dir",
-      "file_size": null,
-      "last_modified": "WALL-CLOCK",
-      "mime_type": null,
-      "visibility": "public"
-     },
-     {
-      "storage": "qiniu",
-      "dir": "qiniu://dav-test",
-      "basename": "docs-refused",
-      "extension": "",
-      "path": "qiniu://dav-test/docs-refused",
       "type": "dir",
       "file_size": null,
       "last_modified": "WALL-CLOCK",
@@ -580,18 +545,6 @@
       "basename": "docs-copy",
       "extension": "",
       "path": "qiniu://dav-test/docs-copy",
-      "type": "dir",
-      "file_size": null,
-      "last_modified": "WALL-CLOCK",
-      "mime_type": null,
-      "visibility": "public"
-     },
-     {
-      "storage": "qiniu",
-      "dir": "qiniu://dav-test",
-      "basename": "docs-refused",
-      "extension": "",
-      "path": "qiniu://dav-test/docs-refused",
       "type": "dir",
       "file_size": null,
       "last_modified": "WALL-CLOCK",
@@ -782,18 +735,6 @@
       "basename": "docs-copy",
       "extension": "",
       "path": "qiniu://dav-test/docs-copy",
-      "type": "dir",
-      "file_size": null,
-      "last_modified": "WALL-CLOCK",
-      "mime_type": null,
-      "visibility": "public"
-     },
-     {
-      "storage": "qiniu",
-      "dir": "qiniu://dav-test",
-      "basename": "docs-refused",
-      "extension": "",
-      "path": "qiniu://dav-test/docs-refused",
       "type": "dir",
       "file_size": null,
       "last_modified": "WALL-CLOCK",

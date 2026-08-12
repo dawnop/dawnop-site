@@ -297,6 +297,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"calls": self.bucket.calls})
         if segs[1:] == ["objects"]:
             return self._json(200, {"keys": sorted(self.bucket.objects)})
+        if segs[1:] == ["state"]:
+            with self.bucket.lock:
+                state = {
+                    key: {
+                        "content": base64.b64encode(value["content"]).decode(),
+                        "mime": value["mime"],
+                    }
+                    for key, value in self.bucket.objects.items()
+                }
+            return self._json(200, {"objects": state})
         return self._json(404, {"error": "no such control endpoint"})
 
     def _control_post(self, segs, body: bytes):

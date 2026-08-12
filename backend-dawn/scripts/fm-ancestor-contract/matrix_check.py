@@ -4,10 +4,11 @@
 import argparse
 from pathlib import Path
 
-VERSION = "3"
+VERSION = "4"
 VALID_ROLES = {"test", "contract"}
 EXPECTED_ROWS = [
     "immediate-tx-as-deferred|test|with_immediate_tx reserves the writer before its body",
+    "immediate-tx-panic-no-rollback|test|with_immediate_tx rolls back when its body panics",
     "repo-file-ancestor-fail-open|test|insert_folder_strict rejects an existing file ancestor",
     "repo-immediate-parent-only|test|insert_file_strict checks ancestors above an existing parent row",
     "repo-directory-target-fail-open|test|insert_file rejects an existing directory target",
@@ -17,10 +18,17 @@ EXPECTED_ROWS = [
     "repo-fm-reparent-split-transaction|test|FM fill reparent rolls back backfilled ancestors when path rewrite fails",
     "repo-webdav-strict-reparent-uses-fm|test|WebDAV strict reparent rejects missing and file ancestors",
     "repo-file-upsert-disappeared-ok|test|insert_file fails closed when an ignored upsert removes its target",
+    "repo-empty-subtree-ok|test|subtree mutations reject an empty source",
+    "repo-copy-skip-source-revalidation|test|copy commits reject a vanished source snapshot",
+    "repo-copy-skip-target-revalidation|test|copy commits revalidate every mapped target",
     "repo-literal-prefix-use-like|contract|tree.literal-prefix.isolated",
     "repo-subtree-child-first|contract|webdav.copy.parent-before-child",
+    "repo-fm-copy-split-transaction|contract|fm.copy.metadata-atomic",
+    "repo-webdav-copy-split-transaction|contract|webdav.copy.metadata-atomic",
     "fm-reject-missing-ancestor|contract|fm.missing-ancestors.auto-created",
     "fm-preflight-after-qiniu|contract|fm.external-effects.preflight",
+    "fm-upload-reuse-existing-key|contract|fm.upload.final-write-isolated",
+    "fm-copy-root-only-preflight|contract|fm.copy.deep-target-preflight",
     "fm-skip-directory-target-preflight|contract|fm.directory-target.preflight",
     "fm-skip-upload-token-preflight|contract|fm.upload-token.preflight",
     "fm-register-gc-before-preflight|contract|fm.register.preflight",
@@ -31,6 +39,7 @@ EXPECTED_ROWS = [
     "webdav-skip-full-ancestor-validation|contract|webdav.full-ancestor.preflight",
     "webdav-missing-parent-fail-open|contract|webdav.missing-parent.rejects",
     "webdav-reverse-overlap-fail-open|contract|webdav.reverse-overlap.rejects",
+    "webdav-copy-root-only-preflight|contract|webdav.copy.deep-target-preflight",
 ]
 EXPECTED_MUTANTS = [row.split("|", 1)[0] for row in EXPECTED_ROWS]
 
@@ -111,7 +120,7 @@ def self_test():
     )
     expect_rejected(
         "owner-drift",
-        [*base[:-1], EXPECTED_ROWS[-1].replace("rejects", "changed")],
+        [*base[:-1], EXPECTED_ROWS[-1] + " changed"],
         EXPECTED_MUTANTS,
         "hand-owned set",
     )

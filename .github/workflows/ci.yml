@@ -87,9 +87,9 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
-    # All backend gate commands took 775s in one serial local run on 2026-08-12.
-    # budget: 3x 775s worst observed
-    timeout-minutes: 39
+    # All backend gate commands took 946s in one serial local run on 2026-08-12.
+    # budget: 3x 946s worst observed
+    timeout-minutes: 48
     steps:
       - uses: actions/checkout@v4
 

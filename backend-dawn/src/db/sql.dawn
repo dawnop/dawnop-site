@@ -193,6 +193,15 @@ pub fn with_immediate_tx[T](c: DbConn, body: fn() -> Result[T, String] !io) -> R
     conn.setAutoCommit(true)
   }
   let _b = exec(c, "begin immediate", [])?
+  bracket(c, h => rollback_immediate(h), _h => finish_immediate_tx(c, body))
+}
+
+fn rollback_immediate(c: DbConn) -> Unit !io = {
+  let _r = exec(c, "rollback", [])
+  ()
+}
+
+fn finish_immediate_tx[T](c: DbConn, body: fn() -> Result[T, String] !io) -> Result[T, String] !io =
   match body() {
     Ok(v) ->
       match exec(c, "commit", []) {
@@ -208,7 +217,6 @@ pub fn with_immediate_tx[T](c: DbConn, body: fn() -> Result[T, String] !io) -> R
         Err(r) -> Err("$m; rollback failed: $r")
       }
   }
-}
 
 # ---- typed row accessors (mismatch = repo-layer bug, hence panic) ----
 
@@ -447,6 +455,23 @@ test "with_immediate_tx reserves the writer before its body" {
     Err(_) -> { assert false }
   }
   assert scalar_int(c1, "select count(*) from immediate_items", []) == Ok(0)
+}
+
+test "with_immediate_tx rolls back when its body panics" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table panic_items (v integer)", []) == Ok(0)
+  let failed: Result[Result[Unit, String], ForeignError] = catch_panic(() =>
+      with_immediate_tx(c, () => {
+        let _i = exec(c, "insert into panic_items values (1)", [])?
+        panic("transaction body panic")
+      }))
+  match failed {
+    Ok(_) -> { assert false }
+    Err(e) -> { assert str.contains(e.message, "transaction body panic") }
+  }
+  assert scalar_int(c, "select count(*) from panic_items", []) == Ok(0)
+  assert with_immediate_tx(c, () => exec(c, "insert into panic_items values (2)", [])) == Ok(1)
+  assert scalar_int(c, "select sum(v) from panic_items", []) == Ok(2)
 }
 
 test "unique constraint violation is an expected Err" {

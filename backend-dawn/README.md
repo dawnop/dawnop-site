@@ -23,8 +23,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   **jar 与 `lib/` 都是构建产物，不入库**——jar 曾经入库，结果是它悄悄落后于 `src/`（要靠手动
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
-- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、106 个本仓单测，连 web/json/sha2 三个包
-  共 174 个；`use java` import 共 61 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
+- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、110 个本仓单测，连 web/json/sha2 三个包
+  共 178 个；`use java` import 共 61 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
   libsimple / 网络，CI 每次 push 都跑）。用到 SQLite 的几个跑内存库（`jdbc:sqlite::memory:`），
   自带建表，不碰 fixture。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
@@ -97,12 +97,15 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `repo/repo_fm.dawn`：所有新写入与重挂接都守完整祖先类型。FM 写入与 move 在同一个
   `BEGIN IMMEDIATE` 事务内补缺失目录并完成最终写入；rename 允许缺失祖先但不补目录；WebDAV
   要求完整父链已存在且都是目录，并在最终写事务内复验。子树查询使用字面前缀且按路径父项优先，
-  干净子树仍可从遗留脏外部祖先下移出。24 个 fail-closed mutant 精确归属到 9 条 Dawn 单测或
-  15 条逐项重置数据库、假七牛与调用日志的 HTTP 合同。
-- SQLite 与七牛无法组成分布式事务。所有外部副作用前都有只读预检，SQLite 最终写仍会在自己的
-  即时事务内复验；若两者之间发生并发元数据变化，请求可能在对象已上传或复制后拒绝，并留下未被
-  SQLite 引用的对象。这是实现明确保留的 TOCTOU 与补偿边界，不宣称对象存储和元数据原子提交。
-- `svc/files.dawn` — 文件树操作层：①`api_fm` 与 `webdav` 共用的对象存储原语（signed_url / rebase / superseded_key / gc_superseded / copy_object / delete_object_of）——
+  干净子树仍可从遗留脏外部祖先下移出。FM 与 WebDAV COPY 会先映射完整目标集，随后把全部
+  metadata 在一个即时事务内复验源快照、目标与父链并一次提交。33 个 fail-closed mutant 精确归属到
+  13 条 Dawn 单测或 20 条逐项重置数据库、假七牛与调用日志的 HTTP 合同。
+- SQLite 与七牛无法组成分布式事务。上传、保存和 COPY 在对象操作前做只读预检，SQLite 最终写在
+  自己的即时事务内复验；代理上传和其他覆盖写总是使用新 key，只有 DB 成功后才回收旧 key。若对象
+  操作与最终 DB 提交之间发生并发变化，请求会拒绝且 metadata 不会部分提交，但可能留下未引用的新
+  对象。DELETE、WebDAV overwrite purge 等删除路径仍逐项执行对象与 metadata 删除，失败依赖补偿或
+  后续清理，不能回滚为原对象。这些是明确保留的 TOCTOU 与补偿边界，不宣称统一的分布式原子性。
+- `svc/files.dawn` — 文件树操作层：①`api_fm` 与 `webdav` 共用的对象存储原语（signed_url / superseded_key / gc_superseded / copy_object / delete_object_of）——
   只回 Result 不映射状态码，因为两个调用方的错误映射与连接持有方式本就不同（fm 一棵树一条连接，WebDAV 一步一条）；②`api_fm` 自己的树遍历（rename/move/copy/delete/save/upload）。
 - `qiniu/sign.dawn` — 三类七牛签名：上传凭证、私有下载 URL、QBox 管理、QiniuMacAuth（统计/CDN/账单，含 body）。
 - `qiniu/rs.dawn` — 管理 REST：stat/delete/copy/upload_text/upload_bytes/upload_file。

@@ -241,6 +241,9 @@ class Fake:
     def keys(self):
         return self._get("/__fake/objects")["keys"]
 
+    def state(self):
+        return self._get("/__fake/state")["objects"]
+
 
 def main():  # noqa: C901 - a case list; splitting it would only hide the order
     ap = argparse.ArgumentParser()

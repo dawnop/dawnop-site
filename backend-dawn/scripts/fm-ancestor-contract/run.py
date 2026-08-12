@@ -163,6 +163,11 @@ def db_state(ctx):
     return {"files": files, "ledger": ledger}
 
 
+def execute_sql(ctx, sql):
+    with sqlite3.connect(ctx.db) as connection:
+        connection.executescript(sql)
+
+
 def seed_deep_file_ancestor(ctx, root="blocked"):
     add_file(ctx, root, False, f"{root}-object")
     add_file(ctx, f"{root}/legacy-dir", True)
@@ -498,6 +503,22 @@ def assert_webdav_copy_parent_order(ctx, checks):
         False,
         "ordered-root-object",
     )
+    execute_sql(
+        ctx,
+        """
+        CREATE TRIGGER require_copy_parent_order
+        BEFORE INSERT ON files
+        WHEN new.path = 'ordered-destination/copied/level-one/level-two/deep.txt'
+          AND NOT EXISTS (
+            SELECT 1 FROM files
+            WHERE path = 'ordered-destination/copied/level-one/level-two'
+              AND is_dir = 1
+          )
+        BEGIN
+          SELECT raise(abort, 'copy inserted child before parent');
+        END;
+        """,
+    )
     status, _ = dav(
         ctx,
         "COPY",
@@ -553,6 +574,222 @@ def assert_webdav_reverse_overlap(ctx, checks):
     checks.equal(db_state(ctx), before_db, "reverse overlap changed DB or ledger")
     checks.equal(ctx.fake.keys(), before_keys, "reverse overlap changed objects")
     checks.equal(ctx.fake.calls(), [], "reverse overlap reached Qiniu")
+
+
+def assert_proxy_upload_final_rejection(ctx, checks):
+    add_file(ctx, "proxy-final", True)
+    old_content = "old proxy bytes must survive"
+    add_file(
+        ctx,
+        "proxy-final/existing.bin",
+        False,
+        "proxy-final-old-object",
+        content_type="application/octet-stream",
+        size=len(old_content),
+        content=old_content,
+    )
+    execute_sql(
+        ctx,
+        """
+        CREATE TRIGGER reject_proxy_final_write
+        BEFORE UPDATE ON files
+        WHEN old.path = 'proxy-final/existing.bin'
+        BEGIN
+          SELECT raise(abort, 'reject proxy final write');
+        END;
+        """,
+    )
+    before_db = db_state(ctx)
+    before_state = ctx.fake.state()
+    ctx.fake.clear_calls()
+
+    status, _ = api_upload(
+        ctx,
+        "qiniu://proxy-final",
+        name="existing.bin",
+        content=b"new proxy bytes",
+    )
+    after_state = ctx.fake.state()
+    new_keys = set(after_state) - set(before_state)
+    calls = ctx.fake.calls()
+
+    checks.true(status >= 400, "proxy upload final metadata rejection status")
+    checks.equal(db_state(ctx), before_db, "failed proxy upload changed metadata")
+    checks.equal(
+        after_state.get("proxy-final-old-object"),
+        before_state.get("proxy-final-old-object"),
+        "failed proxy upload changed old object bytes",
+    )
+    checks.equal(len(new_keys), 1, "failed proxy upload did not leave one fresh orphan")
+    checks.equal(
+        [call.get("op") for call in calls],
+        ["upload"],
+        "failed proxy upload performed an operation other than fresh upload",
+    )
+    if calls:
+        checks.true(
+            calls[0].get("key") in new_keys,
+            "proxy upload did not use the fresh orphan key",
+        )
+
+
+def assert_fm_copy_deep_target_preflight(ctx, checks):
+    add_file(ctx, "fm-deep-source", True)
+    add_file(ctx, "fm-deep-source/nested", True)
+    add_file(
+        ctx,
+        "fm-deep-source/nested/file.txt",
+        False,
+        "fm-deep-source-object",
+    )
+    add_file(ctx, "fm-deep-destination", True)
+    add_file(
+        ctx,
+        "fm-deep-destination/fm-deep-source/nested/file.txt",
+        False,
+        "fm-deep-collision-object",
+    )
+    before_db = db_state(ctx)
+    before_keys = ctx.fake.keys()
+    ctx.fake.clear_calls()
+
+    status, _ = api(
+        ctx,
+        "/api/fm/copy",
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://fm-deep-destination",
+            "sources": ["qiniu://fm-deep-source"],
+        },
+    )
+    checks.equal(status, 409, "FM deep target collision status")
+    checks.equal(db_state(ctx), before_db, "FM deep collision changed DB or ledger")
+    checks.equal(ctx.fake.keys(), before_keys, "FM deep collision changed objects")
+    checks.equal(ctx.fake.calls(), [], "FM deep collision reached Qiniu")
+
+
+def assert_webdav_copy_deep_target_preflight(ctx, checks):
+    add_file(ctx, "dav-deep-source", True)
+    add_file(ctx, "dav-deep-source/nested", True)
+    add_file(
+        ctx,
+        "dav-deep-source/nested/file.txt",
+        False,
+        "dav-deep-source-object",
+    )
+    add_file(ctx, "dav-deep-destination", True)
+    add_file(
+        ctx,
+        "dav-deep-destination/copied/nested/file.txt",
+        False,
+        "dav-deep-collision-object",
+    )
+    before_db = db_state(ctx)
+    before_keys = ctx.fake.keys()
+    ctx.fake.clear_calls()
+
+    status, _ = dav(
+        ctx,
+        "COPY",
+        "/dav/dav-deep-source",
+        {"Destination": "/dav/dav-deep-destination/copied"},
+    )
+    checks.equal(status, 409, "WebDAV deep target collision status")
+    checks.equal(db_state(ctx), before_db, "WebDAV deep collision changed DB or ledger")
+    checks.equal(ctx.fake.keys(), before_keys, "WebDAV deep collision changed objects")
+    checks.equal(ctx.fake.calls(), [], "WebDAV deep collision reached Qiniu")
+
+
+def assert_fm_copy_metadata_atomic(ctx, checks):
+    add_file(ctx, "fm-atomic-source", True)
+    add_file(ctx, "fm-atomic-source/nested", True)
+    add_file(
+        ctx,
+        "fm-atomic-source/nested/file.txt",
+        False,
+        "fm-atomic-source-object",
+    )
+    execute_sql(
+        ctx,
+        """
+        CREATE TRIGGER reject_fm_atomic_copy
+        BEFORE INSERT ON files
+        WHEN new.path = 'fm-atomic-parent/deep/fm-atomic-source/nested/file.txt'
+        BEGIN
+          SELECT raise(abort, 'reject FM atomic copy');
+        END;
+        """,
+    )
+    before_db = db_state(ctx)
+    before_keys = ctx.fake.keys()
+    ctx.fake.clear_calls()
+
+    status, _ = api(
+        ctx,
+        "/api/fm/copy",
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://fm-atomic-parent/deep",
+            "sources": ["qiniu://fm-atomic-source"],
+        },
+    )
+    checks.true(status >= 400, "FM final copy failure status")
+    checks.equal(
+        db_state(ctx), before_db, "FM final copy failure left partial metadata"
+    )
+    checks.true(
+        set(ctx.fake.keys()) > set(before_keys),
+        "FM atomic control did not reach object copy",
+    )
+    checks.true(
+        any(call.get("op") == "copy" for call in ctx.fake.calls()),
+        "FM atomic control did not exercise Qiniu copy",
+    )
+
+
+def assert_webdav_copy_metadata_atomic(ctx, checks):
+    add_file(ctx, "dav-atomic-source", True)
+    add_file(ctx, "dav-atomic-source/nested", True)
+    add_file(
+        ctx,
+        "dav-atomic-source/nested/file.txt",
+        False,
+        "dav-atomic-source-object",
+    )
+    add_file(ctx, "dav-atomic-parent", True)
+    execute_sql(
+        ctx,
+        """
+        CREATE TRIGGER reject_dav_atomic_copy
+        BEFORE INSERT ON files
+        WHEN new.path = 'dav-atomic-parent/copied/nested/file.txt'
+        BEGIN
+          SELECT raise(abort, 'reject WebDAV atomic copy');
+        END;
+        """,
+    )
+    before_db = db_state(ctx)
+    before_keys = ctx.fake.keys()
+    ctx.fake.clear_calls()
+
+    status, _ = dav(
+        ctx,
+        "COPY",
+        "/dav/dav-atomic-source",
+        {"Destination": "/dav/dav-atomic-parent/copied"},
+    )
+    checks.true(status >= 400, "WebDAV final copy failure status")
+    checks.equal(
+        db_state(ctx), before_db, "WebDAV final copy failure left partial metadata"
+    )
+    checks.true(
+        set(ctx.fake.keys()) > set(before_keys),
+        "WebDAV atomic control did not reach object copy",
+    )
+    checks.true(
+        any(call.get("op") == "copy" for call in ctx.fake.calls()),
+        "WebDAV atomic control did not exercise Qiniu copy",
+    )
 
 
 def assert_fm_external_effect_preflight(ctx, checks):
@@ -942,6 +1179,14 @@ ASSERTIONS = [
     ("webdav.full-ancestor.preflight", assert_webdav_full_ancestor),
     ("webdav.missing-parent.rejects", assert_webdav_missing_parent),
     ("webdav.reverse-overlap.rejects", assert_webdav_reverse_overlap),
+    ("fm.upload.final-write-isolated", assert_proxy_upload_final_rejection),
+    ("fm.copy.deep-target-preflight", assert_fm_copy_deep_target_preflight),
+    (
+        "webdav.copy.deep-target-preflight",
+        assert_webdav_copy_deep_target_preflight,
+    ),
+    ("fm.copy.metadata-atomic", assert_fm_copy_metadata_atomic),
+    ("webdav.copy.metadata-atomic", assert_webdav_copy_metadata_atomic),
 ]
 
 

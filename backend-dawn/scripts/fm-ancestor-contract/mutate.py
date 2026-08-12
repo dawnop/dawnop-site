@@ -6,6 +6,7 @@ from pathlib import Path
 
 MUTANTS = (
     "immediate-tx-as-deferred",
+    "immediate-tx-panic-no-rollback",
     "repo-file-ancestor-fail-open",
     "repo-immediate-parent-only",
     "repo-directory-target-fail-open",
@@ -15,10 +16,17 @@ MUTANTS = (
     "repo-fm-reparent-split-transaction",
     "repo-webdav-strict-reparent-uses-fm",
     "repo-file-upsert-disappeared-ok",
+    "repo-empty-subtree-ok",
+    "repo-copy-skip-source-revalidation",
+    "repo-copy-skip-target-revalidation",
     "repo-literal-prefix-use-like",
     "repo-subtree-child-first",
+    "repo-fm-copy-split-transaction",
+    "repo-webdav-copy-split-transaction",
     "fm-reject-missing-ancestor",
     "fm-preflight-after-qiniu",
+    "fm-upload-reuse-existing-key",
+    "fm-copy-root-only-preflight",
     "fm-skip-directory-target-preflight",
     "fm-skip-upload-token-preflight",
     "fm-register-gc-before-preflight",
@@ -29,6 +37,7 @@ MUTANTS = (
     "webdav-skip-full-ancestor-validation",
     "webdav-missing-parent-fail-open",
     "webdav-reverse-overlap-fail-open",
+    "webdav-copy-root-only-preflight",
 )
 
 
@@ -67,6 +76,12 @@ def main() -> int:
             db_sql,
             '  let _b = exec(c, "begin immediate", [])?\n',
             '  let _b = exec(c, "begin", [])?\n',
+        )
+    elif args.mutant == "immediate-tx-panic-no-rollback":
+        replace_once(
+            db_sql,
+            "  bracket(c, h => rollback_immediate(h), _h => finish_immediate_tx(c, body))\n",
+            "  finish_immediate_tx(c, body)\n",
         )
     elif args.mutant == "repo-file-ancestor-fail-open":
         replace_once(
@@ -211,6 +226,30 @@ def main() -> int:
             '      None -> Err("file upsert target disappeared: ${full(rel)}")\n',
             "      None -> Ok(n)\n",
         )
+    elif args.mutant == "repo-empty-subtree-ok":
+        replace_once(
+            repo,
+            "fn validate_present_subtree(rows: List[FileRow], old_rel: String) -> Result[Unit, String] !io =\n"
+            "  if len(rows) == 0 {\n"
+            '    Err(conflict("源不存在：${full(old_rel)}"))\n'
+            "  } else {\n"
+            "    validate_subtree_rows(rows, old_rel, 0)\n"
+            "  }\n",
+            "fn validate_present_subtree(rows: List[FileRow], old_rel: String) -> Result[Unit, String] !io =\n"
+            "  validate_subtree_rows(rows, old_rel, 0)\n",
+        )
+    elif args.mutant == "repo-copy-skip-source-revalidation":
+        replace_once(
+            repo,
+            "  let _s = validate_copy_snapshots(c, trees, 0)?\n",
+            "  let _s = ()\n",
+        )
+    elif args.mutant == "repo-copy-skip-target-revalidation":
+        replace_once(
+            repo,
+            "  let _t = validate_copy_targets(c, trees)?\n",
+            "  let _t = ()\n",
+        )
     elif args.mutant == "repo-literal-prefix-use-like":
         replace_once(
             repo,
@@ -233,11 +272,27 @@ def main() -> int:
             "  let rows = query(c, \"select $COLS from files where path = ? or instr(path, ? || '/') = 1 order by path\", [PStr(rel), PStr(rel)], col_types())?\n",
             "  let rows = query(c, \"select $COLS from files where path = ? or instr(path, ? || '/') = 1 order by path desc\", [PStr(rel), PStr(rel)], col_types())?\n",
         )
+    elif args.mutant == "repo-fm-copy-split-transaction":
+        replace_once(
+            repo,
+            "pub fn commit_fm_copies(c: DbConn, trees: List[CopyTree]) -> Result[Int, String] !io =\n"
+            "  with_immediate_tx(c, () => commit_copy_trees_tx(c, trees, FillMissingCopyAncestors))\n",
+            "pub fn commit_fm_copies(c: DbConn, trees: List[CopyTree]) -> Result[Int, String] !io =\n"
+            "  commit_copy_trees_tx(c, trees, FillMissingCopyAncestors)\n",
+        )
+    elif args.mutant == "repo-webdav-copy-split-transaction":
+        replace_once(
+            repo,
+            "pub fn commit_webdav_copy(c: DbConn, tree: CopyTree) -> Result[Int, String] !io =\n"
+            "  with_immediate_tx(c, () => commit_copy_trees_tx(c, [tree], RequireExistingCopyAncestors))\n",
+            "pub fn commit_webdav_copy(c: DbConn, tree: CopyTree) -> Result[Int, String] !io =\n"
+            "  commit_copy_trees_tx(c, [tree], RequireExistingCopyAncestors)\n",
+        )
     elif args.mutant == "fm-reject-missing-ancestor":
         replace_once(
             service,
-            "use repo/repo_fm.{FileRow, fs_data, taken, insert_folder, insert_file, reparent_allow_missing, reparent_fill_missing, get_row, delete_row, subtree_rows, entry_json, validate_fm_ancestors, validate_fm_file_target, validate_subtree_destination}\n",
-            "use repo/repo_fm.{FileRow, fs_data, taken, insert_folder, insert_folder_strict, insert_file, reparent_allow_missing, reparent_fill_missing, get_row, delete_row, subtree_rows, entry_json, validate_fm_ancestors, validate_fm_file_target, validate_subtree_destination}\n",
+            "use repo/repo_fm.{FileRow, CopiedRow, CopyTree, fs_data, taken, insert_folder, insert_file, reparent_allow_missing, reparent_fill_missing, get_row, delete_row, subtree_rows, entry_json, validate_fm_ancestors, validate_fm_file_target, validate_subtree_destination, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}\n",
+            "use repo/repo_fm.{FileRow, CopiedRow, CopyTree, fs_data, taken, insert_folder, insert_folder_strict, insert_file, reparent_allow_missing, reparent_fill_missing, get_row, delete_row, subtree_rows, entry_json, validate_fm_ancestors, validate_fm_file_target, validate_subtree_destination, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}\n",
         )
         replace_once(
             service,
@@ -251,6 +306,27 @@ def main() -> int:
             "  validate_fm_ancestors(c, rel)\n",
             "fn validate_effect_ancestors(_c: DbConn, _rel: String) -> Result[Unit, String] !io =\n"
             "  Ok(())\n",
+        )
+    elif args.mutant == "fm-upload-reuse-existing-key":
+        replace_once(
+            service,
+            "fn upload_key(_existing: Option[FileRow]) -> String !io = uuid_hex()\n",
+            "fn upload_key(existing: Option[FileRow]) -> String !io =\n"
+            "  match existing {\n"
+            "    Some(o) -> match o.key { Some(k) -> k, None -> uuid_hex() }\n"
+            "    None -> uuid_hex()\n"
+            "  }\n",
+        )
+    elif args.mutant == "fm-copy-root-only-preflight":
+        replace_once(
+            repo,
+            "fn validate_prepare_fm_copy_targets(c: DbConn, tree: CopyTree) -> Result[Unit, String] !io =\n"
+            "  validate_copy_targets(c, [tree])\n",
+            "fn validate_prepare_fm_copy_targets(c: DbConn, tree: CopyTree) -> Result[Unit, String] !io =\n"
+            "  match get_row(c, tree.destination_root)? {\n"
+            '    Some(_) -> Err(conflict("复制目标已存在：${full(tree.destination_root)}"))\n'
+            "    None -> Ok(())\n"
+            "  }\n",
         )
     elif args.mutant == "fm-skip-directory-target-preflight":
         replace_once(
@@ -410,6 +486,17 @@ def main() -> int:
             '  str.starts_with(rel, dst ++ "/")\n',
             "fn destination_is_source_ancestor(_rel: String, _dst: String) -> Bool =\n"
             "  false\n",
+        )
+    elif args.mutant == "webdav-copy-root-only-preflight":
+        replace_once(
+            repo,
+            "fn validate_prepare_webdav_copy_targets(c: DbConn, tree: CopyTree) -> Result[Unit, String] !io =\n"
+            "  validate_copy_targets(c, [tree])\n",
+            "fn validate_prepare_webdav_copy_targets(c: DbConn, tree: CopyTree) -> Result[Unit, String] !io =\n"
+            "  match get_row(c, tree.destination_root)? {\n"
+            '    Some(_) -> Err(conflict("复制目标已存在：${full(tree.destination_root)}"))\n'
+            "    None -> Ok(())\n"
+            "  }\n",
         )
     return 0
 

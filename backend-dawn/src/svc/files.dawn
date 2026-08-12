@@ -23,7 +23,7 @@ use db/sql.{DbConn}
 use svc/auth.{Auth, Qiniu}
 use db/db.{with_db}
 use util/paths.{fm_split, basename, ext, fm_join, full, guess_mime, strip_slashes, strip_trailing_slash}
-use repo/repo_fm.{FileRow, fs_data, taken, insert_folder, insert_file, reparent_allow_missing, reparent_fill_missing, get_row, delete_row, subtree_rows, entry_json, validate_fm_ancestors, validate_fm_file_target, validate_subtree_destination}
+use repo/repo_fm.{FileRow, CopiedRow, CopyTree, fs_data, taken, insert_folder, insert_file, reparent_allow_missing, reparent_fill_missing, get_row, delete_row, subtree_rows, entry_json, validate_fm_ancestors, validate_fm_file_target, validate_subtree_destination, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}
 use util/crypto.{uuid_hex}
 use qiniu/sign.{private_url}
 use qiniu/rs.{delete_obj, copy_obj, upload_text, upload_bytes}
@@ -179,71 +179,70 @@ fn apply_move(c: DbConn, sources: List[String], dest: String, cur: String, i: In
 
 pub fn do_copy(q: Qiniu, c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
   {
-    let _p = preflight_copy(c, sources, dest, i)?
-    apply_copy(q, c, sources, dest, cur, i)
+    let planned = plan_fm_copies(c, sources, dest, i, [])?
+    let _u = validate_copy_plan_targets(planned)?
+    let copied = copy_tree_list_objects(q, planned, 0, [])?
+    let _db = commit_fm_copies(c, copied)?
+    fs_data(c, cur)
   }
 
-fn preflight_copy(c: DbConn, sources: List[String], dest: String, i: Int) -> Result[Unit, String] !io =
+fn plan_fm_copies(c: DbConn, sources: List[String], dest: String, i: Int, acc: List[CopyTree]) -> Result[List[CopyTree], String] !io =
   if i >= len(sources) {
-    Ok(())
+    Ok(acc)
   } else {
     let src = fm_split(sources[i])
     if src == "" {
-      preflight_copy(c, sources, dest, i + 1)
+      plan_fm_copies(c, sources, dest, i + 1, acc)
     } else {
       let new_rel = fm_join(dest, basename(src))
       if str.starts_with(new_rel, "$src/") {
-        preflight_copy(c, sources, dest, i + 1)
+        plan_fm_copies(c, sources, dest, i + 1, acc)
       } else {
         let t = taken(c, new_rel)?
         if t {
           Err(conflict("已存在同名项：${basename(new_rel)}"))
         } else {
-          let _v = validate_effect_path(c, new_rel)?
-          let _s = validate_subtree_destination(c, src, new_rel)?
-          preflight_copy(c, sources, dest, i + 1)
+          let tree = prepare_fm_copy(c, src, new_rel)?
+          plan_fm_copies(c, sources, dest, i + 1, acc ++ [tree])
         }
       }
     }
   }
 
-fn apply_copy(q: Qiniu, c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
-  if i >= len(sources) {
-    fs_data(c, cur)
+fn copy_tree_list_objects(q: Qiniu, trees: List[CopyTree], i: Int, acc: List[CopyTree]) -> Result[List[CopyTree], String] !io =
+  if i >= len(trees) {
+    Ok(acc)
   } else {
-    let src = fm_split(sources[i])
-    if src == "" {
-      apply_copy(q, c, sources, dest, cur, i + 1)
-    } else {
-      let new_rel = fm_join(dest, basename(src))
-      if str.starts_with(new_rel, "$src/") {
-        apply_copy(q, c, sources, dest, cur, i + 1)
-      } else {
-        let rows = subtree_rows(c, src)?
-        let _cp = copy_rows(q, c, rows, src, new_rel, 0)?
-        apply_copy(q, c, sources, dest, cur, i + 1)
-      }
-    }
+    let copied = copy_tree_objects(q, trees[i])?
+    copy_tree_list_objects(q, trees, i + 1, acc ++ [copied])
   }
 
-fn copy_rows(q: Qiniu, c: DbConn, rows: List[FileRow], src: String, new_rel: String, i: Int) -> Result[Int, String] !io =
+## Copy every keyed file in a prepared tree to a fresh object key. Metadata is
+## not touched here; the caller commits the returned plan as one transaction.
+pub fn copy_tree_objects(q: Qiniu, tree: CopyTree) -> Result[CopyTree, String] !io = {
+  let rows = copy_tree_object_rows(q, tree.rows, 0, [])?
+  Ok(CopyTree {
+    source_root: tree.source_root,
+    destination_root: tree.destination_root,
+    rows: rows,
+  })
+}
+
+fn copy_tree_object_rows(q: Qiniu, rows: List[CopiedRow], i: Int, acc: List[CopiedRow]) -> Result[List[CopiedRow], String] !io =
   if i >= len(rows) {
-    Ok(0)
+    Ok(acc)
   } else {
-    let o = rows[i]
-    let dst_path = rebase(src, new_rel, o.path)
-    let _one = if o.is_dir {
-      insert_folder(c, dst_path)?
+    let row = rows[i]
+    let copied_key: Option[String] = if row.source.is_dir {
+      None
     } else {
-      match o.key {
-        Some(k) -> {
-          let new_key = copy_object(q, k)?
-          insert_file(c, dst_path, new_key, o.content_type, o.size)?
-        }
-        None -> 0
+      match row.source.key {
+        Some(key) -> Some(copy_object(q, key)?)
+        None -> None
       }
     }
-    copy_rows(q, c, rows, src, new_rel, i + 1)
+    let copied = CopiedRow { source: row.source, copied_key: copied_key }
+    copy_tree_object_rows(q, rows, i + 1, acc ++ [copied])
   }
 
 # ---- delete ----
@@ -358,7 +357,9 @@ pub fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int)
   let existing = checked?
   let key = upload_key(existing)
   let _up = upload_bytes(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_s() + a.qiniu.expires)?
-  with_db(a.db.path, a.db.ext, c => upsert_upload(c, rel, key, mime, size))
+  let uploaded = with_db(a.db.path, a.db.ext, c => upsert_upload(c, rel, key, mime, size))?
+  let _gc = gc_superseded(a.qiniu, existing, key)
+  Ok(uploaded)
 }
 
 fn validate_effect_path(c: DbConn, rel: String) -> Result[Unit, String] !io = {
@@ -372,18 +373,10 @@ fn validate_effect_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io
 fn validate_effect_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
   validate_fm_file_target(c, rel)
 
-# Reuse an existing file's key (overwrite in place, matching FastAPI), else mint
-# a fresh uuid. Directory targets are rejected by validate_effect_path first;
-# the directory branch remains a defensive fallback for direct helper use.
-fn upload_key(existing: Option[FileRow]) -> String !io =
-  match existing {
-    Some(o) ->
-      match o.key {
-        Some(k) -> if o.is_dir { uuid_hex() } else { k }
-        None -> uuid_hex()
-      }
-    None -> uuid_hex()
-  }
+# Proxy uploads always use a fresh key. If the final metadata write rejects a
+# concurrent tree change, the old row still points at untouched bytes and only
+# the unreferenced new object needs later collection.
+fn upload_key(_existing: Option[FileRow]) -> String !io = uuid_hex()
 
 fn upsert_upload(c: DbConn, rel: String, key: String, mime: String, size: Int) -> Result[Json, String] !io = {
   let _i = insert_file(c, rel, key, mime, size)?
