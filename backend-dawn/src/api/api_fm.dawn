@@ -14,7 +14,7 @@ use db/db.{with_db}
 use svc/auth.{Auth, guarded, guarded_flexible}
 use util/jsonread.{body_obj, str_or, str_list, opt_int}
 use util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime}
-use repo/repo_fm.{fs_data, ensure_dirs, insert_file, get_row, ledger_insert, ledger_delete, search_files, entry_json, stats_db}
+use repo/repo_fm.{FileRow, fs_data, ensure_dirs, insert_file, get_row, ledger_insert, ledger_delete, search_files, entry_json, stats_db, validate_fm_ancestors, validate_fm_file_target}
 use svc/files.{signed_url, gc_superseded, mk_folder, do_rename, do_move, do_copy, do_delete,
   item_paths, merge_deleted, do_create_file, do_save, run_upload, sanitize_name, token_rel }
 use repo/repo_settings.{setting_int}
@@ -53,7 +53,7 @@ pub fn create_folder(a: Auth) -> Handler =
           Err(http_error(400, "缺少 name"))
         } else {
           let rel = fm_join(cur, name)
-          match as_http(with_db(a.db.path, a.db.ext, c => mk_folder(c, rel, cur)), 500)? {
+          match as_http_with(with_db(a.db.path, a.db.ext, c => mk_folder(c, rel, cur)), conflict_or(500))? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
           }
@@ -73,7 +73,7 @@ pub fn rename(a: Auth) -> Handler =
           Err(http_error(400, "缺少 item / name"))
         } else {
           let new_rel = fm_join(parent_rel(old), new_name)
-          match as_http(with_db(a.db.path, a.db.ext, c => do_rename(c, old, new_rel, cur)), 500)? {
+          match as_http_with(with_db(a.db.path, a.db.ext, c => do_rename(c, old, new_rel, cur)), conflict_or(500))? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(409, "已存在同名项：${basename(new_rel)}"))
           }
@@ -314,6 +314,7 @@ pub fn upload_token_ep(a: Auth) -> Handler =
     let m = as_http(body_obj(req.body), 422)?
     let raw_name = str_or(m, "name", "")
     let rel = token_rel(str_or(m, "path", ""), raw_name)
+    let _p = as_http_with(with_db(a.db.path, a.db.ext, c => upload_token_preflight(c, rel)), conflict_or(500))?
     let e = ext(sanitize_name(raw_name))
     let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
     let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_s() + a.qiniu.expires)
@@ -335,6 +336,14 @@ pub fn upload_token_ep(a: Auth) -> Handler =
 
 fn ledger(c: DbConn, key: String, rel: String) -> Result[Int, String] !io =
   ledger_insert(c, key, full(rel))
+
+fn upload_token_preflight(c: DbConn, rel: String) -> Result[Unit, String] !io = {
+  let _a = upload_token_ancestor_preflight(c, rel)?
+  validate_fm_file_target(c, rel)
+}
+
+fn upload_token_ancestor_preflight(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  validate_fm_ancestors(c, rel)
 
 fn qparam(req: Request, name: String) -> String = unwrap_or(query(req, name), "")
 
@@ -364,7 +373,7 @@ pub fn create_file(a: Auth) -> Handler =
           Err(http_error(400, "缺少 name"))
         } else {
           let rel = fm_join(cur, name)
-          match as_http(do_create_file(a, rel, cur), 502)? {
+          match as_http_with(do_create_file(a, rel, cur), conflict_or(502))? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
           }
@@ -384,7 +393,7 @@ pub fn save(a: Auth) -> Handler =
         if rel == "" {
           Err(http_error(400, "缺少 path"))
         } else {
-          Ok(json_ok(as_http(do_save(a, rel, content), 502)?))
+          Ok(json_ok(as_http_with(do_save(a, rel, content), conflict_or(502))?))
         }
       })
 
@@ -414,27 +423,31 @@ pub fn register(a: Auth) -> Handler =
         if rel == "" || key == "" {
           Err(http_error(400, "缺少 path / key"))
         } else {
+          let existing = as_http_with(register_preflight(a, rel, key), conflict_or(500))?
           let r = as_http(stat(a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key), 502)?
           if r.status == 200 {
-            Ok(json_ok(as_http(register_row(a, rel, key, r.body, opt_int(m, "size"), str_or(m, "content_type", "")), 500)?))
+            Ok(json_ok(as_http_with(register_row(a, rel, key, r.body, opt_int(m, "size"), str_or(m, "content_type", ""), existing), conflict_or(500))?))
           } else {
             Err(http_error(400, "对象未在七牛找到，注册被拒"))
           }
         }
       })
 
-fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint: Option[Int], ct_hint: String) -> Result[Json, String] !io = {
+fn register_preflight(a: Auth, rel: String, _key: String) -> Result[Option[FileRow], String] !io =
+  with_db(a.db.path, a.db.ext, c => {
+    let _a = validate_fm_ancestors(c, rel)?
+    let _t = validate_fm_file_target(c, rel)?
+    get_row(c, rel)
+  })
+
+fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint: Option[Int], ct_hint: String, existing: Option[FileRow]) -> Result[Json, String] !io = {
   # qiniu's stat is authoritative for size/mime; fall back to the client's
   # reported values, then a name-based guess, exactly like FastAPI's
   #   size = fsize or payload.size or 0
   #   mime = mimeType or content_type or _guess_mime(basename)
   let size = reg_size(stat_body, size_hint)
   let mime = reg_mime(stat_body, ct_hint, rel)
-  # overwrite: if a file already sits at this path under a different key, its old
-  # qiniu object is about to be orphaned — drop it (best-effort, ignore failure).
-  let existing = with_db(a.db.path, a.db.ext, c => get_row(c, rel))?
-  let _gc = gc_superseded(a.qiniu, existing, key)
-  with_db(a.db.path, a.db.ext, c => {
+  let written: Result[Json, String] = with_db(a.db.path, a.db.ext, c => {
     let _e = ensure_dirs(c, rel)?
     let _i = insert_file(c, rel, key, mime, size)?
     let _l = ledger_delete(c, key)?
@@ -445,6 +458,11 @@ fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint:
       None -> Err("registered file vanished")
     }
   })
+  let entry = written?
+  # The old object is collected only after the row points at the verified new
+  # object. A failed preflight or database write therefore cannot destroy it.
+  let _gc = gc_superseded(a.qiniu, existing, key)
+  Ok(entry)
 }
 
 # fsize of 0 (absent or genuinely empty) falls through to the client hint, then 0
@@ -532,7 +550,7 @@ fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpErro
   let rel = fm_join(target, name)
   let mime = if fp.content_type != "" { fp.content_type } else { guess_mime(name) }
   let size = bytes.len(fp.content)
-  Ok(json_ok(as_http(run_upload(a, rel, fp.content, mime, size), 502)?))
+  Ok(json_ok(as_http_with(run_upload(a, rel, fp.content, mime, size), conflict_or(502))?))
 }
 
 pub fn routes(a: Auth, space_cell: TtlCell, respack_cell: TtlCell) -> List[Route] =

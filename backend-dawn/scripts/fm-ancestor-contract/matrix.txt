@@ -1,0 +1,15 @@
+# Versioned, hand-owned red set. There is no record mode.
+version=2
+repo-file-ancestor-fail-open|test|insert_folder rejects an existing file ancestor
+repo-immediate-parent-only|test|insert_file checks ancestors above an existing parent row
+repo-directory-target-fail-open|test|insert_file rejects an existing directory target
+fm-reject-missing-ancestor|contract|fm.missing-ancestors.auto-created
+fm-preflight-after-qiniu|contract|fm.external-effects.preflight
+fm-skip-directory-target-preflight|contract|fm.directory-target.preflight
+fm-skip-upload-token-preflight|contract|fm.upload-token.preflight
+fm-register-gc-before-preflight|contract|fm.register.preflight
+fm-skip-reparent-validation|contract|fm.reparent.preflight
+fm-map-conflict-as-default|contract|fm.conflict.maps-409
+repo-subtree-shape-fail-open|contract|subtree.internal-shape.preflight
+webdav-skip-full-ancestor-validation|contract|webdav.full-ancestor.preflight
+webdav-missing-parent-fail-open|contract|webdav.missing-parent.rejects

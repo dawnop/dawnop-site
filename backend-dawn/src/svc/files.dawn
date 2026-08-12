@@ -23,7 +23,7 @@ use db/sql.{DbConn}
 use svc/auth.{Auth, Qiniu}
 use db/db.{with_db}
 use util/paths.{fm_split, basename, ext, fm_join, full, guess_mime, strip_slashes, strip_trailing_slash}
-use repo/repo_fm.{FileRow, fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, delete_row, subtree_rows, entry_json}
+use repo/repo_fm.{FileRow, fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, delete_row, subtree_rows, entry_json, validate_fm_ancestors, validate_fm_file_target, validate_subtree_destination}
 use util/crypto.{uuid_hex}
 use qiniu/sign.{private_url}
 use qiniu/rs.{delete_obj, copy_obj, upload_text, upload_bytes}
@@ -51,13 +51,9 @@ pub fn rebase(src_root: String, dst_root: String, path: String) -> String =
 ## differs from the one just written. Directories carry no key (insert_folder
 ## stores NULL), so a normal directory answers None and is never touched.
 ##
-## Keyed off the key alone, deliberately. The three call sites this replaced did
-## not agree: fm's register also required `is_dir == false`, while fm's save and
-## WebDAV's put looked at the key only. That only diverges for a row that is both
-## a directory and an object — which `insert_file`'s upsert can mint, since it
-## rewrites `key` without clearing `is_dir`. In that state the old key is
-## unreferenced either way (the row now names the new one), so collecting it can
-## never strand a live file; the `is_dir` variant just leaked the object.
+## Keyed off the key alone deliberately. New writes reject directory targets,
+## but a legacy mixed row may still carry an object key; if a caller has already
+## replaced that key, collecting the old object is safer than leaking it.
 pub fn superseded_key(existing: Option[FileRow], new_key: String) -> Option[String] =
   match existing {
     Some(o) ->
@@ -131,25 +127,49 @@ pub fn do_rename(c: DbConn, old: String, new_rel: String, cur: String) -> Result
   }
 
 pub fn do_move(c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
+  {
+    let _p = preflight_move(c, sources, dest, i)?
+    apply_move(c, sources, dest, cur, i)
+  }
+
+fn preflight_move(c: DbConn, sources: List[String], dest: String, i: Int) -> Result[Unit, String] !io =
   if i >= len(sources) {
-    fs_data(c, cur)
+    Ok(())
   } else {
     let src = fm_split(sources[i])
     if src == "" {
-      do_move(c, sources, dest, cur, i + 1)
+      preflight_move(c, sources, dest, i + 1)
     } else {
       let new_rel = fm_join(dest, basename(src))
       if new_rel == src || str.starts_with(new_rel, "$src/") {
-        do_move(c, sources, dest, cur, i + 1)
+        preflight_move(c, sources, dest, i + 1)
       } else {
         let t = taken(c, new_rel)?
         if t {
           Err(conflict("已存在同名项：${basename(new_rel)}"))
         } else {
-          let _e = ensure_dirs(c, new_rel)?
-          let _r = reparent(c, src, new_rel)?
-          do_move(c, sources, dest, cur, i + 1)
+          let _v = validate_subtree_destination(c, src, new_rel)?
+          preflight_move(c, sources, dest, i + 1)
         }
+      }
+    }
+  }
+
+fn apply_move(c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
+  if i >= len(sources) {
+    fs_data(c, cur)
+  } else {
+    let src = fm_split(sources[i])
+    if src == "" {
+      apply_move(c, sources, dest, cur, i + 1)
+    } else {
+      let new_rel = fm_join(dest, basename(src))
+      if new_rel == src || str.starts_with(new_rel, "$src/") {
+        apply_move(c, sources, dest, cur, i + 1)
+      } else {
+        let _e = ensure_dirs(c, new_rel)?
+        let _r = reparent(c, src, new_rel)?
+        apply_move(c, sources, dest, cur, i + 1)
       }
     }
   }
@@ -157,26 +177,51 @@ pub fn do_move(c: DbConn, sources: List[String], dest: String, cur: String, i: I
 # ---- copy (dirs are recreated, files get a fresh qiniu object) ----
 
 pub fn do_copy(q: Qiniu, c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
+  {
+    let _p = preflight_copy(c, sources, dest, i)?
+    apply_copy(q, c, sources, dest, cur, i)
+  }
+
+fn preflight_copy(c: DbConn, sources: List[String], dest: String, i: Int) -> Result[Unit, String] !io =
   if i >= len(sources) {
-    fs_data(c, cur)
+    Ok(())
   } else {
     let src = fm_split(sources[i])
     if src == "" {
-      do_copy(q, c, sources, dest, cur, i + 1)
+      preflight_copy(c, sources, dest, i + 1)
     } else {
       let new_rel = fm_join(dest, basename(src))
       if str.starts_with(new_rel, "$src/") {
-        do_copy(q, c, sources, dest, cur, i + 1)
+        preflight_copy(c, sources, dest, i + 1)
       } else {
         let t = taken(c, new_rel)?
         if t {
           Err(conflict("已存在同名项：${basename(new_rel)}"))
         } else {
-          let _e = ensure_dirs(c, new_rel)?
-          let rows = subtree_rows(c, src)?
-          let _cp = copy_rows(q, c, rows, src, new_rel, 0)?
-          do_copy(q, c, sources, dest, cur, i + 1)
+          let _v = validate_effect_path(c, new_rel)?
+          let _s = validate_subtree_destination(c, src, new_rel)?
+          preflight_copy(c, sources, dest, i + 1)
         }
+      }
+    }
+  }
+
+fn apply_copy(q: Qiniu, c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
+  if i >= len(sources) {
+    fs_data(c, cur)
+  } else {
+    let src = fm_split(sources[i])
+    if src == "" {
+      apply_copy(q, c, sources, dest, cur, i + 1)
+    } else {
+      let new_rel = fm_join(dest, basename(src))
+      if str.starts_with(new_rel, "$src/") {
+        apply_copy(q, c, sources, dest, cur, i + 1)
+      } else {
+        let _e = ensure_dirs(c, new_rel)?
+        let rows = subtree_rows(c, src)?
+        let _cp = copy_rows(q, c, rows, src, new_rel, 0)?
+        apply_copy(q, c, sources, dest, cur, i + 1)
       }
     }
   }
@@ -252,7 +297,11 @@ pub fn merge_deleted(base: Json, deleted: List[Json]) -> Json =
 # ---- create empty file / save text ----
 
 pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json], String] !io = {
-  let t = with_db(a.db.path, a.db.ext, c => taken(c, rel))?
+  let checked: Result[Bool, String] = with_db(a.db.path, a.db.ext, c => {
+    let _v = validate_effect_path(c, rel)?
+    taken(c, rel)
+  })
+  let t = checked?
   if t {
     Ok(None)
   } else {
@@ -272,7 +321,11 @@ fn create_file_db(c: DbConn, rel: String, key: String, mime: String, cur: String
 
 ## Write text to a NEW qiniu key, repoint the row, drop the old key. Returns {path}.
 pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !io = {
-  let existing = with_db(a.db.path, a.db.ext, c => get_row(c, rel))?
+  let checked: Result[Option[FileRow], String] = with_db(a.db.path, a.db.ext, c => {
+    let _v = validate_effect_path(c, rel)?
+    get_row(c, rel)
+  })
+  let existing = checked?
   let mime = save_mime(existing, rel)
   let new_key = save_key(rel)
   let _up = upload_text(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, new_key, content, mime, now_s() + a.qiniu.expires)?
@@ -300,14 +353,30 @@ fn save_key(rel: String) -> String !io = {
 # ---- proxy upload ----
 
 pub fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int) -> Result[Json, String] !io = {
-  let existing = with_db(a.db.path, a.db.ext, c => get_row(c, rel))?
+  let checked: Result[Option[FileRow], String] = with_db(a.db.path, a.db.ext, c => {
+    let _v = validate_effect_path(c, rel)?
+    get_row(c, rel)
+  })
+  let existing = checked?
   let key = upload_key(existing)
   let _up = upload_bytes(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_s() + a.qiniu.expires)?
   with_db(a.db.path, a.db.ext, c => upsert_upload(c, rel, key, mime, size))
 }
 
-# reuse an existing file's key (overwrite in place, matching FastAPI), else a fresh
-# uuid; a directory at that path is not a file so it gets a fresh key too.
+fn validate_effect_path(c: DbConn, rel: String) -> Result[Unit, String] !io = {
+  let _a = validate_effect_ancestors(c, rel)?
+  validate_effect_target(c, rel)
+}
+
+fn validate_effect_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  validate_fm_ancestors(c, rel)
+
+fn validate_effect_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  validate_fm_file_target(c, rel)
+
+# Reuse an existing file's key (overwrite in place, matching FastAPI), else mint
+# a fresh uuid. Directory targets are rejected by validate_effect_path first;
+# the directory branch remains a defensive fallback for direct helper use.
 fn upload_key(existing: Option[FileRow]) -> String !io =
   match existing {
     Some(o) ->

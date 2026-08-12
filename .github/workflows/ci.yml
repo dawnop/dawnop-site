@@ -80,12 +80,16 @@ jobs:
         run: >-
           shellcheck backend-dawn/deploy/*.sh backend-dawn/build.sh
           backend-dawn/scripts/db-connection-boundary-mutants/run.sh
+          backend-dawn/scripts/fm-ancestor-contract/run.sh
           backend-dawn/scripts/http-body-boundary-mutants/run.sh
           backend-dawn/scripts/response-stream-boundary-mutants/run.sh
           backend-dawn/scripts/webdav-destination-mutants/run.sh scripts/fetch-dawn.sh
 
   backend:
     runs-on: ubuntu-latest
+    # All backend gate commands took 635s in one serial local run on 2026-08-12.
+    # budget: 3x 635s worst observed
+    timeout-minutes: 32
     steps:
       - uses: actions/checkout@v4
 
@@ -141,6 +145,9 @@ jobs:
 
       - name: WebDAV Destination mutation contract
         run: backend-dawn/scripts/webdav-destination-mutants/run.sh
+
+      - name: FM ancestor mutation contract
+        run: backend-dawn/scripts/fm-ancestor-contract/run.sh
 
       # The contract scripts (read / edge / WebDAV) were written during M6 to
       # diff Dawn against FastAPI request by request. That needed both backends

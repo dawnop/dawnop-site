@@ -27,19 +27,19 @@ use java "java.text.SimpleDateFormat"
 use java "java.util.Date"
 use java "java.util.Locale"
 use java "java.util.TimeZone"
-use web/types.{Request, Response, HttpError, Handler, http_error, as_http, text, raw, binary, redirect, with_header, header, param_segs}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, text, raw, binary, redirect, with_header, header, param_segs}
 use web/router.{Route, route_method_of, tagged}
 use db/db.{with_db}
 use svc/auth.{Auth, Qiniu, check_basic}
 use svc/files.{signed_url, gc_superseded, delete_object_of, rebase, copy_object}
-use repo/repo_fm.{FileRow, get_row, children, subtree_rows, insert_file, insert_folder, delete_row, reparent}
+use repo/repo_fm.{FileRow, get_row, children, subtree_rows, insert_file, insert_folder, delete_row, reparent, validate_webdav_ancestors, validate_webdav_subtree_destination}
 use util/paths.{basename, parent_rel, ext, ts, guess_mime}
 use qiniu/rs.{upload_file}
 use java "java.io.File"
 use util/crypto.{sha256_hex, uuid, uuid_hex}
 use util/http.{fetch_stream, ok_stream, stream_response, close_stream}
 use util/ttl.{TtlCell, cache_get, cache_put, now_s}
-use util/errkind.{KUpstream, as_upstream, split_kind}
+use util/errkind.{KConflict, KUpstream, as_upstream, split_kind}
 use svc/export.{url_encode}
 
 const AUTH_TTL: Int = 300
@@ -339,14 +339,27 @@ fn parent_is_directory(parent: String, row: Option[FileRow]) -> Bool =
   }
 
 fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {
-  let parent = parent_rel(rel)
-  if parent == "" {
-    Ok(true)
-  } else {
-    let row = with_db(a.db.path, a.db.ext, c => get_row(c, parent))?
-    Ok(parent_is_directory(parent, row))
+  let checked = with_db(a.db.path, a.db.ext, c => validate_webdav_ancestors(c, rel))
+  match checked {
+    Ok(_) -> Ok(true)
+    Err(m) -> {
+      let (k, _t) = split_kind(m)
+      match k {
+        KConflict -> Ok(false)
+        _ -> Err(m)
+      }
+    }
   }
 }
+
+fn conflict_or(other: Int) -> fn(String) -> HttpError =
+  msg => {
+    let (k, t) = split_kind(msg)
+    match k {
+      KConflict -> http_error(409, t)
+      _ -> http_error(other, t)
+    }
+  }
 
 # ---- PUT ----
 
@@ -389,7 +402,7 @@ fn put_do(a: Auth, req: Request, rel: String, existing: Option[FileRow]) -> Resu
 
 fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int, existing: Option[FileRow]) -> Result[Response, HttpError] !io =
   {
-    let _i = as_http(with_db(a.db.path, a.db.ext, c => insert_file(c, rel, key, mime, size)), 500)?
+    let _i = as_http_with(with_db(a.db.path, a.db.ext, c => insert_file(c, rel, key, mime, size)), conflict_or(500))?
     let _d = gc_superseded(a.qiniu, existing, key)
     match existing {
       Some(_) -> Ok(text(204, ""))
@@ -443,7 +456,7 @@ fn mkcol(a: Auth, rel: String) -> Result[Response, HttpError] !io =
         if not ok {
           Err(http_error(409, "父目录不存在"))
         } else {
-          let _i = as_http(with_db(a.db.path, a.db.ext, c => insert_folder(c, rel)), 500)?
+          let _i = as_http_with(with_db(a.db.path, a.db.ext, c => insert_folder(c, rel)), conflict_or(500))?
           Ok(text(201, ""))
         }
       }
@@ -755,8 +768,17 @@ fn mc_check_dst(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) 
     let dst_existing = as_http(with_db(a.db.path, a.db.ext, c => get_row(c, dst)), 500)?
     let overwrite = str.to_upper(header_or(req, "overwrite", "T")) != "F"
     match dst_existing {
-      Some(_) -> if not overwrite { Err(http_error(412, "目标已存在")) } else { mc_require_parent(a, rel, dst, is_move, true) }
-      None -> mc_require_parent(a, rel, dst, is_move, false)
+      Some(_) ->
+        if not overwrite {
+          Err(http_error(412, "目标已存在"))
+        } else {
+          let _v = as_http_with(with_db(a.db.path, a.db.ext, c => validate_webdav_subtree_destination(c, rel, dst)), conflict_or(500))?
+          mc_require_parent(a, rel, dst, is_move, true)
+        }
+      None -> {
+        let _v = as_http_with(with_db(a.db.path, a.db.ext, c => validate_webdav_subtree_destination(c, rel, dst)), conflict_or(500))?
+        mc_require_parent(a, rel, dst, is_move, false)
+      }
     }
   }
 
@@ -800,6 +822,7 @@ fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool)
       # qiniu_client.copy); a database failure stays a 500
       let (k, t) = split_kind(m)
       match k {
+        KConflict -> Err(http_error(409, t))
         KUpstream -> Err(http_error(502, t))
         _ -> Err(http_error(500, t))
       }

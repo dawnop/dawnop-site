@@ -23,8 +23,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   **jar 与 `lib/` 都是构建产物，不入库**——jar 曾经入库，结果是它悄悄落后于 `src/`（要靠手动
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
-- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、96 个本仓单测，连 web/json/sha2 三个包
-  共 164 个；`use java` import 共 61 条、分布在 12 个文件；无需 .env / 库 /
+- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、100 个本仓单测，连 web/json/sha2 三个包
+  共 168 个；`use java` import 共 61 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
   libsimple / 网络，CI 每次 push 都跑）。用到 SQLite 的几个跑内存库（`jdbc:sqlite::memory:`），
   自带建表，不碰 fixture。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
@@ -94,6 +94,9 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   同站的 HTTP 与 HTTPS 形式都接受，各自按 80/443 归一；其他 scheme、远端 authority、query 与
   fragment 都返回 400，不会只取 path 后写入本地。前缀比较只展开 percent-encoded unreserved，
   路径段按严格 UTF-8 解码。20 个 fail-closed mutant 分别由完整 Dawn test 或 qiniu golden 唯一归属。
+- `repo/repo_fm.dawn`：所有新写入与重挂接都守完整祖先类型。FM 允许缺失祖先并自动补目录，
+  WebDAV 要求完整父链已存在且都是目录；干净子树仍可从遗留脏外部祖先下移出。13 个 fail-closed
+  mutant 精确归属到 3 条仓储单测或 10 条独立重置的 HTTP 合同，另有 1 条仓储事务正控。
 - `svc/files.dawn` — 文件树操作层：①`api_fm` 与 `webdav` 共用的对象存储原语（signed_url / rebase / superseded_key / gc_superseded / copy_object / delete_object_of）——
   只回 Result 不映射状态码，因为两个调用方的错误映射与连接持有方式本就不同（fm 一棵树一条连接，WebDAV 一步一条）；②`api_fm` 自己的树遍历（rename/move/copy/delete/save/upload）。
 - `qiniu/sign.dawn` — 三类七牛签名：上传凭证、私有下载 URL、QBox 管理、QiniuMacAuth（统计/CDN/账单，含 body）。

@@ -2,10 +2,11 @@
 # FsData serialization, ancestor-dir backfill, and reparent — all pure metadata
 # on the `files` table (rename/move only rewrite paths, never touch qiniu).
 use std/str
-use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
+use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Cell, open, query, exec, with_tx, scalar_int, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
 use json/value.{Json, JNull, JInt, JStr, JArr}
 use util/jsonx.{obj, jstr, jbool}
 use util/paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts}
+use util/errkind.{conflict}
 
 pub type FileRow = { path: String, is_dir: Bool, key: Option[String], content_type: String, size: Int, updated_at: String }
 
@@ -116,25 +117,101 @@ pub fn taken(c: DbConn, rel: String) -> Result[Bool, String] !io = {
   Ok(first_bool_or(rows, false))
 }
 
-## Backfill ancestor directory rows for `rel` (not rel itself), idempotently.
-pub fn ensure_dirs(c: DbConn, rel: String) -> Result[Int, String] !io = {
-  let parent = parent_rel(rel)
-  let parts = filter(str.split(parent, "/"), s => s != "")
-  ensure_loop(c, parts, 0, "")
+type AncestorPolicy =
+  | AllowMissingAncestors
+  | RequireExistingAncestors
+
+## Validate every ancestor of `rel`. File-manager writes may fill missing rows,
+## but an existing ancestor is always required to be a directory.
+pub fn validate_fm_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  validate_ancestors(c, rel, AllowMissingAncestors)
+
+## Reject a file write whose target row is already a directory. Callers pair
+## this with validate_fm_ancestors before any object-store or ledger effect.
+pub fn validate_fm_file_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  reject_directory_target(c, rel)
+
+## Validate every ancestor of `rel` for WebDAV, whose storage model requires
+## the complete parent chain to exist before a write begins.
+pub fn validate_webdav_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  validate_ancestors(c, rel, RequireExistingAncestors)
+
+fn validate_ancestors(c: DbConn, rel: String, policy: AncestorPolicy) -> Result[Unit, String] !io = {
+  let ancestors = ancestor_paths(rel)
+  validate_ancestor_loop(c, ancestors, policy, 0)
 }
 
-fn ensure_loop(c: DbConn, parts: List[String], i: Int, acc: String) -> Result[Int, String] !io =
+fn ancestor_paths(rel: String) -> List[String] = {
+  let parent = parent_rel(rel)
+  let parts = filter(str.split(parent, "/"), s => s != "")
+  ancestor_path_loop(parts, 0, "", [])
+}
+
+fn ancestor_path_loop(parts: List[String], i: Int, acc: String, paths: List[String]) -> List[String] =
   if i >= len(parts) {
-    Ok(0)
+    paths
   } else {
     let next = fm_join(acc, parts[i])
-    let _u = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, datetime('now'), datetime('now')) on conflict(path) do nothing", [PStr(next)])?
-    ensure_loop(c, parts, i + 1, next)
+    ancestor_path_loop(parts, i + 1, next, paths ++ [next])
+  }
+
+fn validate_ancestor_loop(c: DbConn, ancestors: List[String], policy: AncestorPolicy, i: Int) -> Result[Unit, String] !io =
+  if i >= len(ancestors) {
+    Ok(())
+  } else {
+    let path = ancestors[i]
+    match get_row(c, path)? {
+      Some(o) ->
+        if o.is_dir {
+          validate_ancestor_loop(c, ancestors, policy, i + 1)
+        } else {
+          Err(conflict("祖先不是目录：${full(path)}"))
+        }
+      None ->
+        match policy {
+          AllowMissingAncestors -> validate_ancestor_loop(c, ancestors, policy, i + 1)
+          RequireExistingAncestors -> Err(conflict("父目录不存在：${full(path)}"))
+        }
+    }
+  }
+
+## Backfill ancestor directory rows for `rel` (not rel itself), idempotently.
+## Validation and insertion share one transaction so a late conflict cannot
+## leave a partial prefix behind.
+pub fn ensure_dirs(c: DbConn, rel: String) -> Result[Int, String] !io =
+  with_tx(c, () => ensure_dirs_tx(c, rel))
+
+fn ensure_dirs_tx(c: DbConn, rel: String) -> Result[Int, String] !io = {
+  let _v = validate_fm_ancestors(c, rel)?
+  ensure_loop(c, ancestor_paths(rel), 0)
+}
+
+fn ensure_loop(c: DbConn, paths: List[String], i: Int) -> Result[Int, String] !io =
+  if i >= len(paths) {
+    Ok(0)
+  } else {
+    let path = paths[i]
+    let _u = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, datetime('now'), datetime('now')) on conflict(path) do nothing", [PStr(path)])?
+    match get_row(c, path)? {
+      Some(o) ->
+        if o.is_dir {
+          ensure_loop(c, paths, i + 1)
+        } else {
+          Err(conflict("祖先不是目录：${full(path)}"))
+        }
+      None -> Err("created ancestor vanished: $path")
+    }
   }
 
 ## Insert a folder row.
 pub fn insert_folder(c: DbConn, rel: String) -> Result[Int, String] !io =
-  exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, datetime('now'), datetime('now'))", [PStr(rel)])
+  with_tx(c, () => {
+    let _v = validate_insert_folder_ancestors(c, rel)?
+    exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, datetime('now'), datetime('now'))", [PStr(rel)])
+  })
+
+fn validate_insert_folder_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  validate_fm_ancestors(c, rel)
 
 ## A rel plus its whole subtree (for delete), leaf files first is not required.
 pub fn subtree_rows(c: DbConn, rel: String) -> Result[List[FileRow], String] !io = {
@@ -150,8 +227,32 @@ pub fn delete_row(c: DbConn, path: String) -> Result[Int, String] !io =
 
 ## Insert a file row (register). key/content_type/size from the verified object.
 pub fn insert_file(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =
-  exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, ?, ?, datetime('now'), datetime('now')) on conflict(path) do update set key = excluded.key, content_type = excluded.content_type, size = excluded.size, updated_at = datetime('now')",
-    [PStr(rel), PStr(key), PStr(content_type), PInt(size)])
+  with_tx(c, () => {
+    let _a = validate_insert_file_ancestors(c, rel)?
+    let _t = validate_insert_file_target(c, rel)?
+    let n = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, ?, ?, datetime('now'), datetime('now')) on conflict(path) do update set key = excluded.key, content_type = excluded.content_type, size = excluded.size, updated_at = datetime('now') where files.is_dir = 0",
+      [PStr(rel), PStr(key), PStr(content_type), PInt(size)])?
+    if n == 0 {
+      match get_row(c, rel)? {
+        Some(o) -> if o.is_dir { Err(conflict("目标是目录：${full(rel)}")) } else { Ok(n) }
+        None -> Ok(n)
+      }
+    } else {
+      Ok(n)
+    }
+  })
+
+fn validate_insert_file_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  validate_fm_ancestors(c, rel)
+
+fn validate_insert_file_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  reject_directory_target(c, rel)
+
+fn reject_directory_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  match get_row(c, rel)? {
+    Some(o) -> if o.is_dir { Err(conflict("目标是目录：${full(rel)}")) } else { Ok(()) }
+    None -> Ok(())
+  }
 
 pub fn ledger_delete(c: DbConn, key: String) -> Result[Int, String] !io =
   exec(c, "delete from pending_uploads where key = ?", [PStr(key)])
@@ -174,11 +275,71 @@ pub fn ledger_insert(c: DbConn, key: String, path: String) -> Result[Int, String
   exec(c, "insert into pending_uploads (key, path, created_at) values (?, ?, datetime('now')) on conflict(key) do update set path = excluded.path", [PStr(key), PStr(path)])
 
 ## Reparent old_rel and its whole subtree to new_rel (path-prefix rewrite).
-pub fn reparent(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io = {
-  let rows = query(c, "select path from files where path = ? or path like ?", [PStr(old_rel), PStr("$old_rel/%")], [ColStr])?
-  let paths = map(rows, r => str_at(r, 0))
+pub fn reparent(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io =
+  with_tx(c, () => reparent_tx(c, old_rel, new_rel))
+
+fn reparent_tx(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io = {
+  let rows = subtree_rows(c, old_rel)?
+  let _s = validate_subtree_rows(rows, old_rel, 0)?
+  let _d = validate_fm_ancestors(c, new_rel)?
+  let paths = map(rows, o => o.path)
   reparent_loop(c, paths, old_rel, new_rel, 0)
 }
+
+## Read-only destination validation for a subtree operation. Callers that have
+## external effects use this before touching the object store; reparent repeats
+## it inside its transaction so the repository remains safe on its own.
+pub fn validate_subtree_destination(c: DbConn, old_rel: String, new_rel: String) -> Result[Unit, String] !io = {
+  let rows = subtree_rows(c, old_rel)?
+  let _s = validate_subtree_rows(rows, old_rel, 0)?
+  validate_fm_ancestors(c, new_rel)
+}
+
+## WebDAV uses the same internal-shape rule, then validates every destination
+## ancestor above the direct parent. The WebDAV caller checks that direct parent
+## separately before purge, preserving its 412 and 409 ordering contract.
+pub fn validate_webdav_subtree_destination(c: DbConn, old_rel: String, new_rel: String) -> Result[Unit, String] !io = {
+  let rows = subtree_rows(c, old_rel)?
+  let _s = validate_subtree_rows(rows, old_rel, 0)?
+  validate_webdav_ancestors(c, parent_rel(new_rel))
+}
+
+fn validate_subtree_rows(rows: List[FileRow], old_rel: String, i: Int) -> Result[Unit, String] !io =
+  if i >= len(rows) {
+    Ok(())
+  } else {
+    let path = rows[i].path
+    let checked: Result[Unit, String] =
+      if path == old_rel {
+        Ok(())
+      } else {
+        validate_internal_parent(rows, old_rel, parent_rel(path))
+      }
+    let _v = checked?
+    validate_subtree_rows(rows, old_rel, i + 1)
+  }
+
+fn validate_internal_parent(rows: List[FileRow], old_rel: String, path: String) -> Result[Unit, String] !io =
+  match subtree_row_at(rows, path, 0) {
+    None -> Err(conflict("子树祖先缺失：${full(path)}"))
+    Some(o) ->
+      if not o.is_dir {
+        Err(conflict("子树祖先不是目录：${full(path)}"))
+      } else if path == old_rel {
+        Ok(())
+      } else {
+        validate_internal_parent(rows, old_rel, parent_rel(path))
+      }
+  }
+
+fn subtree_row_at(rows: List[FileRow], path: String, i: Int) -> Option[FileRow] =
+  if i >= len(rows) {
+    None
+  } else if rows[i].path == path {
+    Some(rows[i])
+  } else {
+    subtree_row_at(rows, path, i + 1)
+  }
 
 fn reparent_loop(c: DbConn, paths: List[String], old_rel: String, new_rel: String, i: Int) -> Result[Int, String] !io =
   if i >= len(paths) {
@@ -191,3 +352,56 @@ fn reparent_loop(c: DbConn, paths: List[String], old_rel: String, new_rel: Strin
     let _u = exec(c, "update files set path = ?, updated_at = datetime('now') where path = ?", [PStr(np), PStr(p)])?
     reparent_loop(c, paths, old_rel, new_rel, i + 1)
   }
+
+fn fm_test_db() -> DbConn !io = {
+  let c = open("jdbc:sqlite::memory:")
+  let _t = exec(c, "create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null)", [])
+  c
+}
+
+test "insert_folder rejects an existing file ancestor" {
+  let c = fm_test_db()
+  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('blocked', 0, 'old-key', 'text/plain', 3, datetime('now'), datetime('now'))", [])
+  match insert_folder(c, "blocked/folder") {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  assert scalar_int(c, "select count(*) from files", []) == Ok(1)
+}
+
+test "insert_file checks ancestors above an existing parent row" {
+  let c = fm_test_db()
+  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('blocked', 0, 'old-key', 'text/plain', 3, datetime('now'), datetime('now'))", [])
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('blocked/legacy-dir', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  match insert_file(c, "blocked/legacy-dir/child.txt", "new-key", "text/plain", 1) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  assert scalar_int(c, "select count(*) from files", []) == Ok(2)
+}
+
+test "insert_file rejects an existing directory target" {
+  let c = fm_test_db()
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('target-dir', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('target-dir/child.txt', 0, 'child-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match insert_file(c, "target-dir", "new-key", "text/plain", 3) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  match get_row(c, "target-dir") {
+    Ok(Some(o)) -> {
+      assert o.is_dir
+      assert o.key == None
+    }
+    _ -> { assert false }
+  }
+  assert scalar_int(c, "select count(*) from files", []) == Ok(2)
+}
+
+test "ensure_dirs followed by insert_file commits both operations" {
+  let c = fm_test_db()
+  assert ensure_dirs(c, "one/two/file.txt") == Ok(0)
+  assert insert_file(c, "one/two/file.txt", "new-key", "text/plain", 1) == Ok(1)
+  assert scalar_int(c, "select count(*) from files where is_dir = 1", []) == Ok(2)
+  assert scalar_int(c, "select count(*) from files where is_dir = 0", []) == Ok(1)
+}
