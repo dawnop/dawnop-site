@@ -7,7 +7,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 与 `POST /api/fm/upload`（multipart 代理上传，`src/util/multipart.dawn`）**也已落地**。
 
 契约由 `scripts/golden/*.json` 钉住（`scripts/contract_run.py`，CI 每次 push 都跑）：
-播种固定 fixture → 起后端 → 272 条响应逐字节比对。四套脚本里 `contract_qiniu.py` 另起一个
+播种固定 fixture → 起后端 → 273 条响应逐字节比对。四套脚本里 `contract_qiniu.py` 另起一个
 **指向本地假七牛**（`contract_qiniu_fake.py`）的后端，把子目录 COPY、PUT→GET 字节往返、
 覆盖写换 key、register 的 stat 校验这些必须有对象存储才走得到的路径也钉住；
 剩下的具名 skip 只有一件事——桶用量统计（`fm.stats`，走七牛计费/空间 API，假桶不模拟）。
@@ -23,8 +23,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   **jar 与 `lib/` 都是构建产物，不入库**——jar 曾经入库，结果是它悄悄落后于 `src/`（要靠手动
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
-- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、100 个本仓单测，连 web/json/sha2 三个包
-  共 168 个；`use java` import 共 61 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
+- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、106 个本仓单测，连 web/json/sha2 三个包
+  共 174 个；`use java` import 共 61 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
   libsimple / 网络，CI 每次 push 都跑）。用到 SQLite 的几个跑内存库（`jdbc:sqlite::memory:`），
   自带建表，不碰 fixture。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
@@ -94,9 +94,14 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   同站的 HTTP 与 HTTPS 形式都接受，各自按 80/443 归一；其他 scheme、远端 authority、query 与
   fragment 都返回 400，不会只取 path 后写入本地。前缀比较只展开 percent-encoded unreserved，
   路径段按严格 UTF-8 解码。20 个 fail-closed mutant 分别由完整 Dawn test 或 qiniu golden 唯一归属。
-- `repo/repo_fm.dawn`：所有新写入与重挂接都守完整祖先类型。FM 允许缺失祖先并自动补目录，
-  WebDAV 要求完整父链已存在且都是目录；干净子树仍可从遗留脏外部祖先下移出。13 个 fail-closed
-  mutant 精确归属到 3 条仓储单测或 10 条独立重置的 HTTP 合同，另有 1 条仓储事务正控。
+- `repo/repo_fm.dawn`：所有新写入与重挂接都守完整祖先类型。FM 写入与 move 在同一个
+  `BEGIN IMMEDIATE` 事务内补缺失目录并完成最终写入；rename 允许缺失祖先但不补目录；WebDAV
+  要求完整父链已存在且都是目录，并在最终写事务内复验。子树查询使用字面前缀且按路径父项优先，
+  干净子树仍可从遗留脏外部祖先下移出。24 个 fail-closed mutant 精确归属到 9 条 Dawn 单测或
+  15 条逐项重置数据库、假七牛与调用日志的 HTTP 合同。
+- SQLite 与七牛无法组成分布式事务。所有外部副作用前都有只读预检，SQLite 最终写仍会在自己的
+  即时事务内复验；若两者之间发生并发元数据变化，请求可能在对象已上传或复制后拒绝，并留下未被
+  SQLite 引用的对象。这是实现明确保留的 TOCTOU 与补偿边界，不宣称对象存储和元数据原子提交。
 - `svc/files.dawn` — 文件树操作层：①`api_fm` 与 `webdav` 共用的对象存储原语（signed_url / rebase / superseded_key / gc_superseded / copy_object / delete_object_of）——
   只回 Result 不映射状态码，因为两个调用方的错误映射与连接持有方式本就不同（fm 一棵树一条连接，WebDAV 一步一条）；②`api_fm` 自己的树遍历（rename/move/copy/delete/save/upload）。
 - `qiniu/sign.dawn` — 三类七牛签名：上传凭证、私有下载 URL、QBox 管理、QiniuMacAuth（统计/CDN/账单，含 body）。

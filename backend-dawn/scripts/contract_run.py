@@ -249,6 +249,7 @@ def main() -> int:
             if name == "qiniu":
                 senv["FAKE_QINIU"] = fake_base
                 senv["CONTRACT_QINIU_CONFIGURED"] = "1"
+                senv["CONTRACT_DB_PATH"] = str(db)
             else:
                 senv.pop("CONTRACT_QINIU_CONFIGURED", None)
             results[name] = subprocess.call(cmd, env=senv, cwd=str(HERE))

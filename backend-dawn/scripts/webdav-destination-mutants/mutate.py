@@ -190,6 +190,16 @@ def main() -> int:
     elif args.mutant == "purge-before-parent-check":
         replace_once(
             source,
+            "        } else {\n"
+            "          let _v = as_http_with(with_db(a.db.path, a.db.ext, c => validate_webdav_subtree_destination(c, rel, dst)), conflict_or(500))?\n"
+            "          mc_require_parent(a, rel, dst, is_move, true)\n"
+            "        }\n",
+            "        } else {\n"
+            "          mc_require_parent(a, rel, dst, is_move, true)\n"
+            "        }\n",
+        )
+        replace_once(
+            source,
             "fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =\n"
             "  {\n"
             "    let ok = as_http(parent_exists(a, dst), 500)?\n"

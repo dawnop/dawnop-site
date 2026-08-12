@@ -2,7 +2,7 @@
 # FsData serialization, ancestor-dir backfill, and reparent — all pure metadata
 # on the `files` table (rename/move only rewrite paths, never touch qiniu).
 use std/str
-use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Cell, open, query, exec, with_tx, scalar_int, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
+use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Cell, open, query, exec, with_immediate_tx, scalar_int, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
 use json/value.{Json, JNull, JInt, JStr, JArr}
 use util/jsonx.{obj, jstr, jbool}
 use util/paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts}
@@ -53,7 +53,7 @@ pub fn children(c: DbConn, parent: String) -> Result[List[FileRow], String] !io 
   let rows = if parent == "" {
     query(c, "select $COLS from files", [], col_types())?
   } else {
-    query(c, "select $COLS from files where path like ?", [PStr("$parent/%")], col_types())?
+    query(c, "select $COLS from files where instr(path, ? || '/') = 1", [PStr(parent)], col_types())?
   }
   let all = map(rows, row_of)
   let kids = filter(all, o => parent_rel(o.path) == parent)
@@ -96,7 +96,7 @@ pub fn search_files(c: DbConn, base: String, needle: String, deep: Bool) -> Resu
   let rows = if base == "" {
     query(c, "select $COLS from files", [], col_types())?
   } else {
-    query(c, "select $COLS from files where path like ?", [PStr("$base/%")], col_types())?
+    query(c, "select $COLS from files where instr(path, ? || '/') = 1", [PStr(base)], col_types())?
   }
   let all = map(rows, row_of)
   let scoped = if deep { all } else { filter(all, o => parent_rel(o.path) == base) }
@@ -179,7 +179,7 @@ fn validate_ancestor_loop(c: DbConn, ancestors: List[String], policy: AncestorPo
 ## Validation and insertion share one transaction so a late conflict cannot
 ## leave a partial prefix behind.
 pub fn ensure_dirs(c: DbConn, rel: String) -> Result[Int, String] !io =
-  with_tx(c, () => ensure_dirs_tx(c, rel))
+  with_immediate_tx(c, () => ensure_dirs_tx(c, rel))
 
 fn ensure_dirs_tx(c: DbConn, rel: String) -> Result[Int, String] !io = {
   let _v = validate_fm_ancestors(c, rel)?
@@ -192,30 +192,37 @@ fn ensure_loop(c: DbConn, paths: List[String], i: Int) -> Result[Int, String] !i
   } else {
     let path = paths[i]
     let _u = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, datetime('now'), datetime('now')) on conflict(path) do nothing", [PStr(path)])?
-    match get_row(c, path)? {
-      Some(o) ->
-        if o.is_dir {
-          ensure_loop(c, paths, i + 1)
-        } else {
-          Err(conflict("祖先不是目录：${full(path)}"))
-        }
-      None -> Err("created ancestor vanished: $path")
-    }
+    ensure_loop(c, paths, i + 1)
   }
 
 ## Insert a folder row.
 pub fn insert_folder(c: DbConn, rel: String) -> Result[Int, String] !io =
-  with_tx(c, () => {
+  with_immediate_tx(c, () => {
     let _v = validate_insert_folder_ancestors(c, rel)?
-    exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, datetime('now'), datetime('now'))", [PStr(rel)])
+    let _a = ensure_loop(c, ancestor_paths(rel), 0)?
+    insert_folder_row(c, rel)
   })
 
 fn validate_insert_folder_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
   validate_fm_ancestors(c, rel)
 
-## A rel plus its whole subtree (for delete), leaf files first is not required.
+## WebDAV final folder write: recheck the complete existing parent chain in the
+## same write transaction, without inheriting FM's directory backfill policy.
+pub fn insert_folder_strict(c: DbConn, rel: String) -> Result[Int, String] !io =
+  with_immediate_tx(c, () => {
+    let _a = validate_insert_folder_strict_ancestors(c, rel)?
+    insert_folder_row(c, rel)
+  })
+
+fn validate_insert_folder_strict_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  validate_webdav_ancestors(c, rel)
+
+fn insert_folder_row(c: DbConn, rel: String) -> Result[Int, String] !io =
+  exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, datetime('now'), datetime('now'))", [PStr(rel)])
+
+## A rel plus its whole subtree in deterministic parent-before-child order.
 pub fn subtree_rows(c: DbConn, rel: String) -> Result[List[FileRow], String] !io = {
-  let rows = query(c, "select $COLS from files where path = ? or path like ?", [PStr(rel), PStr("$rel/%")], col_types())?
+  let rows = query(c, "select $COLS from files where path = ? or instr(path, ? || '/') = 1 order by path", [PStr(rel), PStr(rel)], col_types())?
   Ok(map(rows, row_of))
 }
 
@@ -227,23 +234,39 @@ pub fn delete_row(c: DbConn, path: String) -> Result[Int, String] !io =
 
 ## Insert a file row (register). key/content_type/size from the verified object.
 pub fn insert_file(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =
-  with_tx(c, () => {
-    let _a = validate_insert_file_ancestors(c, rel)?
-    let _t = validate_insert_file_target(c, rel)?
-    let n = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, ?, ?, datetime('now'), datetime('now')) on conflict(path) do update set key = excluded.key, content_type = excluded.content_type, size = excluded.size, updated_at = datetime('now') where files.is_dir = 0",
-      [PStr(rel), PStr(key), PStr(content_type), PInt(size)])?
-    if n == 0 {
-      match get_row(c, rel)? {
-        Some(o) -> if o.is_dir { Err(conflict("目标是目录：${full(rel)}")) } else { Ok(n) }
-        None -> Ok(n)
-      }
-    } else {
-      Ok(n)
-    }
+  with_immediate_tx(c, () => {
+    let _v = validate_insert_file_ancestors(c, rel)?
+    let _a = ensure_loop(c, ancestor_paths(rel), 0)?
+    insert_file_row(c, rel, key, content_type, size)
   })
 
 fn validate_insert_file_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
   validate_fm_ancestors(c, rel)
+
+## WebDAV final file write: strict parent-chain validation and the upsert share
+## one immediate transaction. Missing parents are never synthesized here.
+pub fn insert_file_strict(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =
+  with_immediate_tx(c, () => {
+    let _a = validate_insert_file_strict_ancestors(c, rel)?
+    insert_file_row(c, rel, key, content_type, size)
+  })
+
+fn validate_insert_file_strict_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  validate_webdav_ancestors(c, rel)
+
+fn insert_file_row(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io = {
+  let _t = validate_insert_file_target(c, rel)?
+  let n = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, ?, ?, datetime('now'), datetime('now')) on conflict(path) do update set key = excluded.key, content_type = excluded.content_type, size = excluded.size, updated_at = datetime('now') where files.is_dir = 0",
+    [PStr(rel), PStr(key), PStr(content_type), PInt(size)])?
+  if n == 0 {
+    match get_row(c, rel)? {
+      Some(o) -> if o.is_dir { Err(conflict("目标是目录：${full(rel)}")) } else { Err("file upsert affected no row: ${full(rel)}") }
+      None -> Err("file upsert target disappeared: ${full(rel)}")
+    }
+  } else {
+    Ok(n)
+  }
+}
 
 fn validate_insert_file_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
   reject_directory_target(c, rel)
@@ -274,17 +297,49 @@ fn scalar_or0(c: DbConn, q: String) -> Result[Int, String] !io = {
 pub fn ledger_insert(c: DbConn, key: String, path: String) -> Result[Int, String] !io =
   exec(c, "insert into pending_uploads (key, path, created_at) values (?, ?, datetime('now')) on conflict(key) do update set path = excluded.path", [PStr(key), PStr(path)])
 
-## Reparent old_rel and its whole subtree to new_rel (path-prefix rewrite).
-pub fn reparent(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io =
-  with_tx(c, () => reparent_tx(c, old_rel, new_rel))
-
-fn reparent_tx(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io = {
+fn validated_subtree_paths(c: DbConn, old_rel: String) -> Result[List[String], String] !io = {
   let rows = subtree_rows(c, old_rel)?
   let _s = validate_subtree_rows(rows, old_rel, 0)?
-  let _d = validate_fm_ancestors(c, new_rel)?
-  let paths = map(rows, o => o.path)
-  reparent_loop(c, paths, old_rel, new_rel, 0)
+  Ok(map(rows, o => o.path))
 }
+
+## Rename metadata in one immediate transaction. Missing destination ancestors
+## remain missing for compatibility, while every ancestor row that does exist
+## must be a directory.
+pub fn reparent_allow_missing(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io =
+  with_immediate_tx(c, () => {
+    let paths = validated_subtree_paths(c, old_rel)?
+    let _v = validate_reparent_allow_missing_destination(c, new_rel)?
+    reparent_loop(c, paths, old_rel, new_rel, 0)
+  })
+
+fn validate_reparent_allow_missing_destination(c: DbConn, new_rel: String) -> Result[Unit, String] !io =
+  validate_fm_ancestors(c, new_rel)
+
+## File-manager MOVE metadata in one immediate transaction. Missing destination
+## ancestors are synthesized before the path rewrite and roll back with it.
+pub fn reparent_fill_missing(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io =
+  with_immediate_tx(c, () => {
+    let paths = validated_subtree_paths(c, old_rel)?
+    let _v = validate_reparent_fill_destination(c, new_rel)?
+    let _d = ensure_loop(c, ancestor_paths(new_rel), 0)?
+    reparent_loop(c, paths, old_rel, new_rel, 0)
+  })
+
+fn validate_reparent_fill_destination(c: DbConn, new_rel: String) -> Result[Unit, String] !io =
+  validate_fm_ancestors(c, new_rel)
+
+## WebDAV final MOVE write. The complete destination parent chain is rechecked
+## under the same immediate transaction as the path rewrite and is never filled.
+pub fn reparent_strict(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io =
+  with_immediate_tx(c, () => {
+    let paths = validated_subtree_paths(c, old_rel)?
+    let _d = validate_reparent_strict_destination(c, new_rel)?
+    reparent_loop(c, paths, old_rel, new_rel, 0)
+  })
+
+fn validate_reparent_strict_destination(c: DbConn, new_rel: String) -> Result[Unit, String] !io =
+  validate_webdav_ancestors(c, new_rel)
 
 ## Read-only destination validation for a subtree operation. Callers that have
 ## external effects use this before touching the object store; reparent repeats
@@ -359,21 +414,21 @@ fn fm_test_db() -> DbConn !io = {
   c
 }
 
-test "insert_folder rejects an existing file ancestor" {
+test "insert_folder_strict rejects an existing file ancestor" {
   let c = fm_test_db()
   let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('blocked', 0, 'old-key', 'text/plain', 3, datetime('now'), datetime('now'))", [])
-  match insert_folder(c, "blocked/folder") {
+  match insert_folder_strict(c, "blocked/folder") {
     Ok(_) -> { assert false }
     Err(_) -> { assert true }
   }
   assert scalar_int(c, "select count(*) from files", []) == Ok(1)
 }
 
-test "insert_file checks ancestors above an existing parent row" {
+test "insert_file_strict checks ancestors above an existing parent row" {
   let c = fm_test_db()
   let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('blocked', 0, 'old-key', 'text/plain', 3, datetime('now'), datetime('now'))", [])
   let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('blocked/legacy-dir', 1, null, '', 0, datetime('now'), datetime('now'))", [])
-  match insert_file(c, "blocked/legacy-dir/child.txt", "new-key", "text/plain", 1) {
+  match insert_file_strict(c, "blocked/legacy-dir/child.txt", "new-key", "text/plain", 1) {
     Ok(_) -> { assert false }
     Err(_) -> { assert true }
   }
@@ -398,10 +453,83 @@ test "insert_file rejects an existing directory target" {
   assert scalar_int(c, "select count(*) from files", []) == Ok(2)
 }
 
-test "ensure_dirs followed by insert_file commits both operations" {
+test "FM inserts atomically create missing ancestors" {
   let c = fm_test_db()
-  assert ensure_dirs(c, "one/two/file.txt") == Ok(0)
   assert insert_file(c, "one/two/file.txt", "new-key", "text/plain", 1) == Ok(1)
-  assert scalar_int(c, "select count(*) from files where is_dir = 1", []) == Ok(2)
+  assert insert_folder(c, "three/four/folder") == Ok(1)
+  assert scalar_int(c, "select count(*) from files where is_dir = 1", []) == Ok(5)
   assert scalar_int(c, "select count(*) from files where is_dir = 0", []) == Ok(1)
+}
+
+test "FM inserts roll back auto-created ancestors when the final write fails" {
+  let c = fm_test_db()
+  let _tf = exec(c, "create trigger reject_file before insert on files when new.path = 'file/a/final.txt' begin select raise(abort, 'reject file'); end", [])
+  let _td = exec(c, "create trigger reject_folder before insert on files when new.path = 'folder/a/final' begin select raise(abort, 'reject folder'); end", [])
+  match insert_file(c, "file/a/final.txt", "new-key", "text/plain", 1) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  match insert_folder(c, "folder/a/final") {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  assert scalar_int(c, "select count(*) from files", []) == Ok(0)
+}
+
+test "WebDAV strict inserts reject missing ancestors without backfill" {
+  let c = fm_test_db()
+  match insert_file_strict(c, "missing/child.txt", "new-key", "text/plain", 1) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  match insert_folder_strict(c, "also-missing/new") {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  assert scalar_int(c, "select count(*) from files", []) == Ok(0)
+}
+
+test "FM fill reparent rolls back backfilled ancestors when path rewrite fails" {
+  let c = fm_test_db()
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('source', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('source/child.txt', 0, 'child-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _t = exec(c, "create trigger reject_reparent before update of path on files when old.path = 'source' begin select raise(abort, 'reject reparent'); end", [])
+  match reparent_fill_missing(c, "source", "new/deep/source") {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  assert scalar_int(c, "select count(*) from files", []) == Ok(2)
+  assert scalar_int(c, "select count(*) from files where path = 'source' or path = 'source/child.txt'", []) == Ok(2)
+}
+
+test "WebDAV strict reparent rejects missing and file ancestors" {
+  let c = fm_test_db()
+  let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('source', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _c = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('source/child.txt', 0, 'child-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match reparent_strict(c, "source", "missing/deep/source") {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  let _b = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('blocked', 0, 'blocked-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _l = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('blocked/legacy', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  match reparent_strict(c, "source", "blocked/legacy/source") {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  assert scalar_int(c, "select count(*) from files", []) == Ok(4)
+  assert scalar_int(c, "select count(*) from files where path = 'source' or path = 'source/child.txt'", []) == Ok(2)
+}
+
+test "insert_file fails closed when an ignored upsert removes its target" {
+  let c = fm_test_db()
+  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('vanish.txt', 0, 'old-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _t = exec(c, "create trigger vanish_target before update on files when old.path = 'vanish.txt' begin delete from files where path = old.path; select raise(ignore); end", [])
+  match insert_file(c, "vanish.txt", "new-key", "text/plain", 2) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  match get_row(c, "vanish.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("old-key") }
+    _ -> { assert false }
+  }
 }

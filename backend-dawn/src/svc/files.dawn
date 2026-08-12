@@ -23,7 +23,7 @@ use db/sql.{DbConn}
 use svc/auth.{Auth, Qiniu}
 use db/db.{with_db}
 use util/paths.{fm_split, basename, ext, fm_join, full, guess_mime, strip_slashes, strip_trailing_slash}
-use repo/repo_fm.{FileRow, fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, delete_row, subtree_rows, entry_json, validate_fm_ancestors, validate_fm_file_target, validate_subtree_destination}
+use repo/repo_fm.{FileRow, fs_data, taken, insert_folder, insert_file, reparent_allow_missing, reparent_fill_missing, get_row, delete_row, subtree_rows, entry_json, validate_fm_ancestors, validate_fm_file_target, validate_subtree_destination}
 use util/crypto.{uuid_hex}
 use qiniu/sign.{private_url}
 use qiniu/rs.{delete_obj, copy_obj, upload_text, upload_bytes}
@@ -102,7 +102,6 @@ pub fn mk_folder(c: DbConn, rel: String, cur: String) -> Result[Option[Json], St
   if t {
     Ok(None)
   } else {
-    let _e = ensure_dirs(c, rel)?
     let _i = insert_folder(c, rel)?
     let d = fs_data(c, cur)?
     Ok(Some(d))
@@ -120,7 +119,7 @@ pub fn do_rename(c: DbConn, old: String, new_rel: String, cur: String) -> Result
     if t {
       Ok(None)
     } else {
-      let _r = reparent(c, old, new_rel)?
+      let _r = reparent_allow_missing(c, old, new_rel)?
       let d = fs_data(c, cur)?
       Ok(Some(d))
     }
@@ -148,12 +147,15 @@ fn preflight_move(c: DbConn, sources: List[String], dest: String, i: Int) -> Res
         if t {
           Err(conflict("已存在同名项：${basename(new_rel)}"))
         } else {
-          let _v = validate_subtree_destination(c, src, new_rel)?
+          let _v = validate_move_destination(c, src, new_rel)?
           preflight_move(c, sources, dest, i + 1)
         }
       }
     }
   }
+
+fn validate_move_destination(c: DbConn, src: String, new_rel: String) -> Result[Unit, String] !io =
+  validate_subtree_destination(c, src, new_rel)
 
 fn apply_move(c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
   if i >= len(sources) {
@@ -167,8 +169,7 @@ fn apply_move(c: DbConn, sources: List[String], dest: String, cur: String, i: In
       if new_rel == src || str.starts_with(new_rel, "$src/") {
         apply_move(c, sources, dest, cur, i + 1)
       } else {
-        let _e = ensure_dirs(c, new_rel)?
-        let _r = reparent(c, src, new_rel)?
+        let _r = reparent_fill_missing(c, src, new_rel)?
         apply_move(c, sources, dest, cur, i + 1)
       }
     }
@@ -218,7 +219,6 @@ fn apply_copy(q: Qiniu, c: DbConn, sources: List[String], dest: String, cur: Str
       if str.starts_with(new_rel, "$src/") {
         apply_copy(q, c, sources, dest, cur, i + 1)
       } else {
-        let _e = ensure_dirs(c, new_rel)?
         let rows = subtree_rows(c, src)?
         let _cp = copy_rows(q, c, rows, src, new_rel, 0)?
         apply_copy(q, c, sources, dest, cur, i + 1)
@@ -314,7 +314,6 @@ pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json],
 }
 
 fn create_file_db(c: DbConn, rel: String, key: String, mime: String, cur: String) -> Result[Json, String] !io = {
-  let _e = ensure_dirs(c, rel)?
   let _i = insert_file(c, rel, key, mime, 0)?
   fs_data(c, cur)
 }
@@ -335,7 +334,6 @@ pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !i
 }
 
 fn save_db(c: DbConn, rel: String, key: String, mime: String, size: Int) -> Result[Int, String] !io = {
-  let _e = ensure_dirs(c, rel)?
   insert_file(c, rel, key, mime, size)
 }
 
@@ -388,7 +386,6 @@ fn upload_key(existing: Option[FileRow]) -> String !io =
   }
 
 fn upsert_upload(c: DbConn, rel: String, key: String, mime: String, size: Int) -> Result[Json, String] !io = {
-  let _e = ensure_dirs(c, rel)?
   let _i = insert_file(c, rel, key, mime, size)?
   match get_row(c, rel)? {
     Some(o) -> Ok(entry_json(o))

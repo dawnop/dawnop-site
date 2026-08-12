@@ -5,19 +5,30 @@ import argparse
 from pathlib import Path
 
 MUTANTS = (
+    "immediate-tx-as-deferred",
     "repo-file-ancestor-fail-open",
     "repo-immediate-parent-only",
     "repo-directory-target-fail-open",
+    "repo-fm-insert-split-transaction",
+    "repo-webdav-strict-insert-uses-fm",
+    "repo-rename-fill-missing",
+    "repo-fm-reparent-split-transaction",
+    "repo-webdav-strict-reparent-uses-fm",
+    "repo-file-upsert-disappeared-ok",
+    "repo-literal-prefix-use-like",
+    "repo-subtree-child-first",
     "fm-reject-missing-ancestor",
     "fm-preflight-after-qiniu",
     "fm-skip-directory-target-preflight",
     "fm-skip-upload-token-preflight",
     "fm-register-gc-before-preflight",
     "fm-skip-reparent-validation",
+    "fm-skip-rename-validation",
     "fm-map-conflict-as-default",
     "repo-subtree-shape-fail-open",
     "webdav-skip-full-ancestor-validation",
     "webdav-missing-parent-fail-open",
+    "webdav-reverse-overlap-fail-open",
 )
 
 
@@ -46,31 +57,43 @@ def main() -> int:
         parser.error("project is required")
 
     repo = args.project / "src/repo/repo_fm.dawn"
+    db_sql = args.project / "src/db/sql.dawn"
     service = args.project / "src/svc/files.dawn"
     fm_api = args.project / "src/api/api_fm.dawn"
     webdav = args.project / "src/api/webdav.dawn"
 
-    if args.mutant == "repo-file-ancestor-fail-open":
+    if args.mutant == "immediate-tx-as-deferred":
+        replace_once(
+            db_sql,
+            '  let _b = exec(c, "begin immediate", [])?\n',
+            '  let _b = exec(c, "begin", [])?\n',
+        )
+    elif args.mutant == "repo-file-ancestor-fail-open":
         replace_once(
             repo,
-            "fn validate_insert_folder_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =\n"
-            "  validate_fm_ancestors(c, rel)\n",
-            "fn validate_insert_folder_ancestors(_c: DbConn, _rel: String) -> Result[Unit, String] !io =\n"
-            "  Ok(())\n",
+            "fn validate_insert_folder_strict_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =\n"
+            "  validate_webdav_ancestors(c, rel)\n",
+            "fn validate_insert_folder_strict_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io = {\n"
+            "  let parent = parent_rel(rel)\n"
+            "  match get_row(c, parent)? {\n"
+            "    Some(_) -> Ok(())\n"
+            "    None -> validate_webdav_ancestors(c, rel)\n"
+            "  }\n"
+            "}\n",
         )
     elif args.mutant == "repo-immediate-parent-only":
         replace_once(
             repo,
-            "fn validate_insert_file_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =\n"
-            "  validate_fm_ancestors(c, rel)\n",
-            "fn validate_insert_file_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io = {\n"
+            "fn validate_insert_file_strict_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =\n"
+            "  validate_webdav_ancestors(c, rel)\n",
+            "fn validate_insert_file_strict_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io = {\n"
             "  let parent = parent_rel(rel)\n"
             '  if parent == "" {\n'
             "    Ok(())\n"
             "  } else {\n"
             "    match get_row(c, parent)? {\n"
             '      Some(o) -> if o.is_dir { Ok(()) } else { Err(conflict("父项不是目录")) }\n'
-            "      None -> Ok(())\n"
+            '      None -> Err(conflict("父目录不存在"))\n'
             "    }\n"
             "  }\n"
             "}\n",
@@ -88,36 +111,138 @@ def main() -> int:
             ' where files.is_dir = 0"',
             '"',
         )
+    elif args.mutant == "repo-fm-insert-split-transaction":
+        replace_once(
+            repo,
+            "pub fn insert_folder(c: DbConn, rel: String) -> Result[Int, String] !io =\n"
+            "  with_immediate_tx(c, () => {\n"
+            "    let _v = validate_insert_folder_ancestors(c, rel)?\n"
+            "    let _a = ensure_loop(c, ancestor_paths(rel), 0)?\n"
+            "    insert_folder_row(c, rel)\n"
+            "  })\n",
+            "pub fn insert_folder(c: DbConn, rel: String) -> Result[Int, String] !io = {\n"
+            "  let _a = ensure_dirs(c, rel)?\n"
+            "  with_immediate_tx(c, () => insert_folder_row(c, rel))\n"
+            "}\n",
+        )
+        replace_once(
+            repo,
+            "pub fn insert_file(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =\n"
+            "  with_immediate_tx(c, () => {\n"
+            "    let _v = validate_insert_file_ancestors(c, rel)?\n"
+            "    let _a = ensure_loop(c, ancestor_paths(rel), 0)?\n"
+            "    insert_file_row(c, rel, key, content_type, size)\n"
+            "  })\n",
+            "pub fn insert_file(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io = {\n"
+            "  let _a = ensure_dirs(c, rel)?\n"
+            "  with_immediate_tx(c, () => insert_file_row(c, rel, key, content_type, size))\n"
+            "}\n",
+        )
+    elif args.mutant == "repo-webdav-strict-insert-uses-fm":
+        replace_once(
+            repo,
+            "pub fn insert_folder_strict(c: DbConn, rel: String) -> Result[Int, String] !io =\n"
+            "  with_immediate_tx(c, () => {\n"
+            "    let _a = validate_insert_folder_strict_ancestors(c, rel)?\n"
+            "    insert_folder_row(c, rel)\n"
+            "  })\n",
+            "pub fn insert_folder_strict(c: DbConn, rel: String) -> Result[Int, String] !io =\n"
+            "  insert_folder(c, rel)\n",
+        )
+        replace_once(
+            repo,
+            "pub fn insert_file_strict(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =\n"
+            "  with_immediate_tx(c, () => {\n"
+            "    let _a = validate_insert_file_strict_ancestors(c, rel)?\n"
+            "    insert_file_row(c, rel, key, content_type, size)\n"
+            "  })\n",
+            "pub fn insert_file_strict(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =\n"
+            "  insert_file(c, rel, key, content_type, size)\n",
+        )
+    elif args.mutant == "repo-rename-fill-missing":
+        replace_once(
+            repo,
+            "pub fn reparent_allow_missing(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io =\n"
+            "  with_immediate_tx(c, () => {\n"
+            "    let paths = validated_subtree_paths(c, old_rel)?\n"
+            "    let _v = validate_reparent_allow_missing_destination(c, new_rel)?\n"
+            "    reparent_loop(c, paths, old_rel, new_rel, 0)\n"
+            "  })\n",
+            "pub fn reparent_allow_missing(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io =\n"
+            "  reparent_fill_missing(c, old_rel, new_rel)\n",
+        )
+    elif args.mutant == "repo-fm-reparent-split-transaction":
+        replace_once(
+            repo,
+            "pub fn reparent_fill_missing(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io =\n"
+            "  with_immediate_tx(c, () => {\n"
+            "    let paths = validated_subtree_paths(c, old_rel)?\n"
+            "    let _v = validate_reparent_fill_destination(c, new_rel)?\n"
+            "    let _d = ensure_loop(c, ancestor_paths(new_rel), 0)?\n"
+            "    reparent_loop(c, paths, old_rel, new_rel, 0)\n"
+            "  })\n",
+            "pub fn reparent_fill_missing(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io = {\n"
+            "  let _d = ensure_dirs(c, new_rel)?\n"
+            "  with_immediate_tx(c, () => {\n"
+            "    let paths = validated_subtree_paths(c, old_rel)?\n"
+            "    let _v = validate_reparent_fill_destination(c, new_rel)?\n"
+            "    reparent_loop(c, paths, old_rel, new_rel, 0)\n"
+            "  })\n"
+            "}\n",
+        )
+    elif args.mutant == "repo-webdav-strict-reparent-uses-fm":
+        start = (
+            "pub fn reparent_strict(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io =\n"
+            "  with_immediate_tx(c, () => {\n"
+            "    let paths = validated_subtree_paths(c, old_rel)?\n"
+            "    let _d = validate_reparent_strict_destination(c, new_rel)?\n"
+            "    reparent_loop(c, paths, old_rel, new_rel, 0)\n"
+            "  })\n"
+        )
+        replace_once(
+            repo,
+            start,
+            "pub fn reparent_strict(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io =\n"
+            "  reparent_fill_missing(c, old_rel, new_rel)\n",
+        )
+    elif args.mutant == "repo-file-upsert-disappeared-ok":
+        replace_once(
+            repo,
+            '      None -> Err("file upsert target disappeared: ${full(rel)}")\n',
+            "      None -> Ok(n)\n",
+        )
+    elif args.mutant == "repo-literal-prefix-use-like":
+        replace_once(
+            repo,
+            "    query(c, \"select $COLS from files where instr(path, ? || '/') = 1\", [PStr(parent)], col_types())?\n",
+            '    query(c, "select $COLS from files where path like ?", [PStr("$parent/%")], col_types())?\n',
+        )
+        replace_once(
+            repo,
+            "    query(c, \"select $COLS from files where instr(path, ? || '/') = 1\", [PStr(base)], col_types())?\n",
+            '    query(c, "select $COLS from files where path like ?", [PStr("$base/%")], col_types())?\n',
+        )
+        replace_once(
+            repo,
+            "  let rows = query(c, \"select $COLS from files where path = ? or instr(path, ? || '/') = 1 order by path\", [PStr(rel), PStr(rel)], col_types())?\n",
+            '  let rows = query(c, "select $COLS from files where path = ? or path like ? order by path", [PStr(rel), PStr("$rel/%")], col_types())?\n',
+        )
+    elif args.mutant == "repo-subtree-child-first":
+        replace_once(
+            repo,
+            "  let rows = query(c, \"select $COLS from files where path = ? or instr(path, ? || '/') = 1 order by path\", [PStr(rel), PStr(rel)], col_types())?\n",
+            "  let rows = query(c, \"select $COLS from files where path = ? or instr(path, ? || '/') = 1 order by path desc\", [PStr(rel), PStr(rel)], col_types())?\n",
+        )
     elif args.mutant == "fm-reject-missing-ancestor":
         replace_once(
             service,
-            "use repo/repo_fm.{FileRow, fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, delete_row, subtree_rows, entry_json, validate_fm_ancestors, validate_fm_file_target, validate_subtree_destination}\n",
-            "use repo/repo_fm.{FileRow, fs_data, taken, ensure_dirs, insert_folder, insert_file, reparent, get_row, delete_row, subtree_rows, entry_json, validate_fm_ancestors, validate_webdav_ancestors, validate_fm_file_target, validate_subtree_destination}\n",
+            "use repo/repo_fm.{FileRow, fs_data, taken, insert_folder, insert_file, reparent_allow_missing, reparent_fill_missing, get_row, delete_row, subtree_rows, entry_json, validate_fm_ancestors, validate_fm_file_target, validate_subtree_destination}\n",
+            "use repo/repo_fm.{FileRow, fs_data, taken, insert_folder, insert_folder_strict, insert_file, reparent_allow_missing, reparent_fill_missing, get_row, delete_row, subtree_rows, entry_json, validate_fm_ancestors, validate_fm_file_target, validate_subtree_destination}\n",
         )
         replace_once(
             service,
-            "pub fn mk_folder(c: DbConn, rel: String, cur: String) -> Result[Option[Json], String] !io = {\n"
-            "  let t = taken(c, rel)?\n"
-            "  if t {\n"
-            "    Ok(None)\n"
-            "  } else {\n"
-            "    let _e = ensure_dirs(c, rel)?\n"
-            "    let _i = insert_folder(c, rel)?\n"
-            "    let d = fs_data(c, cur)?\n"
-            "    Ok(Some(d))\n"
-            "  }\n"
-            "}\n",
-            "pub fn mk_folder(c: DbConn, rel: String, cur: String) -> Result[Option[Json], String] !io = {\n"
-            "  let t = taken(c, rel)?\n"
-            "  if t {\n"
-            "    Ok(None)\n"
-            "  } else {\n"
-            "    let _e = validate_webdav_ancestors(c, rel)?\n"
-            "    let _i = insert_folder(c, rel)?\n"
-            "    let d = fs_data(c, cur)?\n"
-            "    Ok(Some(d))\n"
-            "  }\n"
-            "}\n",
+            "    let _i = insert_folder(c, rel)?\n",
+            "    let _i = insert_folder_strict(c, rel)?\n",
         )
     elif args.mutant == "fm-preflight-after-qiniu":
         replace_once(
@@ -182,9 +307,26 @@ def main() -> int:
         )
     elif args.mutant == "fm-skip-reparent-validation":
         replace_once(
+            service,
+            "fn validate_move_destination(c: DbConn, src: String, new_rel: String) -> Result[Unit, String] !io =\n"
+            "  validate_subtree_destination(c, src, new_rel)\n",
+            "fn validate_move_destination(_c: DbConn, _src: String, _new_rel: String) -> Result[Unit, String] !io =\n"
+            "  Ok(())\n",
+        )
+        replace_once(
             repo,
-            "  let _d = validate_fm_ancestors(c, new_rel)?\n",
-            "  let _d = ()\n",
+            "fn validate_reparent_fill_destination(c: DbConn, new_rel: String) -> Result[Unit, String] !io =\n"
+            "  validate_fm_ancestors(c, new_rel)\n",
+            "fn validate_reparent_fill_destination(_c: DbConn, _new_rel: String) -> Result[Unit, String] !io =\n"
+            "  Ok(())\n",
+        )
+    elif args.mutant == "fm-skip-rename-validation":
+        replace_once(
+            repo,
+            "fn validate_reparent_allow_missing_destination(c: DbConn, new_rel: String) -> Result[Unit, String] !io =\n"
+            "  validate_fm_ancestors(c, new_rel)\n",
+            "fn validate_reparent_allow_missing_destination(_c: DbConn, _new_rel: String) -> Result[Unit, String] !io =\n"
+            "  Ok(())\n",
         )
     elif args.mutant == "fm-map-conflict-as-default":
         replace_once(
@@ -216,48 +358,38 @@ def main() -> int:
         replace_once(
             webdav,
             "fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {\n"
-            "  let checked = with_db(a.db.path, a.db.ext, c => validate_webdav_ancestors(c, rel))\n"
-            "  match checked {\n"
-            "    Ok(_) -> Ok(true)\n"
-            "    Err(m) -> {\n"
-            "      let (k, _t) = split_kind(m)\n"
-            "      match k {\n"
-            "        KConflict -> Ok(false)\n"
-            "        _ -> Err(m)\n"
+            "  with_db(a.db.path, a.db.ext, c => {\n"
+            "    let parent = parent_rel(rel)\n"
+            '    let found: Result[Option[FileRow], String] = if parent == "" { Ok(None) } else { get_row(c, parent) }\n'
+            "    let row = found?\n"
+            "    if not parent_is_directory(parent, row) {\n"
+            "      Ok(false)\n"
+            "    } else {\n"
+            "      match validate_webdav_ancestors(c, parent) {\n"
+            "        Ok(_) -> Ok(true)\n"
+            "        Err(m) -> {\n"
+            "          let (k, _t) = split_kind(m)\n"
+            "          match k {\n"
+            "            KConflict -> Ok(false)\n"
+            "            _ -> Err(m)\n"
+            "          }\n"
+            "        }\n"
             "      }\n"
             "    }\n"
-            "  }\n"
+            "  })\n"
             "}\n",
-            "fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {\n"
-            "  let parent = parent_rel(rel)\n"
-            '  if parent == "" {\n'
-            "    Ok(true)\n"
-            "  } else {\n"
-            "    let row = with_db(a.db.path, a.db.ext, c => get_row(c, parent))?\n"
+            "fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io =\n"
+            "  with_db(a.db.path, a.db.ext, c => {\n"
+            "    let parent = parent_rel(rel)\n"
+            '    let found: Result[Option[FileRow], String] = if parent == "" { Ok(None) } else { get_row(c, parent) }\n'
+            "    let row = found?\n"
             "    Ok(parent_is_directory(parent, row))\n"
-            "  }\n"
-            "}\n",
+            "  })\n",
         )
         replace_once(
             repo,
-            "pub fn validate_webdav_subtree_destination(c: DbConn, old_rel: String, new_rel: String) -> Result[Unit, String] !io = {\n"
-            "  let rows = subtree_rows(c, old_rel)?\n"
-            "  let _s = validate_subtree_rows(rows, old_rel, 0)?\n"
-            "  validate_webdav_ancestors(c, parent_rel(new_rel))\n"
-            "}\n",
-            "pub fn validate_webdav_subtree_destination(c: DbConn, old_rel: String, new_rel: String) -> Result[Unit, String] !io = {\n"
-            "  let rows = subtree_rows(c, old_rel)?\n"
-            "  let _s = validate_subtree_rows(rows, old_rel, 0)?\n"
-            "  let parent = parent_rel(new_rel)\n"
-            '  if parent == "" {\n'
-            "    Ok(())\n"
-            "  } else {\n"
-            "    match get_row(c, parent)? {\n"
-            '      Some(o) -> if o.is_dir { Ok(()) } else { Err(conflict("父项不是目录")) }\n'
-            '      None -> Err(conflict("父目录不存在"))\n'
-            "    }\n"
-            "  }\n"
-            "}\n",
+            "  validate_webdav_ancestors(c, parent_rel(new_rel))\n",
+            "  Ok(())\n",
         )
     elif args.mutant == "webdav-missing-parent-fail-open":
         replace_once(
@@ -267,42 +399,17 @@ def main() -> int:
         )
         replace_once(
             webdav,
-            "fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {\n"
-            "  let checked = with_db(a.db.path, a.db.ext, c => validate_webdav_ancestors(c, rel))\n"
-            "  match checked {\n"
-            "    Ok(_) -> Ok(true)\n"
-            "    Err(m) -> {\n"
-            "      let (k, _t) = split_kind(m)\n"
-            "      match k {\n"
-            "        KConflict -> Ok(false)\n"
-            "        _ -> Err(m)\n"
-            "      }\n"
-            "    }\n"
-            "  }\n"
-            "}\n",
-            "fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {\n"
-            "  let checked = with_db(a.db.path, a.db.ext, c => validate_webdav_ancestors(c, rel))\n"
-            "  match checked {\n"
-            "    Ok(_) -> Ok(true)\n"
-            "    Err(m) -> {\n"
-            "      let (k, _t) = split_kind(m)\n"
-            "      match k {\n"
-            "        KConflict -> {\n"
-            "          let parent = parent_rel(rel)\n"
-            '          if parent == "" {\n'
-            "            Ok(true)\n"
-            "          } else {\n"
-            "            match with_db(a.db.path, a.db.ext, c => get_row(c, parent))? {\n"
-            "              None -> Ok(true)\n"
-            "              Some(_) -> Ok(false)\n"
-            "            }\n"
-            "          }\n"
-            "        }\n"
-            "        _ -> Err(m)\n"
-            "      }\n"
-            "    }\n"
-            "  }\n"
-            "}\n",
+            "    if not parent_is_directory(parent, row) {\n",
+            "    let direct_ok = match row { None -> true, Some(o) -> parent_is_directory(parent, Some(o)) }\n"
+            "    if not direct_ok {\n",
+        )
+    elif args.mutant == "webdav-reverse-overlap-fail-open":
+        replace_once(
+            webdav,
+            "fn destination_is_source_ancestor(rel: String, dst: String) -> Bool =\n"
+            '  str.starts_with(rel, dst ++ "/")\n',
+            "fn destination_is_source_ancestor(_rel: String, _dst: String) -> Bool =\n"
+            "  false\n",
         )
     return 0
 

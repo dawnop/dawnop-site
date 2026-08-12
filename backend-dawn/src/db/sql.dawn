@@ -183,6 +183,33 @@ pub fn with_tx[T](c: DbConn, body: fn() -> Result[T, String] !io) -> Result[T, S
   }
 }
 
+## Run `body` after acquiring SQLite's write reservation up front. Repository
+## primitives use this when validation and the following metadata mutation must
+## observe one stable tree shape rather than beginning as a deferred reader.
+pub fn with_immediate_tx[T](c: DbConn, body: fn() -> Result[T, String] !io) -> Result[T, String] !io = {
+  let conn = raw(c)
+  if not conn.getAutoCommit() {
+    conn.rollback()
+    conn.setAutoCommit(true)
+  }
+  let _b = exec(c, "begin immediate", [])?
+  match body() {
+    Ok(v) ->
+      match exec(c, "commit", []) {
+        Ok(_) -> Ok(v)
+        Err(m) -> {
+          let _r = exec(c, "rollback", [])
+          Err(m)
+        }
+      }
+    Err(m) ->
+      match exec(c, "rollback", []) {
+        Ok(_) -> Err(m)
+        Err(r) -> Err("$m; rollback failed: $r")
+      }
+  }
+}
+
 # ---- typed row accessors (mismatch = repo-layer bug, hence panic) ----
 
 pub fn int_at(row: List[Cell], i: Int) -> Int =
@@ -404,6 +431,22 @@ test "with_tx commits on Ok and rolls back on Err" {
   })
   assert failed == Err("abort")
   assert scalar_int(c, "select count(*) from t", []) == Ok(1)
+}
+
+test "with_immediate_tx reserves the writer before its body" {
+  let c1 = open("jdbc:sqlite:file:immediate_tx_contract?mode=memory&cache=shared")
+  let c2 = open("jdbc:sqlite:file:immediate_tx_contract?mode=memory&cache=shared")
+  assert exec(c1, "create table immediate_items (v integer)", []) == Ok(0)
+  let held: Result[Unit, String] = with_immediate_tx(c1, () =>
+      match exec(c2, "insert into immediate_items values (1)", []) {
+        Ok(_) -> Err("second writer entered an immediate transaction")
+        Err(_) -> Ok(())
+      })
+  match held {
+    Ok(_) -> { assert true }
+    Err(_) -> { assert false }
+  }
+  assert scalar_int(c1, "select count(*) from immediate_items", []) == Ok(0)
 }
 
 test "unique constraint violation is an expected Err" {

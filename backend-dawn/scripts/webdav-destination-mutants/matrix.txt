@@ -1,5 +1,5 @@
 # Versioned, hand-owned red set. There is no record mode.
-version=2
+version=3
 drop-dot-check|test|dest_rel rejects one-dot segments after one decode
 drop-dotdot-check|test|dest_rel rejects two-dot segments after one decode
 reject-dot-containing-names|test|dest_rel accepts names that merely contain dots
@@ -19,4 +19,4 @@ destination-prefix-fail-open|test|dest_rel confines paths to the DAV prefix
 skip-unreserved-prefix-normalization|test|dest_rel normalizes unreserved prefix octets
 restore-replacement-utf8|test|dest_rel rejects invalid percent UTF-8 without aliasing
 purge-before-parent-check|qiniu|copy.dest.file-parent-existing.preserved
-accept-file-parent|test|parent check accepts only root or a directory row
+accept-file-parent|qiniu|write.dest.file-parent.preflight

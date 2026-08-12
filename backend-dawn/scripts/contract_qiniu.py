@@ -31,7 +31,8 @@ What a fake can and cannot buy:
 
 Normally driven by contract_run.py. Standalone (start the fake first):
 
-    TOKEN=... DAV_USER=... DAV_PASS=... FAKE_QINIU=http://127.0.0.1:18100 \\
+    TOKEN=... DAV_USER=... DAV_PASS=... CONTRACT_DB_PATH=... \\
+        FAKE_QINIU=http://127.0.0.1:18100 \\
         python3 contract_qiniu.py --base http://127.0.0.1:18002
 """
 
@@ -40,12 +41,12 @@ import base64
 import json
 import os
 import re
+import sqlite3
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
-import contract_fixture
 from contract_golden import TRANSPORT_STATUS, Golden, transport_error
 from contract_webdav import KEEP_HEADERS, PREFIX, facts
 from contract_webdav import normalize as dav_normalize
@@ -178,6 +179,26 @@ def body_value(raw: bytes):
         return raw.decode("utf-8", "replace")
 
 
+def seed_destination_boundary_rows(db_path, fake):
+    key = "dddddddd-eeee-ffff-0000-111111111111"
+    with sqlite3.connect(db_path) as connection:
+        connection.executemany(
+            'INSERT INTO files (path, is_dir, "key", content_type, size, created_at, updated_at) '
+            "VALUES (?, ?, ?, ?, ?, '2026-01-14 08:00:00.000000', '2026-01-14 08:00:00.000000')",
+            [
+                ("legacy-parent.txt/legacy-dir", 1, None, "", 0),
+                (
+                    "legacy-parent.txt/legacy-dir/existing-target.txt",
+                    0,
+                    key,
+                    "text/plain",
+                    112,
+                ),
+            ],
+        )
+    fake.plant(key, "legacy deep target", "text/plain")
+
+
 class Fake:
     """The fake bucket's control plane."""
 
@@ -230,15 +251,18 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
     token = os.environ.get("TOKEN")
     user, pw = os.environ.get("DAV_USER"), os.environ.get("DAV_PASS")
     fake_base = os.environ.get("FAKE_QINIU")
-    if not token or not user or not pw or not fake_base:
+    db_path = os.environ.get("CONTRACT_DB_PATH")
+    if not token or not user or not pw or not fake_base or not db_path:
         print(
-            "FATAL: TOKEN / DAV_USER / DAV_PASS / FAKE_QINIU not set", file=sys.stderr
+            "FATAL: TOKEN / DAV_USER / DAV_PASS / FAKE_QINIU / CONTRACT_DB_PATH not set",
+            file=sys.stderr,
         )
         return 2
     auth = f"{user}:{pw}"
     FAKE_BASE[0] = fake_base
     fake = Fake(fake_base)
     fake.reset()
+    seed_destination_boundary_rows(db_path, fake)
 
     g = Golden("qiniu", record=args.record)
     if g.fatal:
@@ -296,20 +320,16 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
     )
     fake.clear_calls()
 
-    print("\n== WebDAV overwrite validates a legacy file parent before purge ==")
-    legacy_row = next(
-        row
-        for row in contract_fixture.FILES
-        if row[1] == "legacy-parent.txt/existing-target.txt"
-    )
-    legacy_key = legacy_row[3]
+    print("\n== WebDAV overwrite validates the full parent chain before purge ==")
+    legacy_path = "legacy-parent.txt/legacy-dir/existing-target.txt"
+    legacy_key = "dddddddd-eeee-ffff-0000-111111111111"
     overwrite_f_status, _, _ = dav(
         B,
         "COPY",
         "/dav/empty-dir",
         auth,
         {
-            "Destination": "/dav/legacy-parent.txt/existing-target.txt",
+            "Destination": f"/dav/{legacy_path}",
             "Overwrite": "F",
         },
     )
@@ -318,19 +338,19 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
         "COPY",
         "/dav/empty-dir",
         auth,
-        {"Destination": "/dav/legacy-parent.txt/existing-target.txt"},
+        {"Destination": f"/dav/{legacy_path}"},
     )
     row_status, _, _ = dav(
         B,
         "PROPFIND",
-        "/dav/legacy-parent.txt/existing-target.txt",
+        f"/dav/{legacy_path}",
         auth,
         {"Depth": "0"},
     )
     g.case(
         "copy.dest.file-parent-existing.preserved",
         {
-            "note": "409 precedes purge for a legacy child whose parent is a file",
+            "note": "409 precedes purge when a higher ancestor is a file",
             "overwrite_f_status": overwrite_f_status,
             "copy_status": copy_status,
             "row_status": row_status,
@@ -569,6 +589,49 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
         {"path": SANDBOX, "items": [{"path": f"{SANDBOX}/direct.bin"}]},
     )
     calls_case("fm.delete.calls", "the row and the object go together")
+
+    print("\n== WebDAV direct file parents stop every production write path ==")
+    before_direct_parent_keys = fake.keys()
+    put_status, _, _ = dav(
+        B,
+        "PUT",
+        "/dav/legacy-parent.txt/new-put.txt",
+        auth,
+        body=b"must not upload",
+    )
+    mkcol_status, _, _ = dav(
+        B,
+        "MKCOL",
+        "/dav/legacy-parent.txt/new-col",
+        auth,
+    )
+    move_status, _, _ = dav(
+        B,
+        "MOVE",
+        "/dav/empty-dir",
+        auth,
+        {"Destination": "/dav/legacy-parent.txt/new-move"},
+    )
+    copy_status, _, _ = dav(
+        B,
+        "COPY",
+        "/dav/docs/notes.txt",
+        auth,
+        {"Destination": "/dav/legacy-parent.txt/new-copy.txt"},
+    )
+    g.case(
+        "write.dest.file-parent.preflight",
+        {
+            "note": "PUT MKCOL MOVE and COPY reject a direct file parent before effects",
+            "put_status": put_status,
+            "mkcol_status": mkcol_status,
+            "move_status": move_status,
+            "copy_status": copy_status,
+            "objects_unchanged": fake.keys() == before_direct_parent_keys,
+            "object_calls": scrub(fake.calls()),
+        },
+    )
+    fake.clear_calls()
 
     # What is still not covered here, and why it is not a fake's job.
     g.skip(

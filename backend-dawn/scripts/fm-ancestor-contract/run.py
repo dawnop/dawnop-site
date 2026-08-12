@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
@@ -144,8 +145,8 @@ def rows(ctx, prefix=None):
     query = 'SELECT path, is_dir, "key", content_type, size FROM files'
     params = ()
     if prefix is not None:
-        query += " WHERE path = ? OR path LIKE ?"
-        params = (prefix, f"{prefix}/%")
+        query += " WHERE path = ? OR instr(path, ? || '/') = 1"
+        params = (prefix, prefix)
     query += " ORDER BY path"
     with sqlite3.connect(ctx.db) as connection:
         return connection.execute(query, params).fetchall()
@@ -232,17 +233,6 @@ def assert_fm_missing_ancestors(ctx, checks):
         },
     )[0]
 
-    add_file(ctx, "rename-missing/source.txt", False, "rename-missing-object")
-    statuses["rename"] = api(
-        ctx,
-        "/api/fm/rename",
-        {
-            "path": "qiniu://rename-missing",
-            "item": "qiniu://rename-missing/source.txt",
-            "name": "renamed.txt",
-        },
-    )[0]
-
     for endpoint, status in statuses.items():
         checks.equal(status, 200, f"FM {endpoint} keeps missing-ancestor behavior")
     checks.equal(
@@ -272,16 +262,297 @@ def assert_fm_missing_ancestors(ctx, checks):
         "copy",
         "copy/a",
         "copy/a/notes.txt",
-        "rename-missing/renamed.txt",
     }
     actual_paths = {row[0] for row in rows(ctx)}
     checks.true(
         expected_paths <= actual_paths, "FM writes did not create expected rows"
     )
-    checks.true(
-        "rename-missing" not in actual_paths,
-        "rename unexpectedly created an ordinary missing ancestor",
+
+
+def assert_rename_missing_ancestor_no_fill(ctx, checks):
+    add_file(ctx, "rename-missing/source.txt", False, "rename-missing-object")
+    before_keys = ctx.fake.keys()
+    ctx.fake.clear_calls()
+    status, _ = api(
+        ctx,
+        "/api/fm/rename",
+        {
+            "path": "qiniu://rename-missing",
+            "item": "qiniu://rename-missing/source.txt",
+            "name": "renamed.txt",
+        },
     )
+    paths = {row[0] for row in rows(ctx)}
+    checks.equal(status, 200, "rename with an absent ancestor")
+    checks.true(
+        "rename-missing/renamed.txt" in paths,
+        "rename did not rewrite the target row",
+    )
+    checks.true(
+        "rename-missing/source.txt" not in paths,
+        "rename left the source row",
+    )
+    checks.true(
+        "rename-missing" not in paths,
+        "rename synthesized a previously absent ancestor",
+    )
+    checks.equal(ctx.fake.keys(), before_keys, "rename changed objects")
+    checks.equal(ctx.fake.calls(), [], "rename reached Qiniu")
+
+
+def add_tree(ctx, root, child, key):
+    add_file(ctx, root, True)
+    add_file(ctx, f"{root}/{child}", False, key)
+
+
+def assert_literal_prefix_isolated(ctx, checks):
+    add_tree(ctx, "search%root", "literal-hit.txt", "search-percent-object")
+    add_tree(ctx, "searchXroot", "alias-hit.txt", "search-alias-object")
+    query = urllib.parse.urlencode(
+        {"path": "qiniu://search%root", "filter": "hit", "deep": "1"}
+    )
+    search_status, search_raw = api(ctx, f"/api/fm/search?{query}", method="GET")
+    checks.equal(search_status, 200, "literal percent search status")
+    search_body = json.loads(search_raw)
+    search_paths = {entry["path"] for entry in search_body["files"]}
+    checks.equal(
+        search_paths,
+        {"qiniu://search%root/literal-hit.txt"},
+        "search expanded a literal percent prefix",
+    )
+
+    add_tree(ctx, "fm-delete%root", "literal.txt", "fm-delete-literal-object")
+    add_tree(ctx, "fm-deleteXroot", "sentinel.txt", "fm-delete-sentinel-object")
+    fm_delete_status, _ = api(
+        ctx,
+        "/api/fm/delete",
+        {
+            "path": "qiniu://",
+            "items": [{"path": "qiniu://fm-delete%root"}],
+        },
+    )
+    checks.equal(fm_delete_status, 200, "FM literal percent DELETE status")
+    checks.true(
+        "fm-deleteXroot/sentinel.txt" in {row[0] for row in rows(ctx)},
+        "FM DELETE removed a percent lookalike subtree",
+    )
+    checks.true(
+        "fm-delete-sentinel-object" in ctx.fake.keys(),
+        "FM DELETE removed a percent lookalike object",
+    )
+
+    add_tree(ctx, "dav_delete_root", "literal.txt", "dav-delete-literal-object")
+    add_tree(ctx, "davXdeleteXroot", "sentinel.txt", "dav-delete-sentinel-object")
+    dav_delete_status, _ = dav(ctx, "DELETE", "/dav/dav_delete_root")
+    checks.equal(dav_delete_status, 204, "WebDAV literal underscore DELETE status")
+    checks.true(
+        "davXdeleteXroot/sentinel.txt" in {row[0] for row in rows(ctx)},
+        "WebDAV DELETE removed an underscore lookalike subtree",
+    )
+    checks.true(
+        "dav-delete-sentinel-object" in ctx.fake.keys(),
+        "WebDAV DELETE removed an underscore lookalike object",
+    )
+
+    add_file(ctx, "fm-copy-dest", True)
+    add_file(ctx, "fm-copy%root", True)
+    add_tree(ctx, "fm-copyXroot", "sentinel.txt", "fm-copy-sentinel-object")
+    fm_copy_status, _ = api(
+        ctx,
+        "/api/fm/copy",
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://fm-copy-dest",
+            "sources": ["qiniu://fm-copy%root"],
+        },
+    )
+    checks.equal(fm_copy_status, 200, "FM literal percent COPY status")
+    copied_paths = {row[0] for row in rows(ctx, "fm-copy-dest/fm-copy%root")}
+    checks.equal(
+        copied_paths,
+        {"fm-copy-dest/fm-copy%root"},
+        "FM COPY expanded a literal percent subtree",
+    )
+    checks.true(
+        "fm-copyXroot/sentinel.txt" in {row[0] for row in rows(ctx)},
+        "FM COPY changed its percent lookalike source",
+    )
+
+    add_file(ctx, "dav-copy-dest", True)
+    add_file(ctx, "dav_copy_root", True)
+    add_tree(ctx, "davXcopyXroot", "sentinel.txt", "dav-copy-sentinel-object")
+    dav_copy_status, _ = dav(
+        ctx,
+        "COPY",
+        "/dav/dav_copy_root",
+        {"Destination": "/dav/dav-copy-dest/dav_copy_root"},
+    )
+    checks.equal(dav_copy_status, 201, "WebDAV literal underscore COPY status")
+    checks.equal(
+        {row[0] for row in rows(ctx, "dav-copy-dest/dav_copy_root")},
+        {"dav-copy-dest/dav_copy_root"},
+        "WebDAV COPY expanded a literal underscore subtree",
+    )
+    checks.true(
+        "davXcopyXroot/sentinel.txt" in {row[0] for row in rows(ctx)},
+        "WebDAV COPY changed its underscore lookalike source",
+    )
+
+    add_file(ctx, "fm-move-dest", True)
+    add_tree(ctx, "fm-move%root", "literal.txt", "fm-move-literal-object")
+    add_tree(ctx, "fm-moveXroot", "sentinel.txt", "fm-move-sentinel-object")
+    fm_move_status, _ = api(
+        ctx,
+        "/api/fm/move",
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://fm-move-dest",
+            "sources": ["qiniu://fm-move%root"],
+        },
+    )
+    checks.equal(fm_move_status, 200, "FM literal percent MOVE status")
+    checks.true(
+        "fm-moveXroot/sentinel.txt" in {row[0] for row in rows(ctx)},
+        "FM MOVE changed a percent lookalike subtree",
+    )
+
+    add_file(ctx, "dav-move-dest", True)
+    add_tree(ctx, "dav_move_root", "literal.txt", "dav-move-literal-object")
+    add_tree(ctx, "davXmoveXroot", "sentinel.txt", "dav-move-sentinel-object")
+    dav_move_status, _ = dav(
+        ctx,
+        "MOVE",
+        "/dav/dav_move_root",
+        {"Destination": "/dav/dav-move-dest/dav_move_root"},
+    )
+    checks.equal(dav_move_status, 201, "WebDAV literal underscore MOVE status")
+    checks.true(
+        "davXmoveXroot/sentinel.txt" in {row[0] for row in rows(ctx)},
+        "WebDAV MOVE changed an underscore lookalike subtree",
+    )
+
+    add_tree(ctx, "purge%root", "old.txt", "purge-literal-object")
+    add_tree(ctx, "purgeXroot", "sentinel.txt", "purge-sentinel-object")
+    purge_status, _ = dav(
+        ctx,
+        "COPY",
+        "/dav/empty-dir",
+        {"Destination": "/dav/purge%25root"},
+    )
+    checks.equal(purge_status, 204, "WebDAV literal percent purge status")
+    checks.true(
+        "purgeXroot/sentinel.txt" in {row[0] for row in rows(ctx)},
+        "WebDAV purge removed a percent lookalike subtree",
+    )
+    checks.true(
+        "purge-sentinel-object" in ctx.fake.keys(),
+        "WebDAV purge removed a percent lookalike object",
+    )
+
+
+def assert_webdav_copy_parent_order(ctx, checks):
+    seed_deep_file_ancestor(ctx, "dirty-copy-source")
+    add_file(
+        ctx,
+        "dirty-copy-source/legacy-dir/child.txt",
+        False,
+        "repair-copy-child-object",
+    )
+    add_file(ctx, "repair-copy-destination", True)
+    fm_status, _ = api(
+        ctx,
+        "/api/fm/copy",
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://repair-copy-destination",
+            "sources": ["qiniu://dirty-copy-source/legacy-dir"],
+        },
+    )
+    checks.equal(
+        fm_status,
+        200,
+        "copying a clean subtree out of dirty external ancestry",
+    )
+    checks.true(
+        "repair-copy-destination/legacy-dir/child.txt" in {row[0] for row in rows(ctx)},
+        "repair copy lost its child",
+    )
+    checks.true(
+        "dirty-copy-source/legacy-dir/child.txt" in {row[0] for row in rows(ctx)},
+        "repair copy removed its source",
+    )
+
+    add_file(ctx, "ordered-destination", True)
+    add_file(ctx, "ordered-source", True)
+    add_file(ctx, "ordered-source/level-one", True)
+    add_file(ctx, "ordered-source/level-one/level-two", True)
+    add_file(
+        ctx,
+        "ordered-source/level-one/level-two/deep.txt",
+        False,
+        "ordered-deep-object",
+    )
+    add_file(
+        ctx,
+        "ordered-source/root.txt",
+        False,
+        "ordered-root-object",
+    )
+    status, _ = dav(
+        ctx,
+        "COPY",
+        "/dav/ordered-source",
+        {"Destination": "/dav/ordered-destination/copied"},
+    )
+    checks.equal(status, 201, "WebDAV multilevel COPY status")
+    checks.equal(
+        {row[0] for row in rows(ctx, "ordered-destination/copied")},
+        {
+            "ordered-destination/copied",
+            "ordered-destination/copied/level-one",
+            "ordered-destination/copied/level-one/level-two",
+            "ordered-destination/copied/level-one/level-two/deep.txt",
+            "ordered-destination/copied/root.txt",
+        },
+        "WebDAV COPY did not materialize parents before children",
+    )
+
+
+def assert_webdav_reverse_overlap(ctx, checks):
+    for root in ("overlap-move", "overlap-copy", "overlap-overwrite-f"):
+        add_file(ctx, root, True)
+        add_tree(ctx, f"{root}/source", "child.txt", f"{root}-child-object")
+    before_db = db_state(ctx)
+    before_keys = ctx.fake.keys()
+    ctx.fake.clear_calls()
+
+    move_status, _ = dav(
+        ctx,
+        "MOVE",
+        "/dav/overlap-move/source",
+        {"Destination": "/dav/overlap-move"},
+    )
+    copy_status, _ = dav(
+        ctx,
+        "COPY",
+        "/dav/overlap-copy/source",
+        {"Destination": "/dav/overlap-copy"},
+    )
+    overwrite_f_status, _ = dav(
+        ctx,
+        "COPY",
+        "/dav/overlap-overwrite-f/source",
+        {
+            "Destination": "/dav/overlap-overwrite-f",
+            "Overwrite": "F",
+        },
+    )
+    checks.equal(move_status, 409, "WebDAV MOVE to source ancestor")
+    checks.equal(copy_status, 409, "WebDAV COPY to source ancestor")
+    checks.equal(overwrite_f_status, 412, "Overwrite:F remains first for an ancestor")
+    checks.equal(db_state(ctx), before_db, "reverse overlap changed DB or ledger")
+    checks.equal(ctx.fake.keys(), before_keys, "reverse overlap changed objects")
+    checks.equal(ctx.fake.calls(), [], "reverse overlap reached Qiniu")
 
 
 def assert_fm_external_effect_preflight(ctx, checks):
@@ -412,18 +683,10 @@ def assert_register_preflight(ctx, checks):
     checks.equal(ctx.fake.calls(), [], "register reached Qiniu before preflight")
 
 
-def assert_reparent_preflight(ctx, checks):
+def assert_move_reparent_preflight(ctx, checks):
     seed_deep_file_ancestor(ctx, "blocked")
     add_file(ctx, "blocked/legacy-dir/child.txt", False, "repair-child-object")
-    seed_deep_file_ancestor(ctx, "blocked-copy")
-    add_file(
-        ctx,
-        "blocked-copy/legacy-dir/child.txt",
-        False,
-        "repair-copy-child-object",
-    )
     add_file(ctx, "good", True)
-    add_file(ctx, "good-copy", True)
     repair_status, _ = api(
         ctx,
         "/api/fm/move",
@@ -437,49 +700,11 @@ def assert_reparent_preflight(ctx, checks):
     repair_paths = {row[0] for row in rows(ctx)}
     checks.true("good/legacy-dir/child.txt" in repair_paths, "repair move lost child")
     checks.true("blocked/legacy-dir" not in repair_paths, "repair move left source")
-    repair_copy_status, _ = api(
-        ctx,
-        "/api/fm/copy",
-        {
-            "path": "qiniu://",
-            "destination": "qiniu://good-copy",
-            "sources": ["qiniu://blocked-copy/legacy-dir"],
-        },
-    )
-    checks.equal(
-        repair_copy_status,
-        200,
-        "copying a clean subtree out of a dirty tree",
-    )
-    repair_copy_paths = {row[0] for row in rows(ctx)}
-    checks.true(
-        "good-copy/legacy-dir/child.txt" in repair_copy_paths,
-        "repair copy lost child",
-    )
-    checks.true(
-        "blocked-copy/legacy-dir/child.txt" in repair_copy_paths,
-        "repair copy removed source",
-    )
 
     seed_deep_file_ancestor(ctx, "blocked-two")
-    add_file(
-        ctx,
-        "blocked-two/legacy-dir/old.txt",
-        False,
-        "reparent-old-object",
-    )
     before_db = db_state(ctx)
     before_keys = ctx.fake.keys()
     ctx.fake.clear_calls()
-    rename_status, _ = api(
-        ctx,
-        "/api/fm/rename",
-        {
-            "path": "qiniu://blocked-two/legacy-dir",
-            "item": "qiniu://blocked-two/legacy-dir/old.txt",
-            "name": "renamed.txt",
-        },
-    )
     move_status, _ = api(
         ctx,
         "/api/fm/move",
@@ -489,11 +714,36 @@ def assert_reparent_preflight(ctx, checks):
             "sources": ["qiniu://archive"],
         },
     )
-    checks.equal(rename_status, 409, "rename file-ancestor rejection")
     checks.equal(move_status, 409, "move file-ancestor rejection")
-    checks.equal(db_state(ctx), before_db, "rejected reparent changed DB")
-    checks.equal(ctx.fake.keys(), before_keys, "rejected reparent changed objects")
-    checks.equal(ctx.fake.calls(), [], "rejected reparent reached Qiniu")
+    checks.equal(db_state(ctx), before_db, "rejected move changed DB")
+    checks.equal(ctx.fake.keys(), before_keys, "rejected move changed objects")
+    checks.equal(ctx.fake.calls(), [], "rejected move reached Qiniu")
+
+
+def assert_rename_file_ancestor_preflight(ctx, checks):
+    seed_deep_file_ancestor(ctx, "blocked-rename")
+    add_file(
+        ctx,
+        "blocked-rename/legacy-dir/old.txt",
+        False,
+        "rename-old-object",
+    )
+    before_db = db_state(ctx)
+    before_keys = ctx.fake.keys()
+    ctx.fake.clear_calls()
+    status, _ = api(
+        ctx,
+        "/api/fm/rename",
+        {
+            "path": "qiniu://blocked-rename/legacy-dir",
+            "item": "qiniu://blocked-rename/legacy-dir/old.txt",
+            "name": "renamed.txt",
+        },
+    )
+    checks.equal(status, 409, "rename file-ancestor rejection")
+    checks.equal(db_state(ctx), before_db, "rejected rename changed DB")
+    checks.equal(ctx.fake.keys(), before_keys, "rejected rename changed objects")
+    checks.equal(ctx.fake.calls(), [], "rejected rename reached Qiniu")
 
 
 def assert_conflict_mapping(ctx, checks):
@@ -678,15 +928,20 @@ def assert_webdav_missing_parent(ctx, checks):
 
 ASSERTIONS = [
     ("fm.missing-ancestors.auto-created", assert_fm_missing_ancestors),
+    ("fm.rename.missing-ancestor-no-fill", assert_rename_missing_ancestor_no_fill),
+    ("tree.literal-prefix.isolated", assert_literal_prefix_isolated),
+    ("webdav.copy.parent-before-child", assert_webdav_copy_parent_order),
     ("fm.external-effects.preflight", assert_fm_external_effect_preflight),
     ("fm.directory-target.preflight", assert_directory_target_preflight),
     ("fm.upload-token.preflight", assert_upload_token_preflight),
     ("fm.register.preflight", assert_register_preflight),
-    ("fm.reparent.preflight", assert_reparent_preflight),
+    ("fm.move.reparent-preflight", assert_move_reparent_preflight),
+    ("fm.rename.file-ancestor-preflight", assert_rename_file_ancestor_preflight),
     ("fm.conflict.maps-409", assert_conflict_mapping),
     ("subtree.internal-shape.preflight", assert_internal_subtree_shape),
     ("webdav.full-ancestor.preflight", assert_webdav_full_ancestor),
     ("webdav.missing-parent.rejects", assert_webdav_missing_parent),
+    ("webdav.reverse-overlap.rejects", assert_webdav_reverse_overlap),
 ]
 
 

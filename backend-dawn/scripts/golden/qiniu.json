@@ -18,7 +18,7 @@
    }
   },
   "copy.dest.file-parent-existing.preserved": {
-   "note": "409 precedes purge for a legacy child whose parent is a file",
+   "note": "409 precedes purge when a higher ancestor is a file",
    "overwrite_f_status": 412,
    "copy_status": 409,
    "row_status": 207,
@@ -863,6 +863,15 @@
      "existed": true
     }
    ]
+  },
+  "write.dest.file-parent.preflight": {
+   "note": "PUT MKCOL MOVE and COPY reject a direct file parent before effects",
+   "put_status": 409,
+   "mkcol_status": 409,
+   "move_status": 409,
+   "copy_status": 409,
+   "objects_unchanged": true,
+   "object_calls": []
   }
  }
 }

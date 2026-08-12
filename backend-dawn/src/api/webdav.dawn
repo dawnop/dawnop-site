@@ -32,7 +32,7 @@ use web/router.{Route, route_method_of, tagged}
 use db/db.{with_db}
 use svc/auth.{Auth, Qiniu, check_basic}
 use svc/files.{signed_url, gc_superseded, delete_object_of, rebase, copy_object}
-use repo/repo_fm.{FileRow, get_row, children, subtree_rows, insert_file, insert_folder, delete_row, reparent, validate_webdav_ancestors, validate_webdav_subtree_destination}
+use repo/repo_fm.{FileRow, get_row, children, subtree_rows, insert_file_strict, insert_folder_strict, delete_row, reparent_strict, validate_webdav_ancestors, validate_webdav_subtree_destination}
 use util/paths.{basename, parent_rel, ext, ts, guess_mime}
 use qiniu/rs.{upload_file}
 use java "java.io.File"
@@ -339,17 +339,25 @@ fn parent_is_directory(parent: String, row: Option[FileRow]) -> Bool =
   }
 
 fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {
-  let checked = with_db(a.db.path, a.db.ext, c => validate_webdav_ancestors(c, rel))
-  match checked {
-    Ok(_) -> Ok(true)
-    Err(m) -> {
-      let (k, _t) = split_kind(m)
-      match k {
-        KConflict -> Ok(false)
-        _ -> Err(m)
+  with_db(a.db.path, a.db.ext, c => {
+    let parent = parent_rel(rel)
+    let found: Result[Option[FileRow], String] = if parent == "" { Ok(None) } else { get_row(c, parent) }
+    let row = found?
+    if not parent_is_directory(parent, row) {
+      Ok(false)
+    } else {
+      match validate_webdav_ancestors(c, parent) {
+        Ok(_) -> Ok(true)
+        Err(m) -> {
+          let (k, _t) = split_kind(m)
+          match k {
+            KConflict -> Ok(false)
+            _ -> Err(m)
+          }
+        }
       }
     }
-  }
+  })
 }
 
 fn conflict_or(other: Int) -> fn(String) -> HttpError =
@@ -402,7 +410,10 @@ fn put_do(a: Auth, req: Request, rel: String, existing: Option[FileRow]) -> Resu
 
 fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int, existing: Option[FileRow]) -> Result[Response, HttpError] !io =
   {
-    let _i = as_http_with(with_db(a.db.path, a.db.ext, c => insert_file(c, rel, key, mime, size)), conflict_or(500))?
+    # The upload and SQLite cannot share a transaction. The strict final write
+    # prevents invalid metadata after a race, but a rejected race can leave the
+    # freshly uploaded object for later garbage collection.
+    let _i = as_http_with(with_db(a.db.path, a.db.ext, c => insert_file_strict(c, rel, key, mime, size)), conflict_or(500))?
     let _d = gc_superseded(a.qiniu, existing, key)
     match existing {
       Some(_) -> Ok(text(204, ""))
@@ -456,7 +467,7 @@ fn mkcol(a: Auth, rel: String) -> Result[Response, HttpError] !io =
         if not ok {
           Err(http_error(409, "父目录不存在"))
         } else {
-          let _i = as_http_with(with_db(a.db.path, a.db.ext, c => insert_folder(c, rel)), conflict_or(500))?
+          let _i = as_http_with(with_db(a.db.path, a.db.ext, c => insert_folder_strict(c, rel)), conflict_or(500))?
           Ok(text(201, ""))
         }
       }
@@ -763,6 +774,9 @@ fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Res
     }
   }
 
+fn destination_is_source_ancestor(rel: String, dst: String) -> Bool =
+  str.starts_with(rel, dst ++ "/")
+
 fn mc_check_dst(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) -> Result[Response, HttpError] !io =
   {
     let dst_existing = as_http(with_db(a.db.path, a.db.ext, c => get_row(c, dst)), 500)?
@@ -771,11 +785,15 @@ fn mc_check_dst(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) 
       Some(_) ->
         if not overwrite {
           Err(http_error(412, "目标已存在"))
+        } else if destination_is_source_ancestor(rel, dst) {
+          Err(http_error(409, "不能移动/复制到自身或祖先目录"))
         } else {
           let _v = as_http_with(with_db(a.db.path, a.db.ext, c => validate_webdav_subtree_destination(c, rel, dst)), conflict_or(500))?
           mc_require_parent(a, rel, dst, is_move, true)
         }
-      None -> {
+      None -> if destination_is_source_ancestor(rel, dst) {
+        Err(http_error(409, "不能移动/复制到自身或祖先目录"))
+      } else {
         let _v = as_http_with(with_db(a.db.path, a.db.ext, c => validate_webdav_subtree_destination(c, rel, dst)), conflict_or(500))?
         mc_require_parent(a, rel, dst, is_move, false)
       }
@@ -812,7 +830,7 @@ fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, dst_exist
 fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io = {
   let outcome: Result[Int, String] =
     if is_move {
-      with_db(a.db.path, a.db.ext, c => reparent(c, rel, dst))
+      with_db(a.db.path, a.db.ext, c => reparent_strict(c, rel, dst))
     } else {
       copy_subtree(a, rel, dst)
     }
@@ -843,7 +861,7 @@ fn copy_rows(a: Auth, rel: String, dst: String, rows: List[FileRow], i: Int) -> 
     let dst_path = rebase(rel, dst, o.path)
     let _step =
       if o.is_dir {
-        with_db(a.db.path, a.db.ext, c => insert_folder(c, dst_path))?
+        with_db(a.db.path, a.db.ext, c => insert_folder_strict(c, dst_path))?
       } else {
         copy_one_file(a, o, dst_path)?
       }
@@ -853,7 +871,10 @@ fn copy_rows(a: Auth, rel: String, dst: String, rows: List[FileRow], i: Int) -> 
 fn copy_one_file(a: Auth, o: FileRow, dst_path: String) -> Result[Int, String] !io = {
   let src_key = unwrap_or(o.key, "")
   let new_key = as_upstream(copy_object(a.qiniu, src_key))?
-  with_db(a.db.path, a.db.ext, c => insert_file(c, dst_path, new_key, o.content_type, o.size))
+  # A concurrent metadata change after copy_object cannot be rolled back in the
+  # bucket. The strict insert still refuses an invalid tree and may leave only an
+  # unreferenced copied object, never invalid SQLite metadata.
+  with_db(a.db.path, a.db.ext, c => insert_file_strict(c, dst_path, new_key, o.content_type, o.size))
 }
 
 # ---- LOCK (fake) / UNLOCK ----
@@ -1176,11 +1197,10 @@ fn parent_row(path: String, is_dir: Bool) -> FileRow =
     updated_at: "2026-01-01 00:00:00",
   }
 
-test "parent check accepts only root or a directory row" {
+test "parent check accepts root and directories but rejects missing rows" {
   assert parent_is_directory("", None)
   assert parent_is_directory("docs", Some(parent_row("docs", true)))
   assert not parent_is_directory("missing", None)
-  assert not parent_is_directory("example.txt", Some(parent_row("example.txt", false)))
 }
 
 test "range_pair parses the WebDAV Range forms against a total size" {

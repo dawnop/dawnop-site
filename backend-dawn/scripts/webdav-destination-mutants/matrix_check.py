@@ -4,7 +4,7 @@
 import argparse
 from pathlib import Path
 
-VERSION = "2"
+VERSION = "3"
 VALID_ROLES = {"test", "qiniu"}
 EXPECTED_ROWS = [
     "drop-dot-check|test|dest_rel rejects one-dot segments after one decode",
@@ -26,7 +26,7 @@ EXPECTED_ROWS = [
     "skip-unreserved-prefix-normalization|test|dest_rel normalizes unreserved prefix octets",
     "restore-replacement-utf8|test|dest_rel rejects invalid percent UTF-8 without aliasing",
     "purge-before-parent-check|qiniu|copy.dest.file-parent-existing.preserved",
-    "accept-file-parent|test|parent check accepts only root or a directory row",
+    "accept-file-parent|qiniu|write.dest.file-parent.preflight",
 ]
 EXPECTED_MUTANTS = [row.split("|", 1)[0] for row in EXPECTED_ROWS]
 
