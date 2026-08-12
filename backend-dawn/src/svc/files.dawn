@@ -2,12 +2,9 @@
 # Two groups live here:
 #
 #  1. The object-store primitives api_fm and webdav both need — minting a signed
-#     URL, rebasing a path onto a new subtree root, deciding which superseded key
-#     to collect, copying an object to a fresh key, deleting a row's object. They
-#     return Result and never map to a status code, because the two callers map
-#     failures differently (fm answers 502/conflict JSON, WebDAV answers 502/500
-#     through errkind) and hold their database handles differently (fm runs a
-#     whole tree walk on one connection, WebDAV opens one per step).
+#     URL, copying to fresh keys, and reference-aware best-effort collection after
+#     SQLite has committed. External effects never decide which metadata row is
+#     current; repository transactions return the exact cleanup candidates.
 #
 #  2. api_fm's own tree walks (rename/move/copy/delete/save/upload), lifted out of
 #     the route file so that file is handlers and wire shapes only.
@@ -19,15 +16,15 @@
 use std/str
 use std/map
 use std/bytes
-use db/sql.{DbConn}
+use db/sql.{DbConn, with_immediate_tx}
 use svc/auth.{Auth, Qiniu}
 use db/db.{with_db}
-use util/paths.{fm_split, basename, ext, fm_join, full, guess_mime, strip_slashes, strip_trailing_slash}
-use repo/repo_fm.{FileRow, CopiedRow, CopyTree, fs_data, taken, insert_folder, insert_file, reparent_allow_missing, reparent_fill_missing, get_row, delete_row, subtree_rows, entry_json, validate_fm_ancestors, validate_fm_file_target, validate_subtree_destination, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}
+use util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime, strip_slashes, strip_trailing_slash}
+use repo/repo_fm.{FileRow, ReplaceOutcome, MovePlan, CopiedRow, CopyTree, fs_data, taken, insert_folder, replace_file, create_file_once, reparent_allow_missing, prepare_fm_move, commit_fm_moves, get_row, delete_subtrees, entry_json, key_referenced, key_pending, validate_fm_ancestors, validate_fm_file_target, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}
 use util/crypto.{uuid_hex}
 use qiniu/sign.{private_url}
 use qiniu/rs.{delete_obj, copy_obj, upload_text, upload_bytes}
-use util/errkind.{conflict}
+use util/errkind.{conflict, as_upstream}
 use util/jsonx.{obj, jstr}
 use util/ttl.{now_s}
 use json/value.{Json, JArr, JObj, JStr}
@@ -47,51 +44,64 @@ pub fn signed_url(q: Qiniu, key: String, suffix: String) -> String !io = {
 pub fn rebase(src_root: String, dst_root: String, path: String) -> String =
   dst_root ++ str.slice(path, str.len(src_root), str.len(path))
 
-## The object key that an overwrite orphans, if any: the row's current key when it
-## differs from the one just written. Directories carry no key (insert_folder
-## stores NULL), so a normal directory answers None and is never touched.
-##
-## Keyed off the key alone deliberately. New writes reject directory targets,
-## but a legacy mixed row may still carry an object key; if a caller has already
-## replaced that key, collecting the old object is safer than leaking it.
-pub fn superseded_key(existing: Option[FileRow], new_key: String) -> Option[String] =
-  match existing {
-    Some(o) ->
-      match o.key {
-        Some(k) -> if k != new_key { Some(k) } else { None }
-        None -> None
-      }
-    None -> None
-  }
-
-## Best-effort collection of the object an overwrite superseded. Failure is
-## ignored on purpose: the new object is already written and the row already
-## points at it, so a stuck delete must not fail the request — it leaves an
-## orphan for the sweeper instead.
-pub fn gc_superseded(q: Qiniu, existing: Option[FileRow], new_key: String) -> Unit !io = {
-  let _r: Result[Unit, String] =
-    match superseded_key(existing, new_key) {
-      Some(k) -> delete_obj(q.rs_host, q.ak, q.sk, q.bucket, k)
-      None -> Ok(())
-    }
+fn best_effort_gc(body: fn() -> Result[Unit, String] !io) -> Unit !io = {
+  let _outcome: Result[Result[Unit, String], ForeignError] = catch_panic(body)
   ()
 }
+
+pub fn gc_unreferenced(a: Auth, candidate: Option[String]) -> Unit !io =
+  best_effort_gc(() =>
+      with_db(a.db.path, a.db.ext, c => gc_unreferenced_on(a.qiniu, c, candidate)))
+
+fn gc_unreferenced_on(q: Qiniu, c: DbConn, candidate: Option[String]) -> Result[Unit, String] !io =
+  match candidate {
+    Some(key) ->
+      if str.trim(key) == "" {
+        Ok(())
+      } else {
+        with_immediate_tx(c, () => {
+          let referenced = key_referenced(c, key)?
+          let pending = key_pending(c, key)?
+          if referenced || pending {
+            Ok(())
+          } else {
+            let _d: Result[Unit, String] = delete_obj(q.rs_host, q.ak, q.sk, q.bucket, key)
+            Ok(())
+          }
+        })
+      }
+    None -> Ok(())
+  }
+
+pub fn gc_rows_unreferenced(a: Auth, rows: List[FileRow]) -> Unit !io =
+  gc_row_candidates(a, rows, 0)
+
+fn gc_row_candidates(a: Auth, rows: List[FileRow], i: Int) -> Unit !io =
+  if i >= len(rows) {
+    ()
+  } else {
+    let _g = gc_unreferenced(a, rows[i].key)
+    gc_row_candidates(a, rows, i + 1)
+  }
+
+pub fn gc_copy_tree_unreferenced(a: Auth, tree: CopyTree) -> Unit !io =
+  gc_copied_rows_unreferenced(a, tree.rows, 0)
+
+fn gc_copied_rows_unreferenced(a: Auth, rows: List[CopiedRow], i: Int) -> Unit !io =
+  if i >= len(rows) {
+    ()
+  } else {
+    let _g = gc_unreferenced(a, rows[i].copied_key)
+    gc_copied_rows_unreferenced(a, rows, i + 1)
+  }
 
 ## Duplicate an object under a fresh uuid key; Ok carries the new key. This is
 ## what makes copy (unlike rename/move) a real object-store operation.
 pub fn copy_object(q: Qiniu, src_key: String) -> Result[String, String] !io = {
   let new_key = uuid_hex()
-  let _c = copy_obj(q.rs_host, q.ak, q.sk, q.bucket, src_key, new_key)?
+  let _c = as_upstream(copy_obj(q.rs_host, q.ak, q.sk, q.bucket, src_key, new_key))?
   Ok(new_key)
 }
-
-## Delete the object a row points at. A directory, or a file row with no key,
-## has nothing to delete. Callers decide whether a failure is fatal.
-pub fn delete_object_of(q: Qiniu, o: FileRow) -> Result[Unit, String] !io =
-  match o.key {
-    Some(k) -> if o.is_dir { Ok(()) } else { delete_obj(q.rs_host, q.ak, q.sk, q.bucket, k) }
-    None -> Ok(())
-  }
 
 # ---- create folder ----
 
@@ -111,7 +121,9 @@ pub fn mk_folder(c: DbConn, rel: String, cur: String) -> Result[Option[Json], St
 # ---- rename / move (path-only: the qiniu objects are never touched) ----
 
 pub fn do_rename(c: DbConn, old: String, new_rel: String, cur: String) -> Result[Option[Json], String] !io =
-  if new_rel == old {
+  if not rename_parent_unchanged(old, new_rel) {
+    Err(conflict("重命名不能改变父目录：${full(old)}"))
+  } else if new_rel == old {
     let d = fs_data(c, cur)?
     Ok(Some(d))
   } else {
@@ -125,52 +137,35 @@ pub fn do_rename(c: DbConn, old: String, new_rel: String, cur: String) -> Result
     }
   }
 
+fn rename_parent_unchanged(old: String, new_rel: String) -> Bool =
+  parent_rel(new_rel) == parent_rel(old)
+
 pub fn do_move(c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
   {
-    let _p = preflight_move(c, sources, dest, i)?
-    apply_move(c, sources, dest, cur, i)
+    let plans = plan_fm_moves(c, sources, dest, i, [])?
+    let _m = commit_fm_moves(c, plans)?
+    fs_data(c, cur)
   }
 
-fn preflight_move(c: DbConn, sources: List[String], dest: String, i: Int) -> Result[Unit, String] !io =
+fn plan_fm_moves(c: DbConn, sources: List[String], dest: String, i: Int, acc: List[MovePlan]) -> Result[List[MovePlan], String] !io =
   if i >= len(sources) {
-    Ok(())
+    Ok(acc)
   } else {
     let src = fm_split(sources[i])
     if src == "" {
-      preflight_move(c, sources, dest, i + 1)
+      plan_fm_moves(c, sources, dest, i + 1, acc)
     } else {
       let new_rel = fm_join(dest, basename(src))
       if new_rel == src || str.starts_with(new_rel, "$src/") {
-        preflight_move(c, sources, dest, i + 1)
+        plan_fm_moves(c, sources, dest, i + 1, acc)
       } else {
         let t = taken(c, new_rel)?
         if t {
           Err(conflict("已存在同名项：${basename(new_rel)}"))
         } else {
-          let _v = validate_move_destination(c, src, new_rel)?
-          preflight_move(c, sources, dest, i + 1)
+          let plan = prepare_fm_move(c, src, new_rel)?
+          plan_fm_moves(c, sources, dest, i + 1, acc ++ [plan])
         }
-      }
-    }
-  }
-
-fn validate_move_destination(c: DbConn, src: String, new_rel: String) -> Result[Unit, String] !io =
-  validate_subtree_destination(c, src, new_rel)
-
-fn apply_move(c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
-  if i >= len(sources) {
-    fs_data(c, cur)
-  } else {
-    let src = fm_split(sources[i])
-    if src == "" {
-      apply_move(c, sources, dest, cur, i + 1)
-    } else {
-      let new_rel = fm_join(dest, basename(src))
-      if new_rel == src || str.starts_with(new_rel, "$src/") {
-        apply_move(c, sources, dest, cur, i + 1)
-      } else {
-        let _r = reparent_fill_missing(c, src, new_rel)?
-        apply_move(c, sources, dest, cur, i + 1)
       }
     }
   }
@@ -182,8 +177,13 @@ pub fn do_copy(q: Qiniu, c: DbConn, sources: List[String], dest: String, cur: St
     let planned = plan_fm_copies(c, sources, dest, i, [])?
     let _u = validate_copy_plan_targets(planned)?
     let copied = copy_tree_list_objects(q, planned, 0, [])?
-    let _db = commit_fm_copies(c, copied)?
-    fs_data(c, cur)
+    match commit_fm_copies(c, copied) {
+      Ok(_) -> fs_data(c, cur)
+      Err(m) -> {
+        let _gc = gc_copy_trees_on(q, c, copied, 0)
+        Err(m)
+      }
+    }
   }
 
 fn plan_fm_copies(c: DbConn, sources: List[String], dest: String, i: Int, acc: List[CopyTree]) -> Result[List[CopyTree], String] !io =
@@ -213,8 +213,17 @@ fn copy_tree_list_objects(q: Qiniu, trees: List[CopyTree], i: Int, acc: List[Cop
   if i >= len(trees) {
     Ok(acc)
   } else {
-    let copied = copy_tree_objects(q, trees[i])?
-    copy_tree_list_objects(q, trees, i + 1, acc ++ [copied])
+    match copy_tree_objects(q, trees[i]) {
+      Err(m) -> Err(m)
+      Ok(copied) ->
+        match copy_tree_list_objects(q, trees, i + 1, acc ++ [copied]) {
+          Ok(done) -> Ok(done)
+          Err(m) -> {
+            let _gc = cleanup_copy_tree_direct(q, copied)
+            Err(m)
+          }
+        }
+    }
   }
 
 ## Copy every keyed file in a prepared tree to a fresh object key. Metadata is
@@ -233,16 +242,70 @@ fn copy_tree_object_rows(q: Qiniu, rows: List[CopiedRow], i: Int, acc: List[Copi
     Ok(acc)
   } else {
     let row = rows[i]
-    let copied_key: Option[String] = if row.source.is_dir {
-      None
+    let copied_result: Result[Option[String], String] = if row.source.is_dir {
+      match row.source.key {
+        None -> Ok(None)
+        Some(_) -> Err(conflict("复制源目录携带对象 key：${full(row.source.path)}"))
+      }
     } else {
       match row.source.key {
-        Some(key) -> Some(copy_object(q, key)?)
-        None -> None
+        Some(key) ->
+          if str.trim(key) == "" {
+            Err(conflict("复制源文件的对象 key 为空：${full(row.source.path)}"))
+          } else {
+            Ok(Some(copy_object(q, key)?))
+          }
+        None -> Err(conflict("复制源文件缺少对象 key：${full(row.source.path)}"))
       }
     }
-    let copied = CopiedRow { source: row.source, copied_key: copied_key }
-    copy_tree_object_rows(q, rows, i + 1, acc ++ [copied])
+    match copied_result {
+      Err(m) -> Err(m)
+      Ok(copied_key) -> {
+        let copied = CopiedRow { source: row.source, copied_key: copied_key }
+        match copy_tree_object_rows(q, rows, i + 1, acc ++ [copied]) {
+          Ok(done) -> Ok(done)
+          Err(m) -> {
+            let _gc = cleanup_fresh_key(q, copied_key)
+            Err(m)
+          }
+        }
+      }
+    }
+  }
+
+fn cleanup_fresh_key(q: Qiniu, candidate: Option[String]) -> Unit !io = {
+  let _d: Result[Unit, String] = match candidate {
+    Some(key) -> delete_obj(q.rs_host, q.ak, q.sk, q.bucket, key)
+    None -> Ok(())
+  }
+  ()
+}
+
+fn cleanup_copy_tree_direct(q: Qiniu, tree: CopyTree) -> Unit !io =
+  cleanup_copied_rows_direct(q, tree.rows, 0)
+
+fn cleanup_copied_rows_direct(q: Qiniu, rows: List[CopiedRow], i: Int) -> Unit !io =
+  if i >= len(rows) {
+    ()
+  } else {
+    let _d = cleanup_fresh_key(q, rows[i].copied_key)
+    cleanup_copied_rows_direct(q, rows, i + 1)
+  }
+
+fn gc_copy_trees_on(q: Qiniu, c: DbConn, trees: List[CopyTree], i: Int) -> Unit !io =
+  if i >= len(trees) {
+    ()
+  } else {
+    let _g = gc_copied_rows_on(q, c, trees[i].rows, 0)
+    gc_copy_trees_on(q, c, trees, i + 1)
+  }
+
+fn gc_copied_rows_on(q: Qiniu, c: DbConn, rows: List[CopiedRow], i: Int) -> Unit !io =
+  if i >= len(rows) {
+    ()
+  } else {
+    let _g: Result[Unit, String] = gc_unreferenced_on(q, c, rows[i].copied_key)
+    gc_copied_rows_on(q, c, rows, i + 1)
   }
 
 # ---- delete ----
@@ -263,28 +326,37 @@ pub fn item_paths(m: Map[String, Json]) -> List[String] =
   }
 
 pub fn do_delete(q: Qiniu, c: DbConn, items: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
-  if i >= len(items) {
-    Ok(acc)
-  } else {
-    let rel = items[i]
-    if rel == "" {
-      do_delete(q, c, items, i + 1, acc)
-    } else {
-      let rows = subtree_rows(c, rel)?
-      let d2 = delete_rows(q, c, rows, 0, acc)?
-      do_delete(q, c, items, i + 1, d2)
-    }
+  {
+    let rels = delete_paths(items, i, [])
+    let rows = delete_subtrees(c, rels)?
+    let deleted = deleted_entries(rows, 0, [])?
+    let _gc = gc_deleted_rows(q, c, rows, 0)
+    Ok(acc ++ deleted)
   }
 
-fn delete_rows(q: Qiniu, c: DbConn, rows: List[FileRow], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
+fn delete_paths(items: List[String], i: Int, acc: List[String]) -> List[String] =
+  if i >= len(items) {
+    acc
+  } else if items[i] == "" {
+    delete_paths(items, i + 1, acc)
+  } else {
+    delete_paths(items, i + 1, acc ++ [items[i]])
+  }
+
+fn deleted_entries(rows: List[FileRow], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
   if i >= len(rows) {
     Ok(acc)
   } else {
-    let o = rows[i]
-    let _obj = delete_object_of(q, o)?
-    let e = entry_json(o)
-    let _d = delete_row(c, o.path)?
-    delete_rows(q, c, rows, i + 1, acc ++ [e])
+    let e = entry_json(rows[i])
+    deleted_entries(rows, i + 1, acc ++ [e])
+  }
+
+fn gc_deleted_rows(q: Qiniu, c: DbConn, rows: List[FileRow], i: Int) -> Unit !io =
+  if i >= len(rows) {
+    ()
+  } else {
+    let _g: Result[Unit, String] = gc_unreferenced_on(q, c, rows[i].key)
+    gc_deleted_rows(q, c, rows, i + 1)
   }
 
 pub fn merge_deleted(base: Json, deleted: List[Json]) -> Json =
@@ -306,18 +378,24 @@ pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json],
   } else {
     let mime = guess_mime(rel)
     let key = uuid_hex()
-    let _up = upload_text(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, "", mime, now_s() + a.qiniu.expires)?
-    let d = with_db(a.db.path, a.db.ext, c => create_file_db(c, rel, key, mime, cur))?
-    Ok(Some(d))
+    let _up = as_upstream(upload_text(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, "", mime, now_s() + a.qiniu.expires))?
+    match with_db(a.db.path, a.db.ext, c => create_file_db(c, rel, key, mime, cur)) {
+      Ok(d) -> Ok(Some(d))
+      Err(m) -> {
+        let _gc = gc_unreferenced(a, Some(key))
+        Err(m)
+      }
+    }
   }
 }
 
 fn create_file_db(c: DbConn, rel: String, key: String, mime: String, cur: String) -> Result[Json, String] !io = {
-  let _i = insert_file(c, rel, key, mime, 0)?
+  let _i = create_file_once(c, rel, key, mime, 0)?
   fs_data(c, cur)
 }
 
-## Write text to a NEW qiniu key, repoint the row, drop the old key. Returns {path}.
+## Write text to a NEW qiniu key, repoint the row, then best-effort collect the
+## old key only when no metadata row still references it. Returns {path}.
 pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !io = {
   let checked: Result[Option[FileRow], String] = with_db(a.db.path, a.db.ext, c => {
     let _v = validate_effect_path(c, rel)?
@@ -326,15 +404,25 @@ pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !i
   let existing = checked?
   let mime = save_mime(existing, rel)
   let new_key = save_key(rel)
-  let _up = upload_text(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, new_key, content, mime, now_s() + a.qiniu.expires)?
-  let _db = with_db(a.db.path, a.db.ext, c => save_db(c, rel, new_key, mime, str.len(content)))?
-  let _gc = gc_superseded(a.qiniu, existing, new_key)
-  Ok(obj([("path", jstr(full(rel)))]))
+  let _up = as_upstream(upload_text(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, new_key, content, mime, now_s() + a.qiniu.expires))?
+  match with_db(a.db.path, a.db.ext, c => save_db(c, rel, new_key, mime, text_byte_size(content))) {
+    Ok(outcome) -> {
+      let _gc = gc_unreferenced(a, outcome.superseded_key)
+      Ok(obj([("path", jstr(full(rel)))]))
+    }
+    Err(m) -> {
+      let _gc = gc_unreferenced(a, Some(new_key))
+      Err(m)
+    }
+  }
 }
 
-fn save_db(c: DbConn, rel: String, key: String, mime: String, size: Int) -> Result[Int, String] !io = {
-  insert_file(c, rel, key, mime, size)
+fn save_db(c: DbConn, rel: String, key: String, mime: String, size: Int) -> Result[ReplaceOutcome, String] !io = {
+  replace_file(c, rel, key, mime, size)
 }
+
+fn text_byte_size(content: String) -> Int !io =
+  bytes.len(bytes.utf8(content))
 
 fn save_mime(existing: Option[FileRow], rel: String) -> String =
   match existing {
@@ -350,16 +438,21 @@ fn save_key(rel: String) -> String !io = {
 # ---- proxy upload ----
 
 pub fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int) -> Result[Json, String] !io = {
-  let checked: Result[Option[FileRow], String] = with_db(a.db.path, a.db.ext, c => {
-    let _v = validate_effect_path(c, rel)?
-    get_row(c, rel)
-  })
-  let existing = checked?
-  let key = upload_key(existing)
-  let _up = upload_bytes(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_s() + a.qiniu.expires)?
-  let uploaded = with_db(a.db.path, a.db.ext, c => upsert_upload(c, rel, key, mime, size))?
-  let _gc = gc_superseded(a.qiniu, existing, key)
-  Ok(uploaded)
+  let checked: Result[Unit, String] = with_db(a.db.path, a.db.ext, c => validate_effect_path(c, rel))
+  let _v = checked?
+  let key = upload_key()
+  let _up = as_upstream(upload_bytes(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_s() + a.qiniu.expires))?
+  match with_db(a.db.path, a.db.ext, c => replace_upload(c, rel, key, mime, size)) {
+    Ok(result) -> {
+      let (uploaded, outcome) = result
+      let _gc = gc_unreferenced(a, outcome.superseded_key)
+      Ok(uploaded)
+    }
+    Err(m) -> {
+      let _gc = gc_unreferenced(a, Some(key))
+      Err(m)
+    }
+  }
 }
 
 fn validate_effect_path(c: DbConn, rel: String) -> Result[Unit, String] !io = {
@@ -373,15 +466,13 @@ fn validate_effect_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io
 fn validate_effect_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
   validate_fm_file_target(c, rel)
 
-# Proxy uploads always use a fresh key. If the final metadata write rejects a
-# concurrent tree change, the old row still points at untouched bytes and only
-# the unreferenced new object needs later collection.
-fn upload_key(_existing: Option[FileRow]) -> String !io = uuid_hex()
+# Proxy uploads always use a fresh key.
+fn upload_key() -> String !io = uuid_hex()
 
-fn upsert_upload(c: DbConn, rel: String, key: String, mime: String, size: Int) -> Result[Json, String] !io = {
-  let _i = insert_file(c, rel, key, mime, size)?
+fn replace_upload(c: DbConn, rel: String, key: String, mime: String, size: Int) -> Result[(Json, ReplaceOutcome), String] !io = {
+  let outcome = replace_file(c, rel, key, mime, size)?
   match get_row(c, rel)? {
-    Some(o) -> Ok(entry_json(o))
+    Some(o) -> Ok((entry_json(o), outcome))
     None -> Err("uploaded file vanished")
   }
 }
@@ -422,13 +513,20 @@ test "rebase moves a subtree row onto its new root" {
   assert rebase("docs/x", "arch/y", "docs/x/deep/f.md") == "arch/y/deep/f.md"
 }
 
-test "superseded_key names only a genuinely orphaned object" {
-  let file = FileRow { path: "a.txt", is_dir: false, key: Some("k1"), content_type: "", size: 0, updated_at: "" }
-  let dir = FileRow { path: "d", is_dir: true, key: None, content_type: "", size: 0, updated_at: "" }
-  # a real overwrite: the previous key is orphaned
-  assert superseded_key(Some(file), "k2") == Some("k1")
-  # same key rewritten in place, a directory, or nothing there: no object to drop
-  assert superseded_key(Some(file), "k1") == None
-  assert superseded_key(Some(dir), "k2") == None
-  assert superseded_key(None, "k2") == None
+test "text save size counts UTF-8 bytes" {
+  assert text_byte_size("ascii") == 5
+  assert text_byte_size("中文") == 6
+  assert text_byte_size("A😀") == 5
+}
+
+test "rename service rejects a parent change" {
+  assert rename_parent_unchanged("dirty/missing/old.txt", "dirty/missing/new.txt")
+  assert not rename_parent_unchanged("old.txt", "missing/deep/new.txt")
+}
+
+test "best-effort GC isolates success, errors, and panics" {
+  let _success: Unit = best_effort_gc(() => Ok(()))
+  let _error: Unit = best_effort_gc(() => Err("expected GC error"))
+  let _panic: Unit = best_effort_gc(() => panic("expected GC panic"))
+  assert true
 }

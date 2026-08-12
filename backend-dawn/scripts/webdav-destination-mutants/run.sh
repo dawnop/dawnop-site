@@ -16,6 +16,106 @@ fi
 work="$(mktemp -d "${TMPDIR:-/tmp}/dawnop-webdav-destination-mutants.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
+read_dawn_test_report() {
+  python3 - "$1" <<'PY'
+import pathlib
+import re
+import sys
+
+lines = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
+passed = sum(line.startswith("PASS  ") for line in lines)
+failed = sum(line.startswith("FAIL  ") for line in lines)
+green = re.compile(r"^(\d+) test\(s\) passed$")
+red = re.compile(r"^(\d+) of (\d+) test\(s\) failed$")
+summaries = [line for line in lines if green.fullmatch(line) or red.fullmatch(line)]
+if len(summaries) != 1:
+    raise SystemExit(f"expected one Dawn test summary, found {len(summaries)}")
+match = green.fullmatch(summaries[0])
+if match:
+    total = int(match.group(1))
+    summary_failed = 0
+else:
+    match = red.fullmatch(summaries[0])
+    summary_failed = int(match.group(1))
+    total = int(match.group(2))
+if total == 0:
+    raise SystemExit("Dawn test summary claims zero tests")
+if passed + failed != total:
+    raise SystemExit(
+        f"Dawn test log has {passed} PASS + {failed} FAIL lines, summary says {total}"
+    )
+if failed != summary_failed:
+    raise SystemExit(
+        f"Dawn test log has {failed} FAIL lines, summary says {summary_failed}"
+    )
+print(total, failed)
+PY
+}
+
+validate_qiniu_report() {
+  python3 - "$1" "$2" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+owner = sys.argv[2]
+if not path.is_file():
+    raise SystemExit(f"missing qiniu machine report: {path}")
+report = json.loads(path.read_text(encoding="utf-8"))
+expected_diff = [owner] if owner else []
+checks = {
+    "schema": report.get("schema") == "dawnop.contract-golden.v1",
+    "name": report.get("name") == "qiniu",
+    "verify mode": report.get("record") is False,
+    "complete": report.get("complete") is True,
+    "fatal": report.get("fatal") is None,
+    "diff": report.get("diff") == expected_diff,
+    "new": report.get("new") == [],
+    "missing": report.get("missing") == [],
+    "skip_added": report.get("skip_added") == [],
+    "skip_gone": report.get("skip_gone") == [],
+    "bad": report.get("bad") is bool(owner),
+}
+wrong = [name for name, ok in checks.items() if not ok]
+if wrong:
+    raise SystemExit(f"invalid qiniu machine report fields: {', '.join(wrong)}")
+PY
+}
+
+cat >"$work/test-report.complete" <<'EOF'
+PASS  first
+FAIL  second
+1 of 2 test(s) failed
+EOF
+read -r report_total report_failed <<<"$(read_dawn_test_report "$work/test-report.complete")"
+if [[ "$report_total" != 2 || "$report_failed" != 1 ]]; then
+  printf 'FAIL  Dawn test report parser rejected a complete report\n' >&2
+  exit 1
+fi
+cat >"$work/test-report.truncated" <<'EOF'
+PASS  first
+FAIL  second
+EOF
+if read_dawn_test_report "$work/test-report.truncated" >/dev/null 2>&1; then
+  printf 'FAIL  Dawn test report parser accepted a truncated report\n' >&2
+  exit 1
+fi
+printf 'PASS  Dawn test report completeness negative control\n'
+
+cat >"$work/qiniu-report.valid" <<'EOF'
+{"bad":true,"complete":true,"diff":["owner"],"fatal":null,"missing":[],"name":"qiniu","new":[],"record":false,"schema":"dawnop.contract-golden.v1","skip_added":[],"skip_gone":[]}
+EOF
+validate_qiniu_report "$work/qiniu-report.valid" owner
+cat >"$work/qiniu-report.collateral" <<'EOF'
+{"bad":true,"complete":true,"diff":["owner"],"fatal":null,"missing":[],"name":"qiniu","new":["collateral"],"record":false,"schema":"dawnop.contract-golden.v1","skip_added":[],"skip_gone":[]}
+EOF
+if validate_qiniu_report "$work/qiniu-report.collateral" owner >/dev/null 2>&1; then
+  printf 'FAIL  qiniu report parser accepted NEW collateral\n' >&2
+  exit 1
+fi
+printf 'PASS  qiniu report collateral negative control\n'
+
 python3 "$MATRIX_CHECK" --self-test
 python3 "$MUTATOR" --list >"$work/mutants.txt"
 python3 "$MATRIX_CHECK" --matrix "$MATRIX" --mutants "$work/mutants.txt"
@@ -27,6 +127,16 @@ printf 'PASS  mutate.py rejects unknown mutants\n'
 
 base_log="$work/base.log"
 if ! "$DAWN" test "$BACKEND" >"$base_log" 2>&1; then
+  cat "$base_log" >&2
+  exit 1
+fi
+if ! base_test_report="$(read_dawn_test_report "$base_log")"; then
+  cat "$base_log" >&2
+  exit 1
+fi
+read -r base_test_total base_test_failed <<<"$base_test_report"
+if [[ "$base_test_failed" != 0 ]]; then
+  printf 'FAIL  base Dawn test report is not green\n' >&2
   cat "$base_log" >&2
   exit 1
 fi
@@ -50,8 +160,13 @@ if printf '%s\n' "${roles[@]}" | grep -qx qiniu; then
     exit 1
   fi
   base_qiniu_log="$work/base.qiniu.log"
-  if ! python3 "$BACKEND/scripts/contract_run.py" \
+  base_qiniu_report="$work/base.qiniu.json"
+  if ! CONTRACT_GOLDEN_REPORT="$base_qiniu_report" python3 "$BACKEND/scripts/contract_run.py" \
     --jar "$work/base.jar" --only qiniu >"$base_qiniu_log" 2>&1; then
+    cat "$base_qiniu_log" >&2
+    exit 1
+  fi
+  if ! validate_qiniu_report "$base_qiniu_report" ""; then
     cat "$base_qiniu_log" >&2
     exit 1
   fi
@@ -84,8 +199,20 @@ for index in "${!mutants[@]}"; do
   "$DAWN" test "$project" >"$test_log" 2>&1
   status=$?
   set -e
+  if ! test_report="$(read_dawn_test_report "$test_log")"; then
+    printf 'FAIL  %s produced an incomplete Dawn test report\n' "$mutant" >&2
+    cat "$test_log" >&2
+    exit 1
+  fi
+  read -r test_total test_failed <<<"$test_report"
+  if [[ "$test_total" != "$base_test_total" ]]; then
+    printf 'FAIL  %s ran %s Dawn tests, base ran %s\n' \
+      "$mutant" "$test_total" "$base_test_total" >&2
+    cat "$test_log" >&2
+    exit 1
+  fi
   if [[ "$role" == test ]]; then
-    if [[ $status -eq 0 ]]; then
+    if [[ $status -eq 0 || "$test_failed" != 1 ]]; then
       printf 'FAIL  %s did not turn its owner red\n' "$mutant" >&2
       cat "$test_log" >&2
       exit 1
@@ -106,15 +233,16 @@ for index in "${!mutants[@]}"; do
       exit 1
     fi
   elif [[ "$role" == qiniu ]]; then
-    if [[ $status -ne 0 ]]; then
+    if [[ $status -ne 0 || "$test_failed" != 0 ]]; then
       printf 'FAIL  %s unexpectedly failed Dawn assertions\n' "$mutant" >&2
       cat "$test_log" >&2
       exit 1
     fi
 
     contract_log="$work/$mutant.qiniu.log"
+    contract_report="$work/$mutant.qiniu.json"
     set +e
-    python3 "$BACKEND/scripts/contract_run.py" \
+    CONTRACT_GOLDEN_REPORT="$contract_report" python3 "$BACKEND/scripts/contract_run.py" \
       --jar "$work/$mutant.jar" --only qiniu >"$contract_log" 2>&1
     contract_status=$?
     set -e
@@ -123,21 +251,7 @@ for index in "${!mutants[@]}"; do
       cat "$contract_log" >&2
       exit 1
     fi
-    mapfile -t failures < <(
-      python3 - "$contract_log" <<'PY'
-import pathlib
-import re
-import sys
-
-ansi = re.compile(r"\x1b\[[0-9;]*m")
-for raw in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
-    line = ansi.sub("", raw)
-    match = re.match(r"\s*\[DIFF\]\s+(.+)$", line)
-    if match:
-        print(match.group(1))
-PY
-    )
-    if [[ ${#failures[@]} -ne 1 || "${failures[0]}" != "$owner" ]]; then
+    if ! validate_qiniu_report "$contract_report" "$owner"; then
       printf 'FAIL  %s produced the wrong qiniu red set\n' "$mutant" >&2
       cat "$contract_log" >&2
       exit 1

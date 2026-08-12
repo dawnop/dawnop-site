@@ -23,7 +23,12 @@ MUTANTS = (
     "destination-prefix-fail-open",
     "skip-unreserved-prefix-normalization",
     "restore-replacement-utf8",
-    "purge-before-parent-check",
+    "accept-xml-forbidden-destination",
+    "overwrite-invalid-fail-open",
+    "move-depth-fail-open",
+    "copy-invalid-depth-fail-open",
+    "copy-collection-depth-zero-full-tree",
+    "ignore-move-copy-body",
     "accept-file-parent",
 )
 
@@ -187,36 +192,41 @@ def main() -> int:
             "  if not valid_percent_utf8(s) {\n",
             "  if false {\n",
         )
-    elif args.mutant == "purge-before-parent-check":
+    elif args.mutant == "accept-xml-forbidden-destination":
         replace_once(
             source,
-            "        } else {\n"
-            "          let _v = as_http_with(with_db(a.db.path, a.db.ext, c => validate_webdav_subtree_destination(c, rel, dst)), conflict_or(500))?\n"
-            "          mc_require_parent(a, rel, dst, is_move, true)\n"
-            "        }\n",
-            "        } else {\n"
-            "          mc_require_parent(a, rel, dst, is_move, true)\n"
-            "        }\n",
+            "        if xml10_text_allowed(decoded) {\n",
+            "        if true {\n",
         )
+    elif args.mutant == "overwrite-invalid-fail-open":
         replace_once(
             source,
-            "fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =\n"
-            "  {\n"
-            "    let ok = as_http(parent_exists(a, dst), 500)?\n"
-            "    if not ok {\n"
-            '      Err(http_error(409, "父目录不存在"))\n'
-            "    } else if dst_existed {\n"
-            "      mc_purge_then(a, rel, dst, is_move, true)\n"
-            "    } else {\n"
-            "      mc_apply(a, rel, dst, is_move, false)\n"
-            "    }\n"
-            "  }\n",
-            "fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =\n"
-            "  {\n"
-            "    let _p = if dst_existed { as_http(purge_silent(a, dst), 500)? } else { 0 }\n"
-            "    let ok = as_http(parent_exists(a, dst), 500)?\n"
-            '    if not ok { Err(http_error(409, "父目录不存在")) } else { mc_apply(a, rel, dst, is_move, dst_existed) }\n'
-            "  }\n",
+            '        _ -> Err(http_error(400, "Overwrite 只支持 T 或 F"))\n',
+            "        _ -> Ok(true)\n",
+        )
+    elif args.mutant == "move-depth-fail-open":
+        replace_once(
+            source,
+            '      if str.to_lower(raw) == "infinity" {\n',
+            "      if true {\n",
+        )
+    elif args.mutant == "copy-invalid-depth-fail-open":
+        replace_once(
+            source,
+            '        Err(http_error(400, "COPY Depth 只支持 0 或 infinity"))\n',
+            "        Ok(())\n",
+        )
+    elif args.mutant == "copy-collection-depth-zero-full-tree":
+        replace_once(
+            source,
+            '        Err(http_error(501, "暂不支持集合的 Depth: 0 COPY"))\n',
+            "        Ok(())\n",
+        )
+    elif args.mutant == "ignore-move-copy-body":
+        replace_once(
+            source,
+            "  if bytes.len(req.raw) == 0 {\n",
+            "  if true {\n",
         )
     elif args.mutant == "accept-file-parent":
         replace_once(

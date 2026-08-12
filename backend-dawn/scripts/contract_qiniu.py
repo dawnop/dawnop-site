@@ -179,24 +179,21 @@ def body_value(raw: bytes):
         return raw.decode("utf-8", "replace")
 
 
-def seed_destination_boundary_rows(db_path, fake):
-    key = "dddddddd-eeee-ffff-0000-111111111111"
+def file_metadata(db_path, path):
     with sqlite3.connect(db_path) as connection:
-        connection.executemany(
-            'INSERT INTO files (path, is_dir, "key", content_type, size, created_at, updated_at) '
-            "VALUES (?, ?, ?, ?, ?, '2026-01-14 08:00:00.000000', '2026-01-14 08:00:00.000000')",
-            [
-                ("legacy-parent.txt/legacy-dir", 1, None, "", 0),
-                (
-                    "legacy-parent.txt/legacy-dir/existing-target.txt",
-                    0,
-                    key,
-                    "text/plain",
-                    112,
-                ),
-            ],
-        )
-    fake.plant(key, "legacy deep target", "text/plain")
+        row = connection.execute(
+            'SELECT path, is_dir, "key", content_type, size FROM files WHERE path = ?',
+            (path,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "path": row[0],
+        "is_dir": bool(row[1]),
+        "key": row[2],
+        "content_type": row[3],
+        "size": row[4],
+    }
 
 
 class Fake:
@@ -235,6 +232,15 @@ class Fake:
     def plant(self, key, content, mime):
         self._post("/__fake/put", {"key": key, "content": content, "mime": mime})
 
+    def pause(self, op):
+        self._post("/__fake/pause", {"op": op})
+
+    def release(self, op):
+        self._post("/__fake/release", {"op": op})
+
+    def pauses(self):
+        return self._get("/__fake/pauses")["pauses"]
+
     def calls(self):
         return self._get("/__fake/calls")["calls"]
 
@@ -257,7 +263,8 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
     db_path = os.environ.get("CONTRACT_DB_PATH")
     if not token or not user or not pw or not fake_base or not db_path:
         print(
-            "FATAL: TOKEN / DAV_USER / DAV_PASS / FAKE_QINIU / CONTRACT_DB_PATH not set",
+            "FATAL: TOKEN / DAV_USER / DAV_PASS / FAKE_QINIU / "
+            "CONTRACT_DB_PATH not set",
             file=sys.stderr,
         )
         return 2
@@ -265,7 +272,6 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
     FAKE_BASE[0] = fake_base
     fake = Fake(fake_base)
     fake.reset()
-    seed_destination_boundary_rows(db_path, fake)
 
     g = Golden("qiniu", record=args.record)
     if g.fatal:
@@ -323,46 +329,6 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
     )
     fake.clear_calls()
 
-    print("\n== WebDAV overwrite validates the full parent chain before purge ==")
-    legacy_path = "legacy-parent.txt/legacy-dir/existing-target.txt"
-    legacy_key = "dddddddd-eeee-ffff-0000-111111111111"
-    overwrite_f_status, _, _ = dav(
-        B,
-        "COPY",
-        "/dav/empty-dir",
-        auth,
-        {
-            "Destination": f"/dav/{legacy_path}",
-            "Overwrite": "F",
-        },
-    )
-    copy_status, _, _ = dav(
-        B,
-        "COPY",
-        "/dav/empty-dir",
-        auth,
-        {"Destination": f"/dav/{legacy_path}"},
-    )
-    row_status, _, _ = dav(
-        B,
-        "PROPFIND",
-        f"/dav/{legacy_path}",
-        auth,
-        {"Depth": "0"},
-    )
-    g.case(
-        "copy.dest.file-parent-existing.preserved",
-        {
-            "note": "409 precedes purge when a higher ancestor is a file",
-            "overwrite_f_status": overwrite_f_status,
-            "copy_status": copy_status,
-            "row_status": row_status,
-            "object_present": legacy_key in fake.keys(),
-            "object_calls": scrub(fake.calls()),
-        },
-    )
-    fake.clear_calls()
-
     print("\n== WebDAV COPY of a subtree (one qiniu copy per file row) ==")
     dav_case("mkcol.sandbox", "MKCOL", f"/dav/{PREFIX}")
     fake.clear_calls()
@@ -412,25 +378,36 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
     print("\n== WebDAV COPY refused by the object store -> 502 ==")
     # The regression this pins: an object-store refusal used to surface as a 500
     # (errkind.dawn exists because of it). 599 is qiniu's own "operation failed".
+    before_refused_state = fake.state()
     fake.refuse("copy", 599, '{"error":"contract fake refuses this copy"}')
-    dav_case(
-        "copy.upstream.502",
-        "COPY",
-        "/dav/docs",
-        {"Destination": f"/dav/{PREFIX}/docs-refused"},
+    try:
+        dav_case(
+            "copy.upstream.502",
+            "COPY",
+            "/dav/docs",
+            {"Destination": f"/dav/{PREFIX}/docs-refused"},
+        )
+    finally:
+        fake.allow("copy")
+    g.case(
+        "copy.upstream.no-fresh-object",
+        {
+            "note": "an external copy refusal leaves neither destination metadata nor a fresh copied object",
+            "objects_unchanged": fake.state() == before_refused_state,
+            "destination_root_absent": file_metadata(db_path, f"{PREFIX}/docs-refused")
+            is None,
+        },
     )
     # one attempt, then it stops — a loop that swallowed the error would show two
     calls_case("copy.upstream.calls", "the walk aborts at the first refusal")
-    # COPY is not transactional: what the aborted walk left behind is recorded
-    # rather than asserted away, so a future change to that is a visible diff.
+    # No metadata row is committed before the complete object-copy phase succeeds.
     dav_case(
-        "copy.upstream.partial",
+        "copy.upstream.no-partial",
         "PROPFIND",
         f"/dav/{PREFIX}/docs-refused",
         {"Depth": "1"},
         with_facts=True,
     )
-    fake.allow("copy")
 
     print("\n== WebDAV GET / PUT / DELETE of an object ==")
     dav_case("get.file", "GET", "/dav/docs/notes.txt", {"User-Agent": PROXY_UA})
@@ -593,8 +570,250 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
     )
     calls_case("fm.delete.calls", "the row and the object go together")
 
+    print("\n== WebDAV overwrite switches metadata before collecting old objects ==")
+    copy_target_rel = f"{PREFIX}/copy-overwrite-target"
+    copy_target_path = f"/dav/{copy_target_rel}"
+    copy_setup_statuses = [
+        dav(B, "MKCOL", copy_target_path, auth)[0],
+        dav(
+            B,
+            "PUT",
+            f"{copy_target_path}/old.txt",
+            auth,
+            {"Content-Type": "text/plain"},
+            b"old COPY target bytes\n",
+        )[0],
+    ]
+    copy_old = file_metadata(db_path, f"{copy_target_rel}/old.txt")
+    copy_source = file_metadata(db_path, "docs/notes.txt")
+    copy_source_object = (
+        fake.state().get(copy_source["key"]) if copy_source is not None else None
+    )
+    fake.clear_calls()
+    copy_overwrite_status, _, _ = dav_case(
+        "copy.overwrite.204",
+        "COPY",
+        "/dav/docs",
+        {"Destination": copy_target_path},
+    )
+    copy_target_note = file_metadata(db_path, f"{copy_target_rel}/notes.txt")
+    copy_after_state = fake.state()
+    g.case(
+        "copy.overwrite.state",
+        {
+            "note": "COPY keeps the source, replaces the whole target, then drops old target objects",
+            "setup_statuses": copy_setup_statuses,
+            "copy_status": copy_overwrite_status,
+            "source_metadata_preserved": file_metadata(db_path, "docs/notes.txt")
+            == copy_source,
+            "source_object_preserved": copy_source is not None
+            and copy_after_state.get(copy_source["key"]) == copy_source_object,
+            "target_has_fresh_notes_key": copy_source is not None
+            and copy_target_note is not None
+            and copy_target_note["key"] != copy_source["key"]
+            and copy_target_note["key"] in copy_after_state,
+            "old_target_metadata_absent": file_metadata(
+                db_path, f"{copy_target_rel}/old.txt"
+            )
+            is None,
+            "old_target_object_deleted": copy_old is not None
+            and copy_old["key"] not in copy_after_state,
+        },
+    )
+    calls_case(
+        "copy.overwrite.calls",
+        "fresh source copies are committed before the old target object is collected",
+    )
+    dav_case(
+        "copy.overwrite.tree",
+        "PROPFIND",
+        copy_target_path,
+        {"Depth": "1"},
+        with_facts=True,
+    )
+    dav_case(
+        "copy.overwrite.tree.sub",
+        "PROPFIND",
+        f"{copy_target_path}/img",
+        {"Depth": "1"},
+        with_facts=True,
+    )
+    dav_case(
+        "copy.overwrite.old.gone",
+        "PROPFIND",
+        f"{copy_target_path}/old.txt",
+        {"Depth": "0"},
+    )
+    dav_case(
+        "copy.overwrite.target.bytes",
+        "GET",
+        f"{copy_target_path}/notes.txt",
+        {"User-Agent": PROXY_UA},
+    )
+    dav_case(
+        "copy.overwrite.source.retained",
+        "GET",
+        "/dav/docs/notes.txt",
+        {"User-Agent": PROXY_UA},
+    )
+    fake.clear_calls()
+
+    move_source_rel = f"{PREFIX}/move-overwrite-source"
+    move_target_rel = f"{PREFIX}/move-overwrite-target"
+    move_source_path = f"/dav/{move_source_rel}"
+    move_target_path = f"/dav/{move_target_rel}"
+    move_setup_statuses = [
+        dav(B, "MKCOL", move_source_path, auth)[0],
+        dav(B, "MKCOL", f"{move_source_path}/nested", auth)[0],
+        dav(
+            B,
+            "PUT",
+            f"{move_source_path}/nested/payload.txt",
+            auth,
+            {"Content-Type": "text/plain"},
+            b"MOVE overwrite payload bytes\n",
+        )[0],
+        dav(B, "MKCOL", move_target_path, auth)[0],
+        dav(
+            B,
+            "PUT",
+            f"{move_target_path}/old.txt",
+            auth,
+            {"Content-Type": "text/plain"},
+            b"old MOVE target bytes\n",
+        )[0],
+    ]
+    move_source_file = file_metadata(db_path, f"{move_source_rel}/nested/payload.txt")
+    move_old = file_metadata(db_path, f"{move_target_rel}/old.txt")
+    fake.clear_calls()
+    move_overwrite_status, _, _ = dav_case(
+        "move.overwrite.204",
+        "MOVE",
+        move_source_path,
+        {"Destination": move_target_path},
+    )
+    move_target_file = file_metadata(db_path, f"{move_target_rel}/nested/payload.txt")
+    move_after_state = fake.state()
+    g.case(
+        "move.overwrite.state",
+        {
+            "note": "MOVE removes the source metadata, preserves its object key at the target, and collects old target objects",
+            "setup_statuses": move_setup_statuses,
+            "move_status": move_overwrite_status,
+            "source_tree_absent": file_metadata(db_path, move_source_rel) is None,
+            "source_file_absent": file_metadata(
+                db_path, f"{move_source_rel}/nested/payload.txt"
+            )
+            is None,
+            "target_reuses_source_key": move_source_file is not None
+            and move_target_file is not None
+            and move_target_file["key"] == move_source_file["key"],
+            "source_object_preserved": move_source_file is not None
+            and move_source_file["key"] in move_after_state,
+            "old_target_metadata_absent": file_metadata(
+                db_path, f"{move_target_rel}/old.txt"
+            )
+            is None,
+            "old_target_object_deleted": move_old is not None
+            and move_old["key"] not in move_after_state,
+        },
+    )
+    calls_case(
+        "move.overwrite.calls",
+        "MOVE performs no object copy and collects only superseded target objects",
+    )
+    dav_case(
+        "move.overwrite.source.gone",
+        "PROPFIND",
+        move_source_path,
+        {"Depth": "0"},
+    )
+    dav_case(
+        "move.overwrite.tree",
+        "PROPFIND",
+        move_target_path,
+        {"Depth": "1"},
+        with_facts=True,
+    )
+    dav_case(
+        "move.overwrite.tree.sub",
+        "PROPFIND",
+        f"{move_target_path}/nested",
+        {"Depth": "1"},
+        with_facts=True,
+    )
+    dav_case(
+        "move.overwrite.target.bytes",
+        "GET",
+        f"{move_target_path}/nested/payload.txt",
+        {"User-Agent": PROXY_UA},
+    )
+    fake.clear_calls()
+
+    unicode_path = f"{SANDBOX}/unicode.txt"
+    unicode_content = "Dawn 保存：你好，世界 🌅🚀\n"
+    unicode_bytes = unicode_content.encode("utf-8")
+    api_case(
+        "fm.createfile.utf8",
+        "POST",
+        "/api/fm/create-file",
+        {"path": SANDBOX, "name": "unicode.txt"},
+    )
+    fake.clear_calls()
+    unicode_save_status, _ = api_case(
+        "fm.save.utf8",
+        "POST",
+        "/api/fm/save",
+        {"path": unicode_path, "content": unicode_content},
+    )
+    calls_case(
+        "fm.save.utf8.calls",
+        "Unicode text is uploaded as UTF-8 under a fresh key before the empty object is collected",
+    )
+    listing_url = "/api/fm?" + urllib.parse.urlencode({"path": SANDBOX})
+    listing_status, listing_raw = api(B, "GET", listing_url, token)
+    try:
+        listing_body = json.loads(listing_raw)
+    except (TypeError, ValueError, UnicodeDecodeError):
+        listing_body = {}
+    listing_files = (
+        listing_body.get("files", []) if isinstance(listing_body, dict) else []
+    )
+    unicode_entry = next(
+        (
+            entry
+            for entry in listing_files
+            if isinstance(entry, dict) and entry.get("path") == unicode_path
+        ),
+        None,
+    )
+    content_url = "/api/fm/content?" + urllib.parse.urlencode({"path": unicode_path})
+    unicode_content_status, unicode_raw = api(B, "GET", content_url, token)
+    listed_size = (
+        unicode_entry.get("file_size") if isinstance(unicode_entry, dict) else None
+    )
+    g.case(
+        "fm.save.utf8-byte-size",
+        {
+            "note": "FM save reports UTF-8 byte length and returns the exact uploaded bytes",
+            "save_status": unicode_save_status,
+            "listing_status": listing_status,
+            "content_status": unicode_content_status,
+            "expected_utf8_size": len(unicode_bytes),
+            "listed_size": listed_size,
+            "size_matches_utf8_bytes": listed_size == len(unicode_bytes),
+            "expected_base64": base64.b64encode(unicode_bytes).decode(),
+            "read_back_base64": base64.b64encode(unicode_raw).decode(),
+            "bytes_round_trip": unicode_raw == unicode_bytes,
+        },
+    )
+    fake.clear_calls()
+
     print("\n== WebDAV direct file parents stop every production write path ==")
     before_direct_parent_keys = fake.keys()
+    direct_parent_before = file_metadata(db_path, "legacy-parent.txt")
+    move_source_before = file_metadata(db_path, "empty-dir")
+    copy_source_before = file_metadata(db_path, "docs/notes.txt")
     put_status, _, _ = dav(
         B,
         "PUT",
@@ -602,12 +821,20 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
         auth,
         body=b"must not upload",
     )
+    after_put = {
+        "parent": file_metadata(db_path, "legacy-parent.txt"),
+        "target": file_metadata(db_path, "legacy-parent.txt/new-put.txt"),
+    }
     mkcol_status, _, _ = dav(
         B,
         "MKCOL",
         "/dav/legacy-parent.txt/new-col",
         auth,
     )
+    after_mkcol = {
+        "parent": file_metadata(db_path, "legacy-parent.txt"),
+        "target": file_metadata(db_path, "legacy-parent.txt/new-col"),
+    }
     move_status, _, _ = dav(
         B,
         "MOVE",
@@ -615,6 +842,11 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
         auth,
         {"Destination": "/dav/legacy-parent.txt/new-move"},
     )
+    after_move = {
+        "parent": file_metadata(db_path, "legacy-parent.txt"),
+        "target": file_metadata(db_path, "legacy-parent.txt/new-move"),
+        "source": file_metadata(db_path, "empty-dir"),
+    }
     copy_status, _, _ = dav(
         B,
         "COPY",
@@ -622,6 +854,11 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
         auth,
         {"Destination": "/dav/legacy-parent.txt/new-copy.txt"},
     )
+    after_copy = {
+        "parent": file_metadata(db_path, "legacy-parent.txt"),
+        "target": file_metadata(db_path, "legacy-parent.txt/new-copy.txt"),
+        "source": file_metadata(db_path, "docs/notes.txt"),
+    }
     g.case(
         "write.dest.file-parent.preflight",
         {
@@ -630,6 +867,18 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
             "mkcol_status": mkcol_status,
             "move_status": move_status,
             "copy_status": copy_status,
+            "parent_before": direct_parent_before,
+            "after_put": after_put,
+            "after_mkcol": after_mkcol,
+            "after_move": after_move,
+            "after_copy": after_copy,
+            "metadata_equivalent_after_each_method": all(
+                observation["parent"] == direct_parent_before
+                and observation["target"] is None
+                for observation in (after_put, after_mkcol, after_move, after_copy)
+            )
+            and after_move["source"] == move_source_before
+            and after_copy["source"] == copy_source_before,
             "objects_unchanged": fake.keys() == before_direct_parent_keys,
             "object_calls": scrub(fake.calls()),
         },

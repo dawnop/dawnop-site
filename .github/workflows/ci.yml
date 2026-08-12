@@ -87,9 +87,9 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
-    # All backend gate commands took 946s in one serial local run on 2026-08-12.
-    # budget: 3x 946s worst observed
-    timeout-minutes: 48
+    # All backend gate commands took 1232s in one serial local run on 2026-08-12.
+    # budget: 3x 1232s worst observed
+    timeout-minutes: 62
     steps:
       - uses: actions/checkout@v4
 
@@ -151,7 +151,7 @@ jobs:
 
       # The contract scripts (read / edge / WebDAV) were written during M6 to
       # diff Dawn against FastAPI request by request. That needed both backends
-      # up at once, so CI never ran them. The current four goldens hold 273 wire
+      # up at once, so CI never ran them. The current four goldens hold 292 wire
       # shapes, all exercised against a freshly seeded fixture on every run.
       # They are golden-based now: contract_run.py seeds a pinned SQLite fixture
       # (contract_fixture.py), boots the jar this job just built on 127.0.0.1,

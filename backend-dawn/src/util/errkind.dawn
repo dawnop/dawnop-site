@@ -19,6 +19,7 @@ use std/str
 pub type Kind =
   | KPlain
   | KConflict
+  | KPrecondition
   | KInvalid
   | KUpstream
 
@@ -31,6 +32,9 @@ fn tag(name: String, text: String) -> String = "$name${sep()}$text"
 
 ## Mark a message as "that name/slug is taken".
 pub fn conflict(text: String) -> String = tag("conflict", text)
+
+## Mark a message as "the request precondition no longer holds".
+pub fn precondition(text: String) -> String = tag("precondition", text)
 
 ## Mark a message as "the client sent something the server rejected".
 pub fn invalid(text: String) -> String = tag("invalid", text)
@@ -60,6 +64,8 @@ pub fn split_kind(m: String) -> (Kind, String) =
 fn named(s: String) -> Option[Kind] =
   if s == "conflict" {
     Some(KConflict)
+  } else if s == "precondition" {
+    Some(KPrecondition)
   } else if s == "invalid" {
     Some(KInvalid)
   } else if s == "upstream" {
@@ -78,6 +84,12 @@ test "a tagged message keeps its wire text byte for byte" {
   let (k3, t3) = split_kind(upstream("copy: qiniu 401 {}"))
   assert k3 == KUpstream
   assert t3 == "copy: qiniu 401 {}"
+}
+
+test "a precondition tag survives for HTTP 412 mapping" {
+  let (k, t) = split_kind(precondition("目标已出现"))
+  assert k == KPrecondition
+  assert t == "目标已出现"
 }
 
 test "an untagged message passes through unchanged" {

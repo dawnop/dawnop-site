@@ -40,6 +40,7 @@ import pathlib
 import contract_fixture
 
 GOLDEN_DIR = pathlib.Path(__file__).resolve().parent / "golden"
+MACHINE_REPORT_ENV = "CONTRACT_GOLDEN_REPORT"
 
 # The search path the Dawn backend takes in a contract run, and why it is not
 # the production one. Dawn calls simple_query() (the wangfenjin/simple FTS
@@ -216,8 +217,58 @@ class Golden:
 
     # -- finish ---------------------------------------------------------------
 
+    def _write_machine_report(
+        self,
+        *,
+        complete,
+        missing,
+        skip_added,
+        skip_gone,
+        bad,
+    ):
+        """Write one atomic, stable report when a harness asks for it.
+
+        Human output remains intentionally descriptive. Mutation runners need
+        a closed machine shape so a real owner plus NEW, missing, skip drift,
+        or a truncated run cannot be accepted by grepping one DIFF line.
+        """
+        raw_path = os.environ.get(MACHINE_REPORT_ENV)
+        if not raw_path:
+            return
+        path = pathlib.Path(raw_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        problem_names = [name for name, _ in self.problems]
+        payload = {
+            "schema": "dawnop.contract-golden.v1",
+            "name": self.name,
+            "record": self.record,
+            "complete": complete,
+            "fatal": self.fatal,
+            "match": self.tally["match"],
+            "diff": [name for name in problem_names if name in self.expected],
+            "new": [name for name in problem_names if name not in self.expected],
+            "missing": missing,
+            "skipped": self.skipped,
+            "skip_added": skip_added,
+            "skip_gone": skip_gone,
+            "bad": bad,
+        }
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+
     def finish(self) -> int:
         if self.fatal:
+            self._write_machine_report(
+                complete=False,
+                missing=[],
+                skip_added=[],
+                skip_gone=[],
+                bad=True,
+            )
             print(f"\n{RED}FATAL{RESET}: {self.fatal}")
             return 2
 
@@ -282,5 +333,12 @@ class Golden:
         bad = bool(self.problems or missing or skip_added or skip_gone)
         if self.record:
             bad = bool(missing)  # recording defines the golden; nothing to violate
+        self._write_machine_report(
+            complete=True,
+            missing=missing,
+            skip_added=skip_added,
+            skip_gone=skip_gone,
+            bad=bad,
+        )
         print(f"\n{self.name}: {(RED + 'FAIL' if bad else GREEN + 'PASS')}{RESET}")
         return 1 if bad else 0

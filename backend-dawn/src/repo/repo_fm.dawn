@@ -6,9 +6,15 @@ use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Cell, open, query, exec, wi
 use json/value.{Json, JNull, JInt, JStr, JArr}
 use util/jsonx.{obj, jstr, jbool}
 use util/paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts}
-use util/errkind.{conflict}
+use util/errkind.{KConflict, KPrecondition, conflict, precondition, split_kind}
 
 pub type FileRow = { path: String, is_dir: Bool, key: Option[String], content_type: String, size: Int, updated_at: String }
+
+pub type ReplaceOutcome = { target_existed: Bool, superseded_key: Option[String] }
+
+pub type SubtreeWriteOutcome = { destination_existed: Bool, replaced_rows: List[FileRow], written: Int }
+
+pub type MovePlan = { source_root: String, destination_root: String }
 
 pub type CopiedRow = { source: FileRow, copied_key: Option[String] }
 
@@ -134,9 +140,15 @@ type AncestorPolicy =
 pub fn validate_fm_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
   validate_ancestors(c, rel, AllowMissingAncestors)
 
-## Reject a file write whose target row is already a directory. Callers pair
-## this with validate_fm_ancestors before any object-store or ledger effect.
-pub fn validate_fm_file_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
+## Reject a file write whose target row is already a directory or whose target
+## has descendants. Callers pair this with validate_fm_ancestors before any
+## object-store or ledger effect.
+pub fn validate_fm_file_target(c: DbConn, rel: String) -> Result[Unit, String] !io = {
+  let _t = validate_file_target_directory_preflight(c, rel)?
+  validate_file_target_descendants_preflight(c, rel)
+}
+
+fn validate_file_target_directory_preflight(c: DbConn, rel: String) -> Result[Unit, String] !io =
   reject_directory_target(c, rel)
 
 ## Validate every ancestor of `rel` for WebDAV, whose storage model requires
@@ -240,27 +252,80 @@ pub fn entry_json(o: FileRow) -> Json !io = entry(o)
 pub fn delete_row(c: DbConn, path: String) -> Result[Int, String] !io =
   exec(c, "delete from files where path = ?", [PStr(path)])
 
-## Insert a file row (register). key/content_type/size from the verified object.
-pub fn insert_file(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =
-  with_immediate_tx(c, () => {
-    let _v = validate_insert_file_ancestors(c, rel)?
-    let _a = ensure_loop(c, ancestor_paths(rel), 0)?
-    insert_file_row(c, rel, key, content_type, size)
-  })
+pub fn delete_subtree(c: DbConn, rel: String) -> Result[List[FileRow], String] !io =
+  with_immediate_tx(c, () => delete_subtree_tx(c, rel))
 
-fn validate_insert_file_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
-  validate_fm_ancestors(c, rel)
+pub fn delete_subtrees(c: DbConn, rels: List[String]) -> Result[List[FileRow], String] !io =
+  with_immediate_tx(c, () => delete_subtree_list_tx(c, rels, 0, []))
+
+fn delete_subtree_list_tx(c: DbConn, rels: List[String], i: Int, acc: List[FileRow]) -> Result[List[FileRow], String] !io =
+  if i >= len(rels) {
+    Ok(acc)
+  } else {
+    let rows = delete_subtree_tx(c, rels[i])?
+    delete_subtree_list_tx(c, rels, i + 1, acc ++ rows)
+  }
+
+fn delete_subtree_tx(c: DbConn, rel: String) -> Result[List[FileRow], String] !io =
+  if rel == "" {
+    Ok([])
+  } else {
+    let rows = subtree_rows(c, rel)?
+    if not subtree_root_present(rows, rel, 0) {
+      Ok([])
+    } else {
+      let n = exec(c, "delete from files where path = ? or instr(path, ? || '/') = 1", [PStr(rel), PStr(rel)])?
+      if n == len(rows) {
+        Ok(rows)
+      } else {
+        Err("subtree delete count changed: ${full(rel)}")
+      }
+    }
+  }
+
+pub fn replace_file(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[ReplaceOutcome, String] !io =
+  with_immediate_tx(c, () => replace_file_tx(c, rel, key, content_type, size, AllowMissingAncestors))
+
+pub fn replace_file_strict(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[ReplaceOutcome, String] !io =
+  with_immediate_tx(c, () => replace_file_tx(c, rel, key, content_type, size, RequireExistingAncestors))
+
+fn replace_file_tx(c: DbConn, rel: String, key: String, content_type: String, size: Int, policy: AncestorPolicy) -> Result[ReplaceOutcome, String] !io = {
+  let _v = validate_ancestors(c, rel, policy)?
+  let _a = match policy {
+    AllowMissingAncestors -> ensure_loop(c, ancestor_paths(rel), 0)
+    RequireExistingAncestors -> Ok(0)
+  }?
+  let existing = get_row(c, rel)?
+  let _i = insert_file_row(c, rel, key, content_type, size)?
+  Ok(ReplaceOutcome {
+    target_existed: existing != None,
+    superseded_key: superseded_file_key(existing, key),
+  })
+}
+
+fn superseded_file_key(existing: Option[FileRow], new_key: String) -> Option[String] =
+  match existing {
+    Some(o) ->
+      match o.key {
+        Some(old_key) -> if old_key == new_key { None } else { Some(old_key) }
+        None -> None
+      }
+    None -> None
+  }
+
+pub fn insert_file(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =
+  match replace_file(c, rel, key, content_type, size) {
+    Ok(_) -> Ok(1)
+    Err(m) -> Err(m)
+  }
 
 ## WebDAV final file write: strict parent-chain validation and the upsert share
 ## one immediate transaction. Missing parents are never synthesized here.
 pub fn insert_file_strict(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =
-  with_immediate_tx(c, () => {
-    let _a = validate_insert_file_strict_ancestors(c, rel)?
-    insert_file_row(c, rel, key, content_type, size)
-  })
-
-fn validate_insert_file_strict_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
-  validate_webdav_ancestors(c, rel)
+  match replace_file_strict(c, rel, key, content_type, size) {
+    Ok(_) -> Ok(1)
+    Err(m) -> Err(m)
+  }
 
 fn insert_file_row(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io = {
   let _t = validate_insert_file_target(c, rel)?
@@ -276,8 +341,33 @@ fn insert_file_row(c: DbConn, rel: String, key: String, content_type: String, si
   }
 }
 
-fn validate_insert_file_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
+fn validate_insert_file_target(c: DbConn, rel: String) -> Result[Unit, String] !io = {
+  let _t = validate_insert_file_directory_target(c, rel)?
+  validate_file_target_descendants_final(c, rel)
+}
+
+fn validate_insert_file_directory_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
   reject_directory_target(c, rel)
+
+fn validate_file_target_descendants_preflight(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  reject_file_target_descendants(c, rel)
+
+fn validate_file_target_descendants_final(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  reject_file_target_descendants(c, rel)
+
+fn reject_file_target_descendants(c: DbConn, rel: String) -> Result[Unit, String] !io = {
+  let rows = subtree_rows(c, rel)?
+  reject_file_target_descendant_rows(rows, rel, 0)
+}
+
+fn reject_file_target_descendant_rows(rows: List[FileRow], rel: String, i: Int) -> Result[Unit, String] =
+  if i >= len(rows) {
+    Ok(())
+  } else if rows[i].path == rel {
+    reject_file_target_descendant_rows(rows, rel, i + 1)
+  } else {
+    Err(conflict("文件目标下存在后代：${full(rows[i].path)}"))
+  }
 
 fn reject_directory_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
   match get_row(c, rel)? {
@@ -285,8 +375,72 @@ fn reject_directory_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
     None -> Ok(())
   }
 
+pub fn create_file_once(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =
+  with_immediate_tx(c, () => {
+    let _v = validate_fm_ancestors(c, rel)?
+    let _a = ensure_loop(c, ancestor_paths(rel), 0)?
+    let _t = validate_create_file_target(c, rel)?
+    let n = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, ?, ?, datetime('now'), datetime('now'))",
+      [PStr(rel), PStr(key), PStr(content_type), PInt(size)])?
+    if n == 1 { Ok(n) } else { Err("create-file insert count changed: ${full(rel)}") }
+  })
+
+fn validate_create_file_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  match get_row(c, rel)? {
+    Some(_) -> Err(conflict("目标已存在：${full(rel)}"))
+    None -> validate_file_target_descendants_final(c, rel)
+  }
+
+pub fn key_referenced(c: DbConn, key: String) -> Result[Bool, String] !io = {
+  let rows = query(c, "select count(*) from files where key = ?", [PStr(key)], [ColInt])?
+  Ok(first_bool_or(rows, false))
+}
+
+pub fn key_pending(c: DbConn, key: String) -> Result[Bool, String] !io = {
+  let rows = query(c, "select count(*) from pending_uploads where key = ?", [PStr(key)], [ColInt])?
+  Ok(first_bool_or(rows, false))
+}
+
 pub fn ledger_delete(c: DbConn, key: String) -> Result[Int, String] !io =
   exec(c, "delete from pending_uploads where key = ?", [PStr(key)])
+
+pub fn validate_register_preflight(c: DbConn, rel: String, key: String) -> Result[Unit, String] !io = {
+  let pending = pending_upload_matches(c, key, full(rel))?
+  if not pending {
+    Err(conflict("上传凭证与登记路径不匹配：${full(rel)}"))
+  } else if key_referenced(c, key)? {
+    Err(conflict("对象 key 已被文件引用：$key"))
+  } else {
+    let _a = validate_fm_ancestors(c, rel)?
+    validate_fm_file_target(c, rel)
+  }
+}
+
+pub fn finalize_register(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[(FileRow, ReplaceOutcome), String] !io =
+  with_immediate_tx(c, () => {
+    let pending = pending_upload_matches(c, key, full(rel))?
+    if not pending {
+      Err(conflict("上传凭证与登记路径不匹配：${full(rel)}"))
+    } else if key_referenced(c, key)? {
+      Err(conflict("对象 key 已被文件引用：$key"))
+    } else {
+      let outcome = replace_file_tx(c, rel, key, content_type, size, AllowMissingAncestors)?
+      let consumed = exec(c, "delete from pending_uploads where key = ? and path = ?", [PStr(key), PStr(full(rel))])?
+      if consumed != 1 {
+        Err("register ledger consume count changed: $key")
+      } else {
+        match get_row(c, rel)? {
+          Some(o) -> Ok((o, outcome))
+          None -> Err("registered file vanished: ${full(rel)}")
+        }
+      }
+    }
+  })
+
+fn pending_upload_matches(c: DbConn, key: String, path: String) -> Result[Bool, String] !io = {
+  let rows = query(c, "select count(*) from pending_uploads where key = ? and path = ?", [PStr(key), PStr(path)], [ColInt])?
+  Ok(first_bool_or(rows, false))
+}
 
 ## Local storage stats from the metadata: (used_bytes, file_count, dir_count).
 pub fn stats_db(c: DbConn) -> Result[(Int, Int, Int), String] !io = {
@@ -321,8 +475,10 @@ pub fn reparent_allow_missing(c: DbConn, old_rel: String, new_rel: String) -> Re
     reparent_loop(c, paths, old_rel, new_rel, 0)
   })
 
-fn validate_reparent_allow_missing_destination(c: DbConn, new_rel: String) -> Result[Unit, String] !io =
-  validate_fm_ancestors(c, new_rel)
+fn validate_reparent_allow_missing_destination(c: DbConn, new_rel: String) -> Result[Unit, String] !io = {
+  let _a = validate_fm_ancestors(c, new_rel)?
+  validate_final_destination_subtree(c, new_rel)
+}
 
 ## File-manager MOVE metadata in one immediate transaction. Missing destination
 ## ancestors are synthesized before the path rewrite and roll back with it.
@@ -334,20 +490,85 @@ pub fn reparent_fill_missing(c: DbConn, old_rel: String, new_rel: String) -> Res
     reparent_loop(c, paths, old_rel, new_rel, 0)
   })
 
-fn validate_reparent_fill_destination(c: DbConn, new_rel: String) -> Result[Unit, String] !io =
-  validate_fm_ancestors(c, new_rel)
+## Apply one FM MOVE request as one immediate transaction. Each plan is finally
+## revalidated and applied in request order, so a later collision rolls back all
+## earlier path rewrites and ancestor backfill from the same request.
+pub fn commit_fm_moves(c: DbConn, plans: List[MovePlan]) -> Result[Int, String] !io =
+  with_immediate_tx(c, () => commit_fm_move_plans(c, plans, 0))
 
-## WebDAV final MOVE write. The complete destination parent chain is rechecked
-## under the same immediate transaction as the path rewrite and is never filled.
+fn commit_fm_move_plans(c: DbConn, plans: List[MovePlan], i: Int) -> Result[Int, String] !io =
+  if i >= len(plans) {
+    Ok(0)
+  } else {
+    let plan = plans[i]
+    let paths = validated_subtree_paths(c, plan.source_root)?
+    let _v = validate_reparent_fill_destination(c, plan.destination_root)?
+    let _d = ensure_loop(c, ancestor_paths(plan.destination_root), 0)?
+    let moved = reparent_loop(c, paths, plan.source_root, plan.destination_root, 0)?
+    let rest = commit_fm_move_plans(c, plans, i + 1)?
+    Ok(moved + rest)
+  }
+
+fn validate_reparent_fill_destination(c: DbConn, new_rel: String) -> Result[Unit, String] !io = {
+  let _a = validate_fm_ancestors(c, new_rel)?
+  validate_final_destination_subtree(c, new_rel)
+}
+
+## WebDAV final MOVE without overwrite. Kept as the narrow metadata primitive
+## for callers that require an absent destination.
 pub fn reparent_strict(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io =
+  match commit_webdav_move(c, old_rel, new_rel, false) {
+    Ok(outcome) -> Ok(outcome.written)
+    Err(m) -> Err(m)
+  }
+
+fn validate_reparent_strict_destination(c: DbConn, new_rel: String) -> Result[Unit, String] !io = {
+  let _a = validate_webdav_ancestors(c, new_rel)?
+  validate_final_destination_subtree(c, new_rel)
+}
+
+## Atomically replace a WebDAV MOVE destination and reparent the current source
+## subtree. The returned rows are exactly the destination metadata removed by
+## this transaction and are safe candidates for reference-aware object GC only
+## after commit.
+pub fn commit_webdav_move(c: DbConn, old_rel: String, new_rel: String, overwrite: Bool) -> Result[SubtreeWriteOutcome, String] !io =
   with_immediate_tx(c, () => {
+    let _o = validate_disjoint_subtrees(old_rel, new_rel)?
     let paths = validated_subtree_paths(c, old_rel)?
-    let _d = validate_reparent_strict_destination(c, new_rel)?
-    reparent_loop(c, paths, old_rel, new_rel, 0)
+    let _a = validate_webdav_ancestors(c, new_rel)?
+    let destination_rows = subtree_rows(c, new_rel)?
+    let destination_existed = validate_webdav_destination_snapshot(destination_rows, new_rel, overwrite)?
+    let replaced: List[FileRow] = if destination_existed { delete_subtree_tx(c, new_rel)? } else { [] }
+    let moved = reparent_loop(c, paths, old_rel, new_rel, 0)?
+    Ok(SubtreeWriteOutcome {
+      destination_existed: destination_existed,
+      replaced_rows: replaced,
+      written: moved,
+    })
   })
 
-fn validate_reparent_strict_destination(c: DbConn, new_rel: String) -> Result[Unit, String] !io =
-  validate_webdav_ancestors(c, new_rel)
+fn validate_disjoint_subtrees(old_rel: String, new_rel: String) -> Result[Unit, String] =
+  if old_rel == "" || new_rel == "" {
+    Err(conflict("源与目标都必须是非根路径"))
+  } else if old_rel == new_rel || str.starts_with(new_rel, old_rel ++ "/") || str.starts_with(old_rel, new_rel ++ "/") {
+    Err(conflict("源与目标子树重叠：${full(old_rel)} -> ${full(new_rel)}"))
+  } else {
+    Ok(())
+  }
+
+fn subtree_root_present(rows: List[FileRow], root: String, i: Int) -> Bool =
+  if i >= len(rows) { false } else if rows[i].path == root { true } else { subtree_root_present(rows, root, i + 1) }
+
+fn validate_webdav_destination_snapshot(rows: List[FileRow], root: String, overwrite: Bool) -> Result[Bool, String] = {
+  let root_present = subtree_root_present(rows, root, 0)
+  if not root_present && len(rows) > 0 {
+    Err(conflict("目标根不存在但子树非空：${full(rows[0].path)}"))
+  } else if root_present && not overwrite {
+    Err(precondition("目标子树已存在：${full(root)}"))
+  } else {
+    Ok(root_present)
+  }
+}
 
 ## Read-only destination validation for a subtree operation. Callers that have
 ## external effects use this before touching the object store; reparent repeats
@@ -355,12 +576,48 @@ fn validate_reparent_strict_destination(c: DbConn, new_rel: String) -> Result[Un
 pub fn validate_subtree_destination(c: DbConn, old_rel: String, new_rel: String) -> Result[Unit, String] !io = {
   let rows = subtree_rows(c, old_rel)?
   let _s = validate_present_subtree(rows, old_rel)?
-  validate_fm_ancestors(c, new_rel)
+  let _a = validate_fm_ancestors(c, new_rel)?
+  validate_absent_destination_subtree(c, new_rel)
+}
+
+## Build one FM MOVE plan after a read-only source, ancestor, and complete
+## destination-subtree preflight. commit_fm_moves repeats these invariants under
+## the request-wide immediate transaction before applying each plan.
+pub fn prepare_fm_move(c: DbConn, old_rel: String, new_rel: String) -> Result[MovePlan, String] !io = {
+  let _v = validate_subtree_destination(c, old_rel, new_rel)?
+  Ok(MovePlan { source_root: old_rel, destination_root: new_rel })
+}
+
+## Reject every row under an absent-destination operation. FM uses this strict
+## empty-subtree rule; WebDAV uses the root-aware overwrite rule below.
+pub fn validate_absent_destination_subtree(c: DbConn, new_rel: String) -> Result[Unit, String] !io =
+  validate_empty_destination_subtree(c, new_rel)
+
+## Recheck a WebDAV destination snapshot during HTTP preflight. A root that
+## appeared after the initial lookup is a failed precondition when overwrite is
+## disabled, while orphan descendants remain a malformed-subtree conflict.
+pub fn validate_webdav_destination_preflight(c: DbConn, new_rel: String, overwrite: Bool) -> Result[Unit, String] !io = {
+  let rows = subtree_rows(c, new_rel)?
+  let _s = validate_webdav_destination_snapshot(rows, new_rel, overwrite)?
+  Ok(())
+}
+
+fn validate_final_destination_subtree(c: DbConn, new_rel: String) -> Result[Unit, String] !io =
+  validate_empty_destination_subtree(c, new_rel)
+
+fn validate_empty_destination_subtree(c: DbConn, new_rel: String) -> Result[Unit, String] !io = {
+  let rows = subtree_rows(c, new_rel)?
+  if len(rows) == 0 {
+    Ok(())
+  } else {
+    Err(conflict("目标子树已存在：${full(rows[0].path)}"))
+  }
 }
 
 ## WebDAV uses the same internal-shape rule, then validates every destination
 ## ancestor above the direct parent. The WebDAV caller checks that direct parent
-## separately before purge, preserving its 412 and 409 ordering contract.
+## separately before the final transaction, preserving its 412 and 409 ordering
+## contract.
 pub fn validate_webdav_subtree_destination(c: DbConn, old_rel: String, new_rel: String) -> Result[Unit, String] !io = {
   let rows = subtree_rows(c, old_rel)?
   let _s = validate_present_subtree(rows, old_rel)?
@@ -376,24 +633,46 @@ pub fn prepare_fm_copy(c: DbConn, old_rel: String, new_rel: String) -> Result[Co
   Ok(tree)
 }
 
-fn validate_prepare_fm_copy_targets(c: DbConn, tree: CopyTree) -> Result[Unit, String] !io =
+fn validate_prepare_fm_copy_targets(c: DbConn, tree: CopyTree) -> Result[Unit, String] !io = {
+  let _u = validate_preflight_copy_unmapped_targets(c, [tree])?
   validate_copy_targets(c, [tree])
+}
 
-## Build a WebDAV copy plan after overwrite purge. Its complete external parent
-## chain must still exist, and every mapped target must still be absent.
-pub fn prepare_webdav_copy(c: DbConn, old_rel: String, new_rel: String) -> Result[CopyTree, String] !io = {
+## Snapshot a WebDAV COPY source before object-store effects. Overwrite never
+## mutates the destination here; the final transaction rechecks the snapshot,
+## parent chain, overlap, and then replaces the destination atomically.
+pub fn prepare_webdav_copy(c: DbConn, old_rel: String, new_rel: String, overwrite: Bool) -> Result[CopyTree, String] !io = {
+  let _o = validate_disjoint_subtrees(old_rel, new_rel)?
   let tree = prepare_copy_tree(c, old_rel, new_rel)?
   let _a = validate_webdav_ancestors(c, new_rel)?
-  let _t = validate_prepare_webdav_copy_targets(c, tree)?
+  let _t = validate_prepare_webdav_copy_targets(c, tree, overwrite)?
   Ok(tree)
 }
 
-fn validate_prepare_webdav_copy_targets(c: DbConn, tree: CopyTree) -> Result[Unit, String] !io =
-  validate_copy_targets(c, [tree])
+## Validate the complete source tree before COPY touches the object store. MOVE
+## deliberately does not call this because object shape is irrelevant to a
+## metadata-only path rewrite.
+pub fn validate_copy_source_objects(c: DbConn, old_rel: String) -> Result[Unit, String] !io = {
+  let rows = subtree_rows(c, old_rel)?
+  let _s = validate_present_subtree(rows, old_rel)?
+  validate_copy_source_rows(rows, 0)
+}
+
+fn validate_prepare_webdav_copy_targets(c: DbConn, tree: CopyTree, overwrite: Bool) -> Result[Unit, String] !io =
+  {
+    let _s = validate_webdav_destination_preflight(c, tree.destination_root, overwrite)?
+    if overwrite {
+      Ok(())
+    } else {
+      let _u = validate_preflight_copy_unmapped_targets(c, [tree])?
+      validate_copy_targets(c, [tree])
+    }
+  }
 
 fn prepare_copy_tree(c: DbConn, old_rel: String, new_rel: String) -> Result[CopyTree, String] !io = {
   let rows = subtree_rows(c, old_rel)?
   let _s = validate_present_subtree(rows, old_rel)?
+  let _o = validate_copy_source_rows(rows, 0)?
   Ok(CopyTree {
     source_root: old_rel,
     destination_root: new_rel,
@@ -442,6 +721,31 @@ fn validate_copy_targets(c: DbConn, trees: List[CopyTree]) -> Result[Unit, Strin
   validate_copy_tree_targets(c, trees, 0)
 }
 
+fn validate_preflight_copy_unmapped_targets(c: DbConn, trees: List[CopyTree]) -> Result[Unit, String] !io =
+  validate_copy_unmapped_targets(c, trees, 0)
+
+fn validate_final_copy_unmapped_targets(c: DbConn, trees: List[CopyTree]) -> Result[Unit, String] !io =
+  validate_copy_unmapped_targets(c, trees, 0)
+
+fn validate_copy_unmapped_targets(c: DbConn, trees: List[CopyTree], i: Int) -> Result[Unit, String] !io =
+  if i >= len(trees) {
+    Ok(())
+  } else {
+    let rows = subtree_rows(c, trees[i].destination_root)?
+    let mapped = copy_tree_target_paths(trees[i], 0, [])
+    let _r = validate_copy_destination_rows_mapped(rows, mapped, 0)?
+    validate_copy_unmapped_targets(c, trees, i + 1)
+  }
+
+fn validate_copy_destination_rows_mapped(rows: List[FileRow], mapped: List[String], i: Int) -> Result[Unit, String] !io =
+  if i >= len(rows) {
+    Ok(())
+  } else if path_after(mapped, rows[i].path, 0) {
+    validate_copy_destination_rows_mapped(rows, mapped, i + 1)
+  } else {
+    Err(conflict("复制目标子树含未映射项：${full(rows[i].path)}"))
+  }
+
 fn validate_copy_tree_targets(c: DbConn, trees: List[CopyTree], i: Int) -> Result[Unit, String] !io =
   if i >= len(trees) {
     Ok(())
@@ -467,15 +771,34 @@ fn validate_copy_row_targets(c: DbConn, tree: CopyTree, i: Int) -> Result[Unit, 
 pub fn commit_fm_copies(c: DbConn, trees: List[CopyTree]) -> Result[Int, String] !io =
   with_immediate_tx(c, () => commit_copy_trees_tx(c, trees, FillMissingCopyAncestors))
 
-## Commit one WebDAV COPY in one immediate transaction without synthesizing its
-## external parent chain.
-pub fn commit_webdav_copy(c: DbConn, tree: CopyTree) -> Result[Int, String] !io =
-  with_immediate_tx(c, () => commit_copy_trees_tx(c, [tree], RequireExistingCopyAncestors))
+## Atomically replace one WebDAV COPY destination without synthesizing its
+## external parent chain. A failure after destination deletion rolls the old
+## target back together with every attempted insert.
+pub fn commit_webdav_copy(c: DbConn, tree: CopyTree, overwrite: Bool) -> Result[SubtreeWriteOutcome, String] !io =
+  with_immediate_tx(c, () => {
+    let _u = validate_copy_plan_targets([tree])?
+    let _o = validate_disjoint_subtrees(tree.source_root, tree.destination_root)?
+    let _s = validate_copy_snapshots(c, [tree], 0)?
+    let _a = validate_copy_destination_roots(c, [tree], RequireExistingCopyAncestors, 0)?
+    let _k = validate_copied_keys([tree], 0, 0)?
+    let destination_rows = subtree_rows(c, tree.destination_root)?
+    let destination_existed = validate_webdav_destination_snapshot(destination_rows, tree.destination_root, overwrite)?
+    let replaced: List[FileRow] = if destination_existed { delete_subtree_tx(c, tree.destination_root)? } else { [] }
+    let _e = validate_final_copy_unmapped_targets(c, [tree])?
+    let _t = validate_copy_targets(c, [tree])?
+    let written = insert_copy_trees(c, [tree], 0)?
+    Ok(SubtreeWriteOutcome {
+      destination_existed: destination_existed,
+      replaced_rows: replaced,
+      written: written,
+    })
+  })
 
 fn commit_copy_trees_tx(c: DbConn, trees: List[CopyTree], policy: CopyPolicy) -> Result[Int, String] !io = {
   let _u = validate_copy_plan_targets(trees)?
   let _s = validate_copy_snapshots(c, trees, 0)?
   let _a = validate_copy_destination_roots(c, trees, policy, 0)?
+  let _e = validate_final_copy_unmapped_targets(c, trees)?
   let _t = validate_copy_targets(c, trees)?
   let _k = validate_copied_keys(trees, 0, 0)?
   let _d = fill_copy_destination_roots(c, trees, policy, 0)?
@@ -526,12 +849,13 @@ fn validate_copied_keys(trees: List[CopyTree], tree_i: Int, row_i: Int) -> Resul
     validate_copied_keys(trees, tree_i + 1, 0)
   } else {
     let row = trees[tree_i].rows[row_i]
+    let _s = validate_copy_source_row(row.source)?
     let valid = if row.source.is_dir {
       row.copied_key == None
     } else {
-      match row.source.key {
-        Some(_) -> match row.copied_key { Some(_) -> true, None -> false }
-        None -> row.copied_key == None
+      match row.copied_key {
+        Some(key) -> str.trim(key) != ""
+        None -> false
       }
     }
     if valid {
@@ -567,14 +891,15 @@ fn insert_copy_rows(c: DbConn, tree: CopyTree, i: Int) -> Result[Int, String] !i
   } else {
     let row = tree.rows[i]
     let destination = copy_destination(tree, row.source.path)
-    let n = if row.source.is_dir {
-      insert_folder_row(c, destination)?
+    let inserted: Result[Int, String] = if row.source.is_dir {
+      insert_folder_row(c, destination)
     } else {
       match row.copied_key {
-        Some(key) -> insert_file_row(c, destination, key, row.source.content_type, row.source.size)?
-        None -> 0
+        Some(key) -> insert_file_row(c, destination, key, row.source.content_type, row.source.size)
+        None -> Err("copy insertion has no object result: ${full(row.source.path)}")
       }
     }
+    let n = inserted?
     let rest = insert_copy_rows(c, tree, i + 1)?
     Ok(n + rest)
   }
@@ -584,6 +909,54 @@ fn validate_present_subtree(rows: List[FileRow], old_rel: String) -> Result[Unit
     Err(conflict("源不存在：${full(old_rel)}"))
   } else {
     validate_subtree_rows(rows, old_rel, 0)
+  }
+
+fn validate_copy_source_rows(rows: List[FileRow], i: Int) -> Result[Unit, String] !io =
+  if i >= len(rows) {
+    Ok(())
+  } else {
+    let _s = validate_copy_source_preflight_shape(rows[i])?
+    let _k = validate_copy_source_preflight_key(rows[i])?
+    validate_copy_source_rows(rows, i + 1)
+  }
+
+fn validate_copy_source_preflight_shape(row: FileRow) -> Result[Unit, String] !io =
+  validate_copy_source_shape(row)
+
+fn validate_copy_source_preflight_key(row: FileRow) -> Result[Unit, String] !io =
+  validate_copy_source_nonblank_key(row)
+
+fn validate_copy_source_row(row: FileRow) -> Result[Unit, String] !io = {
+  let _s = validate_copy_source_shape(row)?
+  validate_copy_source_nonblank_key(row)
+}
+
+fn validate_copy_source_shape(row: FileRow) -> Result[Unit, String] !io =
+  if row.is_dir {
+    match row.key {
+      None -> Ok(())
+      Some(_) -> Err(conflict("复制源目录携带对象 key：${full(row.path)}"))
+    }
+  } else {
+    match row.key {
+      Some(_) -> Ok(())
+      None -> Err(conflict("复制源文件缺少对象 key：${full(row.path)}"))
+    }
+  }
+
+fn validate_copy_source_nonblank_key(row: FileRow) -> Result[Unit, String] !io =
+  if row.is_dir {
+    Ok(())
+  } else {
+    match row.key {
+      Some(key) ->
+        if str.trim(key) == "" {
+          Err(conflict("复制源文件的对象 key 为空：${full(row.path)}"))
+        } else {
+          Ok(())
+        }
+      None -> Ok(())
+    }
   }
 
 fn validate_subtree_rows(rows: List[FileRow], old_rel: String, i: Int) -> Result[Unit, String] !io =
@@ -631,15 +1004,31 @@ fn reparent_loop(c: DbConn, paths: List[String], old_rel: String, new_rel: Strin
     let np = new_rel ++ str.slice(p, str.len(old_rel), str.len(p))
     # match FastAPI's SQLAlchemy onupdate: a path change bumps updated_at (wall
     # clock, so not diff-comparable across the two servers — like article updated_at)
-    let _u = exec(c, "update files set path = ?, updated_at = datetime('now') where path = ?", [PStr(np), PStr(p)])?
-    reparent_loop(c, paths, old_rel, new_rel, i + 1)
+    let moved = exec(c, "update files set path = ?, updated_at = datetime('now') where path = ?", [PStr(np), PStr(p)])?
+    if moved != 1 {
+      Err("subtree reparent count changed: ${full(p)}")
+    } else {
+      let rest = reparent_loop(c, paths, old_rel, new_rel, i + 1)?
+      Ok(moved + rest)
+    }
   }
 
 fn fm_test_db() -> DbConn !io = {
   let c = open("jdbc:sqlite::memory:")
   let _t = exec(c, "create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null)", [])
+  let _p = exec(c, "create table pending_uploads (key text primary key, path text not null, created_at text not null)", [])
   c
 }
+
+fn copied_test_tree(tree: CopyTree, prefix: String) -> CopyTree =
+  CopyTree {
+    source_root: tree.source_root,
+    destination_root: tree.destination_root,
+    rows: map(tree.rows, row => CopiedRow {
+      source: row.source,
+      copied_key: if row.source.is_dir { None } else { Some(prefix ++ "-" ++ row.source.path) },
+    }),
+  }
 
 test "insert_folder_strict rejects an existing file ancestor" {
   let c = fm_test_db()
@@ -665,7 +1054,6 @@ test "insert_file_strict checks ancestors above an existing parent row" {
 test "insert_file rejects an existing directory target" {
   let c = fm_test_db()
   let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('target-dir', 1, null, '', 0, datetime('now'), datetime('now'))", [])
-  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('target-dir/child.txt', 0, 'child-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
   match insert_file(c, "target-dir", "new-key", "text/plain", 3) {
     Ok(_) -> { assert false }
     Err(_) -> { assert true }
@@ -677,7 +1065,218 @@ test "insert_file rejects an existing directory target" {
     }
     _ -> { assert false }
   }
-  assert scalar_int(c, "select count(*) from files", []) == Ok(2)
+  assert scalar_int(c, "select count(*) from files", []) == Ok(1)
+}
+
+test "replace_file returns the key superseded inside its transaction" {
+  let c = fm_test_db()
+  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('target.txt', 0, 'current-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match replace_file(c, "target.txt", "new-key", "text/plain", 2) {
+    Ok(outcome) -> {
+      assert outcome.target_existed
+      assert outcome.superseded_key == Some("current-key")
+    }
+    Err(_) -> { assert false }
+  }
+  match get_row(c, "target.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("new-key") }
+    _ -> { assert false }
+  }
+
+  let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('stale.txt', 0, 'moved-key', 'text/plain', 3, datetime('now'), datetime('now'))", [])
+  let _m = exec(c, "update files set path = 'moved.txt' where path = 'stale.txt'", [])
+  match replace_file(c, "stale.txt", "replacement-key", "text/plain", 4) {
+    Ok(outcome) -> {
+      assert not outcome.target_existed
+      assert outcome.superseded_key == None
+    }
+    Err(_) -> { assert false }
+  }
+  match get_row(c, "moved.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("moved-key") }
+    _ -> { assert false }
+  }
+}
+
+test "replace_file_strict returns its actual superseded key" {
+  let c = fm_test_db()
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('parent/file.txt', 0, 'strict-old-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match replace_file_strict(c, "parent/file.txt", "strict-new-key", "text/plain", 2) {
+    Ok(outcome) -> {
+      assert outcome.target_existed
+      assert outcome.superseded_key == Some("strict-old-key")
+    }
+    Err(_) -> { assert false }
+  }
+  match get_row(c, "parent/file.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("strict-new-key") }
+    _ -> { assert false }
+  }
+  match replace_file_strict(c, "parent/new.txt", "strict-created-key", "text/plain", 3) {
+    Ok(outcome) -> {
+      assert not outcome.target_existed
+      assert outcome.superseded_key == None
+    }
+    Err(_) -> { assert false }
+  }
+}
+
+test "key_referenced preserves legacy shared objects" {
+  let c = fm_test_db()
+  let _a = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('a.txt', 0, 'shared-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _b = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('b.txt', 0, 'shared-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match replace_file(c, "a.txt", "fresh-key", "text/plain", 2) {
+    Ok(outcome) -> { assert outcome.superseded_key == Some("shared-key") }
+    Err(_) -> { assert false }
+  }
+  assert key_referenced(c, "shared-key") == Ok(true)
+  assert key_referenced(c, "missing-key") == Ok(false)
+}
+
+test "create_file_once never overwrites a concurrent file" {
+  let c = fm_test_db()
+  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('race.txt', 0, 'saved-key', 'text/plain', 7, datetime('now'), datetime('now'))", [])
+  match create_file_once(c, "race.txt", "empty-key", "text/plain", 0) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  match get_row(c, "race.txt") {
+    Ok(Some(o)) -> {
+      assert o.key == Some("saved-key")
+      assert o.size == 7
+    }
+    _ -> { assert false }
+  }
+}
+
+test "finalize_register atomically validates and consumes its ledger claim" {
+  let c = fm_test_db()
+  let _o = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('target.txt', 0, 'old-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _l = ledger_insert(c, "registered-key", "qiniu://target.txt")
+  match finalize_register(c, "target.txt", "registered-key", "text/plain", 9) {
+    Ok(result) -> {
+      let (row, outcome) = result
+      assert row.key == Some("registered-key")
+      assert row.size == 9
+      assert outcome.target_existed
+      assert outcome.superseded_key == Some("old-key")
+    }
+    Err(_) -> { assert false }
+  }
+  assert scalar_int(c, "select count(*) from pending_uploads", []) == Ok(0)
+  match finalize_register(c, "target.txt", "registered-key", "text/plain", 9) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  match get_row(c, "target.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("registered-key") }
+    _ -> { assert false }
+  }
+}
+
+test "finalize_register rejects path mismatch and duplicate key ownership" {
+  let c = fm_test_db()
+  let _m = ledger_insert(c, "mismatch-key", "qiniu://expected.txt")
+  match finalize_register(c, "other.txt", "mismatch-key", "text/plain", 1) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  assert scalar_int(c, "select count(*) from pending_uploads where key = 'mismatch-key'", []) == Ok(1)
+  assert get_row(c, "other.txt") == Ok(None)
+
+  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('owner.txt', 0, 'shared-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _l = ledger_insert(c, "shared-key", "qiniu://second.txt")
+  match finalize_register(c, "second.txt", "shared-key", "text/plain", 1) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  assert scalar_int(c, "select count(*) from pending_uploads where key = 'shared-key'", []) == Ok(1)
+  assert get_row(c, "second.txt") == Ok(None)
+}
+
+test "delete_subtrees rolls back every requested root on failure" {
+  let c = fm_test_db()
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('one', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _c = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('one/child.txt', 0, 'child-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('second.txt', 0, 'second-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _t = exec(c, "create trigger reject_second before delete on files when old.path = 'second.txt' begin select raise(abort, 'reject second'); end", [])
+  match delete_subtrees(c, ["one", "second.txt"]) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  assert scalar_int(c, "select count(*) from files", []) == Ok(3)
+  let _x = exec(c, "drop trigger reject_second", [])
+  match delete_subtrees(c, ["one", "second.txt"]) {
+    Ok(rows) -> { assert len(rows) == 3 }
+    Err(_) -> { assert false }
+  }
+  assert scalar_int(c, "select count(*) from files", []) == Ok(0)
+}
+
+test "delete_subtree returns one atomic metadata snapshot" {
+  let c = fm_test_db()
+  let _r = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('delete-root', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _a = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('delete-root/a.txt', 0, 'delete-a-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _b = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('delete-root/b.txt', 0, 'delete-b-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _t = exec(c, "create trigger reject_delete_child before delete on files when old.path = 'delete-root/b.txt' begin select raise(abort, 'reject delete child'); end", [])
+  match delete_subtree(c, "delete-root") {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  assert scalar_int(c, "select count(*) from files", []) == Ok(3)
+  let _x = exec(c, "drop trigger reject_delete_child", [])
+  match delete_subtree(c, "delete-root") {
+    Ok(rows) -> {
+      assert len(rows) == 3
+      match subtree_row_at(rows, "delete-root", 0) {
+        Some(o) -> { assert o.key == None }
+        None -> { assert false }
+      }
+      match subtree_row_at(rows, "delete-root/a.txt", 0) {
+        Some(o) -> { assert o.key == Some("delete-a-key") }
+        None -> { assert false }
+      }
+      match subtree_row_at(rows, "delete-root/b.txt", 0) {
+        Some(o) -> { assert o.key == Some("delete-b-key") }
+        None -> { assert false }
+      }
+    }
+    Err(_) -> { assert false }
+  }
+  assert scalar_int(c, "select count(*) from files", []) == Ok(0)
+}
+
+test "WebDAV delete preserves descendants when the requested root is absent" {
+  let c = fm_test_db()
+  let _o = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-delete-orphan/legacy.txt', 0, 'dav-delete-orphan-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match delete_subtree(c, "dav-delete-orphan") {
+    Ok(rows) -> { assert len(rows) == 0 }
+    Err(_) -> { assert false }
+  }
+  assert get_row(c, "dav-delete-orphan") == Ok(None)
+  match get_row(c, "dav-delete-orphan/legacy.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("dav-delete-orphan-key") }
+    _ -> { assert false }
+  }
+}
+
+test "FM delete skips an absent root without deleting its descendants" {
+  let c = fm_test_db()
+  let _o = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('fm-delete-orphan/legacy.txt', 0, 'fm-delete-orphan-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _r = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('fm-delete-real.txt', 0, 'fm-delete-real-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match delete_subtrees(c, ["fm-delete-orphan", "fm-delete-real.txt"]) {
+    Ok(rows) -> {
+      assert len(rows) == 1
+      assert rows[0].path == "fm-delete-real.txt"
+    }
+    Err(_) -> { assert false }
+  }
+  assert get_row(c, "fm-delete-real.txt") == Ok(None)
+  match get_row(c, "fm-delete-orphan/legacy.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("fm-delete-orphan-key") }
+    _ -> { assert false }
+  }
 }
 
 test "FM inserts atomically create missing ancestors" {
@@ -747,6 +1346,99 @@ test "WebDAV strict reparent rejects missing and file ancestors" {
   assert scalar_int(c, "select count(*) from files where path = 'source' or path = 'source/child.txt'", []) == Ok(2)
 }
 
+test "WebDAV MOVE overwrite atomically replaces the current destination" {
+  let c = fm_test_db()
+  let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('move-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('move-source', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _sc = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('move-source/child.txt', 0, 'move-live-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('move-parent/target', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _dc = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('move-parent/target/old.txt', 0, 'move-old-key', 'text/plain', 2, datetime('now'), datetime('now'))", [])
+  match commit_webdav_move(c, "move-source", "move-parent/target", true) {
+    Ok(outcome) -> {
+      assert outcome.destination_existed
+      assert outcome.written == 2
+      assert len(outcome.replaced_rows) == 2
+      match subtree_row_at(outcome.replaced_rows, "move-parent/target", 0) {
+        Some(o) -> { assert o.key == None }
+        None -> { assert false }
+      }
+      match subtree_row_at(outcome.replaced_rows, "move-parent/target/old.txt", 0) {
+        Some(o) -> { assert o.key == Some("move-old-key") }
+        None -> { assert false }
+      }
+    }
+    Err(_) -> { assert false }
+  }
+  assert get_row(c, "move-source") == Ok(None)
+  match get_row(c, "move-parent/target/child.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("move-live-key") }
+    _ -> { assert false }
+  }
+}
+
+test "WebDAV MOVE overwrite rejects descendants under an absent destination root" {
+  let c = fm_test_db()
+  let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('move-orphan-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('move-orphan-source.txt', 0, 'move-orphan-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _o = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('move-orphan-parent/target/legacy.txt', 0, 'move-orphan-legacy-key', 'text/plain', 2, datetime('now'), datetime('now'))", [])
+  match commit_webdav_move(c, "move-orphan-source.txt", "move-orphan-parent/target", true) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  assert get_row(c, "move-orphan-parent/target") == Ok(None)
+  match get_row(c, "move-orphan-source.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("move-orphan-source-key") }
+    _ -> { assert false }
+  }
+  match get_row(c, "move-orphan-parent/target/legacy.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("move-orphan-legacy-key") }
+    _ -> { assert false }
+  }
+}
+
+test "WebDAV MOVE no-overwrite reports a late target as a precondition" {
+  let c = fm_test_db()
+  let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('move-precondition-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('move-precondition-source.txt', 0, 'move-precondition-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  assert get_row(c, "move-precondition-parent/target.txt") == Ok(None)
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('move-precondition-parent/target.txt', 0, 'move-precondition-target-key', 'text/plain', 2, datetime('now'), datetime('now'))", [])
+  match commit_webdav_move(c, "move-precondition-source.txt", "move-precondition-parent/target.txt", false) {
+    Ok(_) -> { assert false }
+    Err(m) -> {
+      let (kind, _text) = split_kind(m)
+      assert kind == KPrecondition
+    }
+  }
+  match get_row(c, "move-precondition-source.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("move-precondition-source-key") }
+    _ -> { assert false }
+  }
+  match get_row(c, "move-precondition-parent/target.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("move-precondition-target-key") }
+    _ -> { assert false }
+  }
+}
+
+test "WebDAV MOVE overwrite restores the old target after a late failure" {
+  let c = fm_test_db()
+  let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('move-late-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('move-late-source.txt', 0, 'move-late-live-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('move-late-parent/target.txt', 0, 'move-late-old-key', 'text/plain', 2, datetime('now'), datetime('now'))", [])
+  let _t = exec(c, "create trigger reject_webdav_move before update of path on files when old.path = 'move-late-source.txt' begin select raise(abort, 'reject webdav move'); end", [])
+  match commit_webdav_move(c, "move-late-source.txt", "move-late-parent/target.txt", true) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  match get_row(c, "move-late-source.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("move-late-live-key") }
+    _ -> { assert false }
+  }
+  match get_row(c, "move-late-parent/target.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("move-late-old-key") }
+    _ -> { assert false }
+  }
+}
+
 test "insert_file fails closed when an ignored upsert removes its target" {
   let c = fm_test_db()
   let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('vanish.txt', 0, 'old-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
@@ -795,7 +1487,7 @@ test "copy commits reject a vanished source snapshot" {
 
   let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
   let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-source.txt', 0, 'dav-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
-  match prepare_webdav_copy(c, "dav-source.txt", "dav-parent/target.txt") {
+  match prepare_webdav_copy(c, "dav-source.txt", "dav-parent/target.txt", false) {
     Err(_) -> { assert false }
     Ok(plan) -> {
       let copied = CopyTree {
@@ -804,7 +1496,7 @@ test "copy commits reject a vanished source snapshot" {
         rows: map(plan.rows, row => CopiedRow { source: row.source, copied_key: Some("dav-copy-key") }),
       }
       let _d = delete_row(c, "dav-source.txt")
-      match commit_webdav_copy(c, copied) {
+      match commit_webdav_copy(c, copied, false) {
         Ok(_) -> { assert false }
         Err(_) -> { assert true }
       }
@@ -838,7 +1530,7 @@ test "copy commits revalidate every mapped target" {
 
   let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
   let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-source.txt', 0, 'dav-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
-  match prepare_webdav_copy(c, "dav-source.txt", "dav-parent/target.txt") {
+  match prepare_webdav_copy(c, "dav-source.txt", "dav-parent/target.txt", false) {
     Err(_) -> { assert false }
     Ok(plan) -> {
       let copied = CopyTree {
@@ -847,7 +1539,7 @@ test "copy commits revalidate every mapped target" {
         rows: map(plan.rows, row => CopiedRow { source: row.source, copied_key: Some("dav-copy-key") }),
       }
       let _t = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-parent/target.txt', 0, 'dav-collision-key', 'text/plain', 2, datetime('now'), datetime('now'))", [])
-      match commit_webdav_copy(c, copied) {
+      match commit_webdav_copy(c, copied, false) {
         Ok(_) -> { assert false }
         Err(_) -> { assert true }
       }
@@ -857,4 +1549,373 @@ test "copy commits revalidate every mapped target" {
       }
     }
   }
+}
+
+test "WebDAV copy preflight rejects every mapped target" {
+  let c = fm_test_db()
+  let _r = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-preflight-source', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-preflight-source/nested', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-preflight-source/nested/file.txt', 0, 'dav-preflight-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-preflight-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _t = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-preflight-parent/copied/nested/file.txt', 0, 'dav-preflight-collision-key', 'text/plain', 2, datetime('now'), datetime('now'))", [])
+  match prepare_webdav_copy(c, "dav-preflight-source", "dav-preflight-parent/copied", false) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  assert get_row(c, "dav-preflight-source/nested/file.txt") != Ok(None)
+  match get_row(c, "dav-preflight-parent/copied/nested/file.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("dav-preflight-collision-key") }
+    _ -> { assert false }
+  }
+}
+
+test "WebDAV COPY prepare rejects orphan descendants even with overwrite" {
+  let c = fm_test_db()
+  let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-prepare-orphan-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-prepare-orphan-source.txt', 0, 'copy-prepare-orphan-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _o = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-prepare-orphan-parent/target/legacy.txt', 0, 'copy-prepare-orphan-legacy-key', 'text/plain', 2, datetime('now'), datetime('now'))", [])
+  match prepare_webdav_copy(c, "copy-prepare-orphan-source.txt", "copy-prepare-orphan-parent/target", true) {
+    Ok(_) -> { assert false }
+    Err(m) -> {
+      let (kind, _text) = split_kind(m)
+      assert kind == KConflict
+    }
+  }
+  match get_row(c, "copy-prepare-orphan-parent/target/legacy.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("copy-prepare-orphan-legacy-key") }
+    _ -> { assert false }
+  }
+}
+
+test "WebDAV COPY no-overwrite reports a late target as a precondition" {
+  let c = fm_test_db()
+  let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-precondition-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-precondition-source.txt', 0, 'copy-precondition-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match prepare_webdav_copy(c, "copy-precondition-source.txt", "copy-precondition-parent/target.txt", false) {
+    Err(_) -> { assert false }
+    Ok(plan) -> {
+      let copied = copied_test_tree(plan, "fresh-precondition")
+      let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-precondition-parent/target.txt', 0, 'copy-precondition-target-key', 'text/plain', 2, datetime('now'), datetime('now'))", [])
+      match commit_webdav_copy(c, copied, false) {
+        Ok(_) -> { assert false }
+        Err(m) -> {
+          let (kind, _text) = split_kind(m)
+          assert kind == KPrecondition
+        }
+      }
+    }
+  }
+  match get_row(c, "copy-precondition-source.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("copy-precondition-source-key") }
+    _ -> { assert false }
+  }
+  match get_row(c, "copy-precondition-parent/target.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("copy-precondition-target-key") }
+    _ -> { assert false }
+  }
+}
+
+test "WebDAV COPY overwrite returns and replaces the current target atomically" {
+  let c = fm_test_db()
+  let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-source', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _sc = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-source/child.txt', 0, 'copy-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-parent/target', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _dc = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-parent/target/old.txt', 0, 'copy-old-key', 'text/plain', 2, datetime('now'), datetime('now'))", [])
+  match prepare_webdav_copy(c, "copy-source", "copy-parent/target", true) {
+    Err(_) -> { assert false }
+    Ok(plan) -> {
+      let copied = copied_test_tree(plan, "fresh")
+      match commit_webdav_copy(c, copied, true) {
+        Err(_) -> { assert false }
+        Ok(outcome) -> {
+          assert outcome.destination_existed
+          assert outcome.written == 2
+          assert len(outcome.replaced_rows) == 2
+          match subtree_row_at(outcome.replaced_rows, "copy-parent/target", 0) {
+            Some(o) -> { assert o.key == None }
+            None -> { assert false }
+          }
+          match subtree_row_at(outcome.replaced_rows, "copy-parent/target/old.txt", 0) {
+            Some(o) -> { assert o.key == Some("copy-old-key") }
+            None -> { assert false }
+          }
+        }
+      }
+    }
+  }
+  match get_row(c, "copy-source/child.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("copy-source-key") }
+    _ -> { assert false }
+  }
+  match get_row(c, "copy-parent/target/child.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("fresh-copy-source/child.txt") }
+    _ -> { assert false }
+  }
+}
+
+test "WebDAV COPY overwrite rejects late descendants under an absent destination root" {
+  let c = fm_test_db()
+  let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-orphan-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-orphan-source.txt', 0, 'copy-orphan-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match prepare_webdav_copy(c, "copy-orphan-source.txt", "copy-orphan-parent/target", true) {
+    Err(_) -> { assert false }
+    Ok(plan) -> {
+      let copied = copied_test_tree(plan, "fresh-orphan")
+      let _o = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-orphan-parent/target/legacy.txt', 0, 'copy-orphan-legacy-key', 'text/plain', 2, datetime('now'), datetime('now'))", [])
+      match commit_webdav_copy(c, copied, true) {
+        Ok(_) -> { assert false }
+        Err(_) -> { assert true }
+      }
+    }
+  }
+  assert get_row(c, "copy-orphan-parent/target") == Ok(None)
+  match get_row(c, "copy-orphan-source.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("copy-orphan-source-key") }
+    _ -> { assert false }
+  }
+  match get_row(c, "copy-orphan-parent/target/legacy.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("copy-orphan-legacy-key") }
+    _ -> { assert false }
+  }
+}
+
+test "WebDAV COPY overwrite preserves the target when the source changes late" {
+  let c = fm_test_db()
+  let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-source-change-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-source-change.txt', 0, 'copy-source-change-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-source-change-parent/target.txt', 0, 'copy-source-change-old-key', 'text/plain', 2, datetime('now'), datetime('now'))", [])
+  match prepare_webdav_copy(c, "copy-source-change.txt", "copy-source-change-parent/target.txt", true) {
+    Err(_) -> { assert false }
+    Ok(plan) -> {
+      let copied = copied_test_tree(plan, "fresh-source-change")
+      let _u = exec(c, "update files set size = 3 where path = 'copy-source-change.txt'", [])
+      match commit_webdav_copy(c, copied, true) {
+        Ok(_) -> { assert false }
+        Err(_) -> { assert true }
+      }
+    }
+  }
+  match get_row(c, "copy-source-change-parent/target.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("copy-source-change-old-key") }
+    _ -> { assert false }
+  }
+}
+
+test "WebDAV COPY overwrite preserves the target when its parent changes late" {
+  let c = fm_test_db()
+  let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-parent-change', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-parent-change-source.txt', 0, 'copy-parent-change-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-parent-change/target.txt', 0, 'copy-parent-change-old-key', 'text/plain', 2, datetime('now'), datetime('now'))", [])
+  match prepare_webdav_copy(c, "copy-parent-change-source.txt", "copy-parent-change/target.txt", true) {
+    Err(_) -> { assert false }
+    Ok(plan) -> {
+      let copied = copied_test_tree(plan, "fresh-parent-change")
+      let _u = exec(c, "update files set is_dir = 0, key = 'late-parent-key' where path = 'copy-parent-change'", [])
+      match commit_webdav_copy(c, copied, true) {
+        Ok(_) -> { assert false }
+        Err(_) -> { assert true }
+      }
+    }
+  }
+  match get_row(c, "copy-parent-change/target.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("copy-parent-change-old-key") }
+    _ -> { assert false }
+  }
+}
+
+test "WebDAV COPY overwrite rolls destination deletion back on insert failure" {
+  let c = fm_test_db()
+  let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-insert-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-insert-source.txt', 0, 'copy-insert-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('copy-insert-parent/target.txt', 0, 'copy-insert-old-key', 'text/plain', 2, datetime('now'), datetime('now'))", [])
+  match prepare_webdav_copy(c, "copy-insert-source.txt", "copy-insert-parent/target.txt", true) {
+    Err(_) -> { assert false }
+    Ok(plan) -> {
+      let copied = copied_test_tree(plan, "fresh-insert")
+      let _t = exec(c, "create trigger reject_webdav_copy_insert before insert on files when new.path = 'copy-insert-parent/target.txt' begin select raise(abort, 'reject webdav copy insert'); end", [])
+      match commit_webdav_copy(c, copied, true) {
+        Ok(_) -> { assert false }
+        Err(_) -> { assert true }
+      }
+    }
+  }
+  match get_row(c, "copy-insert-parent/target.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("copy-insert-old-key") }
+    _ -> { assert false }
+  }
+}
+
+test "WebDAV MOVE and COPY reject overlapping subtrees at final commit" {
+  let c = fm_test_db()
+  let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('overlap', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _s = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('overlap/source', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('overlap/source/file.txt', 0, 'overlap-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match commit_webdav_move(c, "overlap/source", "overlap/source/nested", true) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  match commit_webdav_move(c, "overlap/source", "", true) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  match prepare_webdav_copy(c, "overlap/source", "overlap/source/nested", true) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  match prepare_webdav_copy(c, "overlap/source", "overlap", true) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  match prepare_webdav_copy(c, "overlap/source", "", true) {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  match prepare_webdav_copy(c, "overlap/source", "overlap/copy", true) {
+    Err(_) -> { assert false }
+    Ok(plan) -> {
+      let copied = copied_test_tree(plan, "fresh-overlap")
+      let overlapping = CopyTree {
+        source_root: copied.source_root,
+        destination_root: "overlap/source/nested",
+        rows: copied.rows,
+      }
+      match commit_webdav_copy(c, overlapping, true) {
+        Ok(_) -> { assert false }
+        Err(_) -> { assert true }
+      }
+    }
+  }
+  assert scalar_int(c, "select count(*) from files", []) == Ok(3)
+  match get_row(c, "overlap/source/file.txt") {
+    Ok(Some(o)) -> { assert o.key == Some("overlap-source-key") }
+    _ -> { assert false }
+  }
+}
+
+test "copy commits reject malformed source object rows" {
+  let c = fm_test_db()
+  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('keyless.txt', 0, null, 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match get_row(c, "keyless.txt") {
+    Ok(Some(source)) -> {
+      let plan = CopyTree {
+        source_root: "keyless.txt",
+        destination_root: "keyless-copy.txt",
+        rows: [CopiedRow { source: source, copied_key: None }],
+      }
+      match commit_fm_copies(c, [plan]) {
+        Ok(_) -> { assert false }
+        Err(_) -> { assert true }
+      }
+    }
+    _ -> { assert false }
+  }
+  assert get_row(c, "keyless-copy.txt") == Ok(None)
+
+  let _b = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('blank-key.txt', 0, '   ', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match get_row(c, "blank-key.txt") {
+    Ok(Some(source)) -> {
+      let plan = CopyTree {
+        source_root: "blank-key.txt",
+        destination_root: "blank-key-copy.txt",
+        rows: [CopiedRow { source: source, copied_key: Some("blank-final-copy-key") }],
+      }
+      match commit_fm_copies(c, [plan]) {
+        Ok(_) -> { assert false }
+        Err(_) -> { assert true }
+      }
+    }
+    _ -> { assert false }
+  }
+  assert get_row(c, "blank-key-copy.txt") == Ok(None)
+
+  let _p = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('keyed-dir', 1, 'legacy-dir-key', '', 0, datetime('now'), datetime('now'))", [])
+  match get_row(c, "keyed-dir") {
+    Ok(Some(source)) -> {
+      let plan = CopyTree {
+        source_root: "keyed-dir",
+        destination_root: "dav-parent/keyed-dir",
+        rows: [CopiedRow { source: source, copied_key: None }],
+      }
+      match commit_webdav_copy(c, plan, false) {
+        Ok(_) -> { assert false }
+        Err(_) -> { assert true }
+      }
+    }
+    _ -> { assert false }
+  }
+  assert get_row(c, "dav-parent/keyed-dir") == Ok(None)
+}
+
+test "copy, move, and rename commits reject unmapped destination descendants" {
+  let rename = fm_test_db()
+  let _sr = exec(rename, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('rename-source.txt', 0, 'rename-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _or = exec(rename, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('rename-target/orphan.txt', 0, 'rename-orphan-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match reparent_allow_missing(rename, "rename-source.txt", "rename-target") {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  assert get_row(rename, "rename-source.txt") != Ok(None)
+  assert get_row(rename, "rename-target") == Ok(None)
+
+  let fm_move = fm_test_db()
+  let _s1 = exec(fm_move, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('fm-move-source.txt', 0, 'fm-move-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _o1 = exec(fm_move, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('fm-move-target/orphan.txt', 0, 'fm-move-orphan-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match reparent_fill_missing(fm_move, "fm-move-source.txt", "fm-move-target") {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  assert get_row(fm_move, "fm-move-source.txt") != Ok(None)
+  assert get_row(fm_move, "fm-move-target") == Ok(None)
+
+  let dav_move = fm_test_db()
+  let _p2 = exec(dav_move, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-move-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _s2 = exec(dav_move, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-move-source.txt', 0, 'dav-move-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _o2 = exec(dav_move, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-move-parent/target/orphan.txt', 0, 'dav-move-orphan-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match reparent_strict(dav_move, "dav-move-source.txt", "dav-move-parent/target") {
+    Ok(_) -> { assert false }
+    Err(_) -> { assert true }
+  }
+  assert get_row(dav_move, "dav-move-source.txt") != Ok(None)
+  assert get_row(dav_move, "dav-move-parent/target") == Ok(None)
+
+  let fm_copy = fm_test_db()
+  let _s3 = exec(fm_copy, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('fm-copy-source.txt', 0, 'fm-copy-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _o3 = exec(fm_copy, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('fm-copy-target/orphan.txt', 0, 'fm-copy-orphan-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match get_row(fm_copy, "fm-copy-source.txt") {
+    Ok(Some(source)) -> {
+      let plan = CopyTree {
+        source_root: "fm-copy-source.txt",
+        destination_root: "fm-copy-target",
+        rows: [CopiedRow { source: source, copied_key: Some("fm-copied-key") }],
+      }
+      match commit_fm_copies(fm_copy, [plan]) {
+        Ok(_) -> { assert false }
+        Err(_) -> { assert true }
+      }
+    }
+    _ -> { assert false }
+  }
+  assert get_row(fm_copy, "fm-copy-target") == Ok(None)
+
+  let dav_copy = fm_test_db()
+  let _p4 = exec(dav_copy, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-copy-parent', 1, null, '', 0, datetime('now'), datetime('now'))", [])
+  let _s4 = exec(dav_copy, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-copy-source.txt', 0, 'dav-copy-source-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  let _o4 = exec(dav_copy, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-copy-parent/target/orphan.txt', 0, 'dav-copy-orphan-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match get_row(dav_copy, "dav-copy-source.txt") {
+    Ok(Some(source)) -> {
+      let plan = CopyTree {
+        source_root: "dav-copy-source.txt",
+        destination_root: "dav-copy-parent/target",
+        rows: [CopiedRow { source: source, copied_key: Some("dav-copied-key") }],
+      }
+      match commit_webdav_copy(dav_copy, plan, false) {
+        Ok(_) -> { assert false }
+        Err(_) -> { assert true }
+      }
+    }
+    _ -> { assert false }
+  }
+  assert get_row(dav_copy, "dav-copy-parent/target") == Ok(None)
 }

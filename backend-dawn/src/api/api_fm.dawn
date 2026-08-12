@@ -14,11 +14,11 @@ use db/db.{with_db}
 use svc/auth.{Auth, guarded, guarded_flexible}
 use util/jsonread.{body_obj, str_or, str_list, opt_int}
 use util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime}
-use repo/repo_fm.{FileRow, fs_data, insert_file, get_row, ledger_insert, ledger_delete, search_files, entry_json, stats_db, validate_fm_ancestors, validate_fm_file_target}
-use svc/files.{signed_url, gc_superseded, mk_folder, do_rename, do_move, do_copy, do_delete,
+use repo/repo_fm.{fs_data, get_row, ledger_insert, search_files, entry_json, stats_db, validate_fm_ancestors, validate_fm_file_target, validate_register_preflight, finalize_register}
+use svc/files.{signed_url, gc_unreferenced, mk_folder, do_rename, do_move, do_copy, do_delete,
   item_paths, merge_deleted, do_create_file, do_save, run_upload, sanitize_name, token_rel }
 use repo/repo_settings.{setting_int}
-use util/errkind.{KConflict, split_kind}
+use util/errkind.{KConflict, KUpstream, conflict, upstream, split_kind}
 use util/crypto.{uuid_hex}
 use svc/export.{pct_encode}
 use qiniu/sign.{upload_token}
@@ -68,9 +68,11 @@ pub fn rename(a: Auth) -> Handler =
         let m = as_http(body_obj(req.body), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let old = fm_split(str_or(m, "item", ""))
-        let new_name = fm_split(str.trim(str_or(m, "name", "")))
+        let new_name = str.trim(str_or(m, "name", ""))
         if old == "" || new_name == "" {
           Err(http_error(400, "缺少 item / name"))
+        } else if not valid_rename_name(new_name) {
+          Err(http_error(400, "name 必须是单段名称"))
         } else {
           let new_rel = fm_join(parent_rel(old), new_name)
           match as_http_with(with_db(a.db.path, a.db.ext, c => do_rename(c, old, new_rel, cur)), conflict_or(500))? {
@@ -79,6 +81,9 @@ pub fn rename(a: Auth) -> Handler =
           }
         }
       })
+
+fn valid_rename_name(name: String) -> Bool =
+  name != "" && name != "." && name != ".." && not str.contains(name, "/") && not str.contains(name, "\\")
 
 ## POST /api/fm/move — {path, destination, sources[]}.
 pub fn move(a: Auth) -> Handler =
@@ -211,6 +216,20 @@ fn conflict_or(other: Int) -> fn(String) -> HttpError =
       _ -> http_error(other, t)
     }
   }
+
+fn mutation_failure(msg: String) -> HttpError = {
+  let (_k, t) = split_kind(msg)
+  http_error(mutation_status(msg), t)
+}
+
+fn mutation_status(msg: String) -> Int = {
+  let (k, _t) = split_kind(msg)
+  match k {
+    KConflict -> 409
+    KUpstream -> 502
+    _ -> 500
+  }
+}
 
 fn content_type_of(ct: String) -> String = if ct == "" { "application/octet-stream" } else { ct }
 
@@ -347,8 +366,9 @@ fn upload_token_ancestor_preflight(c: DbConn, rel: String) -> Result[Unit, Strin
 
 fn qparam(req: Request, name: String) -> String = unwrap_or(query(req, name), "")
 
-## POST /api/fm/delete — {path, items:[{path}]}. Deletes each item's subtree:
-## the qiniu object for every file, then the DB row. Returns FsData + {deleted}.
+## POST /api/fm/delete: {path, items:[{path}]}. Atomically removes every
+## requested metadata subtree, then best-effort collects unreferenced objects.
+## Returns FsData + {deleted}.
 pub fn delete(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
@@ -356,7 +376,7 @@ pub fn delete(a: Auth) -> Handler =
         let m = as_http(body_obj(req.body), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let items = item_paths(m)
-        let deleted = as_http(with_db(a.db.path, a.db.ext, c => do_delete(a.qiniu, c, items, 0, [])), 502)?
+        let deleted = as_http_with(with_db(a.db.path, a.db.ext, c => do_delete(a.qiniu, c, items, 0, [])), mutation_failure)?
         let base = as_http(with_db(a.db.path, a.db.ext, c => fs_data(c, cur)), 500)?
         Ok(json_ok(merge_deleted(base, deleted)))
       })
@@ -373,7 +393,7 @@ pub fn create_file(a: Auth) -> Handler =
           Err(http_error(400, "缺少 name"))
         } else {
           let rel = fm_join(cur, name)
-          match as_http_with(do_create_file(a, rel, cur), conflict_or(502))? {
+          match as_http_with(do_create_file(a, rel, cur), mutation_failure)? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
           }
@@ -393,7 +413,7 @@ pub fn save(a: Auth) -> Handler =
         if rel == "" {
           Err(http_error(400, "缺少 path"))
         } else {
-          Ok(json_ok(as_http_with(do_save(a, rel, content), conflict_or(502))?))
+          Ok(json_ok(as_http_with(do_save(a, rel, content), mutation_failure)?))
         }
       })
 
@@ -407,7 +427,7 @@ pub fn copy(a: Auth) -> Handler =
         let cur = fm_split(str_or(m, "path", ""))
         let dest = fm_split(str_or(m, "destination", ""))
         let sources = str_list(m, "sources")
-        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), conflict_or(502))?))
+        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), mutation_failure)?))
       })
 
 ## POST /api/fm/register — {path, key, size?, content_type?}. Confirms the
@@ -423,46 +443,38 @@ pub fn register(a: Auth) -> Handler =
         if rel == "" || key == "" {
           Err(http_error(400, "缺少 path / key"))
         } else {
-          let existing = as_http_with(register_preflight(a, rel, key), conflict_or(500))?
+          let _preflight = as_http_with(register_preflight(a, rel, key), conflict_or(500))?
           let r = as_http(stat(a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key), 502)?
           if r.status == 200 {
-            Ok(json_ok(as_http_with(register_row(a, rel, key, r.body, opt_int(m, "size"), str_or(m, "content_type", ""), existing), conflict_or(500))?))
+            Ok(json_ok(as_http_with(register_row(a, rel, key, r.body, opt_int(m, "size"), str_or(m, "content_type", "")), conflict_or(500))?))
           } else {
-            Err(http_error(400, "对象未在七牛找到，注册被拒"))
+            Err(register_stat_failure(r.status))
           }
         }
       })
 
-fn register_preflight(a: Auth, rel: String, _key: String) -> Result[Option[FileRow], String] !io =
-  with_db(a.db.path, a.db.ext, c => {
-    let _a = validate_fm_ancestors(c, rel)?
-    let _t = validate_fm_file_target(c, rel)?
-    get_row(c, rel)
-  })
+fn register_preflight(a: Auth, rel: String, key: String) -> Result[Unit, String] !io =
+  with_db(a.db.path, a.db.ext, c => validate_register_preflight(c, rel, key))
 
-fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint: Option[Int], ct_hint: String, existing: Option[FileRow]) -> Result[Json, String] !io = {
+fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint: Option[Int], ct_hint: String) -> Result[Json, String] !io = {
   # qiniu's stat is authoritative for size/mime; fall back to the client's
   # reported values, then a name-based guess, exactly like FastAPI's
   #   size = fsize or payload.size or 0
   #   mime = mimeType or content_type or _guess_mime(basename)
   let size = reg_size(stat_body, size_hint)
   let mime = reg_mime(stat_body, ct_hint, rel)
-  let written: Result[Json, String] = with_db(a.db.path, a.db.ext, c => {
-    let _i = insert_file(c, rel, key, mime, size)?
-    let _l = ledger_delete(c, key)?
-    # return the single registered entry (matches FastAPI's _entry(obj)), not the
-    # parent directory listing
-    match get_row(c, rel)? {
-      Some(o) -> Ok(entry_json(o))
-      None -> Err("registered file vanished")
-    }
-  })
-  let entry = written?
-  # The old object is collected only after the row points at the verified new
-  # object. A failed preflight or database write therefore cannot destroy it.
-  let _gc = gc_superseded(a.qiniu, existing, key)
-  Ok(entry)
+  let finalized = with_db(a.db.path, a.db.ext, c => finalize_register(c, rel, key, mime, size))?
+  let (row, outcome) = finalized
+  let _gc = gc_unreferenced(a, outcome.superseded_key)
+  Ok(entry_json(row))
 }
+
+fn register_stat_failure(status: Int) -> HttpError =
+  if status == 612 {
+    http_error(400, "对象未在七牛找到，注册被拒")
+  } else {
+    http_error(502, "七牛 stat 返回 $status")
+  }
 
 # fsize of 0 (absent or genuinely empty) falls through to the client hint, then 0
 fn reg_size(stat_body: String, hint: Option[Int]) -> Int !io = {
@@ -549,7 +561,7 @@ fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpErro
   let rel = fm_join(target, name)
   let mime = if fp.content_type != "" { fp.content_type } else { guess_mime(name) }
   let size = bytes.len(fp.content)
-  Ok(json_ok(as_http_with(run_upload(a, rel, fp.content, mime, size), conflict_or(502))?))
+  Ok(json_ok(as_http_with(run_upload(a, rel, fp.content, mime, size), mutation_failure)?))
 }
 
 pub fn routes(a: Auth, space_cell: TtlCell, respack_cell: TtlCell) -> List[Route] =
@@ -587,4 +599,26 @@ test "register size/mime fall back like FastAPI (stat -> client hint -> guess)" 
   # missing mimeType -> client content_type -> name-based guess
   assert reg_mime("{}", "text/plain", "a/b.md") == "text/plain"
   assert reg_mime("{}", "", "a/b.md") == "text/markdown"
+}
+
+test "rename accepts only one basename segment" {
+  assert valid_rename_name("new.txt")
+  assert not valid_rename_name("")
+  assert not valid_rename_name(".")
+  assert not valid_rename_name("..")
+  assert not valid_rename_name("missing/deep.txt")
+  assert not valid_rename_name("missing\\deep.txt")
+}
+
+test "FM mutation errors keep DB failures distinct from upstream failures" {
+  assert mutation_status(conflict("collision")) == 409
+  assert mutation_status(upstream("qiniu unavailable")) == 502
+  assert mutation_status("database is locked") == 500
+}
+
+test "register stat maps only missing objects to a client error" {
+  assert register_stat_failure(612).status == 400
+  assert register_stat_failure(401).status == 502
+  assert register_stat_failure(429).status == 502
+  assert register_stat_failure(503).status == 502
 }

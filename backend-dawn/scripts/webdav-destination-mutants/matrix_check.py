@@ -4,7 +4,7 @@
 import argparse
 from pathlib import Path
 
-VERSION = "3"
+VERSION = "4"
 VALID_ROLES = {"test", "qiniu"}
 EXPECTED_ROWS = [
     "drop-dot-check|test|dest_rel rejects one-dot segments after one decode",
@@ -25,7 +25,12 @@ EXPECTED_ROWS = [
     "destination-prefix-fail-open|test|dest_rel confines paths to the DAV prefix",
     "skip-unreserved-prefix-normalization|test|dest_rel normalizes unreserved prefix octets",
     "restore-replacement-utf8|test|dest_rel rejects invalid percent UTF-8 without aliasing",
-    "purge-before-parent-check|qiniu|copy.dest.file-parent-existing.preserved",
+    "accept-xml-forbidden-destination|test|dest_rel rejects XML-forbidden decoded characters",
+    "overwrite-invalid-fail-open|test|MOVE and COPY reject invalid Overwrite tokens",
+    "move-depth-fail-open|test|MOVE Depth only accepts infinity",
+    "copy-invalid-depth-fail-open|test|COPY Depth accepts file zero and rejects invalid values",
+    "copy-collection-depth-zero-full-tree|test|COPY collection Depth zero fails closed",
+    "ignore-move-copy-body|test|MOVE and COPY reject non-empty raw bodies",
     "accept-file-parent|qiniu|write.dest.file-parent.preflight",
 ]
 EXPECTED_MUTANTS = [row.split("|", 1)[0] for row in EXPECTED_ROWS]
@@ -103,11 +108,7 @@ def self_test() -> None:
     )
     expect_rejected(
         "role-drift",
-        [
-            *base[:-2],
-            EXPECTED_ROWS[-2].replace("|qiniu|", "|test|"),
-            EXPECTED_ROWS[-1],
-        ],
+        [*base[:-1], EXPECTED_ROWS[-1].replace("|qiniu|", "|test|")],
         EXPECTED_MUTANTS,
         "hand-owned set",
     )
@@ -119,7 +120,7 @@ def self_test() -> None:
         "hand-owned set",
     )
     expect_rejected(
-        "wrong-version", ["version=1", *EXPECTED_ROWS], EXPECTED_MUTANTS, "version"
+        "wrong-version", ["version=3", *EXPECTED_ROWS], EXPECTED_MUTANTS, "version"
     )
     expect_rejected("mutator-omission", base, EXPECTED_MUTANTS[:-1], "mutate.py --list")
     expect_rejected(

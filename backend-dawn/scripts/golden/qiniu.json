@@ -17,14 +17,6 @@
     "error": "bad token"
    }
   },
-  "copy.dest.file-parent-existing.preserved": {
-   "note": "409 precedes purge when a higher ancestor is a file",
-   "overwrite_f_status": 412,
-   "copy_status": 409,
-   "row_status": 207,
-   "object_present": true,
-   "object_calls": []
-  },
   "mkcol.sandbox": {
    "method": "MKCOL",
    "path": "/dav/dav-test",
@@ -174,6 +166,11 @@
    },
    "body": "{\"detail\":\"copy: qiniu 599 {\\\"error\\\":\\\"contract fake refuses this copy\\\"}\"}"
   },
+  "copy.upstream.no-fresh-object": {
+   "note": "an external copy refusal leaves neither destination metadata nor a fresh copied object",
+   "objects_unchanged": true,
+   "destination_root_absent": true
+  },
   "copy.upstream.calls": {
    "note": "the walk aborts at the first refusal",
    "calls": [
@@ -186,7 +183,7 @@
     }
    ]
   },
-  "copy.upstream.partial": {
+  "copy.upstream.no-partial": {
    "method": "PROPFIND",
    "path": "/dav/dav-test/docs-refused",
    "status": 404,
@@ -805,12 +802,494 @@
     }
    ]
   },
+  "copy.overwrite.204": {
+   "method": "COPY",
+   "path": "/dav/docs",
+   "status": 204,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8"
+   },
+   "body": ""
+  },
+  "copy.overwrite.state": {
+   "note": "COPY keeps the source, replaces the whole target, then drops old target objects",
+   "setup_statuses": [
+    201,
+    201
+   ],
+   "copy_status": 204,
+   "source_metadata_preserved": true,
+   "source_object_preserved": true,
+   "target_has_fresh_notes_key": true,
+   "old_target_metadata_absent": true,
+   "old_target_object_deleted": true
+  },
+  "copy.overwrite.calls": {
+   "note": "fresh source copies are committed before the old target object is collected",
+   "calls": [
+    {
+     "op": "copy",
+     "src": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+     "dst": "<key12>",
+     "found": true
+    },
+    {
+     "op": "copy",
+     "src": "11111111-2222-3333-4444-555555555555",
+     "dst": "<key13>",
+     "found": true
+    },
+    {
+     "op": "delete",
+     "key": "<key14>.txt",
+     "existed": true
+    }
+   ]
+  },
+  "copy.overwrite.tree": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/copy-overwrite-target",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "1331"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/copy-overwrite-target/</D:href><D:propstat><D:prop><D:displayname>copy-overwrite-target</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/copy-overwrite-target/img/</D:href><D:propstat><D:prop><D:displayname>img</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/copy-overwrite-target/notes.txt</D:href><D:propstat><D:prop><D:displayname>notes.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>137</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"<key13>\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/copy-overwrite-target/",
+     "/dav/dav-test/copy-overwrite-target/img/",
+     "/dav/dav-test/copy-overwrite-target/notes.txt"
+    ],
+    "displaynames": [
+     "copy-overwrite-target",
+     "img",
+     "notes.txt"
+    ],
+    "contentlengths": [
+     "137"
+    ],
+    "contenttypes": [
+     "text/plain"
+    ],
+    "lastmodified": [
+     "WALL-CLOCK",
+     "WALL-CLOCK",
+     "WALL-CLOCK"
+    ],
+    "collections": 2,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "copy.overwrite.tree.sub": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/copy-overwrite-target/img",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "959"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/copy-overwrite-target/img/</D:href><D:propstat><D:prop><D:displayname>img</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/copy-overwrite-target/img/cover.png</D:href><D:propstat><D:prop><D:displayname>cover.png</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>20480</D:getcontentlength><D:getcontenttype>image/png</D:getcontenttype><D:getetag>\"<key12>\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/copy-overwrite-target/img/",
+     "/dav/dav-test/copy-overwrite-target/img/cover.png"
+    ],
+    "displaynames": [
+     "img",
+     "cover.png"
+    ],
+    "contentlengths": [
+     "20480"
+    ],
+    "contenttypes": [
+     "image/png"
+    ],
+    "lastmodified": [
+     "WALL-CLOCK",
+     "WALL-CLOCK"
+    ],
+    "collections": 1,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "copy.overwrite.old.gone": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/copy-overwrite-target/old.txt",
+   "status": 404,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
+   },
+   "body": "{\"detail\":\"资源不存在\"}"
+  },
+  "copy.overwrite.target.bytes": {
+   "method": "GET",
+   "path": "/dav/dav-test/copy-overwrite-target/notes.txt",
+   "status": 200,
+   "headers": {
+    "content-type": "text/plain",
+    "etag": "\"<key13>\""
+   },
+   "body": "fixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nf"
+  },
+  "copy.overwrite.source.retained": {
+   "method": "GET",
+   "path": "/dav/docs/notes.txt",
+   "status": 200,
+   "headers": {
+    "content-type": "text/plain",
+    "etag": "\"11111111-2222-3333-4444-555555555555\"",
+    "last-modified": "Tue, 06 Jan 2026 12:00:00 GMT"
+   },
+   "body": "fixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nf"
+  },
+  "move.overwrite.204": {
+   "method": "MOVE",
+   "path": "/dav/dav-test/move-overwrite-source",
+   "status": 204,
+   "headers": {
+    "content-type": "text/plain; charset=utf-8"
+   },
+   "body": ""
+  },
+  "move.overwrite.state": {
+   "note": "MOVE removes the source metadata, preserves its object key at the target, and collects old target objects",
+   "setup_statuses": [
+    201,
+    201,
+    201,
+    201,
+    201
+   ],
+   "move_status": 204,
+   "source_tree_absent": true,
+   "source_file_absent": true,
+   "target_reuses_source_key": true,
+   "source_object_preserved": true,
+   "old_target_metadata_absent": true,
+   "old_target_object_deleted": true
+  },
+  "move.overwrite.calls": {
+   "note": "MOVE performs no object copy and collects only superseded target objects",
+   "calls": [
+    {
+     "op": "delete",
+     "key": "<key15>.txt",
+     "existed": true
+    }
+   ]
+  },
+  "move.overwrite.source.gone": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/move-overwrite-source",
+   "status": 404,
+   "headers": {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
+   },
+   "body": "{\"detail\":\"资源不存在\"}"
+  },
+  "move.overwrite.tree": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/move-overwrite-target",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "830"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/move-overwrite-target/</D:href><D:propstat><D:prop><D:displayname>move-overwrite-target</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/move-overwrite-target/nested/</D:href><D:propstat><D:prop><D:displayname>nested</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/move-overwrite-target/",
+     "/dav/dav-test/move-overwrite-target/nested/"
+    ],
+    "displaynames": [
+     "move-overwrite-target",
+     "nested"
+    ],
+    "contentlengths": [],
+    "contenttypes": [],
+    "lastmodified": [
+     "WALL-CLOCK",
+     "WALL-CLOCK"
+    ],
+    "collections": 2,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "move.overwrite.tree.sub": {
+   "method": "PROPFIND",
+   "path": "/dav/dav-test/move-overwrite-target/nested",
+   "status": 207,
+   "headers": {
+    "content-type": "application/xml; charset=\"utf-8\"",
+    "content-length": "974"
+   },
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/move-overwrite-target/nested/</D:href><D:propstat><D:prop><D:displayname>nested</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/move-overwrite-target/nested/payload.txt</D:href><D:propstat><D:prop><D:displayname>payload.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>29</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"<key16>.txt\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "facts": {
+    "hrefs": [
+     "/dav/dav-test/move-overwrite-target/nested/",
+     "/dav/dav-test/move-overwrite-target/nested/payload.txt"
+    ],
+    "displaynames": [
+     "nested",
+     "payload.txt"
+    ],
+    "contentlengths": [
+     "29"
+    ],
+    "contenttypes": [
+     "text/plain"
+    ],
+    "lastmodified": [
+     "WALL-CLOCK",
+     "WALL-CLOCK"
+    ],
+    "collections": 1,
+    "statuses": [
+     "HTTP/1.1 200 OK"
+    ]
+   }
+  },
+  "move.overwrite.target.bytes": {
+   "method": "GET",
+   "path": "/dav/dav-test/move-overwrite-target/nested/payload.txt",
+   "status": 200,
+   "headers": {
+    "content-type": "text/plain",
+    "etag": "\"<key16>.txt\""
+   },
+   "body": "MOVE overwrite payload bytes\n"
+  },
+  "fm.createfile.utf8": {
+   "method": "POST",
+   "path": "/api/fm/create-file",
+   "status": 200,
+   "request": {
+    "path": "qiniu://dav-test",
+    "name": "unicode.txt"
+   },
+   "body": {
+    "storages": [
+     "qiniu"
+    ],
+    "dirname": "qiniu://dav-test",
+    "files": [
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "copy-overwrite-target",
+      "extension": "",
+      "path": "qiniu://dav-test/copy-overwrite-target",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "docs",
+      "extension": "",
+      "path": "qiniu://dav-test/docs",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "docs-copy",
+      "extension": "",
+      "path": "qiniu://dav-test/docs-copy",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "move-overwrite-target",
+      "extension": "",
+      "path": "qiniu://dav-test/move-overwrite-target",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "refused",
+      "extension": "",
+      "path": "qiniu://dav-test/refused",
+      "type": "dir",
+      "file_size": null,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": null,
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "example-copy.txt",
+      "extension": "txt",
+      "path": "qiniu://dav-test/example-copy.txt",
+      "type": "file",
+      "file_size": 42,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": "text/plain",
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "note.md",
+      "extension": "md",
+      "path": "qiniu://dav-test/note.md",
+      "type": "file",
+      "file_size": 24,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": "text/markdown",
+      "visibility": "public"
+     },
+     {
+      "storage": "qiniu",
+      "dir": "qiniu://dav-test",
+      "basename": "unicode.txt",
+      "extension": "txt",
+      "path": "qiniu://dav-test/unicode.txt",
+      "type": "file",
+      "file_size": 0,
+      "last_modified": "WALL-CLOCK",
+      "mime_type": "text/plain",
+      "visibility": "public"
+     }
+    ],
+    "read_only": false
+   }
+  },
+  "fm.save.utf8": {
+   "method": "POST",
+   "path": "/api/fm/save",
+   "status": 200,
+   "request": {
+    "path": "qiniu://dav-test/unicode.txt",
+    "content": "Dawn 保存：你好，世界 🌅🚀\n"
+   },
+   "body": {
+    "path": "qiniu://dav-test/unicode.txt"
+   }
+  },
+  "fm.save.utf8.calls": {
+   "note": "Unicode text is uploaded as UTF-8 under a fresh key before the empty object is collected",
+   "calls": [
+    {
+     "op": "upload",
+     "key": "<key17>.txt",
+     "size": 39,
+     "mime": "text/plain"
+    },
+    {
+     "op": "delete",
+     "key": "<key18>",
+     "existed": true
+    }
+   ]
+  },
+  "fm.save.utf8-byte-size": {
+   "note": "FM save reports UTF-8 byte length and returns the exact uploaded bytes",
+   "save_status": 200,
+   "listing_status": 200,
+   "content_status": 200,
+   "expected_utf8_size": 39,
+   "listed_size": 39,
+   "size_matches_utf8_bytes": true,
+   "expected_base64": "RGF3biDkv53lrZjvvJrkvaDlpb3vvIzkuJbnlYwg8J+MhfCfmoAK",
+   "read_back_base64": "RGF3biDkv53lrZjvvJrkvaDlpb3vvIzkuJbnlYwg8J+MhfCfmoAK",
+   "bytes_round_trip": true
+  },
   "write.dest.file-parent.preflight": {
    "note": "PUT MKCOL MOVE and COPY reject a direct file parent before effects",
    "put_status": 409,
    "mkcol_status": 409,
    "move_status": 409,
    "copy_status": 409,
+   "parent_before": {
+    "path": "legacy-parent.txt",
+    "is_dir": false,
+    "key": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+    "content_type": "text/plain",
+    "size": 64
+   },
+   "after_put": {
+    "parent": {
+     "path": "legacy-parent.txt",
+     "is_dir": false,
+     "key": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+     "content_type": "text/plain",
+     "size": 64
+    },
+    "target": null
+   },
+   "after_mkcol": {
+    "parent": {
+     "path": "legacy-parent.txt",
+     "is_dir": false,
+     "key": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+     "content_type": "text/plain",
+     "size": 64
+    },
+    "target": null
+   },
+   "after_move": {
+    "parent": {
+     "path": "legacy-parent.txt",
+     "is_dir": false,
+     "key": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+     "content_type": "text/plain",
+     "size": 64
+    },
+    "target": null,
+    "source": {
+     "path": "empty-dir",
+     "is_dir": true,
+     "key": null,
+     "content_type": "",
+     "size": 0
+    }
+   },
+   "after_copy": {
+    "parent": {
+     "path": "legacy-parent.txt",
+     "is_dir": false,
+     "key": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+     "content_type": "text/plain",
+     "size": 64
+    },
+    "target": null,
+    "source": {
+     "path": "docs/notes.txt",
+     "is_dir": false,
+     "key": "11111111-2222-3333-4444-555555555555",
+     "content_type": "text/plain",
+     "size": 137
+    }
+   },
+   "metadata_equivalent_after_each_method": true,
    "objects_unchanged": true,
    "object_calls": []
   }

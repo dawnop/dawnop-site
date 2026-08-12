@@ -11,6 +11,8 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -116,6 +118,7 @@ def add_file(
     content_type="text/plain",
     size=1,
     content="ancestor fixture",
+    plant=True,
 ):
     with sqlite3.connect(ctx.db) as connection:
         connection.execute(
@@ -129,7 +132,7 @@ def add_file(
                 0 if is_dir else size,
             ),
         )
-    if key:
+    if key and plant:
         ctx.fake.plant(key, content, content_type)
 
 
@@ -166,6 +169,128 @@ def db_state(ctx):
 def execute_sql(ctx, sql):
     with sqlite3.connect(ctx.db) as connection:
         connection.executescript(sql)
+
+
+def file_row(ctx, path):
+    with sqlite3.connect(ctx.db) as connection:
+        return connection.execute(
+            'SELECT path, is_dir, "key", content_type, size FROM files WHERE path = ?',
+            (path,),
+        ).fetchone()
+
+
+def set_file_key(ctx, path, key, content_type="text/plain", size=1):
+    with sqlite3.connect(ctx.db) as connection:
+        cursor = connection.execute(
+            'UPDATE files SET "key" = ?, content_type = ?, size = ?, '
+            "updated_at = datetime('now') WHERE path = ? AND is_dir = 0",
+            (key, content_type, size, path),
+        )
+        return cursor.rowcount
+
+
+def dangling_file_paths(ctx):
+    live_keys = set(ctx.fake.keys())
+    return [
+        row[0]
+        for row in rows(ctx)
+        if not row[1] and row[2] is not None and row[2] not in live_keys
+    ]
+
+
+def object_bytes(ctx, key):
+    obj = ctx.fake.state().get(key)
+    return None if obj is None else base64.b64decode(obj["content"])
+
+
+def start_background(call):
+    result = {}
+    done = threading.Event()
+
+    def run():
+        try:
+            result["response"] = call()
+        except Exception as error:  # noqa: BLE001 - surfaced by the assertion
+            result["error"] = error
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return result, done, thread
+
+
+def finish_background(thread, done, timeout=15):
+    thread.join(timeout=timeout)
+    return done.is_set()
+
+
+def assert_background_response(checks, result, done, label, expected_status):
+    checks.true(done.is_set(), f"{label} did not finish before timeout")
+    checks.true("error" not in result, f"{label} raised {result.get('error')!r}")
+    checks.true("response" in result, f"{label} produced no response")
+    if "response" in result:
+        checks.equal(result["response"][0], expected_status, f"{label} status")
+
+
+def assert_uploaded_object_collected(checks, before_state, after_state, calls, label):
+    uploads = [call for call in calls if call.get("op") == "upload"]
+    deletes = [call for call in calls if call.get("op") == "delete"]
+    checks.equal(len(uploads), 1, f"{label} upload count")
+    checks.equal(len(deletes), 1, f"{label} cleanup delete count")
+    checks.equal(
+        [call.get("op") for call in calls],
+        ["upload", "delete"],
+        f"{label} object operation order",
+    )
+    if uploads and deletes:
+        checks.equal(
+            deletes[0].get("key"),
+            uploads[0].get("key"),
+            f"{label} cleanup key",
+        )
+    checks.equal(after_state, before_state, f"{label} left a fresh upload object")
+
+
+def assert_copied_objects_collected(checks, before_state, after_state, calls, label):
+    copied = [
+        call.get("dst")
+        for call in calls
+        if call.get("op") == "copy" and call.get("found") is True
+    ]
+    deleted = [call.get("key") for call in calls if call.get("op") == "delete"]
+    checks.true(bool(copied), f"{label} did not reach Qiniu copy")
+    checks.equal(after_state, before_state, f"{label} left fresh copied objects")
+    checks.equal(sorted(deleted), sorted(copied), f"{label} cleanup key set")
+    operations = [call.get("op") for call in calls]
+    checks.true(
+        all(op in ("copy", "delete") for op in operations),
+        f"{label} performed an unrelated object operation: {operations}",
+    )
+    if "delete" in operations:
+        checks.true(
+            operations.index("delete") >= len(copied),
+            f"{label} deleted before all copies completed: {operations}",
+        )
+
+
+def wait_for_pause(fake, op, timeout=5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = fake.pauses().get(op, {})
+        if state.get("entered", 0) > 0:
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def wait_for_call(fake, op, timeout=5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if any(call.get("op") == op for call in fake.calls()):
+            return True
+        time.sleep(0.02)
+    return False
 
 
 def seed_deep_file_ancestor(ctx, root="blocked"):
@@ -610,7 +735,6 @@ def assert_proxy_upload_final_rejection(ctx, checks):
         content=b"new proxy bytes",
     )
     after_state = ctx.fake.state()
-    new_keys = set(after_state) - set(before_state)
     calls = ctx.fake.calls()
 
     checks.true(status >= 400, "proxy upload final metadata rejection status")
@@ -620,17 +744,13 @@ def assert_proxy_upload_final_rejection(ctx, checks):
         before_state.get("proxy-final-old-object"),
         "failed proxy upload changed old object bytes",
     )
-    checks.equal(len(new_keys), 1, "failed proxy upload did not leave one fresh orphan")
-    checks.equal(
-        [call.get("op") for call in calls],
-        ["upload"],
-        "failed proxy upload performed an operation other than fresh upload",
+    assert_uploaded_object_collected(
+        checks,
+        before_state,
+        after_state,
+        calls,
+        "failed proxy upload",
     )
-    if calls:
-        checks.true(
-            calls[0].get("key") in new_keys,
-            "proxy upload did not use the fresh orphan key",
-        )
 
 
 def assert_fm_copy_deep_target_preflight(ctx, checks):
@@ -668,36 +788,1024 @@ def assert_fm_copy_deep_target_preflight(ctx, checks):
     checks.equal(ctx.fake.calls(), [], "FM deep collision reached Qiniu")
 
 
-def assert_webdav_copy_deep_target_preflight(ctx, checks):
-    add_file(ctx, "dav-deep-source", True)
-    add_file(ctx, "dav-deep-source/nested", True)
+def assert_copy_source_object_shape_preflight(ctx, checks):
+    add_file(ctx, "shape-move-source.txt", False)
     add_file(
         ctx,
-        "dav-deep-source/nested/file.txt",
+        "shape-move-target.txt",
         False,
-        "dav-deep-source-object",
+        "shape-move-target-object",
+        content="move target",
     )
-    add_file(ctx, "dav-deep-destination", True)
+    move_status, _ = dav(
+        ctx,
+        "MOVE",
+        "/dav/shape-move-source.txt",
+        {"Destination": "/dav/shape-move-target.txt"},
+    )
+    checks.equal(move_status, 204, "MOVE ignores copy-only object shape")
+    moved_rows = rows(ctx, "shape-move-target.txt")
+    checks.equal(len(moved_rows), 1, "MOVE malformed-source green row count")
+    if len(moved_rows) == 1:
+        checks.equal(moved_rows[0][2], None, "MOVE rewrote the malformed source key")
+    ctx.fake.clear_calls()
+
+    add_file(ctx, "shape-fm-destination", True)
+    add_file(ctx, "shape-fm-source", True)
     add_file(
         ctx,
-        "dav-deep-destination/copied/nested/file.txt",
+        "shape-fm-source/a-valid.txt",
         False,
-        "dav-deep-collision-object",
+        "shape-fm-valid-object",
+    )
+    add_file(ctx, "shape-fm-source/z-keyless.txt", False)
+
+    add_file(ctx, "shape-dav-destination", True)
+    add_file(
+        ctx,
+        "shape-dav-source",
+        True,
+        "shape-dav-directory-object",
+    )
+    add_file(
+        ctx,
+        "shape-dav-source/valid.txt",
+        False,
+        "shape-dav-valid-object",
+    )
+    add_file(ctx, "shape-overwrite-source", True)
+    add_file(
+        ctx,
+        "shape-overwrite-source/a-valid.txt",
+        False,
+        "shape-overwrite-valid-object",
+    )
+    add_file(ctx, "shape-overwrite-source/z-keyless.txt", False)
+    add_file(
+        ctx,
+        "shape-overwrite-target.txt",
+        False,
+        "shape-overwrite-target-object",
+        content="overwrite target must survive",
     )
     before_db = db_state(ctx)
     before_keys = ctx.fake.keys()
+    before_state = ctx.fake.state()
+    overwrite_rows = rows(ctx, "shape-overwrite-target.txt")
     ctx.fake.clear_calls()
 
-    status, _ = dav(
+    fm_status, _ = api(
+        ctx,
+        "/api/fm/copy",
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://shape-fm-destination",
+            "sources": ["qiniu://shape-fm-source"],
+        },
+    )
+    dav_status, _ = dav(
         ctx,
         "COPY",
-        "/dav/dav-deep-source",
-        {"Destination": "/dav/dav-deep-destination/copied"},
+        "/dav/shape-dav-source",
+        {"Destination": "/dav/shape-dav-destination/copied"},
     )
-    checks.equal(status, 409, "WebDAV deep target collision status")
-    checks.equal(db_state(ctx), before_db, "WebDAV deep collision changed DB or ledger")
-    checks.equal(ctx.fake.keys(), before_keys, "WebDAV deep collision changed objects")
-    checks.equal(ctx.fake.calls(), [], "WebDAV deep collision reached Qiniu")
+    overwrite_status, _ = dav(
+        ctx,
+        "COPY",
+        "/dav/shape-overwrite-source",
+        {"Destination": "/dav/shape-overwrite-target.txt"},
+    )
+
+    checks.equal(fm_status, 409, "FM malformed copy source status")
+    checks.equal(dav_status, 409, "WebDAV malformed copy source status")
+    checks.equal(overwrite_status, 409, "WebDAV malformed overwrite source status")
+    checks.equal(
+        rows(ctx, "shape-overwrite-target.txt"),
+        overwrite_rows,
+        "malformed overwrite removed target metadata",
+    )
+    checks.equal(
+        ctx.fake.state().get("shape-overwrite-target-object"),
+        before_state.get("shape-overwrite-target-object"),
+        "malformed overwrite removed or changed the target object",
+    )
+    checks.equal(db_state(ctx), before_db, "malformed copy source changed metadata")
+    checks.equal(ctx.fake.keys(), before_keys, "malformed copy source changed objects")
+    checks.equal(ctx.fake.calls(), [], "malformed copy source reached Qiniu")
+
+
+def assert_copy_blank_source_key_preflight(ctx, checks):
+    blank_key = " \t "
+    add_file(ctx, "blank-fm-destination", True)
+    add_file(ctx, "blank-fm-source", True)
+    add_file(
+        ctx,
+        "blank-fm-source/a-valid.txt",
+        False,
+        "blank-fm-valid-object",
+    )
+    add_file(ctx, "blank-fm-source/z-blank.txt", False, blank_key)
+
+    add_file(ctx, "blank-dav-source", True)
+    add_file(
+        ctx,
+        "blank-dav-source/a-valid.txt",
+        False,
+        "blank-dav-valid-object",
+    )
+    add_file(ctx, "blank-dav-source/z-blank.txt", False, blank_key)
+    add_file(
+        ctx,
+        "blank-overwrite-target.txt",
+        False,
+        "blank-overwrite-target-object",
+        content="blank source must not purge overwrite target",
+    )
+
+    before_db = db_state(ctx)
+    before_keys = ctx.fake.keys()
+    before_state = ctx.fake.state()
+    overwrite_rows = rows(ctx, "blank-overwrite-target.txt")
+    ctx.fake.clear_calls()
+
+    fm_status, _ = api(
+        ctx,
+        "/api/fm/copy",
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://blank-fm-destination",
+            "sources": ["qiniu://blank-fm-source"],
+        },
+    )
+    overwrite_status, _ = dav(
+        ctx,
+        "COPY",
+        "/dav/blank-dav-source",
+        {"Destination": "/dav/blank-overwrite-target.txt"},
+    )
+
+    checks.equal(fm_status, 409, "FM blank source key status")
+    checks.equal(overwrite_status, 409, "WebDAV blank source key status")
+    checks.equal(
+        rows(ctx, "blank-overwrite-target.txt"),
+        overwrite_rows,
+        "blank source removed overwrite target metadata",
+    )
+    checks.equal(
+        ctx.fake.state().get("blank-overwrite-target-object"),
+        before_state.get("blank-overwrite-target-object"),
+        "blank source removed or changed the overwrite target object",
+    )
+    checks.equal(db_state(ctx), before_db, "blank source key changed metadata")
+    checks.equal(ctx.fake.keys(), before_keys, "blank source key changed objects")
+    checks.equal(ctx.fake.calls(), [], "blank source key reached Qiniu")
+
+
+def assert_destination_subtree_preflight(ctx, checks):
+    add_file(ctx, "rename-green-parent", True)
+    add_file(
+        ctx,
+        "rename-green-parent/source.txt",
+        False,
+        "rename-green-source",
+    )
+    add_file(ctx, "orphan-fm-copy-parent", True)
+    add_file(ctx, "orphan-fm-copy-source.txt", False, "orphan-fm-copy-source")
+    add_file(
+        ctx,
+        "orphan-fm-copy-parent/orphan-fm-copy-source.txt/legacy.txt",
+        False,
+        "orphan-fm-copy-legacy",
+    )
+    add_file(ctx, "orphan-fm-move-parent", True)
+    add_file(ctx, "orphan-fm-move-source.txt", False, "orphan-fm-move-source")
+    add_file(
+        ctx,
+        "orphan-fm-move-parent/orphan-fm-move-source.txt/legacy.txt",
+        False,
+        "orphan-fm-move-legacy",
+    )
+    add_file(ctx, "orphan-dav-copy-parent", True)
+    add_file(ctx, "orphan-dav-copy-source.txt", False, "orphan-dav-copy-source")
+    add_file(
+        ctx,
+        "orphan-dav-copy-parent/target/legacy.txt",
+        False,
+        "orphan-dav-copy-legacy",
+    )
+    add_file(ctx, "orphan-dav-move-parent", True)
+    add_file(ctx, "orphan-dav-move-source.txt", False, "orphan-dav-move-source")
+    add_file(
+        ctx,
+        "orphan-dav-move-parent/target/legacy.txt",
+        False,
+        "orphan-dav-move-legacy",
+    )
+    rename_status, _ = api(
+        ctx,
+        "/api/fm/rename",
+        {
+            "path": "qiniu://rename-green-parent",
+            "item": "qiniu://rename-green-parent/source.txt",
+            "name": "target.txt",
+        },
+    )
+    checks.equal(rename_status, 200, "FM rename remains a final-transaction operation")
+    checks.true(
+        "rename-green-parent/target.txt" in {row[0] for row in rows(ctx)},
+        "FM rename green control did not rewrite its source",
+    )
+
+    before_db = db_state(ctx)
+    before_keys = ctx.fake.keys()
+    ctx.fake.clear_calls()
+    statuses = {
+        "FM COPY": api(
+            ctx,
+            "/api/fm/copy",
+            {
+                "path": "qiniu://",
+                "destination": "qiniu://orphan-fm-copy-parent",
+                "sources": ["qiniu://orphan-fm-copy-source.txt"],
+            },
+        )[0],
+        "FM MOVE": api(
+            ctx,
+            "/api/fm/move",
+            {
+                "path": "qiniu://",
+                "destination": "qiniu://orphan-fm-move-parent",
+                "sources": ["qiniu://orphan-fm-move-source.txt"],
+            },
+        )[0],
+        "WebDAV COPY": dav(
+            ctx,
+            "COPY",
+            "/dav/orphan-dav-copy-source.txt",
+            {"Destination": "/dav/orphan-dav-copy-parent/target"},
+        )[0],
+        "WebDAV MOVE": dav(
+            ctx,
+            "MOVE",
+            "/dav/orphan-dav-move-source.txt",
+            {"Destination": "/dav/orphan-dav-move-parent/target"},
+        )[0],
+    }
+    for label, status in statuses.items():
+        checks.equal(status, 409, f"{label} unmapped destination descendant")
+    checks.equal(db_state(ctx), before_db, "orphan destination changed metadata")
+    checks.equal(ctx.fake.keys(), before_keys, "orphan destination changed objects")
+    checks.equal(ctx.fake.calls(), [], "orphan destination reached Qiniu")
+
+
+def assert_webdav_overwrite_gc_after_switch(ctx, checks):
+    parent = "overwrite-gc"
+    source = f"{parent}/source.txt"
+    target = f"{parent}/target.txt"
+    source_key = "overwrite-gc-source-object"
+    old_target_key = "overwrite-gc-old-target-object"
+    source_body = "source bytes copied before the switch"
+    concurrent_body = b"concurrent writer survives postcommit GC"
+    add_file(ctx, parent, True)
+    add_file(
+        ctx,
+        source,
+        False,
+        source_key,
+        size=len(source_body.encode()),
+        content=source_body,
+    )
+    add_file(
+        ctx,
+        target,
+        False,
+        old_target_key,
+        size=len("old target"),
+        content="old target",
+    )
+    source_before = file_row(ctx, source)
+    ctx.fake.clear_calls()
+    ctx.fake.pause("delete")
+
+    copy_result, copy_done, copy_thread = start_background(
+        lambda: dav(
+            ctx,
+            "COPY",
+            f"/dav/{source}",
+            {"Destination": f"/dav/{target}"},
+        )
+    )
+    entered = wait_for_pause(ctx.fake, "delete")
+    copied_key = None
+    switched_row = None
+    put_result = None
+    put_done = None
+    put_thread = None
+    upload_seen = False
+    writer_blocked = False
+    row_while_blocked = None
+    state_while_paused = {}
+    try:
+        if entered:
+            copy_calls = [call for call in ctx.fake.calls() if call.get("op") == "copy"]
+            if len(copy_calls) == 1:
+                copied_key = copy_calls[0].get("dst")
+            switched_row = file_row(ctx, target)
+            state_while_paused = ctx.fake.state()
+            put_result, put_done, put_thread = start_background(
+                lambda: dav(ctx, "PUT", f"/dav/{target}", body=concurrent_body)
+            )
+            upload_seen = wait_for_call(ctx.fake, "upload")
+            if upload_seen:
+                writer_blocked = not put_done.wait(timeout=0.3)
+                row_while_blocked = file_row(ctx, target)
+    finally:
+        ctx.fake.release("delete")
+
+    copy_finished = finish_background(copy_thread, copy_done)
+    put_finished = False
+    if put_thread is not None and put_done is not None:
+        put_finished = finish_background(put_thread, put_done)
+
+    checks.true(entered, "overwrite COPY did not reach postcommit destination GC")
+    checks.true(copy_finished, "overwrite COPY did not finish after GC release")
+    assert_background_response(checks, copy_result, copy_done, "overwrite COPY", 204)
+    checks.true(upload_seen, "concurrent PUT did not finish its object upload")
+    checks.true(
+        writer_blocked,
+        "concurrent PUT metadata switch was not blocked by the GC writer lock",
+    )
+    checks.true(put_finished, "concurrent PUT did not finish after GC release")
+    if put_result is None or put_done is None:
+        checks.true(False, "concurrent PUT was not started")
+    else:
+        assert_background_response(checks, put_result, put_done, "concurrent PUT", 204)
+
+    expected_switched = None
+    if source_before is not None and copied_key is not None:
+        expected_switched = (
+            target,
+            source_before[1],
+            copied_key,
+            source_before[3],
+            source_before[4],
+        )
+    checks.equal(
+        switched_row,
+        expected_switched,
+        "COPY metadata was not fully switched before destination GC",
+    )
+    checks.equal(
+        row_while_blocked,
+        expected_switched,
+        "concurrent PUT changed metadata while destination GC held the lock",
+    )
+    checks.true(
+        old_target_key in state_while_paused,
+        "destination GC removed the old object before the paused delete",
+    )
+    if copied_key is not None:
+        checks.equal(
+            base64.b64decode(state_while_paused[copied_key]["content"])
+            if copied_key in state_while_paused
+            else None,
+            source_body.encode(),
+            "switched COPY object bytes",
+        )
+
+    calls = ctx.fake.calls()
+    copy_calls = [call for call in calls if call.get("op") == "copy"]
+    upload_calls = [call for call in calls if call.get("op") == "upload"]
+    delete_calls = [call for call in calls if call.get("op") == "delete"]
+    checks.equal(len(copy_calls), 1, "overwrite COPY object-copy count")
+    checks.equal(len(upload_calls), 1, "concurrent PUT upload count")
+    checks.equal(len(delete_calls), 2, "postcommit GC delete count")
+    checks.equal(
+        [call.get("op") for call in calls],
+        ["copy", "upload", "delete", "delete"],
+        "postcommit GC and concurrent PUT object operation order",
+    )
+    if copy_calls and upload_calls:
+        copied_key = copy_calls[0].get("dst")
+        uploaded_key = upload_calls[0].get("key")
+        checks.equal(
+            {call.get("key") for call in delete_calls},
+            {old_target_key, copied_key},
+            "postcommit GC candidate set",
+        )
+        final_row = file_row(ctx, target)
+        checks.true(final_row is not None, "concurrent PUT target metadata is missing")
+        if final_row is not None:
+            checks.equal(final_row[2], uploaded_key, "concurrent PUT final key")
+        checks.equal(
+            object_bytes(ctx, uploaded_key),
+            concurrent_body,
+            "concurrent PUT final object bytes",
+        )
+        checks.true(old_target_key not in ctx.fake.keys(), "old target object survived")
+        checks.true(
+            copied_key not in ctx.fake.keys(), "superseded COPY object survived"
+        )
+
+    checks.equal(file_row(ctx, source), source_before, "COPY changed source metadata")
+    checks.equal(dangling_file_paths(ctx), [], "postcommit GC left dangling metadata")
+    get_status, get_body = dav(
+        ctx,
+        "GET",
+        f"/dav/{target}",
+        {"User-Agent": "contract-proxy-client/1.0"},
+    )
+    checks.equal(get_status, 200, "concurrent PUT final GET status")
+    checks.equal(get_body, concurrent_body, "concurrent PUT final GET bytes")
+
+
+def assert_webdav_put_actual_superseded_key(ctx, checks):
+    parent = "put-superseded"
+    target = f"{parent}/target.txt"
+    original_key = "put-superseded-k0"
+    raced_key = "put-superseded-k2"
+    race_body = b"uploaded K1 must replace the raced K2 row"
+    add_file(ctx, parent, True)
+    add_file(
+        ctx,
+        target,
+        False,
+        original_key,
+        size=len("original"),
+        content="original",
+    )
+    ctx.fake.clear_calls()
+    ctx.fake.pause("upload")
+    result, done, thread = start_background(
+        lambda: dav(ctx, "PUT", f"/dav/{target}", body=race_body)
+    )
+    entered = wait_for_pause(ctx.fake, "upload")
+    switched = 0
+    try:
+        if entered:
+            switched = set_file_key(
+                ctx,
+                target,
+                raced_key,
+                size=len("raced replacement"),
+            )
+            ctx.fake.plant(raced_key, "raced replacement", "text/plain")
+    finally:
+        ctx.fake.release("upload")
+    finished = finish_background(thread, done)
+
+    checks.true(entered, "PUT did not reach the paused upload")
+    checks.equal(switched, 1, "race fixture did not replace P with K2")
+    checks.true(finished, "raced PUT did not finish after upload release")
+    assert_background_response(checks, result, done, "raced PUT", 204)
+    calls = ctx.fake.calls()
+    uploads = [call for call in calls if call.get("op") == "upload"]
+    deletes = [call for call in calls if call.get("op") == "delete"]
+    checks.equal(
+        [call.get("op") for call in calls],
+        ["upload", "delete"],
+        "raced PUT object operation order",
+    )
+    checks.equal(len(uploads), 1, "raced PUT upload count")
+    checks.equal(len(deletes), 1, "raced PUT delete count")
+    if uploads and deletes:
+        uploaded_key = uploads[0].get("key")
+        checks.equal(deletes[0].get("key"), raced_key, "raced PUT cleanup key")
+        target_row = file_row(ctx, target)
+        checks.true(target_row is not None, "raced PUT target row is missing")
+        if target_row is not None:
+            checks.equal(target_row[2], uploaded_key, "raced PUT final K1 metadata")
+        checks.equal(object_bytes(ctx, uploaded_key), race_body, "raced PUT K1 bytes")
+    checks.true(original_key in ctx.fake.keys(), "PUT incorrectly collected stale K0")
+    checks.true(raced_key not in ctx.fake.keys(), "PUT did not collect actual K2")
+
+    control = f"{parent}/control.txt"
+    first_body = b"ordinary create control"
+    second_body = b"ordinary overwrite control"
+    ctx.fake.clear_calls()
+    create_status, _ = dav(ctx, "PUT", f"/dav/{control}", body=first_body)
+    first_row = file_row(ctx, control)
+    create_calls = ctx.fake.calls()
+    checks.equal(create_status, 201, "ordinary PUT create status")
+    checks.equal(
+        [call.get("op") for call in create_calls],
+        ["upload"],
+        "ordinary PUT create object operations",
+    )
+    checks.true(first_row is not None, "ordinary PUT create metadata")
+
+    ctx.fake.clear_calls()
+    overwrite_status, _ = dav(ctx, "PUT", f"/dav/{control}", body=second_body)
+    second_row = file_row(ctx, control)
+    overwrite_calls = ctx.fake.calls()
+    checks.equal(overwrite_status, 204, "ordinary PUT overwrite status")
+    checks.equal(
+        [call.get("op") for call in overwrite_calls],
+        ["upload", "delete"],
+        "ordinary PUT overwrite object operations",
+    )
+    if first_row is not None and second_row is not None:
+        checks.true(first_row[2] != second_row[2], "ordinary PUT reused its object key")
+        checks.true(first_row[2] not in ctx.fake.keys(), "ordinary PUT kept old object")
+        checks.equal(
+            object_bytes(ctx, second_row[2]),
+            second_body,
+            "ordinary PUT overwrite bytes",
+        )
+
+
+def assert_object_gc_live_key_reference(ctx, checks):
+    parent = "gc-live-reference"
+    shared_key = "gc-live-shared-object"
+    shared_body = "shared bytes must remain readable"
+    first = f"{parent}/a.txt"
+    second = f"{parent}/b.txt"
+    add_file(ctx, parent, True)
+    add_file(
+        ctx,
+        first,
+        False,
+        shared_key,
+        size=len(shared_body.encode()),
+        content=shared_body,
+    )
+    add_file(
+        ctx,
+        second,
+        False,
+        shared_key,
+        size=len(shared_body.encode()),
+        plant=False,
+    )
+    second_before = file_row(ctx, second)
+    ctx.fake.clear_calls()
+    shared_status, _ = dav(
+        ctx,
+        "PUT",
+        f"/dav/{first}",
+        body=b"A gets a private replacement",
+    )
+    shared_calls = ctx.fake.calls()
+    checks.equal(shared_status, 204, "shared-key PUT status")
+    checks.equal(
+        [call.get("op") for call in shared_calls],
+        ["upload"],
+        "shared-key GC reached object delete",
+    )
+    checks.equal(file_row(ctx, second), second_before, "shared-key peer metadata")
+    checks.true(shared_key in ctx.fake.keys(), "shared live key was deleted")
+    get_status, get_body = dav(
+        ctx,
+        "GET",
+        f"/dav/{second}",
+        {"User-Agent": "contract-proxy-client/1.0"},
+    )
+    checks.equal(get_status, 200, "shared-key peer GET status")
+    checks.equal(get_body, shared_body.encode(), "shared-key peer GET bytes")
+
+    solo = f"{parent}/solo.txt"
+    solo_key = "gc-live-solo-object"
+    add_file(ctx, solo, False, solo_key, content="unshared old bytes")
+    ctx.fake.clear_calls()
+    solo_status, _ = dav(
+        ctx,
+        "PUT",
+        f"/dav/{solo}",
+        body=b"solo replacement",
+    )
+    solo_calls = ctx.fake.calls()
+    checks.equal(solo_status, 204, "unshared-key PUT status")
+    checks.equal(
+        [call.get("op") for call in solo_calls],
+        ["upload", "delete"],
+        "unshared-key GC object operation order",
+    )
+    checks.true(solo_key not in ctx.fake.keys(), "unshared superseded key survived")
+    if len(solo_calls) == 2:
+        checks.equal(solo_calls[1].get("key"), solo_key, "unshared GC key")
+
+
+def assert_webdav_delete_metadata_first_concurrent_rename(ctx, checks):
+    parent = "delete-race"
+    source = f"{parent}/p.txt"
+    destination = f"{parent}/q.txt"
+    source_key = "delete-race-source-object"
+    add_file(ctx, parent, True)
+    add_file(ctx, source, False, source_key, content="delete race")
+    ctx.fake.clear_calls()
+    ctx.fake.pause("delete")
+    delete_result, delete_done, delete_thread = start_background(
+        lambda: dav(ctx, "DELETE", f"/dav/{source}")
+    )
+    entered = wait_for_pause(ctx.fake, "delete")
+    source_absent_at_pause = False
+    rename_result = None
+    rename_done = None
+    rename_thread = None
+    rename_finished_while_gc = False
+    try:
+        if entered:
+            source_absent_at_pause = file_row(ctx, source) is None
+            rename_result, rename_done, rename_thread = start_background(
+                lambda: dav(
+                    ctx,
+                    "MOVE",
+                    f"/dav/{source}",
+                    {"Destination": f"/dav/{destination}"},
+                )
+            )
+            rename_finished_while_gc = rename_done.wait(timeout=1)
+    finally:
+        ctx.fake.release("delete")
+
+    delete_finished = finish_background(delete_thread, delete_done)
+    rename_finished = False
+    if rename_thread is not None and rename_done is not None:
+        rename_finished = finish_background(rename_thread, rename_done)
+    checks.true(entered, "DELETE did not reach paused object GC")
+    checks.true(source_absent_at_pause, "DELETE left P metadata visible during GC")
+    checks.true(
+        rename_finished_while_gc,
+        "concurrent rename could not observe metadata-first deletion",
+    )
+    checks.true(delete_finished, "DELETE did not finish after GC release")
+    assert_background_response(checks, delete_result, delete_done, "DELETE", 204)
+    checks.true(rename_finished, "concurrent rename did not finish")
+    if rename_result is None or rename_done is None:
+        checks.true(False, "concurrent rename was not started")
+    else:
+        assert_background_response(
+            checks,
+            rename_result,
+            rename_done,
+            "concurrent rename",
+            404,
+        )
+    checks.equal(file_row(ctx, source), None, "DELETE source metadata survived")
+    checks.equal(file_row(ctx, destination), None, "concurrent rename created Q")
+    checks.true(source_key not in ctx.fake.keys(), "DELETE source object survived")
+    checks.equal(
+        [call.get("op") for call in ctx.fake.calls()],
+        ["delete"],
+        "DELETE race object operations",
+    )
+    checks.equal(dangling_file_paths(ctx), [], "DELETE race left dangling metadata")
+
+
+def assert_webdav_delete_metadata_subtree_atomic(ctx, checks):
+    root = "delete-atomic"
+    first_key = "delete-atomic-first-object"
+    second_key = "delete-atomic-second-object"
+    add_file(ctx, root, True)
+    add_file(ctx, f"{root}/a.txt", False, first_key, content="first")
+    add_file(ctx, f"{root}/nested", True)
+    add_file(
+        ctx,
+        f"{root}/nested/z.txt",
+        False,
+        second_key,
+        content="second",
+    )
+    execute_sql(
+        ctx,
+        f"""
+        CREATE TRIGGER reject_delete_atomic_child
+        BEFORE DELETE ON files
+        WHEN old.path = '{root}/nested/z.txt'
+        BEGIN
+          SELECT raise(abort, 'reject atomic subtree delete');
+        END;
+        """,
+    )
+    before_db = db_state(ctx)
+    before_state = ctx.fake.state()
+    ctx.fake.clear_calls()
+    failed_status, _ = dav(ctx, "DELETE", f"/dav/{root}")
+    checks.equal(failed_status, 500, "rejected subtree DELETE status")
+    checks.equal(db_state(ctx), before_db, "rejected subtree DELETE changed metadata")
+    checks.equal(
+        ctx.fake.state(),
+        before_state,
+        "rejected subtree DELETE changed objects",
+    )
+    checks.equal(ctx.fake.calls(), [], "rejected subtree DELETE reached object GC")
+
+    execute_sql(ctx, "DROP TRIGGER reject_delete_atomic_child;")
+    ctx.fake.clear_calls()
+    control_status, _ = dav(ctx, "DELETE", f"/dav/{root}")
+    control_calls = ctx.fake.calls()
+    checks.equal(control_status, 204, "subtree DELETE success control status")
+    checks.equal(rows(ctx, root), [], "subtree DELETE success metadata")
+    checks.true(first_key not in ctx.fake.keys(), "subtree DELETE kept first object")
+    checks.true(second_key not in ctx.fake.keys(), "subtree DELETE kept second object")
+    checks.equal(
+        {call.get("key") for call in control_calls if call.get("op") == "delete"},
+        {first_key, second_key},
+        "subtree DELETE success object set",
+    )
+    checks.equal(
+        [call.get("op") for call in control_calls],
+        ["delete", "delete"],
+        "subtree DELETE success object operations",
+    )
+
+
+def assert_webdav_overwrite_copy_failure_preserves_target(ctx, checks):
+    parent = "copy-refusal-preserves"
+    source = f"{parent}/source.txt"
+    target = f"{parent}/target.txt"
+    source_key = "copy-refusal-source-object"
+    target_key = "copy-refusal-target-object"
+    add_file(ctx, parent, True)
+    add_file(ctx, source, False, source_key, content="source survives refusal")
+    add_file(ctx, target, False, target_key, content="target survives refusal")
+    before_db = db_state(ctx)
+    before_state = ctx.fake.state()
+    source_before = file_row(ctx, source)
+    target_before = file_row(ctx, target)
+    ctx.fake.clear_calls()
+    ctx.fake.refuse("copy", 599, '{"error":"copy refusal seam"}')
+    try:
+        status, _ = dav(
+            ctx,
+            "COPY",
+            f"/dav/{source}",
+            {"Destination": f"/dav/{target}"},
+        )
+    finally:
+        ctx.fake.allow("copy")
+    calls = ctx.fake.calls()
+    checks.equal(status, 502, "overwrite COPY refusal status")
+    checks.equal(db_state(ctx), before_db, "overwrite COPY refusal changed metadata")
+    checks.equal(
+        ctx.fake.state(), before_state, "overwrite COPY refusal changed objects"
+    )
+    checks.equal(file_row(ctx, source), source_before, "COPY refusal changed source")
+    checks.equal(file_row(ctx, target), target_before, "COPY refusal changed target")
+    checks.equal(len(calls), 1, "overwrite COPY refusal object call count")
+    if calls:
+        checks.equal(calls[0].get("op"), "copy", "overwrite COPY refusal operation")
+        checks.equal(
+            calls[0].get("outcome"),
+            "refused",
+            "overwrite COPY refusal did not reach fake seam",
+        )
+    checks.true(
+        all(call.get("op") != "delete" for call in calls),
+        "overwrite COPY refusal deleted the old target",
+    )
+
+
+def assert_webdav_overwrite_move_failure_preserves_target(ctx, checks):
+    parent = "move-failure-preserves"
+    source = f"{parent}/source.txt"
+    target = f"{parent}/target.txt"
+    source_key = "move-failure-source-object"
+    target_key = "move-failure-target-object"
+    add_file(ctx, parent, True)
+    add_file(ctx, source, False, source_key, content="source survives DB failure")
+    add_file(ctx, target, False, target_key, content="target survives DB failure")
+    execute_sql(
+        ctx,
+        f"""
+        CREATE TRIGGER reject_overwrite_move_update
+        BEFORE UPDATE OF path ON files
+        WHEN old.path = '{source}'
+        BEGIN
+          SELECT raise(abort, 'reject overwrite MOVE source rewrite');
+        END;
+        """,
+    )
+    before_db = db_state(ctx)
+    before_state = ctx.fake.state()
+    source_before = file_row(ctx, source)
+    target_before = file_row(ctx, target)
+    ctx.fake.clear_calls()
+    status, _ = dav(
+        ctx,
+        "MOVE",
+        f"/dav/{source}",
+        {"Destination": f"/dav/{target}"},
+    )
+    checks.equal(status, 500, "overwrite MOVE late DB failure status")
+    checks.equal(db_state(ctx), before_db, "overwrite MOVE failure changed metadata")
+    checks.equal(
+        ctx.fake.state(), before_state, "overwrite MOVE failure changed objects"
+    )
+    checks.equal(file_row(ctx, source), source_before, "MOVE failure changed source")
+    checks.equal(file_row(ctx, target), target_before, "MOVE failure changed target")
+    checks.equal(ctx.fake.calls(), [], "overwrite MOVE failure reached object GC")
+
+
+def assert_webdav_overwrite_metadata_switch_atomic(ctx, checks):
+    copy_root = "switch-atomic-copy"
+    copy_source = f"{copy_root}/source"
+    copy_target = f"{copy_root}/target"
+    copy_a_key = "switch-atomic-copy-a-object"
+    copy_z_key = "switch-atomic-copy-z-object"
+    copy_old_key = "switch-atomic-copy-old-object"
+    add_file(ctx, copy_root, True)
+    add_file(ctx, copy_source, True)
+    add_file(ctx, f"{copy_source}/a.txt", False, copy_a_key, content="copy a")
+    add_file(ctx, f"{copy_source}/z.txt", False, copy_z_key, content="copy z")
+    add_file(ctx, copy_target, True)
+    add_file(ctx, f"{copy_target}/old.txt", False, copy_old_key, content="copy old")
+    execute_sql(
+        ctx,
+        f"""
+        CREATE TRIGGER reject_late_copy_switch
+        BEFORE INSERT ON files
+        WHEN new.path = '{copy_target}/z.txt'
+        BEGIN
+          SELECT raise(abort, 'reject late COPY metadata switch');
+        END;
+        """,
+    )
+    before_copy_db = db_state(ctx)
+    before_copy_state = ctx.fake.state()
+    ctx.fake.clear_calls()
+    copy_status, _ = dav(
+        ctx,
+        "COPY",
+        f"/dav/{copy_source}",
+        {"Destination": f"/dav/{copy_target}"},
+    )
+    copy_calls = ctx.fake.calls()
+    checks.equal(copy_status, 500, "late COPY metadata switch status")
+    checks.equal(
+        db_state(ctx),
+        before_copy_db,
+        "late COPY metadata switch left partial target metadata",
+    )
+    assert_copied_objects_collected(
+        checks,
+        before_copy_state,
+        ctx.fake.state(),
+        copy_calls,
+        "late COPY metadata switch",
+    )
+    checks.true(
+        all(
+            call.get("key") != copy_old_key
+            for call in copy_calls
+            if call.get("op") == "delete"
+        ),
+        "late COPY metadata switch deleted the old target object",
+    )
+
+    move_root = "switch-atomic-move"
+    move_source = f"{move_root}/source"
+    move_target = f"{move_root}/target"
+    move_a_key = "switch-atomic-move-a-object"
+    move_z_key = "switch-atomic-move-z-object"
+    move_old_key = "switch-atomic-move-old-object"
+    add_file(ctx, move_root, True)
+    add_file(ctx, move_source, True)
+    add_file(ctx, f"{move_source}/a.txt", False, move_a_key, content="move a")
+    add_file(ctx, f"{move_source}/z.txt", False, move_z_key, content="move z")
+    add_file(ctx, move_target, True)
+    add_file(ctx, f"{move_target}/old.txt", False, move_old_key, content="move old")
+    execute_sql(
+        ctx,
+        f"""
+        CREATE TRIGGER reject_late_move_switch
+        BEFORE UPDATE OF path ON files
+        WHEN old.path = '{move_source}/z.txt'
+        BEGIN
+          SELECT raise(abort, 'reject late MOVE metadata switch');
+        END;
+        """,
+    )
+    before_move_db = db_state(ctx)
+    before_move_state = ctx.fake.state()
+    ctx.fake.clear_calls()
+    move_status, _ = dav(
+        ctx,
+        "MOVE",
+        f"/dav/{move_source}",
+        {"Destination": f"/dav/{move_target}"},
+    )
+    checks.equal(move_status, 500, "late MOVE metadata switch status")
+    checks.equal(
+        db_state(ctx),
+        before_move_db,
+        "late MOVE metadata switch left partial source or target metadata",
+    )
+    checks.equal(
+        ctx.fake.state(),
+        before_move_state,
+        "late MOVE metadata switch changed objects",
+    )
+    checks.equal(ctx.fake.calls(), [], "late MOVE metadata switch reached object GC")
+
+    copy_control_root = "switch-control-copy"
+    copy_control_source = f"{copy_control_root}/source"
+    copy_control_target = f"{copy_control_root}/target"
+    copy_control_source_key = "switch-control-copy-source-object"
+    copy_control_old_key = "switch-control-copy-old-object"
+    add_file(ctx, copy_control_root, True)
+    add_file(ctx, copy_control_source, True)
+    add_file(
+        ctx,
+        f"{copy_control_source}/file.txt",
+        False,
+        copy_control_source_key,
+        content="copy control bytes",
+    )
+    add_file(ctx, copy_control_target, True)
+    add_file(
+        ctx,
+        f"{copy_control_target}/old.txt",
+        False,
+        copy_control_old_key,
+        content="old copy control",
+    )
+    ctx.fake.clear_calls()
+    copy_control_status, _ = dav(
+        ctx,
+        "COPY",
+        f"/dav/{copy_control_source}",
+        {"Destination": f"/dav/{copy_control_target}"},
+    )
+    copy_control_calls = ctx.fake.calls()
+    checks.equal(copy_control_status, 204, "COPY metadata-switch control status")
+    checks.equal(
+        {row[0] for row in rows(ctx, copy_control_target)},
+        {copy_control_target, f"{copy_control_target}/file.txt"},
+        "COPY metadata-switch control target tree",
+    )
+    checks.true(
+        file_row(ctx, f"{copy_control_source}/file.txt") is not None,
+        "COPY metadata-switch control removed source",
+    )
+    checks.true(
+        copy_control_source_key in ctx.fake.keys(),
+        "COPY metadata-switch control removed source object",
+    )
+    checks.true(
+        copy_control_old_key not in ctx.fake.keys(),
+        "COPY metadata-switch control kept old target object",
+    )
+    checks.equal(
+        [call.get("op") for call in copy_control_calls],
+        ["copy", "delete"],
+        "COPY metadata-switch control object operations",
+    )
+
+    move_control_root = "switch-control-move"
+    move_control_source = f"{move_control_root}/source"
+    move_control_target = f"{move_control_root}/target"
+    move_control_source_key = "switch-control-move-source-object"
+    move_control_old_key = "switch-control-move-old-object"
+    add_file(ctx, move_control_root, True)
+    add_file(ctx, move_control_source, True)
+    add_file(
+        ctx,
+        f"{move_control_source}/file.txt",
+        False,
+        move_control_source_key,
+        content="move control bytes",
+    )
+    add_file(ctx, move_control_target, True)
+    add_file(
+        ctx,
+        f"{move_control_target}/old.txt",
+        False,
+        move_control_old_key,
+        content="old move control",
+    )
+    ctx.fake.clear_calls()
+    move_control_status, _ = dav(
+        ctx,
+        "MOVE",
+        f"/dav/{move_control_source}",
+        {"Destination": f"/dav/{move_control_target}"},
+    )
+    move_control_calls = ctx.fake.calls()
+    checks.equal(move_control_status, 204, "MOVE metadata-switch control status")
+    checks.equal(rows(ctx, move_control_source), [], "MOVE control source survived")
+    checks.equal(
+        {row[0] for row in rows(ctx, move_control_target)},
+        {move_control_target, f"{move_control_target}/file.txt"},
+        "MOVE metadata-switch control target tree",
+    )
+    moved_row = file_row(ctx, f"{move_control_target}/file.txt")
+    checks.true(moved_row is not None, "MOVE metadata-switch control target file")
+    if moved_row is not None:
+        checks.equal(moved_row[2], move_control_source_key, "MOVE control object key")
+    checks.true(
+        move_control_source_key in ctx.fake.keys(),
+        "MOVE metadata-switch control removed source object",
+    )
+    checks.true(
+        move_control_old_key not in ctx.fake.keys(),
+        "MOVE metadata-switch control kept old target object",
+    )
+    checks.equal(
+        [call.get("op") for call in move_control_calls],
+        ["delete"],
+        "MOVE metadata-switch control object operations",
+    )
 
 
 def assert_fm_copy_metadata_atomic(ctx, checks):
@@ -721,7 +1829,7 @@ def assert_fm_copy_metadata_atomic(ctx, checks):
         """,
     )
     before_db = db_state(ctx)
-    before_keys = ctx.fake.keys()
+    before_state = ctx.fake.state()
     ctx.fake.clear_calls()
 
     status, _ = api(
@@ -737,13 +1845,12 @@ def assert_fm_copy_metadata_atomic(ctx, checks):
     checks.equal(
         db_state(ctx), before_db, "FM final copy failure left partial metadata"
     )
-    checks.true(
-        set(ctx.fake.keys()) > set(before_keys),
-        "FM atomic control did not reach object copy",
-    )
-    checks.true(
-        any(call.get("op") == "copy" for call in ctx.fake.calls()),
-        "FM atomic control did not exercise Qiniu copy",
+    assert_copied_objects_collected(
+        checks,
+        before_state,
+        ctx.fake.state(),
+        ctx.fake.calls(),
+        "FM final copy failure",
     )
 
 
@@ -769,26 +1876,28 @@ def assert_webdav_copy_metadata_atomic(ctx, checks):
         """,
     )
     before_db = db_state(ctx)
-    before_keys = ctx.fake.keys()
+    before_state = ctx.fake.state()
     ctx.fake.clear_calls()
 
     status, _ = dav(
         ctx,
         "COPY",
         "/dav/dav-atomic-source",
-        {"Destination": "/dav/dav-atomic-parent/copied"},
+        {
+            "Destination": "/dav/dav-atomic-parent/copied",
+            "Overwrite": "F",
+        },
     )
     checks.true(status >= 400, "WebDAV final copy failure status")
     checks.equal(
         db_state(ctx), before_db, "WebDAV final copy failure left partial metadata"
     )
-    checks.true(
-        set(ctx.fake.keys()) > set(before_keys),
-        "WebDAV atomic control did not reach object copy",
-    )
-    checks.true(
-        any(call.get("op") == "copy" for call in ctx.fake.calls()),
-        "WebDAV atomic control did not exercise Qiniu copy",
+    assert_copied_objects_collected(
+        checks,
+        before_state,
+        ctx.fake.state(),
+        ctx.fake.calls(),
+        "WebDAV final copy failure",
     )
 
 
@@ -835,7 +1944,6 @@ def assert_fm_external_effect_preflight(ctx, checks):
 
 def assert_directory_target_preflight(ctx, checks):
     add_file(ctx, "target-dir", True)
-    add_file(ctx, "target-dir/child.txt", False, "target-dir-child-object")
     ctx.fake.plant("directory-register-object", "registered", "text/plain")
     add_ledger(ctx, "directory-register-object", "qiniu://target-dir")
     before_db = db_state(ctx)
@@ -874,6 +1982,127 @@ def assert_directory_target_preflight(ctx, checks):
         ctx.fake.keys(), before_keys, "directory-target rejection changed objects"
     )
     checks.equal(ctx.fake.calls(), [], "directory-target rejection reached Qiniu")
+
+
+def assert_file_target_descendant_preflight(ctx, checks):
+    parent = "descendant-preflight"
+    targets = {
+        "create-file": f"{parent}/create.txt",
+        "save": f"{parent}/save.txt",
+        "upload-token": f"{parent}/token.bin",
+        "register": f"{parent}/register.txt",
+        "upload": f"{parent}/upload.bin",
+        "WebDAV PUT": f"{parent}/dav.txt",
+    }
+    add_file(ctx, parent, True)
+    for target in targets.values():
+        add_file(ctx, f"{target}/legacy-child", True)
+    ctx.fake.plant("descendant-register-object", "registered", "text/plain")
+    add_ledger(
+        ctx,
+        "descendant-register-object",
+        f"qiniu://{targets['register']}",
+    )
+    before_db = db_state(ctx)
+    before_state = ctx.fake.state()
+    ctx.fake.clear_calls()
+
+    statuses = {
+        "create-file": api(
+            ctx,
+            "/api/fm/create-file",
+            {"path": f"qiniu://{parent}", "name": "create.txt"},
+        )[0],
+        "save": api(
+            ctx,
+            "/api/fm/save",
+            {"path": f"qiniu://{targets['save']}", "content": "new"},
+        )[0],
+        "upload-token": api(
+            ctx,
+            "/api/fm/upload-token",
+            {"path": f"qiniu://{parent}", "name": "token.bin"},
+        )[0],
+        "register": api(
+            ctx,
+            "/api/fm/register",
+            {
+                "path": f"qiniu://{targets['register']}",
+                "key": "descendant-register-object",
+            },
+        )[0],
+        "upload": api_upload(ctx, f"qiniu://{parent}", name="upload.bin")[0],
+        "WebDAV PUT": dav(
+            ctx,
+            "PUT",
+            f"/dav/{targets['WebDAV PUT']}",
+            body=b"descendant preflight",
+        )[0],
+    }
+    for endpoint, status in statuses.items():
+        checks.equal(status, 409, f"{endpoint} descendant-target rejection")
+    checks.equal(
+        db_state(ctx), before_db, "descendant-target rejection changed DB or ledger"
+    )
+    checks.equal(
+        ctx.fake.state(),
+        before_state,
+        "descendant-target rejection changed objects",
+    )
+    checks.equal(ctx.fake.calls(), [], "descendant-target rejection reached Qiniu")
+
+
+def assert_file_target_descendant_final_race(ctx, checks):
+    parent = "descendant-race"
+    add_file(ctx, parent, True)
+    cases = [
+        (
+            "FM upload",
+            f"{parent}/fm.bin",
+            lambda: api_upload(ctx, f"qiniu://{parent}", name="fm.bin"),
+        ),
+        (
+            "WebDAV PUT",
+            f"{parent}/dav.bin",
+            lambda: dav(
+                ctx,
+                "PUT",
+                f"/dav/{parent}/dav.bin",
+                body=b"late descendant race",
+            ),
+        ),
+    ]
+
+    for label, target, request_call in cases:
+        before_state = ctx.fake.state()
+        ctx.fake.clear_calls()
+        ctx.fake.pause("upload")
+        result, done, thread = start_background(request_call)
+        entered = wait_for_pause(ctx.fake, "upload")
+        child = f"{target}/late-child"
+        try:
+            if entered:
+                add_file(ctx, child, True)
+        finally:
+            ctx.fake.release("upload")
+        finished = finish_background(thread, done)
+
+        checks.true(entered, f"{label} did not reach the paused upload")
+        checks.true(finished, f"{label} did not finish after upload release")
+        assert_background_response(checks, result, done, label, 409)
+        target_rows = rows(ctx, target)
+        checks.equal(
+            [row[0] for row in target_rows],
+            [child],
+            f"{label} created a file root over a late descendant",
+        )
+        assert_uploaded_object_collected(
+            checks,
+            before_state,
+            ctx.fake.state(),
+            ctx.fake.calls(),
+            f"{label} late descendant rejection",
+        )
 
 
 def assert_upload_token_preflight(ctx, checks):
@@ -957,6 +2186,104 @@ def assert_move_reparent_preflight(ctx, checks):
     checks.equal(ctx.fake.calls(), [], "rejected move reached Qiniu")
 
 
+def assert_fm_move_request_atomic(ctx, checks):
+    add_file(ctx, "move-skip-self.txt", False, "move-skip-self-object")
+    add_file(ctx, "move-skip-descendant", True)
+    add_file(
+        ctx,
+        "move-skip-descendant/child.txt",
+        False,
+        "move-skip-descendant-object",
+    )
+    skip_state = db_state(ctx)
+    empty_status, _ = api(
+        ctx,
+        "/api/fm/move",
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://unused",
+            "sources": [],
+        },
+    )
+    self_status, _ = api(
+        ctx,
+        "/api/fm/move",
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://",
+            "sources": ["qiniu://move-skip-self.txt"],
+        },
+    )
+    descendant_status, _ = api(
+        ctx,
+        "/api/fm/move",
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://move-skip-descendant/inside",
+            "sources": ["qiniu://move-skip-descendant"],
+        },
+    )
+    checks.equal(empty_status, 200, "empty MOVE request wire status")
+    checks.equal(self_status, 200, "self MOVE skip wire status")
+    checks.equal(descendant_status, 200, "descendant MOVE skip wire status")
+    checks.equal(db_state(ctx), skip_state, "skipped MOVE request changed metadata")
+
+    add_file(ctx, "move-success.txt", False, "move-success-object")
+    add_file(ctx, "move-success-destination", True)
+    success_status, _ = api(
+        ctx,
+        "/api/fm/move",
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://move-success-destination",
+            "sources": ["qiniu://move-success.txt"],
+        },
+    )
+    checks.equal(success_status, 200, "successful MOVE wire status")
+    checks.equal(rows(ctx, "move-success.txt"), [], "successful MOVE left source")
+    checks.equal(
+        len(rows(ctx, "move-success-destination/move-success.txt")),
+        1,
+        "successful MOVE did not create target",
+    )
+
+    add_file(ctx, "move-atomic-left", True)
+    add_file(
+        ctx,
+        "move-atomic-left/same.txt",
+        False,
+        "move-atomic-left-object",
+    )
+    add_file(ctx, "move-atomic-right", True)
+    add_file(
+        ctx,
+        "move-atomic-right/same.txt",
+        False,
+        "move-atomic-right-object",
+    )
+    before_db = db_state(ctx)
+    before_keys = ctx.fake.keys()
+    ctx.fake.clear_calls()
+
+    status, _ = api(
+        ctx,
+        "/api/fm/move",
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://move-atomic-destination/deep",
+            "sources": [
+                "qiniu://move-atomic-left/same.txt",
+                "qiniu://move-atomic-right/same.txt",
+            ],
+        },
+    )
+
+    checks.true(status >= 400, "multi-source MOVE basename collision status")
+    checks.equal(db_state(ctx), before_db, "multi-source MOVE left a partial move")
+    checks.equal(ctx.fake.keys(), before_keys, "metadata-only MOVE changed objects")
+    checks.equal(ctx.fake.calls(), [], "metadata-only MOVE reached Qiniu")
+
+
 def assert_rename_file_ancestor_preflight(ctx, checks):
     seed_deep_file_ancestor(ctx, "blocked-rename")
     add_file(
@@ -1009,6 +2336,97 @@ def assert_conflict_mapping(ctx, checks):
         ctx.fake.keys(), before_keys, "create-folder rejection changed objects"
     )
     checks.equal(ctx.fake.calls(), [], "create-folder rejection reached Qiniu")
+
+
+def assert_fm_copy_error_classification(ctx, checks):
+    add_file(ctx, "copy-errors", True)
+    add_file(ctx, "copy-errors/conflict-source.txt", False, "copy-conflict-source")
+    add_file(ctx, "copy-errors/conflict-destination", True)
+    add_file(
+        ctx,
+        "copy-errors/conflict-destination/conflict-source.txt",
+        False,
+        "copy-conflict-target",
+    )
+    ctx.fake.clear_calls()
+    conflict_status, _ = api(
+        ctx,
+        "/api/fm/copy",
+        {
+            "path": "qiniu://copy-errors",
+            "destination": "qiniu://copy-errors/conflict-destination",
+            "sources": ["qiniu://copy-errors/conflict-source.txt"],
+        },
+    )
+    checks.equal(conflict_status, 409, "FM COPY conflict classification")
+    checks.equal(ctx.fake.calls(), [], "FM COPY conflict reached Qiniu")
+
+    add_file(ctx, "copy-errors/upstream-source.txt", False, "copy-upstream-source")
+    add_file(ctx, "copy-errors/upstream-destination", True)
+    ctx.fake.clear_calls()
+    ctx.fake.refuse("copy", 599, '{"error":"refuse copy classification"}')
+    try:
+        upstream_status, _ = api(
+            ctx,
+            "/api/fm/copy",
+            {
+                "path": "qiniu://copy-errors",
+                "destination": "qiniu://copy-errors/upstream-destination",
+                "sources": ["qiniu://copy-errors/upstream-source.txt"],
+            },
+        )
+    finally:
+        ctx.fake.allow("copy")
+    checks.equal(upstream_status, 502, "FM COPY Qiniu failure classification")
+    checks.equal(
+        rows(ctx, "copy-errors/upstream-destination/upstream-source.txt"),
+        [],
+        "FM COPY Qiniu refusal committed metadata",
+    )
+    checks.true(
+        any(
+            call.get("op") == "copy" and call.get("outcome") == "refused"
+            for call in ctx.fake.calls()
+        ),
+        "FM COPY Qiniu refusal did not reach the fake",
+    )
+
+    add_file(ctx, "copy-errors/plain-source.txt", False, "copy-plain-source")
+    add_file(ctx, "copy-errors/plain-destination", True)
+    execute_sql(
+        ctx,
+        """
+        CREATE TRIGGER reject_copy_plain_final_write
+        BEFORE INSERT ON files
+        WHEN new.path = 'copy-errors/plain-destination/plain-source.txt'
+        BEGIN
+          SELECT raise(abort, 'reject copy plain final write');
+        END;
+        """,
+    )
+    before_plain_db = db_state(ctx)
+    before_plain_state = ctx.fake.state()
+    ctx.fake.clear_calls()
+    plain_status, _ = api(
+        ctx,
+        "/api/fm/copy",
+        {
+            "path": "qiniu://copy-errors",
+            "destination": "qiniu://copy-errors/plain-destination",
+            "sources": ["qiniu://copy-errors/plain-source.txt"],
+        },
+    )
+    checks.equal(plain_status, 500, "FM COPY final DB failure classification")
+    checks.equal(
+        db_state(ctx), before_plain_db, "FM COPY final DB failure changed metadata"
+    )
+    assert_copied_objects_collected(
+        checks,
+        before_plain_state,
+        ctx.fake.state(),
+        ctx.fake.calls(),
+        "FM COPY final DB failure",
+    )
 
 
 def assert_internal_subtree_shape(ctx, checks):
@@ -1170,20 +2588,55 @@ ASSERTIONS = [
     ("webdav.copy.parent-before-child", assert_webdav_copy_parent_order),
     ("fm.external-effects.preflight", assert_fm_external_effect_preflight),
     ("fm.directory-target.preflight", assert_directory_target_preflight),
+    ("file-target.descendants.preflight", assert_file_target_descendant_preflight),
+    (
+        "file-target.descendants.final-race",
+        assert_file_target_descendant_final_race,
+    ),
     ("fm.upload-token.preflight", assert_upload_token_preflight),
     ("fm.register.preflight", assert_register_preflight),
     ("fm.move.reparent-preflight", assert_move_reparent_preflight),
+    ("fm.move.request-atomic", assert_fm_move_request_atomic),
     ("fm.rename.file-ancestor-preflight", assert_rename_file_ancestor_preflight),
     ("fm.conflict.maps-409", assert_conflict_mapping),
+    ("fm.copy.error-classification", assert_fm_copy_error_classification),
     ("subtree.internal-shape.preflight", assert_internal_subtree_shape),
     ("webdav.full-ancestor.preflight", assert_webdav_full_ancestor),
     ("webdav.missing-parent.rejects", assert_webdav_missing_parent),
     ("webdav.reverse-overlap.rejects", assert_webdav_reverse_overlap),
     ("fm.upload.final-write-isolated", assert_proxy_upload_final_rejection),
     ("fm.copy.deep-target-preflight", assert_fm_copy_deep_target_preflight),
+    ("copy.source-object-shape.preflight", assert_copy_source_object_shape_preflight),
+    ("copy.blank-source-key.preflight", assert_copy_blank_source_key_preflight),
     (
-        "webdav.copy.deep-target-preflight",
-        assert_webdav_copy_deep_target_preflight,
+        "copy-move.destination-subtree.preflight",
+        assert_destination_subtree_preflight,
+    ),
+    (
+        "webdav.overwrite.gc-after-switch",
+        assert_webdav_overwrite_gc_after_switch,
+    ),
+    ("webdav.put.actual-superseded-key", assert_webdav_put_actual_superseded_key),
+    ("object-gc.live-key-reference", assert_object_gc_live_key_reference),
+    (
+        "webdav.delete.metadata-first.concurrent-rename",
+        assert_webdav_delete_metadata_first_concurrent_rename,
+    ),
+    (
+        "webdav.delete.metadata-subtree-atomic",
+        assert_webdav_delete_metadata_subtree_atomic,
+    ),
+    (
+        "webdav.overwrite.copy-failure-preserves-target",
+        assert_webdav_overwrite_copy_failure_preserves_target,
+    ),
+    (
+        "webdav.overwrite.move-failure-preserves-target",
+        assert_webdav_overwrite_move_failure_preserves_target,
+    ),
+    (
+        "webdav.overwrite.metadata-switch-atomic",
+        assert_webdav_overwrite_metadata_switch_atomic,
     ),
     ("fm.copy.metadata-atomic", assert_fm_copy_metadata_atomic),
     ("webdav.copy.metadata-atomic", assert_webdav_copy_metadata_atomic),
@@ -1191,7 +2644,7 @@ ASSERTIONS = [
 
 
 def run_assertions(ctx):
-    failures = 0
+    failures = []
     for name, assertion in ASSERTIONS:
         contract_fixture.build(str(ctx.db))
         ctx.fake.reset()
@@ -1200,18 +2653,45 @@ def run_assertions(ctx):
             assertion(ctx, checks)
             checks.finish()
         except Exception as error:  # noqa: BLE001 - report the whole red set
-            failures += 1
+            failures.append(name)
             print(f"FAIL  {name}: {error}")
         else:
             print(f"PASS  {name}")
     return failures
 
 
+def write_report(path, failures):
+    if path is None:
+        return
+    payload = {
+        "schema": "dawnop.fm-ancestor-contract.v1",
+        "complete": True,
+        "total": len(ASSERTIONS),
+        "failures": failures,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--jar", type=pathlib.Path, required=True)
+    parser.add_argument("--list", action="store_true")
+    parser.add_argument("--jar", type=pathlib.Path)
     parser.add_argument("--port", type=int, default=18320)
+    parser.add_argument("--report", type=pathlib.Path)
     args = parser.parse_args()
+    if args.list:
+        if args.jar is not None or args.report is not None:
+            parser.error("--list does not accept --jar or --report")
+        print("\n".join(name for name, _ in ASSERTIONS))
+        return 0
+    if args.jar is None:
+        parser.error("--jar is required unless --list is used")
     if not args.jar.is_file():
         parser.error(f"jar does not exist: {args.jar}")
 
@@ -1253,7 +2733,7 @@ def main():
             stdout=log,
             stderr=subprocess.STDOUT,
         )
-        failures = 1
+        failures = None
         try:
             contract_run.wait_health(base, process)
             token = contract_run.login(base)
@@ -1273,6 +2753,13 @@ def main():
                 process.kill()
             fake_server.shutdown()
 
+    if failures is None:
+        return 1
+    write_report(args.report, failures)
+    print(
+        f"SUMMARY  FM ancestor contract: {len(failures)} of "
+        f"{len(ASSERTIONS)} assertion(s) failed"
+    )
     if failures:
         print(f"backend log: {log_path}", file=sys.stderr)
         return 1

@@ -1,19 +1,27 @@
 # Versioned, hand-owned red set. There is no record mode.
-version=4
+version=13
 immediate-tx-as-deferred|test|with_immediate_tx reserves the writer before its body
 immediate-tx-panic-no-rollback|test|with_immediate_tx rolls back when its body panics
 repo-file-ancestor-fail-open|test|insert_folder_strict rejects an existing file ancestor
 repo-immediate-parent-only|test|insert_file_strict checks ancestors above an existing parent row
 repo-directory-target-fail-open|test|insert_file rejects an existing directory target
+repo-file-target-descendants-preflight-fail-open|contract|file-target.descendants.preflight
+repo-file-target-descendants-final-fail-open|contract|file-target.descendants.final-race
 repo-fm-insert-split-transaction|test|FM inserts roll back auto-created ancestors when the final write fails
 repo-webdav-strict-insert-uses-fm|test|WebDAV strict inserts reject missing ancestors without backfill
 repo-rename-fill-missing|contract|fm.rename.missing-ancestor-no-fill
 repo-fm-reparent-split-transaction|test|FM fill reparent rolls back backfilled ancestors when path rewrite fails
+repo-fm-move-request-split-transaction|contract|fm.move.request-atomic
 repo-webdav-strict-reparent-uses-fm|test|WebDAV strict reparent rejects missing and file ancestors
 repo-file-upsert-disappeared-ok|test|insert_file fails closed when an ignored upsert removes its target
 repo-empty-subtree-ok|test|subtree mutations reject an empty source
 repo-copy-skip-source-revalidation|test|copy commits reject a vanished source snapshot
 repo-copy-skip-target-revalidation|test|copy commits revalidate every mapped target
+repo-copy-source-shape-preflight-fail-open|contract|copy.source-object-shape.preflight
+repo-copy-blank-key-preflight-fail-open|contract|copy.blank-source-key.preflight
+repo-copy-source-shape-final-fail-open|test|copy commits reject malformed source object rows
+repo-destination-subtree-preflight-fail-open|contract|copy-move.destination-subtree.preflight
+repo-destination-subtree-final-fail-open|test|copy, move, and rename commits reject unmapped destination descendants
 repo-literal-prefix-use-like|contract|tree.literal-prefix.isolated
 repo-subtree-child-first|contract|webdav.copy.parent-before-child
 repo-fm-copy-split-transaction|contract|fm.copy.metadata-atomic
@@ -22,9 +30,10 @@ fm-reject-missing-ancestor|contract|fm.missing-ancestors.auto-created
 fm-preflight-after-qiniu|contract|fm.external-effects.preflight
 fm-upload-reuse-existing-key|contract|fm.upload.final-write-isolated
 fm-copy-root-only-preflight|contract|fm.copy.deep-target-preflight
+fm-copy-plain-error-as-502|contract|fm.copy.error-classification
 fm-skip-directory-target-preflight|contract|fm.directory-target.preflight
 fm-skip-upload-token-preflight|contract|fm.upload-token.preflight
-fm-register-gc-before-preflight|contract|fm.register.preflight
+fm-register-stat-before-preflight|contract|fm.register.preflight
 fm-skip-reparent-validation|contract|fm.move.reparent-preflight
 fm-skip-rename-validation|contract|fm.rename.file-ancestor-preflight
 fm-map-conflict-as-default|contract|fm.conflict.maps-409
@@ -32,4 +41,18 @@ repo-subtree-shape-fail-open|contract|subtree.internal-shape.preflight
 webdav-skip-full-ancestor-validation|contract|webdav.full-ancestor.preflight
 webdav-missing-parent-fail-open|contract|webdav.missing-parent.rejects
 webdav-reverse-overlap-fail-open|contract|webdav.reverse-overlap.rejects
-webdav-copy-root-only-preflight|contract|webdav.copy.deep-target-preflight
+webdav-copy-root-only-preflight|test|WebDAV copy preflight rejects every mapped target
+object-gc-panic-leak|test|best-effort GC isolates success, errors, and panics
+object-gc-release-lock-before-delete|contract|webdav.overwrite.gc-after-switch
+webdav-put-use-preflight-superseded|contract|webdav.put.actual-superseded-key
+gc-skip-live-key-reference|contract|object-gc.live-key-reference
+webdav-delete-qiniu-before-detach|contract|webdav.delete.metadata-first.concurrent-rename
+webdav-delete-subtree-rowwise|contract|webdav.delete.metadata-subtree-atomic
+webdav-copy-overwrite-delete-on-failure|contract|webdav.overwrite.copy-failure-preserves-target
+webdav-move-overwrite-delete-on-failure|contract|webdav.overwrite.move-failure-preserves-target
+webdav-collection-overwrite-delete-on-failure|contract|webdav.overwrite.metadata-switch-atomic
+repo-webdav-copy-overwrite-prepare-root-blind|test|WebDAV COPY prepare rejects orphan descendants even with overwrite
+repo-webdav-delete-root-blind|test|WebDAV delete preserves descendants when the requested root is absent
+repo-fm-delete-list-root-blind|test|FM delete skips an absent root without deleting its descendants
+webdav-precondition-map-as-conflict|test|WebDAV precondition errors map to 412 at preflight and final edges
+fm-save-codepoint-size|qiniu|fm.save.utf8-byte-size

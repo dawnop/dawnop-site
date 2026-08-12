@@ -35,6 +35,9 @@ Control plane (not qiniu; only the contract script calls it):
     POST /__fake/reset          -> reseed objects, clear calls and refusals
     POST /__fake/refuse         -> {"op","status","body"}; status 0 disarms
     POST /__fake/put            -> {"key","content","mime"}; plant an object
+    POST /__fake/pause          -> {"op"}; pause matching object requests
+    POST /__fake/release        -> {"op"}; release and disarm that pause
+    GET  /__fake/pauses         -> entered request counts for armed pauses
 
 Standalone (the harness starts it in-process instead):
 
@@ -106,13 +109,45 @@ class Bucket:
 
     def reset(self):
         with self.lock:
+            for gate in getattr(self, "pauses", {}).values():
+                gate.set()
             self.objects = seed_objects()
             self.calls = []
             self.refuse = {}
+            self.pauses = {}
+            self.pause_entered = {}
 
     def log(self, **kw):
         with self.lock:
             self.calls.append(kw)
+
+    def arm_pause(self, op: str):
+        with self.lock:
+            old = self.pauses.pop(op, None)
+            if old is not None:
+                old.set()
+            self.pauses[op] = threading.Event()
+            self.pause_entered[op] = 0
+
+    def wait_if_paused(self, op: str):
+        with self.lock:
+            gate = self.pauses.get(op)
+            if gate is None:
+                return
+            self.pause_entered[op] = self.pause_entered.get(op, 0) + 1
+        gate.wait(timeout=10)
+
+    def release_pause(self, op: str):
+        with self.lock:
+            gate = self.pauses.pop(op, None)
+        if gate is not None:
+            gate.set()
+
+    def pause_state(self):
+        with self.lock:
+            return {
+                op: {"entered": self.pause_entered.get(op, 0)} for op in self.pauses
+            }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -219,6 +254,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._check_qbox(f"/delete/{encoded}\n"):
             return self._qiniu_error(401, "bad token")
         _bucket, key = _entry(encoded)
+        self.bucket.wait_if_paused("delete")
         if self._refused("delete", key=key):
             return None
         existed = self.bucket.objects.pop(key, None) is not None
@@ -252,6 +288,7 @@ class Handler(BaseHTTPRequestHandler):
         content, mime = parts["file"]
         if not _check_upload_token(token, key):
             return self._qiniu_error(401, "bad token")
+        self.bucket.wait_if_paused("upload")
         if self._refused("upload", key=key):
             return None
         self.bucket.objects[key] = {"content": content, "mime": mime}
@@ -307,6 +344,8 @@ class Handler(BaseHTTPRequestHandler):
                     for key, value in self.bucket.objects.items()
                 }
             return self._json(200, {"objects": state})
+        if segs[1:] == ["pauses"]:
+            return self._json(200, {"pauses": self.bucket.pause_state()})
         return self._json(404, {"error": "no such control endpoint"})
 
     def _control_post(self, segs, body: bytes):
@@ -332,6 +371,12 @@ class Handler(BaseHTTPRequestHandler):
                 "content": payload.get("content", "").encode(),
                 "mime": payload.get("mime", "application/octet-stream"),
             }
+            return self._json(200, {"ok": True})
+        if segs[1:] == ["pause"]:
+            self.bucket.arm_pause(payload["op"])
+            return self._json(200, {"ok": True})
+        if segs[1:] == ["release"]:
+            self.bucket.release_pause(payload["op"])
             return self._json(200, {"ok": True})
         return self._json(404, {"error": "no such control endpoint"})
 

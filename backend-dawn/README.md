@@ -7,7 +7,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 与 `POST /api/fm/upload`（multipart 代理上传，`src/util/multipart.dawn`）**也已落地**。
 
 契约由 `scripts/golden/*.json` 钉住（`scripts/contract_run.py`，CI 每次 push 都跑）：
-播种固定 fixture → 起后端 → 273 条响应逐字节比对。四套脚本里 `contract_qiniu.py` 另起一个
+播种固定 fixture → 起后端 → 292 条响应逐字节比对。四套脚本里 `contract_qiniu.py` 另起一个
 **指向本地假七牛**（`contract_qiniu_fake.py`）的后端，把子目录 COPY、PUT→GET 字节往返、
 覆盖写换 key、register 的 stat 校验这些必须有对象存储才走得到的路径也钉住；
 剩下的具名 skip 只有一件事——桶用量统计（`fm.stats`，走七牛计费/空间 API，假桶不模拟）。
@@ -23,8 +23,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   **jar 与 `lib/` 都是构建产物，不入库**——jar 曾经入库，结果是它悄悄落后于 `src/`（要靠手动
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
-- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、110 个本仓单测，连 web/json/sha2 三个包
-  共 178 个；`use java` import 共 61 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
+- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、148 个本仓单测，连 web/json/sha2 三个包
+  共 216 个；`use java` import 共 61 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
   libsimple / 网络，CI 每次 push 都跑）。用到 SQLite 的几个跑内存库（`jdbc:sqlite::memory:`），
   自带建表，不碰 fixture。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
@@ -93,20 +93,33 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   HTTP(S) absolute URI 映射到本地树。`Request` 没有可信的外部 scheme 字段，因此 `Host` 未带端口时
   同站的 HTTP 与 HTTPS 形式都接受，各自按 80/443 归一；其他 scheme、远端 authority、query 与
   fragment 都返回 400，不会只取 path 后写入本地。前缀比较只展开 percent-encoded unreserved，
-  路径段按严格 UTF-8 解码。20 个 fail-closed mutant 分别由完整 Dawn test 或 qiniu golden 唯一归属。
-- `repo/repo_fm.dawn`：所有新写入与重挂接都守完整祖先类型。FM 写入与 move 在同一个
-  `BEGIN IMMEDIATE` 事务内补缺失目录并完成最终写入；rename 允许缺失祖先但不补目录；WebDAV
-  要求完整父链已存在且都是目录，并在最终写事务内复验。子树查询使用字面前缀且按路径父项优先，
-  干净子树仍可从遗留脏外部祖先下移出。FM 与 WebDAV COPY 会先映射完整目标集，随后把全部
-  metadata 在一个即时事务内复验源快照、目标与父链并一次提交。33 个 fail-closed mutant 精确归属到
-  13 条 Dawn 单测或 20 条逐项重置数据库、假七牛与调用日志的 HTTP 合同。
+  路径段按严格 UTF-8 解码。25 个 fail-closed mutant 中 24 个由完整 Dawn test 唯一归属，1 个由
+  qiniu golden 唯一归属；
+  overwrite purge 的祖先顺序由下述更强的完整文件树合同统一持有，不在这里重复造 owner。
+- `repo/repo_fm.dawn`：所有新写入与重挂接都守完整祖先类型。FM 写入与整个多源 move 请求各自在一个
+  `BEGIN IMMEDIATE` 事务内补缺失目录并完成最终写入；多源 move 按请求顺序逐项复验和重挂，后项失败会
+  回滚同一请求内的全部前项；rename 允许缺失祖先但不补目录；WebDAV
+  要求完整父链已存在且都是目录。普通文件写入会在七牛或账本副作用前拒绝目标根下已有后代，并在最终
+  即时事务内复验，避免并发遗留后代与新文件根并存。move、rename 与 COPY 都在最终写事务内复验目标完整子树，不会在
+  缺失目标根下留下或覆盖未映射后代。子树查询使用字面前缀且按路径父项优先，
+  干净子树仍可从遗留脏外部祖先下移出。FM 与 WebDAV COPY 会在对象操作前拒绝携带 key 的目录、
+  缺少有效非空 key 的文件、映射目标冲突和目标根下的未映射遗留项，随后把全部 metadata 在一个即时
+  事务内复验源快照、对象形状、完整目标子树与父链并一次提交。FM COPY 将冲突、七牛失败和普通
+  SQLite/内部失败分别映射为 409、502 和 500。56 个 fail-closed mutant 按依赖层精确归属到 21 条
+  Dawn 单测、34 条逐项重置数据库、假七牛与调用日志的 HTTP 合同，以及 1 条 qiniu golden。Dawn
+  角色只核对自己的单测红集；
+  HTTP 角色必须保持全部 Dawn 单测绿色，再唯一打红自己的合同，避免把低层事务退化对上层的真实影响
+  误判为同层 collateral。
 - SQLite 与七牛无法组成分布式事务。上传、保存和 COPY 在对象操作前做只读预检，SQLite 最终写在
-  自己的即时事务内复验；代理上传和其他覆盖写总是使用新 key，只有 DB 成功后才回收旧 key。若对象
-  操作与最终 DB 提交之间发生并发变化，请求会拒绝且 metadata 不会部分提交，但可能留下未引用的新
-  对象。DELETE、WebDAV overwrite purge 等删除路径仍逐项执行对象与 metadata 删除，失败依赖补偿或
-  后续清理，不能回滚为原对象。这些是明确保留的 TOCTOU 与补偿边界，不宣称统一的分布式原子性。
-- `svc/files.dawn` — 文件树操作层：①`api_fm` 与 `webdav` 共用的对象存储原语（signed_url / superseded_key / gc_superseded / copy_object / delete_object_of）——
-  只回 Result 不映射状态码，因为两个调用方的错误映射与连接持有方式本就不同（fm 一棵树一条连接，WebDAV 一步一条）；②`api_fm` 自己的树遍历（rename/move/copy/delete/save/upload）。
+  自己的即时事务内复验；代理上传和其他覆盖写总是使用新 key。DELETE、PUT 覆盖、COPY 覆盖与 MOVE
+  覆盖都先原子提交 metadata 删除或切换，再按事务返回的真实旧 key 做引用感知回收，远端失败不会留下
+  指向已删对象的旧 metadata。当前回收会在一个 `BEGIN IMMEDIATE` 内复验 `files` 与
+  `pending_uploads`，并在持有写锁时调用七牛 DELETE；慢或无响应的对象存储会阻塞其他 SQLite writer。
+  DELETE 失败也没有持久化重试记录。COPY 与上传若远端已写成但响应丢失，调用方拿不到新 key，同样会
+  留下无法从本地账本恢复的孤儿对象。这些是当前明确记录的分布式生命周期缺口，不宣称统一原子性。
+- `svc/files.dawn`：文件树操作层。①`api_fm` 与 `webdav` 共用的对象存储原语（`signed_url`、
+  `copy_object`、引用感知 GC），只回 `Result` 或 best-effort 结果，不在本层映射 HTTP 状态；②`api_fm`
+  自己的树遍历（rename/move/copy/delete/save/upload）。
 - `qiniu/sign.dawn` — 三类七牛签名：上传凭证、私有下载 URL、QBox 管理、QiniuMacAuth（统计/CDN/账单，含 body）。
 - `qiniu/rs.dawn` — 管理 REST：stat/delete/copy/upload_text/upload_bytes/upload_file。
 - `util/paths.dawn` / `repo/repo_fm.dawn` — 路径原语 / 虚拟树（path↔key，DirEntry 序列化）。

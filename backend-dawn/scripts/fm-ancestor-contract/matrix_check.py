@@ -4,23 +4,31 @@
 import argparse
 from pathlib import Path
 
-VERSION = "4"
-VALID_ROLES = {"test", "contract"}
+VERSION = "13"
+VALID_ROLES = {"test", "contract", "qiniu"}
 EXPECTED_ROWS = [
     "immediate-tx-as-deferred|test|with_immediate_tx reserves the writer before its body",
     "immediate-tx-panic-no-rollback|test|with_immediate_tx rolls back when its body panics",
     "repo-file-ancestor-fail-open|test|insert_folder_strict rejects an existing file ancestor",
     "repo-immediate-parent-only|test|insert_file_strict checks ancestors above an existing parent row",
     "repo-directory-target-fail-open|test|insert_file rejects an existing directory target",
+    "repo-file-target-descendants-preflight-fail-open|contract|file-target.descendants.preflight",
+    "repo-file-target-descendants-final-fail-open|contract|file-target.descendants.final-race",
     "repo-fm-insert-split-transaction|test|FM inserts roll back auto-created ancestors when the final write fails",
     "repo-webdav-strict-insert-uses-fm|test|WebDAV strict inserts reject missing ancestors without backfill",
     "repo-rename-fill-missing|contract|fm.rename.missing-ancestor-no-fill",
     "repo-fm-reparent-split-transaction|test|FM fill reparent rolls back backfilled ancestors when path rewrite fails",
+    "repo-fm-move-request-split-transaction|contract|fm.move.request-atomic",
     "repo-webdav-strict-reparent-uses-fm|test|WebDAV strict reparent rejects missing and file ancestors",
     "repo-file-upsert-disappeared-ok|test|insert_file fails closed when an ignored upsert removes its target",
     "repo-empty-subtree-ok|test|subtree mutations reject an empty source",
     "repo-copy-skip-source-revalidation|test|copy commits reject a vanished source snapshot",
     "repo-copy-skip-target-revalidation|test|copy commits revalidate every mapped target",
+    "repo-copy-source-shape-preflight-fail-open|contract|copy.source-object-shape.preflight",
+    "repo-copy-blank-key-preflight-fail-open|contract|copy.blank-source-key.preflight",
+    "repo-copy-source-shape-final-fail-open|test|copy commits reject malformed source object rows",
+    "repo-destination-subtree-preflight-fail-open|contract|copy-move.destination-subtree.preflight",
+    "repo-destination-subtree-final-fail-open|test|copy, move, and rename commits reject unmapped destination descendants",
     "repo-literal-prefix-use-like|contract|tree.literal-prefix.isolated",
     "repo-subtree-child-first|contract|webdav.copy.parent-before-child",
     "repo-fm-copy-split-transaction|contract|fm.copy.metadata-atomic",
@@ -29,9 +37,10 @@ EXPECTED_ROWS = [
     "fm-preflight-after-qiniu|contract|fm.external-effects.preflight",
     "fm-upload-reuse-existing-key|contract|fm.upload.final-write-isolated",
     "fm-copy-root-only-preflight|contract|fm.copy.deep-target-preflight",
+    "fm-copy-plain-error-as-502|contract|fm.copy.error-classification",
     "fm-skip-directory-target-preflight|contract|fm.directory-target.preflight",
     "fm-skip-upload-token-preflight|contract|fm.upload-token.preflight",
-    "fm-register-gc-before-preflight|contract|fm.register.preflight",
+    "fm-register-stat-before-preflight|contract|fm.register.preflight",
     "fm-skip-reparent-validation|contract|fm.move.reparent-preflight",
     "fm-skip-rename-validation|contract|fm.rename.file-ancestor-preflight",
     "fm-map-conflict-as-default|contract|fm.conflict.maps-409",
@@ -39,12 +48,33 @@ EXPECTED_ROWS = [
     "webdav-skip-full-ancestor-validation|contract|webdav.full-ancestor.preflight",
     "webdav-missing-parent-fail-open|contract|webdav.missing-parent.rejects",
     "webdav-reverse-overlap-fail-open|contract|webdav.reverse-overlap.rejects",
-    "webdav-copy-root-only-preflight|contract|webdav.copy.deep-target-preflight",
+    "webdav-copy-root-only-preflight|test|WebDAV copy preflight rejects every mapped target",
+    "object-gc-panic-leak|test|best-effort GC isolates success, errors, and panics",
+    "object-gc-release-lock-before-delete|contract|webdav.overwrite.gc-after-switch",
+    "webdav-put-use-preflight-superseded|contract|webdav.put.actual-superseded-key",
+    "gc-skip-live-key-reference|contract|object-gc.live-key-reference",
+    "webdav-delete-qiniu-before-detach|contract|webdav.delete.metadata-first.concurrent-rename",
+    "webdav-delete-subtree-rowwise|contract|webdav.delete.metadata-subtree-atomic",
+    "webdav-copy-overwrite-delete-on-failure|contract|webdav.overwrite.copy-failure-preserves-target",
+    "webdav-move-overwrite-delete-on-failure|contract|webdav.overwrite.move-failure-preserves-target",
+    "webdav-collection-overwrite-delete-on-failure|contract|webdav.overwrite.metadata-switch-atomic",
+    "repo-webdav-copy-overwrite-prepare-root-blind|test|WebDAV COPY prepare rejects orphan descendants even with overwrite",
+    "repo-webdav-delete-root-blind|test|WebDAV delete preserves descendants when the requested root is absent",
+    "repo-fm-delete-list-root-blind|test|FM delete skips an absent root without deleting its descendants",
+    "webdav-precondition-map-as-conflict|test|WebDAV precondition errors map to 412 at preflight and final edges",
+    "fm-save-codepoint-size|qiniu|fm.save.utf8-byte-size",
 ]
 EXPECTED_MUTANTS = [row.split("|", 1)[0] for row in EXPECTED_ROWS]
+EXPECTED_CONTRACT_OWNERS = [
+    row.split("|", 2)[2] for row in EXPECTED_ROWS if row.split("|", 2)[1] == "contract"
+]
+EXPECTED_QINIU_OWNERS = [
+    row.split("|", 2)[2] for row in EXPECTED_ROWS if row.split("|", 2)[1] == "qiniu"
+]
+EXPECTED_ROLE_COUNTS = {"test": 21, "contract": 34, "qiniu": 1}
 
 
-def validate(lines, listed_mutants):
+def validate(lines, listed_mutants, listed_assertions, listed_qiniu_assertions):
     content = [
         line.strip() for line in lines if line.strip() and not line.startswith("#")
     ]
@@ -75,14 +105,49 @@ def validate(lines, listed_mutants):
 
     if rows != EXPECTED_ROWS:
         raise ValueError("matrix order or membership differs from the hand-owned set")
+    role_counts = {
+        role: sum(1 for _, actual_role, _ in parsed if actual_role == role)
+        for role in VALID_ROLES
+    }
+    if role_counts != EXPECTED_ROLE_COUNTS:
+        raise ValueError(f"matrix role counts differ: {role_counts}")
     if listed_mutants != EXPECTED_MUTANTS:
         raise ValueError("mutate.py --list differs from matrix membership")
+    if len(listed_assertions) != len(set(listed_assertions)):
+        raise ValueError("run.py --list contains duplicate contract owners")
+    expected_assertions = set(EXPECTED_CONTRACT_OWNERS)
+    actual_assertions = set(listed_assertions)
+    missing_assertions = sorted(expected_assertions - actual_assertions)
+    extra_assertions = sorted(actual_assertions - expected_assertions)
+    if missing_assertions:
+        raise ValueError(
+            f"run.py --list is missing matrix contract owners: {missing_assertions}"
+        )
+    if extra_assertions:
+        raise ValueError(f"run.py --list has extra contract owners: {extra_assertions}")
+    if len(listed_qiniu_assertions) != len(set(listed_qiniu_assertions)):
+        raise ValueError("contract_qiniu.py contains duplicate case owners")
+    missing_qiniu_assertions = sorted(
+        set(EXPECTED_QINIU_OWNERS) - set(listed_qiniu_assertions)
+    )
+    if missing_qiniu_assertions:
+        raise ValueError(
+            "contract_qiniu.py is missing matrix qiniu owners: "
+            f"{missing_qiniu_assertions}"
+        )
     return parsed
 
 
-def expect_rejected(name, lines, mutants, message):
+def expect_rejected(
+    name, lines, mutants, message, assertions=None, qiniu_assertions=None
+):
     try:
-        validate(lines, mutants)
+        validate(
+            lines,
+            mutants,
+            EXPECTED_CONTRACT_OWNERS if assertions is None else assertions,
+            EXPECTED_QINIU_OWNERS if qiniu_assertions is None else qiniu_assertions,
+        )
     except ValueError as error:
         if message not in str(error):
             raise AssertionError(f"{name}: wrong rejection: {error}") from error
@@ -93,7 +158,12 @@ def expect_rejected(name, lines, mutants, message):
 
 def self_test():
     base = [f"version={VERSION}", *EXPECTED_ROWS]
-    validate(base, EXPECTED_MUTANTS)
+    validate(
+        base,
+        EXPECTED_MUTANTS,
+        EXPECTED_CONTRACT_OWNERS,
+        EXPECTED_QINIU_OWNERS,
+    )
     expect_rejected(
         "duplicate-mutant",
         [*base, f"{EXPECTED_MUTANTS[0]}|test|another owner"],
@@ -114,7 +184,7 @@ def self_test():
     )
     expect_rejected(
         "role-drift",
-        [*base[:-1], EXPECTED_ROWS[-1].replace("|contract|", "|test|")],
+        [*base[:-1], EXPECTED_ROWS[-1].replace("|qiniu|", "|test|")],
         EXPECTED_MUTANTS,
         "hand-owned set",
     )
@@ -147,25 +217,76 @@ def self_test():
         [*EXPECTED_MUTANTS, EXPECTED_MUTANTS[-1]],
         "mutate.py --list",
     )
+    expect_rejected(
+        "assertion-missing",
+        base,
+        EXPECTED_MUTANTS,
+        "missing matrix contract owners",
+        EXPECTED_CONTRACT_OWNERS[:-1],
+    )
+    expect_rejected(
+        "assertion-extra",
+        base,
+        EXPECTED_MUTANTS,
+        "extra contract owners",
+        [*EXPECTED_CONTRACT_OWNERS, "unknown.contract.owner"],
+    )
+    expect_rejected(
+        "assertion-duplicate",
+        base,
+        EXPECTED_MUTANTS,
+        "duplicate contract owners",
+        [*EXPECTED_CONTRACT_OWNERS, EXPECTED_CONTRACT_OWNERS[-1]],
+    )
+    expect_rejected(
+        "qiniu-assertion-missing",
+        base,
+        EXPECTED_MUTANTS,
+        "missing matrix qiniu owners",
+        qiniu_assertions=[],
+    )
+    expect_rejected(
+        "qiniu-assertion-duplicate",
+        base,
+        EXPECTED_MUTANTS,
+        "duplicate case owners",
+        qiniu_assertions=[*EXPECTED_QINIU_OWNERS, EXPECTED_QINIU_OWNERS[-1]],
+    )
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--matrix", type=Path)
     parser.add_argument("--mutants", type=Path)
+    parser.add_argument("--assertions", type=Path)
+    parser.add_argument("--qiniu-assertions", type=Path)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
         self_test()
-    if args.matrix is not None or args.mutants is not None:
-        if args.matrix is None or args.mutants is None:
-            parser.error("--matrix and --mutants must be provided together")
+    matrix_inputs = (
+        args.matrix,
+        args.mutants,
+        args.assertions,
+        args.qiniu_assertions,
+    )
+    if any(value is not None for value in matrix_inputs):
+        if any(value is None for value in matrix_inputs):
+            parser.error(
+                "--matrix, --mutants, --assertions and --qiniu-assertions "
+                "must be provided together"
+            )
         parsed = validate(
             args.matrix.read_text(encoding="utf-8").splitlines(),
             args.mutants.read_text(encoding="utf-8").splitlines(),
+            args.assertions.read_text(encoding="utf-8").splitlines(),
+            args.qiniu_assertions.read_text(encoding="utf-8").splitlines(),
         )
         print(
-            f"PASS  FM ancestor matrix v{VERSION}: {len(parsed)} owned mutants across exact roles"
+            f"PASS  FM ancestor matrix v{VERSION}: {len(parsed)} owned mutants "
+            f"({EXPECTED_ROLE_COUNTS['test']} test, "
+            f"{EXPECTED_ROLE_COUNTS['contract']} contract, "
+            f"{EXPECTED_ROLE_COUNTS['qiniu']} qiniu)"
         )
     if not args.self_test and args.matrix is None:
         parser.error("choose --self-test or provide --matrix and --mutants")

@@ -1562,22 +1562,21 @@
   "delete.dir": {
    "method": "DELETE",
    "path": "/dav/dav-test",
-   "status": 500,
+   "status": 204,
    "headers": {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": "34"
+    "content-type": "text/plain; charset=utf-8"
    },
-   "body": "{\"detail\":\"服务器内部错误\"}"
+   "body": ""
   },
   "propfind.deleted": {
    "method": "PROPFIND",
    "path": "/dav/dav-test",
-   "status": 207,
+   "status": 404,
    "headers": {
-    "content-type": "application/xml; charset=\"utf-8\"",
-    "content-length": "426"
+    "content-type": "application/json; charset=utf-8",
+    "content-length": "28"
    },
-   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/</D:href><D:propstat><D:prop><D:displayname>dav-test</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>"
+   "body": "{\"detail\":\"资源不存在\"}"
   }
  }
 }

@@ -30,16 +30,16 @@ use java "java.util.TimeZone"
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, text, raw, binary, redirect, with_header, header, param_segs}
 use web/router.{Route, route_method_of, tagged}
 use db/db.{with_db}
-use svc/auth.{Auth, Qiniu, check_basic}
-use svc/files.{signed_url, gc_superseded, delete_object_of, copy_tree_objects}
-use repo/repo_fm.{FileRow, get_row, children, subtree_rows, insert_file_strict, insert_folder_strict, delete_row, reparent_strict, validate_webdav_ancestors, validate_webdav_subtree_destination, prepare_webdav_copy, commit_webdav_copy}
+use svc/auth.{Auth, check_basic}
+use svc/files.{signed_url, gc_unreferenced, gc_rows_unreferenced, gc_copy_tree_unreferenced, copy_tree_objects}
+use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}
 use util/paths.{basename, parent_rel, ext, ts, guess_mime}
 use qiniu/rs.{upload_file}
 use java "java.io.File"
 use util/crypto.{sha256_hex, uuid, uuid_hex}
 use util/http.{fetch_stream, ok_stream, stream_response, close_stream}
 use util/ttl.{TtlCell, cache_get, cache_put, now_s}
-use util/errkind.{KConflict, KUpstream, as_upstream, split_kind}
+use util/errkind.{KConflict, KPrecondition, KUpstream, precondition, split_kind}
 use svc/export.{url_encode}
 
 const AUTH_TTL: Int = 300
@@ -365,9 +365,20 @@ fn conflict_or(other: Int) -> fn(String) -> HttpError =
     let (k, t) = split_kind(msg)
     match k {
       KConflict -> http_error(409, t)
+      KPrecondition -> http_error(412, t)
       _ -> http_error(other, t)
     }
   }
+
+fn mutation_error(msg: String) -> HttpError = {
+  let (k, t) = split_kind(msg)
+  match k {
+    KConflict -> http_error(409, t)
+    KPrecondition -> http_error(412, t)
+    KUpstream -> http_error(502, t)
+    _ -> http_error(500, t)
+  }
+}
 
 # ---- PUT ----
 
@@ -380,13 +391,27 @@ fn put(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io =
   if rel == "" {
     Err(http_error(405, "不能写入根"))
   } else {
-    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
-      Some(o) -> if o.is_dir { Err(http_error(405, "目标是目录")) } else { put_do(a, req, rel, Some(o)) }
-      None -> put_do(a, req, rel, None)
+    match as_http_with(with_db(a.db.path, a.db.ext, c => put_preflight(c, rel)), conflict_or(500))? {
+      Some(o) -> if o.is_dir { Err(http_error(405, "目标是目录")) } else { put_do(a, req, rel) }
+      None -> put_do(a, req, rel)
     }
   }
 
-fn put_do(a: Auth, req: Request, rel: String, existing: Option[FileRow]) -> Result[Response, HttpError] !io =
+fn put_preflight(c: DbConn, rel: String) -> Result[Option[FileRow], String] !io =
+  match get_row(c, rel)? {
+    Some(o) -> if o.is_dir {
+      Ok(Some(o))
+    } else {
+      let _t = validate_fm_file_target(c, rel)?
+      Ok(Some(o))
+    }
+    None -> {
+      let _t = validate_fm_file_target(c, rel)?
+      Ok(None)
+    }
+  }
+
+fn put_do(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io =
   {
     let ok = as_http(parent_exists(a, rel), 500)?
     if not ok {
@@ -401,23 +426,27 @@ fn put_do(a: Auth, req: Request, rel: String, existing: Option[FileRow]) -> Resu
         None -> Err(http_error(500, "请求体未落盘"))
         Some(path) -> {
           let size = as_http(file_size(path), 500)?
-          let _u = as_http(upload_file(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, path, mime, now_s() + a.qiniu.expires), 502)?
-          put_commit(a, rel, key, mime, size, existing)
+          match upload_file(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, path, mime, now_s() + a.qiniu.expires) {
+            Ok(_) -> put_commit(a, rel, key, mime, size)
+            Err(m) -> {
+              let _gc = gc_unreferenced(a, Some(key))
+              Err(http_error(502, m))
+            }
+          }
         }
       }
     }
   }
 
-fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int, existing: Option[FileRow]) -> Result[Response, HttpError] !io =
-  {
-    # The upload and SQLite cannot share a transaction. The strict final write
-    # prevents invalid metadata after a race, but a rejected race can leave the
-    # freshly uploaded object for later garbage collection.
-    let _i = as_http_with(with_db(a.db.path, a.db.ext, c => insert_file_strict(c, rel, key, mime, size)), conflict_or(500))?
-    let _d = gc_superseded(a.qiniu, existing, key)
-    match existing {
-      Some(_) -> Ok(text(204, ""))
-      None -> Ok(text(201, ""))
+fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int) -> Result[Response, HttpError] !io =
+  match with_db(a.db.path, a.db.ext, c => replace_file_strict(c, rel, key, mime, size)) {
+    Ok(outcome) -> {
+      let _gc = gc_unreferenced(a, outcome.superseded_key)
+      Ok(text(if outcome.target_existed { 204 } else { 201 }, ""))
+    }
+    Err(m) -> {
+      let _gc = gc_unreferenced(a, Some(key))
+      Err(mutation_error(m))
     }
   }
 
@@ -427,31 +456,13 @@ fn del(a: Auth, rel: String) -> Result[Response, HttpError] !io =
   if rel == "" {
     Err(http_error(405, "不能删除根"))
   } else {
-    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
-      None -> Err(http_error(404, "资源不存在"))
-      Some(_) -> purge(a, rel)
+    let rows = as_http(with_db(a.db.path, a.db.ext, c => delete_subtree(c, rel)), 500)?
+    if len(rows) == 0 {
+      Err(http_error(404, "资源不存在"))
+    } else {
+      let _gc = gc_rows_unreferenced(a, rows)
+      Ok(text(204, ""))
     }
-  }
-
-fn purge(a: Auth, rel: String) -> Result[Response, HttpError] !io =
-  {
-    let rows = as_http(with_db(a.db.path, a.db.ext, c => subtree_rows(c, rel)), 500)?
-    let _q = del_qiniu(a.qiniu, rows, 0)
-    let _d = as_http(with_db(a.db.path, a.db.ext, c => del_rows(c, rows, 0)), 500)?
-    Ok(text(204, ""))
-  }
-
-fn del_qiniu(q: Qiniu, rows: List[FileRow], i: Int) -> Int !io =
-  if i >= len(rows) { 0 } else {
-    let o = rows[i]
-    let _r: Result[Unit, String] = delete_object_of(q, o)
-    del_qiniu(q, rows, i + 1)
-  }
-
-fn del_rows(c: DbConn, rows: List[FileRow], i: Int) -> Result[Int, String] !io =
-  if i >= len(rows) { Ok(0) } else {
-    let _d = delete_row(c, rows[i].path)?
-    del_rows(c, rows, i + 1)
   }
 
 # ---- MKCOL ----
@@ -719,10 +730,26 @@ fn pct_decode_seg(s: String) -> Result[String, HttpError] !io =
     Err(http_error(400, "Destination 包含非法 UTF-8"))
   } else {
     match catch_text(() => URLDecoder.decode(join(str.split(s, "+"), "%2B"), "UTF-8")!) {
-      Ok(decoded) -> Ok(decoded)
+      Ok(decoded) ->
+        if xml10_text_allowed(decoded) {
+          Ok(decoded)
+        } else {
+          Err(http_error(400, "Destination 包含 XML 1.0 禁止字符"))
+        }
       Err(_) -> Err(http_error(400, "非法目标"))
     }
   }
+
+fn xml10_text_allowed(s: String) -> Bool =
+  fold(code_points(s), true, (acc, c) => acc && xml10_char_allowed(c))
+
+fn xml10_char_allowed(c: Char) -> Bool = {
+  let n = char.code(c)
+  n == 9 || n == 10 || n == 13 ||
+    (n >= 32 && n <= 55295) ||
+    (n >= 57344 && n <= 65533) ||
+    (n >= 65536 && n <= 1114111)
+}
 
 fn decode_destination_segments(segs: List[String], i: Int, acc: List[String]) -> Result[List[String], HttpError] !io =
   if i >= len(segs) {
@@ -751,15 +778,70 @@ fn dest_rel(req: Request) -> Result[Option[String], HttpError] !io =
     }
   }
 
+# MOVE and COPY do not define request-body semantics. Ignoring an extension body
+# while mutating the tree makes a request appear accepted when part of it was
+# discarded, so fail closed before any write.
+fn reject_move_copy_body(req: Request) -> Result[Unit, HttpError] =
+  if bytes.len(req.raw) == 0 {
+    Ok(())
+  } else {
+    Err(http_error(415, "MOVE/COPY 不支持请求体"))
+  }
+
+fn require_move_depth(req: Request) -> Result[Unit, HttpError] =
+  match header(req, "depth") {
+    None -> Ok(())
+    Some(raw) ->
+      if str.to_lower(raw) == "infinity" {
+        Ok(())
+      } else {
+        Err(http_error(400, "MOVE Depth 只支持 infinity"))
+      }
+  }
+
+fn require_copy_depth(req: Request, source_is_dir: Bool) -> Result[Unit, HttpError] =
+  match header(req, "depth") {
+    None -> Ok(())
+    Some(raw) -> {
+      let depth = str.to_lower(raw)
+      if depth == "infinity" || (depth == "0" && not source_is_dir) {
+        Ok(())
+      } else if depth == "0" {
+        Err(http_error(501, "暂不支持集合的 Depth: 0 COPY"))
+      } else {
+        Err(http_error(400, "COPY Depth 只支持 0 或 infinity"))
+      }
+    }
+  }
+
+fn overwrite_requested(req: Request) -> Result[Bool, HttpError] =
+  match header(req, "overwrite") {
+    None -> Ok(true)
+    Some(raw) ->
+      match str.to_upper(raw) {
+        "T" -> Ok(true)
+        "F" -> Ok(false)
+        _ -> Err(http_error(400, "Overwrite 只支持 T 或 F"))
+      }
+  }
+
+fn validate_move_copy_request(req: Request, is_move: Bool, source_is_dir: Bool) -> Result[Bool, HttpError] = {
+  let _body = reject_move_copy_body(req)?
+  let _depth = if is_move { require_move_depth(req)? } else { require_copy_depth(req, source_is_dir)? }
+  overwrite_requested(req)
+}
+
 # FastAPI checks the source exists (404) BEFORE parsing Destination (400) or the
-# self/subdir guard (409); reproduce that ordering here.
+# self/subdir guard (409); preserve source ordering while validating every
+# write-affecting header before Destination resolution and any external effect.
 fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Response, HttpError] !io =
   if rel == "" {
     Err(http_error(405, "不能操作根"))
   } else {
     match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
       None -> Err(http_error(404, "源不存在"))
-      Some(_) ->
+      Some(source) -> {
+        let overwrite = validate_move_copy_request(req, is_move, source.is_dir)?
         match dest_rel(req)? {
           None -> Err(http_error(400, "缺少 Destination"))
           Some(dst) ->
@@ -768,19 +850,19 @@ fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Res
             } else if dst == rel || str.starts_with(dst, rel ++ "/") {
               Err(http_error(409, "不能移动/复制到自身或子目录"))
             } else {
-              mc_check_dst(a, req, rel, dst, is_move)
+              mc_check_dst(a, rel, dst, is_move, overwrite)
             }
         }
+      }
     }
   }
 
 fn destination_is_source_ancestor(rel: String, dst: String) -> Bool =
   str.starts_with(rel, dst ++ "/")
 
-fn mc_check_dst(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) -> Result[Response, HttpError] !io =
+fn mc_check_dst(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !io =
   {
     let dst_existing = as_http(with_db(a.db.path, a.db.ext, c => get_row(c, dst)), 500)?
-    let overwrite = str.to_upper(header_or(req, "overwrite", "T")) != "F"
     match dst_existing {
       Some(_) ->
         if not overwrite {
@@ -789,71 +871,65 @@ fn mc_check_dst(a: Auth, req: Request, rel: String, dst: String, is_move: Bool) 
           Err(http_error(409, "不能移动/复制到自身或祖先目录"))
         } else {
           let _v = as_http_with(with_db(a.db.path, a.db.ext, c => validate_webdav_subtree_destination(c, rel, dst)), conflict_or(500))?
-          mc_require_parent(a, rel, dst, is_move, true)
+          let _c = mc_validate_copy_source(a, rel, is_move)?
+          mc_require_parent(a, rel, dst, is_move, overwrite)
         }
       None -> if destination_is_source_ancestor(rel, dst) {
         Err(http_error(409, "不能移动/复制到自身或祖先目录"))
       } else {
         let _v = as_http_with(with_db(a.db.path, a.db.ext, c => validate_webdav_subtree_destination(c, rel, dst)), conflict_or(500))?
-        mc_require_parent(a, rel, dst, is_move, false)
+        let _e = as_http_with(with_db(a.db.path, a.db.ext, c => validate_webdav_destination_preflight(c, dst, overwrite)), conflict_or(500))?
+        let _c = mc_validate_copy_source(a, rel, is_move)?
+        mc_require_parent(a, rel, dst, is_move, overwrite)
       }
     }
   }
 
-fn mc_purge_then(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =
-  {
-    let _p = as_http(purge_silent(a, dst), 500)?
-    mc_apply(a, rel, dst, is_move, dst_existed)
+fn mc_validate_copy_source(a: Auth, rel: String, is_move: Bool) -> Result[Unit, HttpError] !io =
+  if is_move {
+    Ok(())
+  } else {
+    as_http_with(with_db(a.db.path, a.db.ext, c => validate_copy_source_objects(c, rel)), conflict_or(500))
   }
 
-# delete the dst subtree (rows + qiniu) without producing a Response
-fn purge_silent(a: Auth, rel: String) -> Result[Int, String] !io =
-  match with_db(a.db.path, a.db.ext, c => subtree_rows(c, rel))? {
-    rows -> {
-      let _q = del_qiniu(a.qiniu, rows, 0)
-      with_db(a.db.path, a.db.ext, c => del_rows(c, rows, 0))
-    }
-  }
-
-fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io =
+fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !io =
   {
     let ok = as_http(parent_exists(a, dst), 500)?
     if not ok {
       Err(http_error(409, "父目录不存在"))
-    } else if dst_existed {
-      mc_purge_then(a, rel, dst, is_move, true)
     } else {
-      mc_apply(a, rel, dst, is_move, false)
+      mc_apply(a, rel, dst, is_move, overwrite)
     }
   }
 
-fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, dst_existed: Bool) -> Result[Response, HttpError] !io = {
-  let outcome: Result[Int, String] =
+fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !io = {
+  let result: Result[SubtreeWriteOutcome, String] =
     if is_move {
-      with_db(a.db.path, a.db.ext, c => reparent_strict(c, rel, dst))
+      with_db(a.db.path, a.db.ext, c => commit_webdav_move(c, rel, dst, overwrite))
     } else {
-      copy_subtree(a, rel, dst)
+      copy_subtree(a, rel, dst, overwrite)
     }
-  match outcome {
-    Err(m) -> {
-      # an object-store refusal is a 502 (the FastAPI reference raises 502 around
-      # qiniu_client.copy); a database failure stays a 500
-      let (k, t) = split_kind(m)
-      match k {
-        KConflict -> Err(http_error(409, t))
-        KUpstream -> Err(http_error(502, t))
-        _ -> Err(http_error(500, t))
-      }
+  match result {
+    Err(m) -> Err(mutation_error(m))
+    Ok(outcome) -> {
+      let status = if outcome.destination_existed { 204 } else { 201 }
+      let _gc = gc_rows_unreferenced(a, outcome.replaced_rows)
+      Ok(text(status, ""))
     }
-    Ok(_) -> if dst_existed { Ok(text(204, "")) } else { Ok(text(201, "")) }
   }
 }
 
 # COPY: recreate dirs, and for each file copy the qiniu object to a fresh key.
-fn copy_subtree(a: Auth, rel: String, dst: String) -> Result[Int, String] !io = {
-  let planned = with_db(a.db.path, a.db.ext, c => prepare_webdav_copy(c, rel, dst))?
-  let copied = as_upstream(copy_tree_objects(a.qiniu, planned))?
-  with_db(a.db.path, a.db.ext, c => commit_webdav_copy(c, copied))
+fn copy_subtree(a: Auth, rel: String, dst: String, overwrite: Bool) -> Result[SubtreeWriteOutcome, String] !io = {
+  let planned = with_db(a.db.path, a.db.ext, c => prepare_webdav_copy(c, rel, dst, overwrite))?
+  let copied = copy_tree_objects(a.qiniu, planned)?
+  match with_db(a.db.path, a.db.ext, c => commit_webdav_copy(c, copied, overwrite)) {
+    Ok(outcome) -> Ok(outcome)
+    Err(m) -> {
+      let _gc = gc_copy_tree_unreferenced(a, copied)
+      Err(m)
+    }
+  }
 }
 
 # ---- LOCK (fake) / UNLOCK ----
@@ -1018,9 +1094,36 @@ fn dest_req_at(dest: String, host: String, prefix: String) -> Request =
 
 fn dest_req(dest: String) -> Request = dest_req_at(dest, "dav.example", "/dav")
 
+fn protocol_req(method: String, header_name: String, header_value: String, body: String) -> Request =
+  Request {
+    method: method, path: "/dav/source", raw_path: "/dav/source",
+    params: map.from([("rest", ["source"])]),
+    query: map.empty(),
+    headers: if header_name == "" { map.empty() } else { map.from([(header_name, [header_value])]) },
+    body: body, raw: bytes.utf8(body), body_file: None, route: None,
+  }
+
 fn dest_error(r: Result[Option[String], HttpError], message: String) -> Bool =
   match r {
     Err(e) -> e.status == 400 && e.message == message
+    Ok(_) -> false
+  }
+
+fn unit_error_status(r: Result[Unit, HttpError], status: Int) -> Bool =
+  match r {
+    Err(e) -> e.status == status
+    Ok(_) -> false
+  }
+
+fn unit_ok(r: Result[Unit, HttpError]) -> Bool =
+  match r {
+    Ok(_) -> true
+    Err(_) -> false
+  }
+
+fn bool_error_status(r: Result[Bool, HttpError], status: Int) -> Bool =
+  match r {
+    Err(e) -> e.status == status
     Ok(_) -> false
   }
 
@@ -1141,6 +1244,58 @@ test "dest_rel rejects invalid percent UTF-8 without aliasing" {
   assert dest_rel(dest_req("/dav/%EF%BF%BD")) == Ok(Some("�"))
   assert dest_rel(dest_req("/dav/%E5%9B%BE%E7%89%87")) == Ok(Some("图片"))
   assert dest_rel(dest_req("/dav/a+b%3F%23")) == Ok(Some("a+b?#"))
+}
+
+test "dest_rel rejects XML-forbidden decoded characters" {
+  let invalid = "Destination 包含 XML 1.0 禁止字符"
+  assert dest_error(dest_rel(dest_req("/dav/nul%00name")), invalid)
+  assert dest_error(dest_rel(dest_req("/dav/control%01name")), invalid)
+  assert dest_error(dest_rel(dest_req("/dav/control%0Bname")), invalid)
+  assert dest_error(dest_rel(dest_req("/dav/nonchar%EF%BF%BE")), invalid)
+  assert dest_rel(dest_req("/dav/tab%09line%0Areturn%0D")) == Ok(Some("tab\tline\nreturn\r"))
+}
+
+test "MOVE and COPY reject invalid Overwrite tokens" {
+  assert overwrite_requested(protocol_req("MOVE", "", "", "")) == Ok(true)
+  assert overwrite_requested(protocol_req("MOVE", "overwrite", "T", "")) == Ok(true)
+  assert overwrite_requested(protocol_req("COPY", "overwrite", "t", "")) == Ok(true)
+  assert overwrite_requested(protocol_req("MOVE", "overwrite", "F", "")) == Ok(false)
+  assert overwrite_requested(protocol_req("COPY", "overwrite", "f", "")) == Ok(false)
+  assert bool_error_status(overwrite_requested(protocol_req("COPY", "overwrite", "true", "")), 400)
+  assert bool_error_status(overwrite_requested(protocol_req("MOVE", "overwrite", "garbage", "")), 400)
+}
+
+test "WebDAV precondition errors map to 412 at preflight and final edges" {
+  let preflight = conflict_or(500)
+  assert preflight(precondition("目标已出现")).status == 412
+  assert mutation_error(precondition("目标已出现")).status == 412
+}
+
+test "MOVE Depth only accepts infinity" {
+  assert unit_ok(require_move_depth(protocol_req("MOVE", "", "", "")))
+  assert unit_ok(require_move_depth(protocol_req("MOVE", "depth", "infinity", "")))
+  assert unit_ok(require_move_depth(protocol_req("MOVE", "depth", "INFINITY", "")))
+  assert unit_error_status(require_move_depth(protocol_req("MOVE", "depth", "0", "")), 400)
+  assert unit_error_status(require_move_depth(protocol_req("MOVE", "depth", "1", "")), 400)
+}
+
+test "COPY Depth accepts file zero and rejects invalid values" {
+  assert unit_ok(require_copy_depth(protocol_req("COPY", "", "", ""), false))
+  assert unit_ok(require_copy_depth(protocol_req("COPY", "depth", "infinity", ""), true))
+  assert unit_ok(require_copy_depth(protocol_req("COPY", "depth", "INFINITY", ""), true))
+  assert unit_ok(require_copy_depth(protocol_req("COPY", "depth", "0", ""), false))
+  assert unit_error_status(require_copy_depth(protocol_req("COPY", "depth", "1", ""), false), 400)
+  assert unit_error_status(require_copy_depth(protocol_req("COPY", "depth", "garbage", ""), true), 400)
+}
+
+test "COPY collection Depth zero fails closed" {
+  assert unit_error_status(require_copy_depth(protocol_req("COPY", "depth", "0", ""), true), 501)
+}
+
+test "MOVE and COPY reject non-empty raw bodies" {
+  assert unit_ok(reject_move_copy_body(protocol_req("MOVE", "", "", "")))
+  assert unit_error_status(reject_move_copy_body(protocol_req("MOVE", "", "", "extension-body")), 415)
+  assert unit_error_status(reject_move_copy_body(protocol_req("COPY", "", "", "<extension/>")), 415)
 }
 
 fn is_dot_segment_error(r: Result[Option[String], HttpError]) -> Bool =
