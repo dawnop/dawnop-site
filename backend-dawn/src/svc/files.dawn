@@ -20,7 +20,7 @@ use db/sql.{DbConn, with_immediate_tx}
 use svc/auth.{Auth, Qiniu}
 use db/db.{with_db}
 use util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime, safe_persisted_mime, strip_slashes, strip_trailing_slash}
-use repo/repo_fm.{FileRow, ReplaceOutcome, MovePlan, CopiedRow, CopyTree, fs_data, taken, insert_folder, replace_file, create_file_once, reparent_allow_missing, prepare_fm_move, commit_fm_moves, get_row, delete_subtrees, entry_json, key_referenced, key_pending, validate_fm_ancestors, validate_fm_file_target, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}
+use repo/repo_fm.{FileRow, ReplaceOutcome, MovePlan, CopiedRow, CopyTree, fs_data, taken, insert_folder, replace_file, replace_file_receipt, create_file_once, reparent_allow_missing, prepare_fm_move, commit_fm_moves, get_row, delete_subtrees, entry_json, key_referenced, key_pending, validate_fm_ancestors, validate_fm_file_target, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}
 use util/crypto.{uuid_hex}
 use qiniu/sign.{private_url}
 use qiniu/rs.{delete_obj, copy_obj, upload_text, upload_bytes}
@@ -473,12 +473,13 @@ fn validate_effect_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
 # Proxy uploads always use a fresh key.
 fn upload_key() -> String !io = uuid_hex()
 
+# The receipt is the row this upload wrote, so it is read inside the transaction
+# that wrote it (repo_fm.replace_file_receipt) rather than by a get_row after the
+# commit, which is what /register has always done.
 fn replace_upload(c: DbConn, rel: String, key: String, mime: String, size: Int) -> Result[(Json, ReplaceOutcome), String] !io = {
-  let outcome = replace_file(c, rel, key, mime, size)?
-  match get_row(c, rel)? {
-    Some(o) -> Ok((entry_json(o), outcome))
-    None -> Err("uploaded file vanished")
-  }
+  let written = replace_file_receipt(c, rel, key, mime, size)?
+  let (row, outcome) = written
+  Ok((entry_json(row), outcome))
 }
 
 # ---- upload-token path shaping ----
