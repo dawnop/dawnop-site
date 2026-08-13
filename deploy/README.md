@@ -3,8 +3,10 @@
 线上形态（M6 之后）：Nginx 托管前端静态产物，把 `/api` 反代到 **Dawn 后端
 `127.0.0.1:8001`**（systemd `dawnop-dawn`）；`dav.dawnop.com` 是独立 vhost，同样反代到 Dawn。
 FastAPI/uvicorn（`:8000`，systemd `dawnop-backend`）**已 `systemctl disable`**，但代码、venv、
-`.env` 与 libsimple 都还在原地——它是紧急回滚目标，见
-[`../backend-dawn/deploy/rollback-to-fastapi.sh`](../backend-dawn/deploy/rollback-to-fastapi.sh)。
+`.env` 与 libsimple 都还在原地——它是紧急回滚目标，见下面的
+[「四、回滚安全链」](#四回滚安全链)（脚本是
+[`rollback-to-fastapi.sh`](../backend-dawn/deploy/rollback-to-fastapi.sh) 与
+[`return-to-dawn.sh`](../backend-dawn/deploy/return-to-dawn.sh)）。
 
 > ## ⚠️ nginx 配置不在这个仓库
 >
@@ -71,10 +73,12 @@ rsync -az --delete frontend/dist/ <user>@<server>:/var/www/dawnop/dist/
 
 **紧急回滚到 FastAPI**：
 ```bash
-ssh <user>@<server> 'sudo bash /opt/dawnop-dawn/rollback-to-fastapi.sh'
+ssh <user>@<server> 'sudo bash /opt/dawnop-dawn/rollback-to-fastapi.sh'   # 切到 FastAPI :8000
+ssh <user>@<server> 'sudo bash /opt/dawnop-dawn/return-to-dawn.sh'        # 切回 Dawn :8001
 ```
-把 uvicorn 拉起来、nginx 的 `/api` 与 dav 指回 `:8000`。Dawn 服务不动，切回去就是反操作。
 两套共用同一个 SQLite 文件（WAL），**没有数据迁移要撤**——切流与回滚都是纯路由变更。
+细节见下面「四、回滚安全链」，**第一次用之前先把那一节的两个前置条件配好**，否则回滚脚本
+会在核验那一步停下来（它宁可不切，也不切到一个说不清的进程上）。
 
 ---
 
@@ -212,3 +216,68 @@ HTTPS 与证书（含 `storage.` / `cdn.` / `dav.` 子域名的通配符证书�
   真来源。它依赖 dav vhost 的 `dawnop_dav` 日志格式（尾巴的 `auth=` 标记），
   **改/关 nginx 那个日志格式会静默停用它**。重装/验证/把自己封了怎么解，见
   [`fail2ban/README.md`](./fail2ban/README.md)。
+
+---
+
+## 四、回滚安全链
+
+回滚是全仓最少被执行的代码：着火之前没有任何东西会跑它。所以这条链上的每一步都拒绝
+「看起来对」——它要么拿到可核对的证据，要么停下来不切流。
+
+两个脚本，互为反操作，都以 root 跑：
+
+| 脚本 | 做什么 |
+|---|---|
+| `backend-dawn/deploy/rollback-to-fastapi.sh` | Dawn :8001 → FastAPI :8000 |
+| `backend-dawn/deploy/return-to-dawn.sh` | FastAPI :8000 → Dawn :8001 |
+
+### 前置条件（配一次，回滚当天没时间配）
+
+1. **探针秘密**，两处内容必须一致：
+   ```bash
+   secret=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+   printf '%s' "$secret" | sudo install -m 600 /dev/stdin /opt/dawnop/backend/.rollback-probe
+   echo "ROLLBACK_PROBE_HEADER=$secret" | sudo tee -a /opt/dawnop/backend/.env
+   ```
+   脚本从 `.rollback-probe` 读，FastAPI 从 `.env` 读。**不一致 = 探针回 404**，回滚会在
+   核验那一步停下。留空则探针整体关闭（任何请求都 404，不泄露它存在）。
+2. **`DATABASE_URL` 是绝对路径**（见「二、1」那条警告）。这正是核验要抓的东西。
+
+### 回滚脚本按什么顺序做事
+
+1. 放哨兵 `/etc/dawnop/fastapi-file-routes-disabled`，**然后**才 `systemctl restart`。
+   守卫是进程级闩存，起来之后才放的哨兵这一代进程看不见；用 `restart` 而不是
+   `enable --now`，是为了保证读到哨兵的一定是新进程。受守护 = `/api/fm` 关闭（回 503）。
+2. 拉起 uvicorn，等 `:8000/api/health`。
+3. **核验（在动 nginx 之前）**：单元 cgroup / argv / cwd / 有效 UID:GID、
+   `/proc/$PID/exe` 是不是钉住的解释器、单元定义与进程环境里都没有 `LD_*` / `PYTHON*`、
+   库身份对得上、`/api/fm` 确实是 503。
+   > 顺序不是随便排的。`systemctl show -p Environment` 看不见 `EnvironmentFile=` 指向的
+   > `.env` 的内容——补上这个盲区的只有 `/proc/$PID/environ`，而它要求进程已经在跑。
+   > 「进程起来了、流量还没切过去」是唯一能既看得见真实进程环境、又还来得及不切流的窗口。
+4. 改 nginx（备份 → 逐条核对待替换的字符串 → `sed -i` → `nginx -t` → reload）。
+5. 切流后复验公网。
+
+回切脚本是同一套纪律的镜像：动 nginx 之前先核验 Dawn 运行时并跑完整探活（不是 curl 一个
+`/health` 就算数——`/api/health` 不碰库、不碰七牛、不碰鉴权，它绿着的时候后端可以坏到任何
+程度），reload **之后再核验一遍**，任何一步不过就还原 nginx、留在 FastAPI 上，并且
+**重新完整核验一遍 FastAPI**（这条链里没有任何「刚才验过了」的缓存结论）。
+
+### 手工核对库身份
+
+脚本比的就是这两个值，你可以自己敲：
+
+```bash
+# 库文件的指纹
+printf '%s' "$(stat -Lc '%d:%i' -- /opt/dawnop/data/dawnop.db)" | sha256sum
+# 进程闩住的指纹（回滚期间 FastAPI 在跑时）
+curl -s -H "X-Rollback-Probe: $(cat /opt/dawnop/backend/.rollback-probe)" \
+  http://127.0.0.1:8000/api/rollback/db-identity
+```
+两者必须相等。不等 = FastAPI 连的不是生产库（最常见原因还是 `.env` 里的相对
+`DATABASE_URL`）。`$(...)` 那层不能省：直接 `stat ... | sha256sum` 会把尾换行一起算进去。
+
+配方（`sha256("<st_dev>:<st_ino>")`）的唯一定义点在
+`backend/app/core/db_identity.py`，`backend/tests/test_rollback_chain.py` 拿真文件把它和
+脚本里的那个函数钉在一起——否则这一节的命令随时可能变成假的。
+`backend/scripts/rollback_chain_mutants.py` 是这些断言的负控（会临时改生产文件，不进 CI）。

@@ -34,6 +34,7 @@ ROLLBACK_API = BACKEND / "app" / "api" / "rollback.py"
 MAIN = BACKEND / "app" / "main.py"
 ROLLBACK_SH = REPO / "backend-dawn" / "deploy" / "rollback-to-fastapi.sh"
 RETURN_SH = REPO / "backend-dawn" / "deploy" / "return-to-dawn.sh"
+DEPLOY_README = REPO / "deploy" / "README.md"
 
 
 def sub(old: str, new: str) -> Callable[[str], str]:
@@ -83,13 +84,32 @@ BOTH_SCRIPTS = [ROLLBACK_SH, RETURN_SH]
 
 MUTANTS: list[tuple[str, str, list[Path], Callable[[str], str], set[str]]] = [
     (
+        "readme-command-drift",
+        "运维手册的核对命令与代码配方漂开（%d:%i 写反）",
+        [DEPLOY_README],
+        sub("stat -Lc '%d:%i'", "stat -Lc '%i:%d'"),
+        {"test_deploy_readme_verification_command_actually_works"},
+    ),
+    (
+        "readme-drops-the-printf-wrapper",
+        "手册漏掉 $(...) 那层，尾换行被算进 sha256",
+        [DEPLOY_README],
+        sub(
+            "printf '%s' \"$(stat -Lc '%d:%i' -- /opt/dawnop/data/dawnop.db)\" | sha256sum",
+            "stat -Lc '%d:%i' -- /opt/dawnop/data/dawnop.db | sha256sum",
+        ),
+        {"test_deploy_readme_verification_command_actually_works"},
+    ),
+    (
         "fingerprint-recipe",
         "指纹配方把 dev:ino 换成 ino:dev（与 stat -Lc '%d:%i' 不再一致）",
         [DB_IDENTITY],
         sub('f"{st.st_dev}:{st.st_ino}"', 'f"{st.st_ino}:{st.st_dev}"'),
+        # 配方是三处的共同真相：Python、脚本里的函数、手册里的命令。动一处，三处一起红。
         {
             "test_fingerprint_matches_stat_and_sha256sum",
             "test_fingerprint_recipe_is_dev_colon_ino",
+            "test_deploy_readme_verification_command_actually_works",
         },
     ),
     (

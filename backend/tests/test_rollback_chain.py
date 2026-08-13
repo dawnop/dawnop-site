@@ -170,6 +170,34 @@ def test_fingerprint_matches_stat_and_sha256sum(tmp_path, block_file):
     assert fingerprint_of_path(str(target)) == from_shell
 
 
+def test_deploy_readme_verification_command_actually_works(tmp_path):
+    """运维手册里那行核对命令**照抄下来跑**，结果必须等于进程会闩住的指纹。
+
+    这一节只在生产着火时被第一次执行。一条抄错了的命令在那一刻的表现是「库身份对不上」，
+    而人会去查库，不会去怀疑手册。所以这里把 README 的那一行原样抠出来跑一遍。
+    """
+    readme = read(REPO / "deploy" / "README.md")
+    m = re.search(
+        r"^printf '%s' \"\$\(stat -Lc '%d:%i' -- (\S+)\)\" \| sha256sum$", readme, re.M
+    )
+    assert m, "deploy/README.md 里那条核对命令的形状变了"
+
+    target = tmp_path / "dawnop.db"
+    target.write_bytes(b"x")
+    command = m.group(0).replace(m.group(1), shlex.quote(str(target)))
+    out = subprocess.run(
+        ["bash", "-c", command], capture_output=True, text=True, check=True
+    )
+
+    assert out.stdout.split()[0] == fingerprint_of_path(str(target))
+
+
+def test_deploy_readme_documents_the_probe_header_name():
+    readme = read(REPO / "deploy" / "README.md")
+    assert rollback_api.PROBE_HEADER_NAME in readme
+    assert "/api/rollback/db-identity" in readme
+
+
 def test_fingerprint_recipe_is_dev_colon_ino(tmp_path):
     target = tmp_path / "db"
     target.write_bytes(b"x")
