@@ -81,7 +81,10 @@ app.include_router(
 )
 app.include_router(monitor.router, prefix="/api/monitor", tags=["monitor"])
 app.include_router(pages.router, prefix="/api/pages", tags=["pages"])
-app.include_router(rollback.router, prefix="/api/rollback", include_in_schema=False)
+# 不在这里再写一遍 include_in_schema=False：两处写同一件事，任何一处被改掉，另一处都会
+# 把它盖住，于是「探针不该出现在文档里」这条就没有任何一个变异体能推翻它。唯一的开关在
+# app/api/rollback.py 的路由装饰器上。
+app.include_router(rollback.router, prefix="/api/rollback")
 app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
 app.include_router(tags.router, prefix="/api/tags", tags=["tags"])

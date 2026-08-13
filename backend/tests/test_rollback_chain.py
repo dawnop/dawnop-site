@@ -87,6 +87,20 @@ def line_index(text: str, needle: str) -> int:
     raise AssertionError(f"脚本的代码行里找不到 {needle!r}")
 
 
+def top_level_line_index(text: str, pattern: str) -> int:
+    """顶格（第 0 列）的那一行——即脚本主干，不是某个函数体里的同名调用。
+
+    这条区分是必要的：return-to-dawn.sh 的 `systemctl reload nginx` 出现两次，
+    一次在 keep_fastapi_and_bail() 的还原路径里（缩进的，且在文件靠前），一次在
+    主干第 3 步。按「第一次出现」定位会锚到函数定义上，于是「reload 之后有没有复验」
+    这条判词会被第 2 步的调用蒙混过关——恒真。
+    """
+    for i, line in code_lines(text):
+        if re.match(pattern, line):
+            return i
+    raise AssertionError(f"脚本里没有顶格的 {pattern!r}")
+
+
 def python_code_only(path: Path) -> str:
     """把 .py 的注释与字符串（含文档字符串）剔掉，只留代码。
 
@@ -527,18 +541,18 @@ def test_keeping_fastapi_reruns_the_full_verification():
 
 def test_return_to_dawn_reverifies_after_reload():
     text = read(RETURN_SH)
-    reload_at = line_index(text, "systemctl reload nginx")
+    reload_at = top_level_line_index(text, r"systemctl reload nginx\s*$")
     after = [
         i
         for i, line in code_lines(text)
-        if i > reload_at and re.match(r"\s*verify_dawn_runtime\b", line)
+        if i > reload_at and re.match(r"verify_dawn_runtime\b", line)
     ]
     assert after, "reload 之后没有任何一次重新核验——切回去了不等于健康"
 
 
 def test_return_to_dawn_probes_public_surface_after_reload():
     text = read(RETURN_SH)
-    reload_at = line_index(text, "systemctl reload nginx")
+    reload_at = top_level_line_index(text, r"systemctl reload nginx\s*$")
     assert [
         i
         for i, line in code_lines(text)
@@ -631,8 +645,16 @@ def test_fastapi_constants_live_only_in_the_shared_block():
 
 
 def test_both_directions_verify_the_same_way():
+    """两个脚本都要**调用**共享的核验驱动，不是「块里有这个函数的定义」就算数。
+
+    定义在共享块里，两边永远都有——只看名字在不在，这条判词就是恒真的。
+    """
     for path in (ROLLBACK_SH, RETURN_SH):
-        assert "verify_guarded_fastapi_runtime" in read(path)
+        text = read(path)
+        outside = code_text(text.replace(shared_block(text), ""))
+        assert re.search(
+            r"^\s*verify_guarded_fastapi_runtime\s*(;|$)", outside, re.M
+        ), f"{path.name} 从没调用过 verify_guarded_fastapi_runtime"
 
 
 def test_unit_identity_check_covers_unit_argv_cwd_uid_gid():
@@ -662,11 +684,17 @@ def test_dawn_runtime_verification_reuses_the_shared_predicates():
 
 
 def test_pinned_interpreter_is_compared_through_proc_exe():
-    body = function_body(shared_block(read(ROLLBACK_SH)), "verify_pinned_interpreter")
-    assert "/proc/$pid/exe" in body
-    assert "resolve_path" in body, "两边都要 readlink -f 之后再比"
-    resolve = function_body(shared_block(read(ROLLBACK_SH)), "resolve_path")
-    assert "readlink -f" in resolve
+    """实测值必须**取自** /proc/$PID/exe，而不是只在报错信息里提一句它。"""
+    block = shared_block(read(ROLLBACK_SH))
+    body = function_body(block, "verify_pinned_interpreter")
+    assert re.search(
+        r'^\s*actual=\$\(resolve_path "/proc/\$pid/exe"\)\s*$', body, re.M
+    ), "actual 不是从 /proc/$pid/exe 取的"
+    assert re.search(
+        r'^\s*pinned=\$\(resolve_path "\$pinned_path"\)\s*$', body, re.M
+    ), "钉住的解释器没有解析后再比"
+    assert '[ "$actual" != "$pinned" ]' in body, "取到了却没比"
+    assert "readlink -f" in function_body(block, "resolve_path")
 
 
 @pytest.mark.parametrize(
