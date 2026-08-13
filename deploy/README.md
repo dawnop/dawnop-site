@@ -258,6 +258,41 @@ HTTPS 与证书（含 `storage.` / `cdn.` / `dav.` 子域名的通配符证书�
 4. 改 nginx（备份 → 逐条核对待替换的字符串 → `sed -i` → `nginx -t` → reload）。
 5. 切流后复验公网。
 
+### 被加载器环境检查挡住时（`ROLLBACK_ALLOW_ENV`）
+
+第 3 步那条「单元定义与进程环境里都没有 `LD_*` / `PYTHON*`」是**刻意宽的**：`PYTHONUNBUFFERED`、
+`PYTHONDONTWRITEBYTECODE` 这种不影响加载行为的变量也会被拦下来。宽是为了不用维护一张
+「哪些 `PYTHON*` 是安全的」的名单，那张名单会过期。
+
+**正常情况下你根本用不到这一节。** 实测：`deploy/dawnop-backend.service` 里没有任何
+`Environment=`（只有一个 `EnvironmentFile=/opt/dawnop/backend/.env`），`backend/.env.example`
+里也没有 `PYTHON*` / `LD_*`，`ExecStart` 直接调 venv 里的二进制、不做 `activate`。所以生产
+大概率不会触发它。但服务器上真实的 `.env` 在仓库里看不见，不能排除。
+
+真被挡住、且你**看过那个变量、确认它不影响加载行为**时，用逃生阀显式放行：
+
+```bash
+ssh <user>@<server> "sudo env ROLLBACK_ALLOW_ENV='PYTHONUNBUFFERED PYTHONDONTWRITEBYTECODE' bash -s" \
+  < backend-dawn/deploy/rollback-to-fastapi.sh
+```
+
+`sudo env ...` 这个写法不能省：`sudo` 默认 `env_reset`，`ROLLBACK_ALLOW_ENV=x sudo ...` 传不进去。
+
+规则：
+
+- 空格分隔的**完整变量名**列表。不是前缀，不是子串，也不是 glob——
+  `ROLLBACK_ALLOW_ENV="PYTHONUNBUFFERED"` 放不掉 `PYTHONPATH`。想放两个就写两个。
+- 没列上的变量照旧 fail closed，脚本停在核验那一步、不切流。
+- 每放行一个名字，脚本都会往日志里印一行 `[escape] ... 放行了加载器环境变量 <名字>`。
+  放行必须留痕，回滚记录里要能看出你当时接受了什么。
+- 不设它 = 今天的行为，一个字节不差。
+
+**它是应急出口，不是配置项**：别把它写进 systemd 单元、`.env` 或任何常驻的地方。这个阀存在的
+理由只有一个——宽匹配加 fail-closed 卡在应急通道上而又没有出口时，压力下的人会把整个检查
+注释掉，那才是真正的失效模式。逃生阀把「静默被挡」换成「有意识地接受并留痕」。放行的判断
+永远是人做的：`LD_PRELOAD` / `LD_LIBRARY_PATH` / `PYTHONPATH` / `PYTHONHOME` 出现在这个列表里，
+基本等于承认「我不知道这个进程在跑什么代码」，那时候该做的是去看那一行是谁加的，不是放行。
+
 回切脚本是同一套纪律的镜像：动 nginx 之前先核验 Dawn 运行时并跑完整探活（不是 curl 一个
 `/health` 就算数——`/api/health` 不碰库、不碰七牛、不碰鉴权，它绿着的时候后端可以坏到任何
 程度），reload **之后再核验一遍**，任何一步不过就还原 nginx、留在 FastAPI 上，并且

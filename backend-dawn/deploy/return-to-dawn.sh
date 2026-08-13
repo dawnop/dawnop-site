@@ -139,11 +139,47 @@ unit_main_pid() {
 # 从 NUL 或空格分隔的 KEY=VALUE 流里挑出第一个会改变加载行为的变量名。
 # PYTHONPATH / PYTHONHOME / LD_PRELOAD / LD_LIBRARY_PATH 这类变量能让一个字节不差的
 # 可执行文件加载完全不同的代码，所以「跑的是钉住的解释器」并不等于「跑的是钉住的代码」。
-# 前缀匹配是刻意宽的：把 PYTHONUNBUFFERED 这种无害的也拦下来，代价是回滚时多改一行
-# 单元文件，收益是不必维护一张「哪些 PYTHON* 是安全的」的名单——那张名单会过期。
+# 前缀匹配是刻意宽的：把 PYTHONUNBUFFERED 这种无害的也拦下来，代价是回滚时可能要显式
+# 放行一两个名字，收益是不必维护一张「哪些 PYTHON* 是安全的」的名单——那张名单会过期。
+#
+# ---- 逃生阀 ROLLBACK_ALLOW_ENV ----
+# 空格分隔的变量名列表，列进去的名字即使命中上面的前缀也放行。**这是应急出口，不是配置项**：
+# 正常回滚不该设它（这个单元没有任何 Environment=，只有一个 EnvironmentFile=，用法见
+# deploy/README.md）。它存在的理由只有一个——宽匹配 + fail-closed 卡在应急通道上而又没有
+# 出口时，压力下的人会把整个检查注释掉，那才是真正的失效模式。这个阀把「静默被挡」换成
+# 「有意识地接受并留痕」：每放行一个名字都往日志里印出那个名字。
+ROLLBACK_ALLOW_ENV="${ROLLBACK_ALLOW_ENV:-}"
+
+# 匹配的是**完整变量名相等**，不是前缀、不是子串、也不是 glob：
+# ROLLBACK_ALLOW_ENV="PYTHONUNBUFFERED" 放不掉 PYTHONPATH，也放不掉 PYTHONUNBUFFERED_EXTRA。
+loader_environment_is_allowed() {
+  local name=$1 entry
+  local -a allowed
+  read -r -a allowed <<< "$ROLLBACK_ALLOW_ENV"
+  for entry in "${allowed[@]}"; do
+    if [ "$entry" = "$name" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 loader_environment_offender() {
   # set2 只给一个 \n：tr 会用它补齐 set1 的长度，NUL 与空格都变成换行。
-  tr '\0 ' '\n' | awk -F= '$1 ~ /^(LD_|PYTHON)/ { print $1; exit }'
+  local names name
+  names=$(tr '\0 ' '\n' | awk -F= '$1 ~ /^(LD_|PYTHON)/ { print $1 }')
+  # awk 这里**不**能自己 exit。有了白名单之后，要找的是第一个「没被放行的」变量，
+  # 而不是第一个命中前缀的变量——第一个恰好被放行，不代表它后面那个也该放行。
+  # （顺带修掉一个潜在的坑：awk 提前 exit 会让 tr 吃 SIGPIPE，pipefail 下整条管道非 0。）
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    if loader_environment_is_allowed "$name"; then
+      echo "    [escape] ROLLBACK_ALLOW_ENV 放行了加载器环境变量 $name" >&2
+      continue
+    fi
+    printf '%s\n' "$name"
+    return 0
+  done <<< "$names"
 }
 
 verify_unit_loader_environment() {

@@ -138,13 +138,20 @@ def block_file(tmp_path):
 
 
 def run_block(block_file: Path, snippet: str, stdin: bytes = b"") -> str:
+    return run_block_full(block_file, snippet, stdin)[0]
+
+
+def run_block_full(
+    block_file: Path, snippet: str, stdin: bytes = b""
+) -> tuple[str, str]:
+    """(stdout, stderr)。逃生阀的回显走 stderr——它不能污染 stdout 上的判定结果。"""
     proc = subprocess.run(
         ["bash", "-c", f". {shlex.quote(str(block_file))}\n{snippet}"],
         input=stdin,
         capture_output=True,
     )
     assert proc.returncode == 0, proc.stderr.decode()
-    return proc.stdout.decode()
+    return proc.stdout.decode(), proc.stderr.decode()
 
 
 # --------------------------------------------------------------------------
@@ -741,6 +748,93 @@ def test_loader_environment_offender(block_file, env, expected):
     assert (
         run_block(block_file, "loader_environment_offender\n", env).strip() == expected
     )
+
+
+ESCAPE_SNIPPET = "ROLLBACK_ALLOW_ENV={}\nloader_environment_offender\n"
+
+
+@pytest.mark.parametrize(
+    ("allow", "env", "expected"),
+    [
+        # 放行的必须是**完整变量名**。前缀、子串、glob 一律不算数。
+        ("PYTHONPATH", b"PYTHONPATH=/tmp/evil\0", ""),
+        ("PYTHON", b"PYTHONPATH=/tmp/evil\0", "PYTHONPATH"),
+        ("PYTHONPATH_EXTRA", b"PYTHONPATH=/tmp/evil\0", "PYTHONPATH"),
+        ("PATH", b"PYTHONPATH=/tmp/evil\0", "PYTHONPATH"),
+        ("PYTHON*", b"PYTHONPATH=/tmp/evil\0", "PYTHONPATH"),
+        ("PYTHONUNBUFFERED", b"PYTHONUNBUFFERED_EXTRA=1\0", "PYTHONUNBUFFERED_EXTRA"),
+        ("LD_", b"LD_PRELOAD=/tmp/evil.so\0", "LD_PRELOAD"),
+        # 多个名字：空格分隔，全列上才全放行。
+        (
+            "PYTHONUNBUFFERED LD_PRELOAD",
+            b"PYTHONUNBUFFERED=1\0LD_PRELOAD=/tmp/evil.so\0",
+            "",
+        ),
+        # ★ 「第一个 offender 恰好被放行」不等于整条流干净：报的必须是第一个**没被放行的**。
+        (
+            "PYTHONUNBUFFERED",
+            b"PYTHONUNBUFFERED=1\0PYTHONPATH=/tmp/evil\0",
+            "PYTHONPATH",
+        ),
+        (
+            "PYTHONDONTWRITEBYTECODE PYTHONUNBUFFERED",
+            b"PYTHONDONTWRITEBYTECODE=1\0PYTHONUNBUFFERED=1\0LD_PRELOAD=/tmp/evil.so\0",
+            "LD_PRELOAD",
+        ),
+    ],
+)
+def test_allow_env_releases_only_the_exact_variable_name(
+    block_file, allow, env, expected
+):
+    got = run_block(block_file, ESCAPE_SNIPPET.format(shlex.quote(allow)), env)
+    assert got.strip() == expected
+
+
+@pytest.mark.parametrize(
+    "name", ["PYTHONUNBUFFERED", "PYTHONDONTWRITEBYTECODE", "LD_LIBRARY_PATH"]
+)
+def test_allow_env_echoes_the_released_variable_name(block_file, name):
+    """放行必须留痕，且留的是**那个名字**。
+
+    「已放行一个变量」这种不点名的日志等于无声接受，而无声接受正是这个逃生阀存在
+    要消除的东西：它把「被挡住」换成「有意识地接受」，代价必须是日志里那一行。
+    参数化过三个名字，是为了让「把名字硬编码进消息」这种假回显也红。
+    """
+    env = name.encode() + b"=1\0"
+    stdout, stderr = run_block_full(
+        block_file, ESCAPE_SNIPPET.format(shlex.quote(name)), env
+    )
+    assert stdout.strip() == "", "被放行的变量不该再出现在判定结果里"
+    assert name in stderr, f"日志里没有回显被放行的 {name}"
+    assert "ROLLBACK_ALLOW_ENV" in stderr, "没说清是逃生阀放的行"
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        (b"PATH=/usr/bin\0HOME=/root\0", ""),
+        (b"PATH=/usr/bin\0PYTHONPATH=/tmp/evil\0", "PYTHONPATH"),
+        (b"PYTHONUNBUFFERED=1\0", "PYTHONUNBUFFERED"),
+        (b"LD_PRELOAD=/tmp/evil.so\0", "LD_PRELOAD"),
+        (b"PYTHONUNBUFFERED=1\0LD_PRELOAD=/tmp/evil.so\0", "PYTHONUNBUFFERED"),
+    ],
+)
+@pytest.mark.parametrize("allow", ["", "   "])
+def test_allow_env_empty_or_unset_is_todays_behaviour(block_file, allow, env, expected):
+    """名单空 = 今天的行为，一个字节不差：宽匹配 + fail closed。
+
+    逃生阀不是「默认放松一点」。不设它的人拿到的必须还是 #236 那套判词。
+    """
+    with_valve = run_block(block_file, ESCAPE_SNIPPET.format(shlex.quote(allow)), env)
+    without_valve = run_block(block_file, "loader_environment_offender\n", env)
+    assert with_valve.strip() == expected
+    assert without_valve.strip() == expected
+
+
+def test_deploy_readme_documents_the_escape_valve():
+    """逃生阀只有被写下来才是逃生阀。没人知道的出口等于没有出口。"""
+    readme = read(REPO / "deploy" / "README.md")
+    assert "ROLLBACK_ALLOW_ENV" in readme
 
 
 def test_guarded_verification_checks_both_unit_and_process_loader_environment():
