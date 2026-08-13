@@ -83,6 +83,17 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `db/db.dawn` — 每请求一连接（`with_db`）：WAL + `load_extension(libsimple)`。
 - `util/crypto.dawn` — sha256 / hmac-sha1 / hmac-sha256 / base64url / uuid（auth、七牛、JWT、腾讯共用）。
 - `util/http.dawn` — java.net.http 出站客户端：`fetch/post/post_form` + `fetch_bytes`（二进制体，G6）；
+  **每个出站请求都带单请求超时**。`request_for` 是全模块唯一装配请求的地方，也是唯一一处 `.timeout(`，
+  新加的 body handler 想漏掉超时都没有位置。分两档：管理类调用 `MANAGEMENT_TIMEOUT_S` = 10s
+  （七牛 rs stat/delete/copy、用量与 CDN、腾讯云、vault 探活），搬字节的调用
+  `TRANSFER_TIMEOUT_S` = 3600s（代理上传、WebDAV PUT、下载代理）。
+  之所以必须分档：实测（JDK 26）这个超时是**整次交换的硬期限**，不是空闲计时器——稳定推进的响应体
+  照样在期限处被切断，POST 请求体上传到一半也一样，而且期限还覆盖 connect 阶段。于是管理档要短
+  （`svc/files.dawn` 的 gc 刻意把 `delete_obj` 关在 `BEGIN IMMEDIATE` 里防 TOCTOU，这个值就是
+  SQLite 全局写锁被占的上界），传输档必须远高于任何合法传输，因为它是时长上限而不是延迟上限。
+  超时的错误文本写明超的是哪一档（`outbound HTTP timed out after Ns: ...`），**其余传输错误逐字节不变**。
+  负控在 `scripts/http-timeout-mutants/`：假服务器接受连接后先停住再迟迟作答（有限停顿，所以变异体
+  是转红而不是把门禁挂死），`inflate-deadline` 保留 `.timeout(` 只把值改荒谬——只有真计时的断言能判红它。
   `RequestBody` 不透明边界封装流式文件请求体，调用方不传播 Java publisher 类型；
   `ResponseStream` 不透明边界封装实时响应流，业务模块只经 owner adapter 进入 web3 streaming。
   FFI 门禁只约束显式 `InputStream` 源码名，不阻止 Java 返回类型由推断得到；响应侧另以
