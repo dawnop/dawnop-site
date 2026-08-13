@@ -220,6 +220,26 @@ if python3 "$MUTATOR" unknown-mutant "$BACKEND" >"$work/unknown.log" 2>&1; then
 fi
 printf 'PASS  mutate.py rejects unknown mutants\n'
 
+# Every mutant must still find its anchors in today's source. A rename anywhere
+# they quote rots one silently, and the loop below would discover it only after
+# rebuilding and retesting every mutant ahead of it — an hour in, on the run
+# that was supposed to be the check. Applying all of them to a throwaway copy
+# costs seconds and fails here instead.
+mapfile -t all_mutants < <(python3 "$MUTATOR" --list)
+anchor_probe="$work/anchor-probe"
+for mutant in "${all_mutants[@]}"; do
+  rm -rf "$anchor_probe"
+  mkdir -p "$anchor_probe"
+  cp -R "$BACKEND/src" "$anchor_probe/src"
+  if ! python3 "$MUTATOR" "$mutant" "$anchor_probe" >"$work/$mutant.anchor.log" 2>&1; then
+    printf 'FAIL  %s no longer finds its anchors\n' "$mutant" >&2
+    cat "$work/$mutant.anchor.log" >&2
+    exit 1
+  fi
+done
+rm -rf "$anchor_probe"
+printf 'PASS  all %s mutants still find their anchors\n' "${#all_mutants[@]}"
+
 base_test_log="$work/base.test.log"
 if ! "$DAWN" test "$BACKEND" >"$base_test_log" 2>&1; then
   cat "$base_test_log" >&2
