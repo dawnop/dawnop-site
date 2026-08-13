@@ -71,6 +71,20 @@ MUTANTS = (
     "config-range-falls-back-to-default",
     "config-nonnumeric-falls-back-to-default",
     "upload-token-expired-deadline",
+    "name-guard-fm-create-folder-fail-open",
+    "name-guard-fm-rename-fail-open",
+    "name-guard-fm-move-fail-open",
+    "name-guard-fm-copy-fail-open",
+    "name-guard-fm-create-file-fail-open",
+    "name-guard-fm-save-fail-open",
+    "name-guard-fm-upload-token-fail-open",
+    "name-guard-fm-register-fail-open",
+    "name-guard-fm-proxy-upload-fail-open",
+    "name-guard-webdav-put-fail-open",
+    "name-guard-webdav-mkcol-fail-open",
+    "name-guard-webdav-destination-fail-open",
+    "entry-json-mime-passthrough",
+    "copy-mime-passthrough",
 )
 
 
@@ -1198,6 +1212,107 @@ def main() -> int:
             fm_api,
             "    let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_s() + a.qiniu.expires)\n",
             "    let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_s() - a.qiniu.expires)\n",
+        )
+    # One mutant per write entry, each dropping only that entry's call to the
+    # name guard. The guard itself is shared, so a mutant that broke the
+    # predicate would turn every one of these cases red at once and could not be
+    # owned; dropping call sites one at a time is what shows each door is
+    # actually locked rather than standing behind someone else's lock.
+    elif args.mutant == "name-guard-fm-create-folder-fail-open":
+        replace_once(
+            fm_api,
+            "          let _n = require_trimmed_names(rel)?\n"
+            "          match as_http_with(with_db(a.db.path, a.db.ext, c => mk_folder(c, rel, cur)), conflict_or(500))? {\n",
+            "          match as_http_with(with_db(a.db.path, a.db.ext, c => mk_folder(c, rel, cur)), conflict_or(500))? {\n",
+        )
+    elif args.mutant == "name-guard-fm-rename-fail-open":
+        replace_once(
+            fm_api,
+            "          let _n = require_trimmed_names(new_rel)?\n",
+            "",
+        )
+    elif args.mutant == "name-guard-fm-move-fail-open":
+        replace_once(
+            fm_api,
+            "        let _n = check_relocation_targets(dest, sources, 0)?\n"
+            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_move(c, sources, dest, cur, 0)), conflict_or(500))?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_move(c, sources, dest, cur, 0)), conflict_or(500))?))\n",
+        )
+    elif args.mutant == "name-guard-fm-copy-fail-open":
+        replace_once(
+            fm_api,
+            "        let _n = check_relocation_targets(dest, sources, 0)?\n"
+            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), mutation_failure)?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), mutation_failure)?))\n",
+        )
+    elif args.mutant == "name-guard-fm-create-file-fail-open":
+        replace_once(
+            fm_api,
+            "          let _n = require_trimmed_names(rel)?\n"
+            "          match as_http_with(do_create_file(a, rel, cur), mutation_failure)? {\n",
+            "          match as_http_with(do_create_file(a, rel, cur), mutation_failure)? {\n",
+        )
+    elif args.mutant == "name-guard-fm-save-fail-open":
+        replace_once(
+            fm_api,
+            "          let _n = require_trimmed_names(rel)?\n"
+            "          Ok(json_ok(as_http_with(do_save(a, rel, content), mutation_failure)?))\n",
+            "          Ok(json_ok(as_http_with(do_save(a, rel, content), mutation_failure)?))\n",
+        )
+    elif args.mutant == "name-guard-fm-upload-token-fail-open":
+        replace_once(
+            fm_api,
+            "    let _n = require_trimmed_names(rel)?\n"
+            "    let _p = as_http_with(with_db(a.db.path, a.db.ext, c => upload_token_preflight(c, rel)), conflict_or(500))?\n",
+            "    let _p = as_http_with(with_db(a.db.path, a.db.ext, c => upload_token_preflight(c, rel)), conflict_or(500))?\n",
+        )
+    elif args.mutant == "name-guard-fm-register-fail-open":
+        replace_once(
+            fm_api,
+            "          let _n = require_trimmed_names(rel)?\n"
+            "          let _preflight = as_http_with(register_preflight(a, rel, key), conflict_or(500))?\n",
+            "          let _preflight = as_http_with(register_preflight(a, rel, key), conflict_or(500))?\n",
+        )
+    elif args.mutant == "name-guard-fm-proxy-upload-fail-open":
+        replace_once(
+            fm_api,
+            "  let _n = require_trimmed_names(rel)?\n"
+            "  # the part's declared type is a client-supplied string that ends up in the row\n",
+            "  # the part's declared type is a client-supplied string that ends up in the row\n",
+        )
+    elif args.mutant == "name-guard-webdav-put-fail-open":
+        replace_once(
+            webdav,
+            "    let _n = require_trimmed_names(rel)?\n"
+            "    match as_http_with(with_db(a.db.path, a.db.ext, c => put_preflight(c, rel)), conflict_or(500))? {\n",
+            "    match as_http_with(with_db(a.db.path, a.db.ext, c => put_preflight(c, rel)), conflict_or(500))? {\n",
+        )
+    elif args.mutant == "name-guard-webdav-mkcol-fail-open":
+        replace_once(
+            webdav,
+            "    let _n = require_trimmed_names(rel)?\n"
+            "    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {\n",
+            "    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {\n",
+        )
+    elif args.mutant == "name-guard-webdav-destination-fail-open":
+        replace_once(
+            webdav,
+            "              let _n = require_trimmed_names(dst)?\n",
+            "",
+        )
+    elif args.mutant == "entry-json-mime-passthrough":
+        # a stored content type reaches the browser's file manager as written
+        replace_once(
+            repo,
+            '    ("mime_type", if is_dir || o.content_type == "" { JNull } else { JStr(safe_persisted_mime(o.content_type)) }),\n',
+            '    ("mime_type", if is_dir || o.content_type == "" { JNull } else { JStr(o.content_type) }),\n',
+        )
+    elif args.mutant == "copy-mime-passthrough":
+        # a copy duplicates the source row's stored type into a brand new row
+        replace_once(
+            repo,
+            "        Some(key) -> insert_file_row(c, destination, key, safe_persisted_mime(row.source.content_type), row.source.size)\n",
+            "        Some(key) -> insert_file_row(c, destination, key, row.source.content_type, row.source.size)\n",
         )
     return 0
 

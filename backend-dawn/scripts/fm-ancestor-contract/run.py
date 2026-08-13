@@ -2685,75 +2685,559 @@ def assert_fm_addressing_lossless(ctx, checks):
         "rename rewrote the wrong row",
     )
 
-    # move: `sources` entries are addressed the same way, and the basename keeps
-    # its whitespace at the destination
-    add_file(ctx, "addr-move", True)
-    add_file(ctx, "addr-move/c.txt", False, "addr-move-plain-object")
-    add_file(ctx, "addr-move/c.txt ", False, "addr-move-space-object")
-    add_file(ctx, "addr-move-dest", True)
-    move_status, _ = api(
+    # move and copy used to appear here too, relocating "c.txt " and landing it
+    # spelled that way at the destination. #245 removed the possibility rather
+    # than the addressing: the path those two would write carries an edge space,
+    # and a copied "c.txt " next to an existing "c.txt" is a new ambiguous pair,
+    # so both are refused before they resolve anything. What they can still be
+    # asked is that they refuse, and that belongs to the cases that own the
+    # guard: name-guard.fm.move and name-guard.fm.copy. This case keeps the
+    # operations that address a whitespace row without spelling a new name.
+
+
+# The two messages util/paths require_trimmed_names answers with. Asserting the
+# text, not only the 400, is what keeps these cases pinned to their own guard: a
+# handler has several other ways to answer 400.
+NAME_EDGE_DETAIL = "名称不能以空白开头或结尾"
+NAME_BLANK_DETAIL = "名称不能只由空白组成"
+
+# Where a probe puts its whitespace is not cosmetic. Anything an endpoint reads
+# through paths.fm_split is also seen by the fm-split-trims-addressing mutant,
+# which trims the whole path: a probe whose whitespace sits at either end of
+# that string would stop reaching the name guard under it, and the case would
+# quietly become a second owner of that mutant. So probes on fm_split inputs put
+# the whitespace on a non-terminal segment (or at the start of a leaf), and the
+# plain trailing-space spelling is used at the entries that do not split:
+# rename's `name`, upload-token's and proxy upload's filename, and every WebDAV
+# path, which arrives as decoded URL segments.
+
+
+def detail_of(raw):
+    try:
+        return json.loads(raw).get("detail")
+    except (ValueError, AttributeError):
+        return None
+
+
+def refuse_name(checks, response, label, detail=NAME_EDGE_DETAIL):
+    status, raw = response
+    checks.equal(status, 400, f"{label} status")
+    checks.equal(detail_of(raw), detail, f"{label} message")
+
+
+def assert_name_guard_create_folder(ctx, checks):
+    """create-folder refuses a name that is not its own trim, and creates it otherwise.
+
+    This endpoint used to run str.trim over the name and create the folder under
+    the trimmed spelling, so "new " and "new" were the same request with no way
+    to tell. Nothing rewrites the name now: it is either stored as typed or
+    refused.
+    """
+    before = db_state(ctx)
+    refuse_name(
+        checks,
+        api(ctx, "/api/fm/create-folder", {"path": "qiniu://docs", "name": "a /b"}),
+        "create-folder trailing space on a parent segment",
+    )
+    refuse_name(
+        checks,
+        api(ctx, "/api/fm/create-folder", {"path": "qiniu://docs", "name": "a/ b"}),
+        "create-folder leading space on the leaf",
+    )
+    refuse_name(
+        checks,
+        api(ctx, "/api/fm/create-folder", {"path": "qiniu://docs", "name": "a/   /b"}),
+        "create-folder all-blank segment",
+        NAME_BLANK_DETAIL,
+    )
+    checks.equal(db_state(ctx), before, "a refused create-folder wrote a row")
+    status, _ = api(
+        ctx, "/api/fm/create-folder", {"path": "qiniu://docs", "name": "a/b"}
+    )
+    checks.equal(status, 200, "clean create-folder status")
+    checks.true(
+        file_row(ctx, "docs/a/b") is not None, "clean create-folder wrote no row"
+    )
+
+
+def assert_name_guard_rename(ctx, checks):
+    """rename refuses a new name that is not its own trim.
+
+    The name reaches the handler raw, so this is the endpoint where the plain
+    "renamed.txt " spelling is the probe. The guard sits on the new name and
+    never on `item`, which is what leaves rename as the repair path for a row
+    that already carries an edge space; that half of the claim is addressing and
+    belongs to fm.addressing.lossless.
+    """
+    before = db_state(ctx)
+    for name, label, detail in (
+        ("renamed.txt ", "rename trailing space", NAME_EDGE_DETAIL),
+        (" renamed.txt", "rename leading space", NAME_EDGE_DETAIL),
+        ("   ", "rename all-blank name", NAME_BLANK_DETAIL),
+    ):
+        refuse_name(
+            checks,
+            api(
+                ctx,
+                "/api/fm/rename",
+                {
+                    "path": "qiniu://docs",
+                    "item": "qiniu://docs/notes.txt",
+                    "name": name,
+                },
+            ),
+            label,
+            detail,
+        )
+    checks.equal(db_state(ctx), before, "a refused rename rewrote a path")
+    status, _ = api(
+        ctx,
+        "/api/fm/rename",
+        {
+            "path": "qiniu://docs",
+            "item": "qiniu://docs/notes.txt",
+            "name": "renamed.txt",
+        },
+    )
+    checks.equal(status, 200, "clean rename status")
+    checks.true(
+        file_row(ctx, "docs/renamed.txt") is not None, "clean rename lost the row"
+    )
+
+
+def assert_name_guard_move(ctx, checks):
+    """move refuses either half of a target it would spell with an edge space.
+
+    The path a move writes is the destination directory followed by the leaf
+    name the source keeps, so both are checked. A relocated "a.txt " landing
+    beside an existing "a.txt" is the ambiguous pair this rule exists to stop,
+    and the source row keeping its own spelling is not a licence to write it
+    somewhere new.
+    """
+    add_file(ctx, "dirty ", True)
+    add_file(ctx, "dirty /nest", True)
+    add_file(ctx, "leafs", True)
+    add_file(ctx, "leafs/ a.txt", False, "move-guard-leaf-object")
+    add_file(ctx, "clean-dest", True)
+    before = db_state(ctx)
+    refuse_name(
+        checks,
+        api(
+            ctx,
+            "/api/fm/move",
+            {
+                "path": "qiniu://",
+                "destination": "qiniu://dirty /nest",
+                "sources": ["qiniu://example.txt"],
+            },
+        ),
+        "move into a directory whose path has an edge space",
+    )
+    refuse_name(
+        checks,
+        api(
+            ctx,
+            "/api/fm/move",
+            {
+                "path": "qiniu://",
+                "destination": "qiniu://clean-dest",
+                "sources": ["qiniu://leafs/ a.txt"],
+            },
+        ),
+        "move of a leaf whose name has an edge space",
+    )
+    checks.equal(db_state(ctx), before, "a refused move rewrote a path")
+    checks.equal(ctx.fake.calls(), [], "a refused move reached Qiniu")
+    status, _ = api(
         ctx,
         "/api/fm/move",
         {
             "path": "qiniu://",
-            "destination": "qiniu://addr-move-dest",
-            "sources": ["qiniu://addr-move/c.txt "],
+            "destination": "qiniu://clean-dest",
+            "sources": ["qiniu://example.txt"],
         },
     )
-    checks.equal(move_status, 200, "move status")
-    checks.equal(
-        {(row[0], row[2]) for row in rows(ctx, "addr-move")},
-        {("addr-move", None), ("addr-move/c.txt", "addr-move-plain-object")},
-        "move took the wrong source row",
-    )
-    checks.equal(
-        {(row[0], row[2]) for row in rows(ctx, "addr-move-dest")},
-        {
-            ("addr-move-dest", None),
-            ("addr-move-dest/c.txt ", "addr-move-space-object"),
-        },
-        "move landed the wrong destination path",
+    checks.equal(status, 200, "clean move status")
+    checks.true(
+        file_row(ctx, "clean-dest/example.txt") is not None, "clean move lost the row"
     )
 
-    # copy: same addressing, and the fresh object carries the addressed row's
-    # bytes rather than its neighbour's
-    add_file(ctx, "addr-copy", True)
-    add_file(ctx, "addr-copy/d.txt", False, "addr-copy-plain-object", content="d plain")
-    add_file(
-        ctx,
-        "addr-copy/d.txt ",
-        False,
-        "addr-copy-space-object",
-        content="d spaced",
+
+def assert_name_guard_copy(ctx, checks):
+    """copy refuses either half of a target it would spell with an edge space.
+
+    Copy is the worse of the two: move at least leaves the number of dirty rows
+    where it was, while a copy of "a.txt " mints a second one.
+    """
+    add_file(ctx, "dirty ", True)
+    add_file(ctx, "dirty /nest", True)
+    add_file(ctx, "leafs", True)
+    add_file(ctx, "leafs/ a.txt", False, "copy-guard-leaf-object", content="leaf bytes")
+    add_file(ctx, "copy-source.txt", False, "copy-guard-object", content="clean bytes")
+    add_file(ctx, "clean-dest", True)
+    before = db_state(ctx)
+    refuse_name(
+        checks,
+        api(
+            ctx,
+            "/api/fm/copy",
+            {
+                "path": "qiniu://",
+                "destination": "qiniu://dirty /nest",
+                "sources": ["qiniu://copy-source.txt"],
+            },
+        ),
+        "copy into a directory whose path has an edge space",
     )
-    add_file(ctx, "addr-copy-dest", True)
-    copy_status, _ = api(
+    refuse_name(
+        checks,
+        api(
+            ctx,
+            "/api/fm/copy",
+            {
+                "path": "qiniu://",
+                "destination": "qiniu://clean-dest",
+                "sources": ["qiniu://leafs/ a.txt"],
+            },
+        ),
+        "copy of a leaf whose name has an edge space",
+    )
+    checks.equal(db_state(ctx), before, "a refused copy wrote a row")
+    checks.equal(ctx.fake.calls(), [], "a refused copy reached Qiniu")
+    status, _ = api(
         ctx,
         "/api/fm/copy",
         {
             "path": "qiniu://",
-            "destination": "qiniu://addr-copy-dest",
-            "sources": ["qiniu://addr-copy/d.txt "],
+            "destination": "qiniu://clean-dest",
+            "sources": ["qiniu://copy-source.txt"],
         },
     )
-    checks.equal(copy_status, 200, "copy status")
-    checks.equal(
-        {(row[0], row[2]) for row in rows(ctx, "addr-copy")},
-        {
-            ("addr-copy", None),
-            ("addr-copy/d.txt", "addr-copy-plain-object"),
-            ("addr-copy/d.txt ", "addr-copy-space-object"),
-        },
-        "copy changed its source subtree",
+    checks.equal(status, 200, "clean copy status")
+    checks.true(
+        file_row(ctx, "clean-dest/copy-source.txt") is not None,
+        "clean copy wrote no row",
     )
-    copied = rows(ctx, "addr-copy-dest/d.txt ")
-    checks.equal(len(copied), 1, "copy destination row count")
-    if len(copied) == 1:
-        checks.equal(
-            object_bytes(ctx, copied[0][2]),
-            b"d spaced",
-            "copy duplicated the neighbour's bytes",
+
+
+def assert_name_guard_create_file(ctx, checks):
+    """create-file refuses a name that is not its own trim, before it mints an object.
+
+    Like create-folder it used to trim. The refusal has to land before the empty
+    object is uploaded, otherwise a rejected request still leaves a key behind.
+    """
+    before = db_state(ctx)
+    refuse_name(
+        checks,
+        api(ctx, "/api/fm/create-file", {"path": "qiniu://docs", "name": "a /b.txt"}),
+        "create-file trailing space on a parent segment",
+    )
+    refuse_name(
+        checks,
+        api(ctx, "/api/fm/create-file", {"path": "qiniu://docs", "name": "a/ b.txt"}),
+        "create-file leading space on the leaf",
+    )
+    checks.equal(db_state(ctx), before, "a refused create-file wrote a row")
+    checks.equal(ctx.fake.calls(), [], "a refused create-file reached Qiniu")
+    status, _ = api(
+        ctx, "/api/fm/create-file", {"path": "qiniu://docs", "name": "created.txt"}
+    )
+    checks.equal(status, 200, "clean create-file status")
+    checks.true(
+        file_row(ctx, "docs/created.txt") is not None, "clean create-file wrote no row"
+    )
+
+
+def assert_name_guard_save(ctx, checks):
+    """save refuses a path that is not its own trim, before it writes an object.
+
+    save is a write even when the row exists, because it can also create one,
+    and either way it uploads a fresh key before touching metadata. So the guard
+    is at the top of the handler and no object is minted for a refused path.
+    """
+    add_file(ctx, "save-guard.txt", False, "save-guard-object", content="old text")
+    before = db_state(ctx)
+    refuse_name(
+        checks,
+        api(ctx, "/api/fm/save", {"path": "qiniu://docs /notes.txt", "content": "x"}),
+        "save into a directory whose path has an edge space",
+    )
+    refuse_name(
+        checks,
+        api(ctx, "/api/fm/save", {"path": "qiniu://docs/   /x.txt", "content": "x"}),
+        "save through an all-blank segment",
+        NAME_BLANK_DETAIL,
+    )
+    checks.equal(db_state(ctx), before, "a refused save wrote a row")
+    checks.equal(ctx.fake.calls(), [], "a refused save reached Qiniu")
+    status, _ = api(
+        ctx, "/api/fm/save", {"path": "qiniu://save-guard.txt", "content": "new text"}
+    )
+    checks.equal(status, 200, "clean save status")
+
+
+def assert_name_guard_upload_token(ctx, checks):
+    """upload-token refuses the filename before it mints a credential or a ledger row.
+
+    The token is scoped to a key the client then spends directly against the
+    bucket, and /register is handed back the path this endpoint computed. A name
+    refused only at /register would already have cost an upload.
+    """
+    before = db_state(ctx)
+    for name, label, detail in (
+        ("pic.png ", "upload-token trailing space", NAME_EDGE_DETAIL),
+        (" pic.png", "upload-token leading space", NAME_EDGE_DETAIL),
+        ("   ", "upload-token all-blank filename", NAME_BLANK_DETAIL),
+    ):
+        refuse_name(
+            checks,
+            api(ctx, "/api/fm/upload-token", {"path": "qiniu://docs", "name": name}),
+            label,
+            detail,
         )
+    checks.equal(db_state(ctx), before, "a refused upload-token wrote DB or ledger")
+    checks.equal(ctx.fake.calls(), [], "a refused upload-token reached Qiniu")
+    status, raw = api(
+        ctx, "/api/fm/upload-token", {"path": "qiniu://docs", "name": "pic.png"}
+    )
+    checks.equal(status, 200, "clean upload-token status")
+    if status == 200:
+        checks.equal(
+            json.loads(raw)["path"], "qiniu://docs/pic.png", "clean upload-token path"
+        )
+
+
+def assert_name_guard_register(ctx, checks):
+    """register refuses the path before it asks Qiniu whether the object landed.
+
+    /register is a public endpoint, not only the second half of the browser's
+    direct upload, so it states the rule itself rather than trusting the path it
+    is handed back.
+    """
+    ctx.fake.plant("register-guard-object", "registered bytes", "text/plain")
+    add_ledger(ctx, "register-guard-object", "qiniu://docs/reg.txt")
+    before = db_state(ctx)
+    ctx.fake.clear_calls()
+    refuse_name(
+        checks,
+        api(
+            ctx,
+            "/api/fm/register",
+            {"path": "qiniu://docs /reg.txt", "key": "register-guard-object"},
+        ),
+        "register into a directory whose path has an edge space",
+    )
+    checks.equal(db_state(ctx), before, "a refused register wrote a row")
+    checks.equal(ctx.fake.calls(), [], "a refused register reached Qiniu stat")
+    status, _ = api(
+        ctx,
+        "/api/fm/register",
+        {"path": "qiniu://docs/reg.txt", "key": "register-guard-object"},
+    )
+    checks.equal(status, 200, "clean register status")
+    checks.true(
+        file_row(ctx, "docs/reg.txt") is not None, "clean register wrote no row"
+    )
+
+
+def assert_name_guard_proxy_upload(ctx, checks):
+    """the proxy upload refuses the multipart filename before the bytes go anywhere.
+
+    The filename arrives verbatim from the part headers (util/multipart
+    disp_filename keeps everything inside the quotes), so this door is how a
+    non-browser client would otherwise plant " a.txt".
+    """
+    before = db_state(ctx)
+    refuse_name(
+        checks,
+        api_upload(ctx, "qiniu://docs", name="up.bin "),
+        "proxy upload trailing space in the filename",
+    )
+    refuse_name(
+        checks,
+        api_upload(ctx, "qiniu://docs", name=" up.bin"),
+        "proxy upload leading space in the filename",
+    )
+    checks.equal(db_state(ctx), before, "a refused proxy upload wrote a row")
+    checks.equal(ctx.fake.calls(), [], "a refused proxy upload reached Qiniu")
+    status, _ = api_upload(ctx, "qiniu://docs", name="up.bin")
+    checks.equal(status, 200, "clean proxy upload status")
+    checks.true(
+        file_row(ctx, "docs/up.bin") is not None, "clean proxy upload wrote no row"
+    )
+
+
+def assert_name_guard_webdav_put(ctx, checks):
+    """PUT refuses a path segment that is not its own trim.
+
+    WebDAV is the entry that never trimmed anything, so it is where the store
+    could pick up an edge space even while the web app was still trimming. The
+    path arrives as decoded URL segments, so the plain %20 spelling is the probe.
+    """
+    before = db_state(ctx)
+    refuse_name(
+        checks,
+        dav(ctx, "PUT", "/dav/docs/put.txt%20", body=b"put"),
+        "PUT with a trailing space in the leaf",
+    )
+    refuse_name(
+        checks,
+        dav(ctx, "PUT", "/dav/docs%20/put.txt", body=b"put"),
+        "PUT through a directory segment with a trailing space",
+    )
+    checks.equal(db_state(ctx), before, "a refused PUT wrote a row")
+    checks.equal(ctx.fake.calls(), [], "a refused PUT reached Qiniu")
+    status, _ = dav(ctx, "PUT", "/dav/docs/put.txt", body=b"put")
+    checks.equal(status, 201, "clean PUT status")
+    checks.true(file_row(ctx, "docs/put.txt") is not None, "clean PUT wrote no row")
+
+
+def assert_name_guard_webdav_mkcol(ctx, checks):
+    """MKCOL refuses a collection name that is not its own trim."""
+    before = db_state(ctx)
+    refuse_name(
+        checks,
+        dav(ctx, "MKCOL", "/dav/docs/col%20"),
+        "MKCOL with a trailing space in the leaf",
+    )
+    refuse_name(
+        checks,
+        dav(ctx, "MKCOL", "/dav/docs/%20col"),
+        "MKCOL with a leading space in the leaf",
+    )
+    checks.equal(db_state(ctx), before, "a refused MKCOL wrote a row")
+    status, _ = dav(ctx, "MKCOL", "/dav/docs/col")
+    checks.equal(status, 201, "clean MKCOL status")
+    checks.true(file_row(ctx, "docs/col") is not None, "clean MKCOL wrote no row")
+
+
+def assert_name_guard_webdav_destination(ctx, checks):
+    """MOVE and COPY refuse a Destination that is not its own trim.
+
+    Both verbs resolve the Destination through one function and write what it
+    names, so one guard covers the pair. It sits on the Destination and not on
+    the request path: the source is being addressed, only the destination is
+    being spelled.
+    """
+    add_file(ctx, "dav-move.txt", False, "dav-move-object", content="move bytes")
+    add_file(ctx, "dav-copy.txt", False, "dav-copy-object", content="copy bytes")
+    before = db_state(ctx)
+    refuse_name(
+        checks,
+        dav(ctx, "MOVE", "/dav/dav-move.txt", {"Destination": "/dav/moved.txt%20"}),
+        "MOVE to a destination with a trailing space",
+    )
+    refuse_name(
+        checks,
+        dav(ctx, "COPY", "/dav/dav-copy.txt", {"Destination": "/dav/%20copied.txt"}),
+        "COPY to a destination with a leading space",
+    )
+    checks.equal(db_state(ctx), before, "a refused MOVE or COPY wrote a row")
+    checks.equal(ctx.fake.calls(), [], "a refused MOVE or COPY reached Qiniu")
+    move_status, _ = dav(
+        ctx, "MOVE", "/dav/dav-move.txt", {"Destination": "/dav/moved.txt"}
+    )
+    checks.equal(move_status, 201, "clean MOVE status")
+    copy_status, _ = dav(
+        ctx, "COPY", "/dav/dav-copy.txt", {"Destination": "/dav/copied.txt"}
+    )
+    checks.equal(copy_status, 201, "clean COPY status")
+    checks.true(file_row(ctx, "moved.txt") is not None, "clean MOVE lost the row")
+    checks.true(file_row(ctx, "copied.txt") is not None, "clean COPY wrote no row")
+
+
+def assert_persisted_mime_listing(ctx, checks):
+    """A directory listing reports a stored content type through the outbound boundary.
+
+    `mime_type` in a DirEntry is a stored value on its way to the browser, which
+    hands it to the file manager as the type to render and preview with. Rows
+    predate every check this backend runs, so the value is replaced whole rather
+    than cleaned: a sanitised "text/plain\\r\\nX-Injected: 1" would still be a
+    chosen type, just a different one.
+    """
+    add_file(ctx, "mime-list", True)
+    add_file(
+        ctx,
+        "mime-list/dirty.txt",
+        False,
+        "mime-list-dirty-object",
+        content_type="text/plain\r\nX-Injected: 1",
+    )
+    add_file(
+        ctx,
+        "mime-list/clean.txt",
+        False,
+        "mime-list-clean-object",
+        content_type="text/plain",
+    )
+    status, raw = api(
+        ctx,
+        "/api/fm?" + urllib.parse.urlencode({"path": "qiniu://mime-list"}),
+        method="GET",
+    )
+    checks.equal(status, 200, "listing status")
+    if status == 200:
+        listed = {
+            entry["path"]: entry["mime_type"] for entry in json.loads(raw)["files"]
+        }
+        checks.equal(
+            listed.get("qiniu://mime-list/dirty.txt"),
+            "application/octet-stream",
+            "listing shipped an unshippable stored type",
+        )
+        checks.equal(
+            listed.get("qiniu://mime-list/clean.txt"),
+            "text/plain",
+            "listing rewrote a shippable stored type",
+        )
+    checks.equal(
+        file_row(ctx, "mime-list/dirty.txt")[3],
+        "text/plain\r\nX-Injected: 1",
+        "listing rewrote the stored row",
+    )
+
+
+def assert_persisted_mime_copy(ctx, checks):
+    """A copy stores the source's content type through the outbound boundary.
+
+    A copy is a brand new row carrying an old row's value forward, so without
+    the boundary one dirty row becomes two. The claim is about what lands in the
+    database, which is why this reads the row rather than the response: the
+    response would show the fallback either way, because the DirEntry has its
+    own boundary.
+    """
+    add_file(
+        ctx,
+        "mime-copy.txt",
+        False,
+        "mime-copy-object",
+        content_type="text/plain\r\nX-Injected: 1",
+        content="copy me",
+    )
+    add_file(ctx, "mime-copy-dest", True)
+    status, _ = api(
+        ctx,
+        "/api/fm/copy",
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://mime-copy-dest",
+            "sources": ["qiniu://mime-copy.txt"],
+        },
+    )
+    checks.equal(status, 200, "copy status")
+    copied = file_row(ctx, "mime-copy-dest/mime-copy.txt")
+    checks.true(copied is not None, "copy wrote no row")
+    if copied is not None:
+        checks.equal(
+            copied[3],
+            "application/octet-stream",
+            "copy duplicated an unshippable stored type",
+        )
+    checks.equal(
+        file_row(ctx, "mime-copy.txt")[3],
+        "text/plain\r\nX-Injected: 1",
+        "copy rewrote its source row",
+    )
 
 
 def assert_webdav_missing_parent(ctx, checks):
@@ -2938,6 +3422,20 @@ ASSERTIONS = [
     ("webdav.copy.metadata-atomic", assert_webdav_copy_metadata_atomic),
     ("fm.addressing.lossless", assert_fm_addressing_lossless),
     ("fm.json.duplicate-members", assert_json_duplicate_members),
+    ("name-guard.fm.create-folder", assert_name_guard_create_folder),
+    ("name-guard.fm.rename", assert_name_guard_rename),
+    ("name-guard.fm.move", assert_name_guard_move),
+    ("name-guard.fm.copy", assert_name_guard_copy),
+    ("name-guard.fm.create-file", assert_name_guard_create_file),
+    ("name-guard.fm.save", assert_name_guard_save),
+    ("name-guard.fm.upload-token", assert_name_guard_upload_token),
+    ("name-guard.fm.register", assert_name_guard_register),
+    ("name-guard.fm.proxy-upload", assert_name_guard_proxy_upload),
+    ("name-guard.webdav.put", assert_name_guard_webdav_put),
+    ("name-guard.webdav.mkcol", assert_name_guard_webdav_mkcol),
+    ("name-guard.webdav.destination", assert_name_guard_webdav_destination),
+    ("persisted-mime.fm.listing", assert_persisted_mime_listing),
+    ("persisted-mime.fm.copy", assert_persisted_mime_copy),
 ]
 
 
