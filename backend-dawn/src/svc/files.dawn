@@ -475,7 +475,7 @@ fn upload_key() -> String !io = uuid_hex()
 
 # The receipt is the row this upload wrote, so it is read inside the transaction
 # that wrote it (repo_fm.replace_file_receipt) rather than by a get_row after the
-# commit, which is what /register has always done.
+# commit. /register has always read its receipt inside its own transaction.
 fn replace_upload(c: DbConn, rel: String, key: String, mime: String, size: Int) -> Result[(Json, ReplaceOutcome), String] !io = {
   let written = replace_file_receipt(c, rel, key, mime, size)?
   let (row, outcome) = written

@@ -320,9 +320,9 @@ pub fn replace_file_receipt(c: DbConn, rel: String, key: String, content_type: S
 ## `begin immediate` holds the write reservation across both statements, so no
 ## other connection can remove the row in between. Those guards stay Err rather
 ## than panic for the reason every other impossible-state guard in this file is
-## an Err: a self-contradicting database is exactly what the 500 that an Err
-## already produces is for, and an Err stays inside the transaction's rollback
-## path instead of unwinding through it.
+## an Err: the 500 an Err already produces is the right answer for a database
+## that contradicts itself, and a panic would buy nothing on a branch that
+## cannot be taken.
 fn receipt_row(c: DbConn, rel: String) -> Result[Option[FileRow], String] !io = {
   let _t = require_tx(c, "upload receipt read ${full(rel)}")?
   get_row(c, rel)
