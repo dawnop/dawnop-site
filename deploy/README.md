@@ -185,6 +185,11 @@ sudo usermod -aG dawnop dawn                  # uvicorn 以 dawn 身份跑（见
 ```
 > 只把库 `chown dawnop:dawnop` 而不管组写权限，是一个**只在回滚当天才暴露**的配置：
 > Dawn 一切正常，直到某天切到 uvicorn，它连库就报 `attempt to write a readonly database`。
+>
+> ⚠️ 这四行是**新机首次部署**的配方，按两个单元的 `User=` 与 SQLite WAL 的行为推导，
+> **未在现有生产机上核对过**。现有生产机可能是别的做法（例如库文件直接 666）。
+> 要在跑着的机器上照这段改，先 `ls -ld /opt/dawnop/data` 和 `ls -l /opt/dawnop/data/dawnop.db`
+> 看清现状，再决定动不动。这段是补齐一个缺失的步骤，不是要你去改一台正常工作的机器。
 
 ### 3. Dawn 后端（生产）
 ```bash
