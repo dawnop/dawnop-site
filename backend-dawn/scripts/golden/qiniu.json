@@ -1510,7 +1510,7 @@
     "calls": [
      {
       "op": "upload",
-      "key": "<key19>.bin",
+      "key": "<fresh-key>.bin",
       "size": 9,
       "mime": "application/octet-stream"
      },
@@ -1523,7 +1523,7 @@
     "row_after": {
      "path": "dav-test/legacy-mime-crlf.bin",
      "is_dir": false,
-     "key": "<key19>.bin",
+     "key": "<fresh-key>.bin",
      "content_type": "application/octet-stream",
      "size": 9
     }

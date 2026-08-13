@@ -126,6 +126,22 @@ def dav(base, method, path, auth, headers=None, body=None, opener=OPENER, timeou
         return TRANSPORT_STATUS, {}, transport_error(e).encode()
 
 
+def _fresh_key(value):
+    """Replace any freshly minted object key with one fixed placeholder.
+
+    scrub() numbers keys in order of first appearance across the whole run, which
+    makes every case that records one depend on how many were minted before it. A
+    case that is not about key distinctness should not carry that coupling.
+    """
+    if isinstance(value, dict):
+        return {k: _fresh_key(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_fresh_key(v) for v in value]
+    if isinstance(value, str):
+        return _KEY.sub("<fresh-key>", value)
+    return value
+
+
 def scrub(value):
     """Replace the per-run identifiers in a recorded value.
 
@@ -956,12 +972,17 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
         token,
         {"path": f"qiniu://{save_rel}", "content": "rewritten"},
     )
+    # The freshly minted key is normalized locally rather than through scrub():
+    # scrub's aliases are numbered in order of first appearance across the whole
+    # run, so a change anywhere earlier renumbers them and this case would go red
+    # for something that has nothing to do with content types. Distinctness is not
+    # what is being pinned here — the content type is.
     mime_probe["save"] = {
         "note": "the remote multipart and the rewritten row both carry the fallback",
         "status": save_status,
-        "body": scrub(body_value(save_raw)),
-        "calls": scrub(fake.calls()),
-        "row_after": scrub(file_metadata(db_path, save_rel)),
+        "body": body_value(save_raw),
+        "calls": _fresh_key(fake.calls()),
+        "row_after": _fresh_key(file_metadata(db_path, save_rel)),
     }
     fake.clear_calls()
     g.case("fm.persisted-mime.fail-safe", mime_probe)
