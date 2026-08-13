@@ -34,6 +34,8 @@ ROLLBACK_API = BACKEND / "app" / "api" / "rollback.py"
 MAIN = BACKEND / "app" / "main.py"
 ROLLBACK_SH = REPO / "backend-dawn" / "deploy" / "rollback-to-fastapi.sh"
 RETURN_SH = REPO / "backend-dawn" / "deploy" / "return-to-dawn.sh"
+DAWN_UNIT = REPO / "backend-dawn" / "deploy" / "dawnop-dawn.service"
+FASTAPI_UNIT = REPO / "deploy" / "dawnop-backend.service"
 DEPLOY_README = REPO / "deploy" / "README.md"
 
 
@@ -450,6 +452,69 @@ MUTANTS: list[tuple[str, str, list[Path], Callable[[str], str], set[str]]] = [
         sub("'/^Uid:/ { print $3 }'", "'/^Uid:/ { print $2 }'"),
         {"test_unit_identity_check_covers_unit_argv_cwd_uid_gid"},
     ),
+    # ---- 脚本印出来的「下一步」 ----
+    (
+        "tail-points-at-a-server-side-copy",
+        "结尾的「下一步」改回 /opt/dawnop-dawn/ 下那个不存在的脚本副本",
+        BOTH_SCRIPTS,
+        None,  # 占位，见下方特判
+        {
+            "test_deploy_scripts_never_point_at_a_server_side_copy_of_themselves",
+            "test_each_script_ends_by_pointing_at_the_pipe_over_ssh_form",
+        },
+    ),
+    (
+        "tail-points-at-itself",
+        "结尾的「下一步」指向自己而不是对方（回滚完印回滚）",
+        BOTH_SCRIPTS,
+        None,  # 占位，见下方特判
+        {"test_each_script_ends_by_pointing_at_the_pipe_over_ssh_form"},
+    ),
+    # ---- 加固不对称：注释与手册说的必须是实测 ----
+    (
+        "hardening-comment-claims-parity",
+        "Dawn 单元的注释又宣称与 FastAPI 单元一致（#251 那条假陈述）",
+        [DAWN_UNIT],
+        sub(
+            "# hardening. This is NOT mirrored by the rollback target:"
+            " dawnop-backend.service",
+            "# hardening (mirrors the FastAPI unit). dawnop-backend.service",
+        ),
+        {"test_hardening_comment_matches_what_the_two_units_actually_carry"},
+    ),
+    (
+        "fastapi-unit-silently-hardened",
+        "给 FastAPI 单元补上加固，但注释与手册还在讲不对称",
+        [FASTAPI_UNIT],
+        sub("Restart=on-failure", "NoNewPrivileges=true\nRestart=on-failure"),
+        {"test_hardening_comment_matches_what_the_two_units_actually_carry"},
+    ),
+    (
+        "dawn-unit-loses-hardening",
+        "Dawn 单元的加固被删光，注释与手册还在讲它有四条",
+        [DAWN_UNIT],
+        None,  # 占位，见下方特判
+        {"test_hardening_comment_matches_what_the_two_units_actually_carry"},
+    ),
+    (
+        "readme-hides-the-unhardened-rollback-target",
+        "回滚一节不再说「回滚落到的是一个未加固的进程」",
+        [DEPLOY_README],
+        sub_all("未加固", "照常加固"),
+        {"test_deploy_readme_warns_that_the_rollback_target_is_unhardened"},
+    ),
+    (
+        "readme-drops-the-missing-directive-list",
+        "回滚一节不再点名 FastAPI 单元缺的是哪几条",
+        [DEPLOY_README],
+        sub(
+            "有四条：`NoNewPrivileges`、\n"
+            "> `ProtectSystem`（配 `ReadWritePaths=/opt/dawnop/data`）、`ProtectHome`、"
+            "`PrivateTmp`。",
+            "有若干条。",
+        ),
+        {"test_deploy_readme_warns_that_the_rollback_target_is_unhardened"},
+    ),
 ]
 
 
@@ -470,9 +535,49 @@ def _health_only_probes(text: str) -> str:
     )
 
 
+def _tail_points_at_a_server_side_copy(text: str) -> str:
+    """把结尾的「下一步」改回 #250 之前那个不存在的路径。"""
+    new, n = re.subn(
+        r'echo "  (回切|再次回滚)（[^）]*）："\n'
+        r"echo \"    ssh <user>@<server> 'sudo bash -s' "
+        r'< backend-dawn/deploy/(\S+\.sh)"',
+        lambda m: f'echo "  {m.group(1)}：sudo bash /opt/dawnop-dawn/{m.group(2)}"',
+        text,
+    )
+    if n != 1:
+        raise SystemExit("mutant 的锚点不唯一或没了：结尾的「下一步」那两行")
+    return new
+
+
+def _tail_points_at_itself(text: str) -> str:
+    """让结尾的「下一步」指向自己。`"` 结尾把它与文件头注释里的同款调用形式区分开。"""
+    names = ("rollback-to-fastapi.sh", "return-to-dawn.sh")
+
+    def swap(m: "re.Match[str]") -> str:
+        other = names[1] if m.group(1) == names[0] else names[0]
+        return m.group(0).replace(m.group(1), other)
+
+    new, n = re.subn(r'< backend-dawn/deploy/(\S+\.sh)"', swap, text)
+    if n != 1:
+        raise SystemExit("mutant 的锚点不唯一或没了：结尾的 pipe-over-ssh 行")
+    return new
+
+
+def _strip_dawn_hardening(text: str) -> str:
+    pattern = re.compile(r"(NoNewPrivileges|ProtectSystem|ProtectHome|PrivateTmp)=")
+    lines = text.splitlines(keepends=True)
+    kept = [ln for ln in lines if not pattern.match(ln)]
+    if len(kept) == len(lines):
+        raise SystemExit("mutant 的锚点没了：Dawn 单元的加固指令")
+    return "".join(kept)
+
+
 SPECIAL = {
     "shared-block-emptied": _empty_the_shared_block,
     "health-only-liveness": _health_only_probes,
+    "tail-points-at-a-server-side-copy": _tail_points_at_a_server_side_copy,
+    "tail-points-at-itself": _tail_points_at_itself,
+    "dawn-unit-loses-hardening": _strip_dawn_hardening,
 }
 
 

@@ -6,9 +6,16 @@
 #   3) sudo cp deploy/dawnop-backend.service /etc/systemd/system/dawnop-backend.service
 #      （按实际路径/用户改下面的 User / WorkingDirectory / ExecStart）
 #   4) sudo systemctl daemon-reload
-#      sudo systemctl enable --now dawnop-backend
-#      sudo systemctl status dawnop-backend     # 查看运行状态
-#      journalctl -u dawnop-backend -f          # 跟踪日志
+#      到此为止，**不要 enable --now**：M6 之后这个单元是应急回滚目标，常态是停用的
+#      （`systemctl disable --now dawnop-backend`）。拉起它的是
+#      backend-dawn/deploy/rollback-to-fastapi.sh（它自己 enable + restart，并在切流前
+#      核验进程身份），return-to-dawn.sh 回切时再 disable 回去。
+#      回滚期间看它：systemctl status dawnop-backend / journalctl -u dawnop-backend -f
+#
+# 这个单元**没有**任何 systemd 加固指令（NoNewPrivileges / ProtectSystem / ProtectHome /
+# PrivateTmp），而 backend-dawn/deploy/dawnop-dawn.service 四条都有。不是漏了：见那份单元
+# 里的说明与 deploy/README.md 的「四、回滚安全链」。补加固要等回滚演练（#249）之后再评估，
+# 因为这些指令与 venv 路径、libsimple.so、.env 的冲突只会在真正回滚的那一刻暴露。
 
 [Unit]
 Description=dawnop-site FastAPI backend (uvicorn)

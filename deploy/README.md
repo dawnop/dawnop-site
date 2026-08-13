@@ -81,7 +81,9 @@ ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/return-to-dawn.sh      
 > 装它们的一步。`/opt/dawnop-dawn/` 下若有一份 `rollback-to-fastapi.sh`，那是 M6 切流时手工放的
 > 旧副本，早于 2026-07 的重写，不含现在这条安全链（重写之前它改的是 `sites-available/dawnop`，
 > 一个 nginx 根本不读的文件，于是回滚印着成功却什么都没改）；`return-to-dawn.sh` 服务器上根本
-> 没有。两个脚本自己在结尾印的 `sudo bash /opt/dawnop-dawn/...` 是同一个错，以本节为准。
+> 没有。两个脚本跑完在结尾印的「下一步」就是上面这两行（由
+> `backend/tests/test_rollback_chain.py` 钉住，它们曾经印过一个 `/opt/dawnop-dawn/` 下的
+> 不存在路径）。
 
 两套共用同一个 SQLite 文件（WAL），**没有数据迁移要撤**：切流与回滚都是路由变更加一个守护
 开关（回滚期间 `/api/fm` 关闭、回 503，见「四」）。
@@ -281,6 +283,17 @@ HTTPS 与证书（含 `storage.` / `cdn.` / `dav.` 子域名的通配符证书�
 |---|---|
 | `backend-dawn/deploy/rollback-to-fastapi.sh` | Dawn :8001 → FastAPI :8000 |
 | `backend-dawn/deploy/return-to-dawn.sh` | FastAPI :8000 → Dawn :8001 |
+
+> ⚠️ **回滚落到的是一个未加固的进程。** `deploy/dawnop-backend.service` 上没有任何 systemd
+> 沙箱指令，而生产的 `backend-dawn/deploy/dawnop-dawn.service` 有四条：`NoNewPrivileges`、
+> `ProtectSystem`（配 `ReadWritePaths=/opt/dawnop/data`）、`ProtectHome`、`PrivateTmp`。
+> 所以回滚不只是换一个后端，它同时把这四层约束一起摘掉：回滚期间那个进程能碰的东西比
+> Dawn 那个多。
+>
+> 这是有意留着的，不是漏了。那条路径至今没有端到端跑过（#249），而 `ProtectHome` /
+> `ProtectSystem` 与 venv 路径、`libsimple.so` 的加载、`.env` 的读取都可能冲突，冲突只会在
+> 真正需要回滚的那一刻暴露；给一条没跑通过的应急路径加沙箱，风险是把回滚本身弄坏。
+> 补加固等演练之后再评估。这一条是让你知道自己在接受什么，不是叫你别回滚。
 
 ### 前置条件（配一次，回滚当天没时间配）
 

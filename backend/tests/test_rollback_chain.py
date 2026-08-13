@@ -118,6 +118,45 @@ def python_code_only(path: Path) -> str:
     return " ".join(kept)
 
 
+def readme_section(title: str) -> str:
+    """deploy/README.md 里 `## <title>` 到下一个 `## ` 之间的那一段。
+
+    整篇 README 里找一个词太松：`ProtectSystem` 在「二、3」也出现，拿它当「回滚一节说了
+    加固不对称」的证据就是恒真的。判词要落在那一节里。
+    """
+    readme = read(REPO / "deploy" / "README.md")
+    start = readme.index(f"## {title}")
+    rest = readme[start + 1 :]
+    m = re.search(r"^## ", rest, re.M)
+    return rest[: m.start()] if m else rest
+
+
+# systemd 的沙箱类指令。不求穷尽，求覆盖两个单元今天用到的与最可能被补上的那些。
+HARDENING_DIRECTIVES = frozenset(
+    {
+        "NoNewPrivileges",
+        "ProtectSystem",
+        "ProtectHome",
+        "PrivateTmp",
+        "PrivateDevices",
+        "ProtectKernelTunables",
+        "ProtectKernelModules",
+        "ProtectControlGroups",
+        "RestrictAddressFamilies",
+        "RestrictNamespaces",
+        "RestrictSUIDSGID",
+        "LockPersonality",
+        "MemoryDenyWriteExecute",
+        "SystemCallFilter",
+        "CapabilityBoundingSet",
+    }
+)
+
+
+def hardening_directives(path: Path) -> set[str]:
+    return HARDENING_DIRECTIVES & set(unit_directives(path))
+
+
 def unit_directives(path: Path) -> dict[str, str]:
     out: dict[str, str] = {}
     for line in read(path).splitlines():
@@ -692,6 +731,43 @@ def test_both_directions_verify_the_same_way():
         ), f"{path.name} 从没调用过 verify_guarded_fastapi_runtime"
 
 
+def test_hardening_comment_matches_what_the_two_units_actually_carry():
+    """Dawn 单元那条加固注释说的，必须是两个单元的实测状态。
+
+    它一度写着「mirrors the FastAPI unit」。实测不是：Dawn 单元有四条沙箱指令，
+    `deploy/dawnop-backend.service` 一条都没有。回滚等于切到一个未加固的进程上，而注释
+    宣称两者一样。这不是排版问题，是一条会让人在事故中做出错误风险判断的假陈述。
+
+    这条断言钉的是「注释 == 实测」，不是某个字符串。日后给 FastAPI 单元补上加固、或者把
+    Dawn 单元的加固删掉，它都会转红，那时该改的是注释（以及这条断言），不是绕开它。
+    """
+    dawn = hardening_directives(DAWN_UNIT_FILE)
+    fastapi = hardening_directives(FASTAPI_UNIT_FILE)
+    assert dawn, "Dawn 单元不再有任何加固指令，注释与 README 的不对称论述要重写"
+    assert not fastapi, (
+        f"FastAPI 单元现在带了加固指令 {sorted(fastapi)}：两个单元不再不对称，"
+        "dawnop-dawn.service 的注释与 deploy/README.md「四」的警告都要重写"
+    )
+
+    text = read(DAWN_UNIT_FILE)
+    assert "mirrors the FastAPI unit" not in text, (
+        "注释又在宣称与 FastAPI 单元一致，而实测两者不对称"
+    )
+    assert FASTAPI_UNIT_FILE.name in text, "注释没点名不对称的另一方，读的人无从核对"
+    assert "#249" in text, "注释没留下「为什么当初没补」的记号（回滚演练那一件）"
+
+
+def test_deploy_readme_warns_that_the_rollback_target_is_unhardened():
+    """做回滚决策的人要知道自己在接受什么：回滚同时把 Dawn 单元那几层约束一起摘掉。
+
+    注释只有改这个单元的人会看见；按下回滚的人看的是 README 那一节。
+    """
+    section = readme_section("四、回滚安全链")
+    assert "未加固" in section, "回滚一节没说清回滚落到的是一个未加固的进程"
+    for directive in sorted(hardening_directives(DAWN_UNIT_FILE)):
+        assert directive in section, f"回滚一节没点名 FastAPI 单元缺的 {directive}"
+
+
 def test_unit_identity_check_covers_unit_argv_cwd_uid_gid():
     body = function_body(shared_block(read(ROLLBACK_SH)), "verify_unit_identity")
     assert "/cgroup" in body, "没确认 PID 真属于这个单元"
@@ -853,6 +929,44 @@ def test_guarded_verification_checks_both_unit_and_process_loader_environment():
     assert "EnvironmentFile" in unit_directives(FASTAPI_UNIT_FILE), (
         "单元不再有 EnvironmentFile，这条盲区论证要重写"
     )
+
+
+# --------------------------------------------------------------------------
+# 8. 脚本印出来的「下一步」必须是能照抄的
+# --------------------------------------------------------------------------
+
+
+def test_deploy_scripts_never_point_at_a_server_side_copy_of_themselves():
+    """`/opt/dawnop-dawn/` 下没有任何 `.sh`，别叫人去那里跑一个不存在的文件。
+
+    `deploy.sh` 只装 `backend-dawn.jar` 与 `lib/`，仓库里没有任何一步把这些脚本装到服务器上
+    （`deploy/README.md`「一」那条警告说的就是这件事）。回滚脚本结尾曾经印着
+    `sudo bash /opt/dawnop-dawn/return-to-dawn.sh`，那是回滚成功之后立刻打印的一行，
+    正是人在事故中最可能直接照抄的那行，而照抄的结果是 No such file or directory。
+    """
+    scripts = sorted((REPO / "backend-dawn" / "deploy").glob("*.sh"))
+    assert len(scripts) >= 3, f"部署脚本的位置变了：{[p.name for p in scripts]}"
+    for path in scripts:
+        found = re.findall(r"/opt/dawnop-dawn/\S*\.sh", read(path))
+        assert not found, f"{path.name} 指向服务器上不存在的脚本副本：{found}"
+
+
+@pytest.mark.parametrize(
+    ("path", "other"), [(ROLLBACK_SH, RETURN_SH), (RETURN_SH, ROLLBACK_SH)]
+)
+def test_each_script_ends_by_pointing_at_the_pipe_over_ssh_form(path, other):
+    """结尾的「下一步」印的是 README 里那条正规调用形式，而且指向的是**对方**。
+
+    脚本跑在服务器上，读它输出的人站在本地：提示得说清「从本地仓库 pipe 过去」，
+    否则那行照抄不动。指向对方也是判词的一部分：回滚之后要给的是回切，反过来同理。
+    """
+    tail = read(path).rsplit("\necho\n", 1)[-1]
+    assert re.search(
+        rf"^echo \"\s*ssh <user>@<server> 'sudo bash -s' "
+        rf"< backend-dawn/deploy/{re.escape(other.name)}\"$",
+        tail,
+        re.M,
+    ), f"{path.name} 结尾没有指向 {other.name} 的 pipe-over-ssh 调用形式"
 
 
 # --------------------------------------------------------------------------
