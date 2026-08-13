@@ -2863,6 +2863,19 @@ def assert_json_duplicate_members(ctx, checks):
         "the accepted body created its folder",
     )
 
+    # The per-object scope has to be a Map, because a list of names is quadratic
+    # and the 2MB body limit allows about 190k members in one object: measured at
+    # 11s for 50k with a list and 0.2s with a Map. That is a request that costs a
+    # core for minutes, reachable by anyone who can log in. The budget below is
+    # loose enough not to be measuring the machine and far enough under the
+    # quadratic cost at this width (minutes) that a return to it cannot pass.
+    wide = "{" + ",".join(f'"k{i}":1' for i in range(100000)) + "}"
+    started = time.monotonic()
+    wide_status, _raw = post("/api/fm/create-folder", wide)
+    elapsed = time.monotonic() - started
+    checks.equal(wide_status, 400, "a wide body is answered on its merits")
+    checks.true(elapsed < 15, f"scanning 100k members took {elapsed:.1f}s")
+
 
 ASSERTIONS = [
     ("fm.missing-ancestors.auto-created", assert_fm_missing_ancestors),

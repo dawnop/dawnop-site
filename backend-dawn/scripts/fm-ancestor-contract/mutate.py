@@ -1173,7 +1173,7 @@ def main() -> int:
         # membership test answers no
         replace_once(
             jsonread,
-            "            scan_members(src, cursor.next(src, k), seen ++ [name])\n",
+            "            scan_members(src, cursor.next(src, k), map.insert(seen, name, true))\n",
             "            scan_members(src, cursor.next(src, k), seen)\n",
         )
     elif args.mutant == "config-range-falls-back-to-default":
