@@ -62,10 +62,28 @@ retires it entirely.
 > is retiring uvicorn after a clean observation window (blocked on M6.5 for the
 > `/api/fm/upload` endpoint, or keep FastAPI running solely for it).
 
-**Rollback** is a one-line revert: point `location /api/` back at `:8000` and
-`nginx -s reload`. Because both backends share the same SQLite file (WAL) and
-qiniu bucket, there is no data migration to undo — cutover and rollback are pure
-routing changes.
+**Rollback** was a one-line revert while the cutover was in progress: point
+`location /api/` back at `:8000` and `nginx -s reload`. That is no longer the
+procedure. Since the rollback safety chain landed, rollback goes through
+`backend-dawn/deploy/rollback-to-fastapi.sh`, which places the file-route
+sentinel, restarts uvicorn, and verifies the process (cgroup / argv / cwd /
+effective UID:GID, pinned interpreter, loader environment, database identity)
+**before** touching nginx. `return-to-dawn.sh` is the inverse. Run both from a
+local checkout; nothing installs a copy on the server:
+
+```bash
+ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/rollback-to-fastapi.sh
+ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/return-to-dawn.sh
+```
+
+Two prerequisites have to be configured before the first use, or the script
+stops at the verification step and does not switch traffic. They are in
+[`deploy/README.md`](../../deploy/README.md), section 四, together with the note
+that the rollback target runs unhardened.
+
+Both backends still share the same SQLite file (WAL) and qiniu bucket, so there
+is no data migration to undo: rollback is a routing change plus one guard switch
+(`/api/fm` answers 503 while guarded).
 
 ### Recommended rollout order (each = one `nginx -s reload`, diffable)
 

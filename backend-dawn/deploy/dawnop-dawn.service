@@ -45,8 +45,16 @@ SuccessExitStatus=143
 # explicit `systemctl stop` is never overridden by Restart= anyway.
 Restart=always
 RestartSec=3
-# hardening (mirrors the FastAPI unit). /opt/dawnop/data holds the shared DB +
-# WAL/SHM (writable); the jar dir and libsimple.so are read-only, which is fine.
+# hardening. This is NOT mirrored by the rollback target: dawnop-backend.service
+# carries none of these four directives, so rolling back also drops the sandbox.
+# Deliberate, not an oversight. That unit is an emergency path nobody has run end
+# to end yet (#249), and ProtectHome/ProtectSystem can collide with the venv, the
+# libsimple.so load and the .env read in ways that would only surface at the one
+# moment a rollback is actually needed. Revisit after a drill. The person
+# deciding to roll back is told the same thing in deploy/README.md, section
+# "四、回滚安全链".
+# /opt/dawnop/data holds the shared DB + WAL/SHM (writable); the jar dir and
+# libsimple.so are read-only, which is fine.
 NoNewPrivileges=true
 ProtectSystem=strict
 ReadWritePaths=/opt/dawnop/data

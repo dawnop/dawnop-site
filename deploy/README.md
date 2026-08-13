@@ -284,6 +284,17 @@ HTTPS 与证书（含 `storage.` / `cdn.` / `dav.` 子域名的通配符证书�
 | `backend-dawn/deploy/rollback-to-fastapi.sh` | Dawn :8001 → FastAPI :8000 |
 | `backend-dawn/deploy/return-to-dawn.sh` | FastAPI :8000 → Dawn :8001 |
 
+> ⚠️ **回滚落到的是一个未加固的进程。** `deploy/dawnop-backend.service` 上没有任何 systemd
+> 沙箱指令，而生产的 `backend-dawn/deploy/dawnop-dawn.service` 有四条：`NoNewPrivileges`、
+> `ProtectSystem`（配 `ReadWritePaths=/opt/dawnop/data`）、`ProtectHome`、`PrivateTmp`。
+> 所以回滚不只是换一个后端，它同时把这四层约束一起摘掉：回滚期间那个进程能碰的东西比
+> Dawn 那个多。
+>
+> 这是有意留着的，不是漏了。那条路径至今没有端到端跑过（#249），而 `ProtectHome` /
+> `ProtectSystem` 与 venv 路径、`libsimple.so` 的加载、`.env` 的读取都可能冲突，冲突只会在
+> 真正需要回滚的那一刻暴露；给一条没跑通过的应急路径加沙箱，风险是把回滚本身弄坏。
+> 补加固等演练之后再评估。这一条是让你知道自己在接受什么，不是叫你别回滚。
+
 ### 前置条件（配一次，回滚当天没时间配）
 
 1. **探针秘密**，两处内容必须一致：
