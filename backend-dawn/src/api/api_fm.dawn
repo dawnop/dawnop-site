@@ -557,7 +557,10 @@ fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpErro
   # fp.filename comes from the (UTF-8-decoded) part headers already
   let name = sanitize_name(fp.filename)
   let rel = fm_join(target, name)
-  let mime = if fp.content_type != "" { fp.content_type } else { guess_mime(name) }
+  # the part's declared type is a client-supplied string that ends up in the row
+  # and in the multipart body posted to qiniu, so it crosses the outbound boundary
+  # on the way in rather than being trusted because it arrived as a header
+  let mime = safe_persisted_mime(if fp.content_type != "" { fp.content_type } else { guess_mime(name) })
   let size = bytes.len(fp.content)
   Ok(json_ok(as_http_with(run_upload(a, rel, fp.content, mime, size), mutation_failure)?))
 }
