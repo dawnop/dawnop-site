@@ -13,7 +13,7 @@ use util/jsonx.{obj, jstr, jint}
 use db/db.{with_db}
 use svc/auth.{Auth, guarded, guarded_flexible}
 use util/jsonread.{body_obj, str_or, str_list, opt_int}
-use util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime, safe_persisted_mime}
+use util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime, safe_persisted_mime, require_trimmed_names}
 use repo/repo_fm.{fs_data, get_row, ledger_insert, search_files, entry_json, stats_db, validate_fm_ancestors, validate_fm_file_target, validate_register_preflight, finalize_register}
 use svc/files.{signed_url, gc_unreferenced, mk_folder, do_rename, do_move, do_copy, do_delete,
   item_paths, merge_deleted, do_create_file, do_save, run_upload, sanitize_name, token_rel }
@@ -48,11 +48,12 @@ pub fn create_folder(a: Auth) -> Handler =
       {
         let m = as_http(body_obj(req.body), 422)?
         let cur = fm_split(str_or(m, "path", ""))
-        let name = fm_split(str.trim(str_or(m, "name", "")))
+        let name = fm_split(str_or(m, "name", ""))
         if name == "" {
           Err(http_error(400, "缺少 name"))
         } else {
           let rel = fm_join(cur, name)
+          let _n = require_trimmed_names(rel)?
           match as_http_with(with_db(a.db.path, a.db.ext, c => mk_folder(c, rel, cur)), conflict_or(500))? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
@@ -68,13 +69,14 @@ pub fn rename(a: Auth) -> Handler =
         let m = as_http(body_obj(req.body), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let old = fm_split(str_or(m, "item", ""))
-        let new_name = str.trim(str_or(m, "name", ""))
+        let new_name = str_or(m, "name", "")
         if old == "" || new_name == "" {
           Err(http_error(400, "缺少 item / name"))
         } else if not valid_rename_name(new_name) {
           Err(http_error(400, "name 必须是单段名称"))
         } else {
           let new_rel = fm_join(parent_rel(old), new_name)
+          let _n = require_trimmed_names(new_rel)?
           match as_http_with(with_db(a.db.path, a.db.ext, c => do_rename(c, old, new_rel, cur)), conflict_or(500))? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(409, "已存在同名项：${basename(new_rel)}"))
@@ -82,6 +84,14 @@ pub fn rename(a: Auth) -> Handler =
         }
       })
 
+# Structural, and rename's alone: rename replaces the last segment in place, so
+# its `name` has to BE one segment. It sits beside `require_trimmed_names`
+# rather than absorbing it, because the two answer different questions and have
+# different scopes. This one asks "is this one path segment", which is false for
+# create-folder and upload, where a name legitimately spells a subpath ("a/b").
+# The other asks "may this segment be stored", which holds at every write entry
+# and over every segment of the target. Folding either into the other would hand
+# one endpoint's rule to the rest.
 fn valid_rename_name(name: String) -> Bool =
   name != "" && name != "." && name != ".." && not str.contains(name, "/") && not str.contains(name, "\\")
 
@@ -94,8 +104,21 @@ pub fn move(a: Auth) -> Handler =
         let cur = fm_split(str_or(m, "path", ""))
         let dest = fm_split(str_or(m, "destination", ""))
         let sources = str_list(m, "sources")
+        let _n = check_relocation_targets(dest, sources, 0)?
         Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_move(c, sources, dest, cur, 0)), conflict_or(500))?))
       })
+
+# Move and copy write `fm_join(dest, basename(src))` for each source. Those are
+# the destination's segments followed by one leaf name, so checking the two
+# ingredients checks the target exactly, without a second copy of the join that
+# could drift away from the one svc/files plans with.
+fn check_relocation_targets(dest: String, sources: List[String], i: Int) -> Result[Unit, HttpError] =
+  if i >= len(sources) {
+    require_trimmed_names(dest)
+  } else {
+    let _leaf = require_trimmed_names(basename(fm_split(sources[i])))?
+    check_relocation_targets(dest, sources, i + 1)
+  }
 
 # ---- qiniu URL / upload endpoints (read-only: sign & redirect, no mutation) ----
 
@@ -331,6 +354,9 @@ pub fn upload_token_ep(a: Auth) -> Handler =
     let m = as_http(body_obj(req.body), 422)?
     let raw_name = str_or(m, "name", "")
     let rel = token_rel(str_or(m, "path", ""), raw_name)
+    # the token is minted for a path /register will later be handed back, so the
+    # name is refused here rather than after the client has spent the credential
+    let _n = require_trimmed_names(rel)?
     let _p = as_http_with(with_db(a.db.path, a.db.ext, c => upload_token_preflight(c, rel)), conflict_or(500))?
     let e = ext(sanitize_name(raw_name))
     let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
@@ -386,11 +412,12 @@ pub fn create_file(a: Auth) -> Handler =
       {
         let m = as_http(body_obj(req.body), 422)?
         let cur = fm_split(str_or(m, "path", ""))
-        let name = fm_split(str.trim(str_or(m, "name", "")))
+        let name = fm_split(str_or(m, "name", ""))
         if name == "" {
           Err(http_error(400, "缺少 name"))
         } else {
           let rel = fm_join(cur, name)
+          let _n = require_trimmed_names(rel)?
           match as_http_with(do_create_file(a, rel, cur), mutation_failure)? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
@@ -411,6 +438,7 @@ pub fn save(a: Auth) -> Handler =
         if rel == "" {
           Err(http_error(400, "缺少 path"))
         } else {
+          let _n = require_trimmed_names(rel)?
           Ok(json_ok(as_http_with(do_save(a, rel, content), mutation_failure)?))
         }
       })
@@ -425,6 +453,7 @@ pub fn copy(a: Auth) -> Handler =
         let cur = fm_split(str_or(m, "path", ""))
         let dest = fm_split(str_or(m, "destination", ""))
         let sources = str_list(m, "sources")
+        let _n = check_relocation_targets(dest, sources, 0)?
         Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), mutation_failure)?))
       })
 
@@ -441,6 +470,7 @@ pub fn register(a: Auth) -> Handler =
         if rel == "" || key == "" {
           Err(http_error(400, "缺少 path / key"))
         } else {
+          let _n = require_trimmed_names(rel)?
           let _preflight = as_http_with(register_preflight(a, rel, key), conflict_or(500))?
           let r = as_http(stat(a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key), 502)?
           if r.status == 200 {
@@ -557,6 +587,9 @@ fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpErro
   # fp.filename comes from the (UTF-8-decoded) part headers already
   let name = sanitize_name(fp.filename)
   let rel = fm_join(target, name)
+  # the filename rides in verbatim from the multipart headers (disp_filename),
+  # so this is the door a " a.txt" from a non-browser client arrives at
+  let _n = require_trimmed_names(rel)?
   # the part's declared type is a client-supplied string that ends up in the row
   # and in the multipart body posted to qiniu, so it crosses the outbound boundary
   # on the way in rather than being trusted because it arrived as a header

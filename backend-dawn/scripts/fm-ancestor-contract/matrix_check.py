@@ -4,7 +4,7 @@
 import argparse
 from pathlib import Path
 
-VERSION = "17"
+VERSION = "18"
 VALID_ROLES = {"test", "contract", "qiniu"}
 EXPECTED_ROWS = [
     "immediate-tx-as-deferred|test|with_immediate_tx reserves the writer before its body",
@@ -73,6 +73,20 @@ EXPECTED_ROWS = [
     "config-range-falls-back-to-default|test|a config integer outside its range refuses to start",
     "config-nonnumeric-falls-back-to-default|test|a config integer that is not a number refuses to start",
     "upload-token-expired-deadline|qiniu|fm.upload-token.deadline-window",
+    "name-guard-fm-create-folder-fail-open|contract|name-guard.fm.create-folder",
+    "name-guard-fm-rename-fail-open|contract|name-guard.fm.rename",
+    "name-guard-fm-move-fail-open|contract|name-guard.fm.move",
+    "name-guard-fm-copy-fail-open|contract|name-guard.fm.copy",
+    "name-guard-fm-create-file-fail-open|contract|name-guard.fm.create-file",
+    "name-guard-fm-save-fail-open|contract|name-guard.fm.save",
+    "name-guard-fm-upload-token-fail-open|contract|name-guard.fm.upload-token",
+    "name-guard-fm-register-fail-open|contract|name-guard.fm.register",
+    "name-guard-fm-proxy-upload-fail-open|contract|name-guard.fm.proxy-upload",
+    "name-guard-webdav-put-fail-open|contract|name-guard.webdav.put",
+    "name-guard-webdav-mkcol-fail-open|contract|name-guard.webdav.mkcol",
+    "name-guard-webdav-destination-fail-open|contract|name-guard.webdav.destination",
+    "entry-json-mime-passthrough|contract|persisted-mime.fm.listing",
+    "copy-mime-passthrough|contract|persisted-mime.fm.copy",
 ]
 EXPECTED_MUTANTS = [row.split("|", 1)[0] for row in EXPECTED_ROWS]
 EXPECTED_CONTRACT_OWNERS = [
@@ -81,7 +95,7 @@ EXPECTED_CONTRACT_OWNERS = [
 EXPECTED_QINIU_OWNERS = [
     row.split("|", 2)[2] for row in EXPECTED_ROWS if row.split("|", 2)[1] == "qiniu"
 ]
-EXPECTED_ROLE_COUNTS = {"test": 27, "contract": 36, "qiniu": 3}
+EXPECTED_ROLE_COUNTS = {"test": 27, "contract": 50, "qiniu": 3}
 
 
 def validate(lines, listed_mutants, listed_assertions, listed_qiniu_assertions):

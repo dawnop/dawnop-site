@@ -5,7 +5,7 @@ use std/str
 use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Cell, open, query, exec, with_immediate_tx, scalar_int, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
 use json/value.{Json, JNull, JInt, JStr, JArr}
 use util/jsonx.{obj, jstr, jbool}
-use util/paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts}
+use util/paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts, safe_persisted_mime}
 use util/errkind.{KConflict, KPrecondition, conflict, precondition, split_kind}
 
 pub type FileRow = { path: String, is_dir: Bool, key: Option[String], content_type: String, size: Int, updated_at: String }
@@ -45,6 +45,13 @@ fn opt_or_blank(r: List[Cell], i: Int) -> String =
   }
 
 ## One DirEntry (VueFinder FsData line format).
+##
+## `mime_type` is a stored content type on its way out, so it crosses the same
+## boundary the response headers do. A row is not a trusted source: this value
+## reaches the browser, which hands it to the file manager as the type to render
+## and to preview with. An empty type stays null (that is "unknown", not a
+## refusal), and anything else either is printable ASCII or leaves as
+## application/octet-stream.
 fn entry(o: FileRow) -> Json !io = {
   let rel = o.path
   let is_dir = o.is_dir
@@ -57,7 +64,7 @@ fn entry(o: FileRow) -> Json !io = {
     ("type", jstr(if is_dir { "dir" } else { "file" })),
     ("file_size", if is_dir { JNull } else { JInt(o.size) }),
     ("last_modified", JInt(ts(o.updated_at))),
-    ("mime_type", if is_dir || o.content_type == "" { JNull } else { JStr(o.content_type) }),
+    ("mime_type", if is_dir || o.content_type == "" { JNull } else { JStr(safe_persisted_mime(o.content_type)) }),
     ("visibility", jstr("public")),
   ])
 }
@@ -895,7 +902,11 @@ fn insert_copy_rows(c: DbConn, tree: CopyTree, i: Int) -> Result[Int, String] !i
       insert_folder_row(c, destination)
     } else {
       match row.copied_key {
-        Some(key) -> insert_file_row(c, destination, key, row.source.content_type, row.source.size)
+        # a copy carries the source row's stored type forward into a brand new
+        # row, so an unshippable legacy value would be duplicated rather than
+        # retired. It goes through the outbound boundary on the way in, the same
+        # way svc/files save_mime does, and the copy lands clean.
+        Some(key) -> insert_file_row(c, destination, key, safe_persisted_mime(row.source.content_type), row.source.size)
         None -> Err("copy insertion has no object result: ${full(row.source.path)}")
       }
     }

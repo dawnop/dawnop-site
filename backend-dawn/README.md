@@ -40,8 +40,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   **jar 与 `lib/` 都是构建产物，不入库**——jar 曾经入库，结果是它悄悄落后于 `src/`（要靠手动
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
-- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、159 个本仓单测，连 web/json/sha2 三个包
-  共 227 个；`use java` import 共 61 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
+- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、162 个本仓单测，连 web/json/sha2 三个包
+  共 230 个；`use java` import 共 61 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
   libsimple / 网络，CI 每次 push 都跑）。用到 SQLite 的几个跑内存库（`jdbc:sqlite::memory:`），
   自带建表，不碰 fixture。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
@@ -120,6 +120,19 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 **文件管理（刀 11）**
 - `api/api_fm.dawn` — 17 端点（除 `upload`）：列目录 / 预览 / 下载（302）/ 内容代理（二进制）/ stats / search / CRUD / save / register / upload-token。
   只剩路由与线格式，树操作在 `svc/files.dawn`。
+- **写入的每一段名称必须等于自己的 `str.trim`**（`util/paths.dawn` 的 `require_trimmed_names`）。
+  12 个写入入口各自守住自己要写的整条相对路径：FM 的 create-folder / rename / move / copy /
+  create-file / save / upload-token / register / upload，WebDAV 的 PUT / MKCOL / MOVE+COPY
+  （后两者共用一处 `Destination` 守卫）。违反回 400，纯空白名与首尾带空白的名各有自己的消息。
+  create-folder / create-file / rename 从前在这里 `str.trim` 后照建，前端也 trim；两层现在都不再
+  改写用户输入。判词与寻址是分开的：`fm_split` 保持无损，所以已存在的「a.txt 」仍可列目录、下载、
+  改名改干净、删除，只是不能再被创建、移动或复制到别处。拒的空白集合就是 `str.trim` 的
+  （`Character.isWhitespace`：含 U+3000，不含 U+00A0 / U+2007 / U+202F / U+200B / U+FEFF），
+  不是「不可见字符」。
+- **`files.content_type` 出站一律过 `safe_persisted_mime`**（整体替换成 `application/octet-stream`，
+  不做清洗）：PROPFIND 的 `getcontenttype`、HEAD/GET 的 Content-Type、`/api/fm/content` 代理、
+  save 复用旧类型、七牛 multipart 头、代理上传申报的类型，加上 DirEntry 的 `mime_type` 与 COPY
+  写进新行的类型。`thumb_fop` 不在此列，它只拿这个值跟固定的光栅类型白名单比对，值本身不外流。
 - `api/webdav.dawn`：`Destination` 只把 path-absolute 或 authority 与请求 `Host` 归一后相同的
   HTTP(S) absolute URI 映射到本地树。`Request` 没有可信的外部 scheme 字段，因此 `Host` 未带端口时
   同站的 HTTP 与 HTTPS 形式都接受，各自按 80/443 归一；其他 scheme、远端 authority、query 与
@@ -139,9 +152,9 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   干净子树仍可从遗留脏外部祖先下移出。FM 与 WebDAV COPY 会在对象操作前拒绝携带 key 的目录、
   缺少有效非空 key 的文件、映射目标冲突和目标根下的未映射遗留项，随后把全部 metadata 在一个即时
   事务内复验源快照、对象形状、完整目标子树与父链并一次提交。FM COPY 将冲突、七牛失败和普通
-  SQLite/内部失败分别映射为 409、502 和 500。66 个 fail-closed mutant 按依赖层精确归属到 27 条
-  Dawn 单测、36 条逐项重置数据库、假七牛与调用日志的 HTTP 合同，以及 3 条 qiniu golden
-  （`scripts/fm-ancestor-contract/`，矩阵 v17）。Dawn
+  SQLite/内部失败分别映射为 409、502 和 500。80 个 fail-closed mutant 按依赖层精确归属到 27 条
+  Dawn 单测、50 条逐项重置数据库、假七牛与调用日志的 HTTP 合同，以及 3 条 qiniu golden
+  （`scripts/fm-ancestor-contract/`，矩阵 v18）。Dawn
   角色只核对自己的单测红集；
   HTTP 角色必须保持全部 Dawn 单测绿色，再唯一打红自己的合同，避免把低层事务退化对上层的真实影响
   误判为同层 collateral。
