@@ -575,6 +575,30 @@ fn destination_authority_matches(req: Request, uri: URI, scheme: String) -> Bool
       }
   }
 
+# The local authority an absolute Destination is compared against comes from the
+# Host header and from nowhere else, so the comparison is only defined when the
+# request carries exactly one. RFC 7230 §5.4 says it must.
+#
+# Neither departure used to be noticed. With Host absent, the comparison fell
+# through to "no match" and the request was refused as pointing at another
+# server — a claim about a request that never named a server at all, arrived at
+# by accident rather than by rule. With Host repeated, the first value won
+# silently: `Host: dav.example` followed by `Host: evil.example` was accepted,
+# and the same pair in the other order was refused, so which of two contradicting
+# authorities a request was addressed to decided the answer by header order.
+# Repetition has no single value; picking one is a guess, so both shapes are
+# refused, and each says which one it was.
+fn require_single_host(req: Request) -> Result[Unit, HttpError] = {
+  let given = headers_all(req, "host")
+  if len(given) == 0 {
+    Err(http_error(400, "缺少 Host 头，无法判断 Destination 是否属于当前服务器"))
+  } else if len(given) > 1 {
+    Err(http_error(400, "Host 头只能出现一次"))
+  } else {
+    Ok(())
+  }
+}
+
 fn require_hierarchical_destination(uri: URI) -> Result[Unit, HttpError] !io =
   if uri.isOpaque() {
     Err(http_error(400, "Destination 必须是分层 URI"))
@@ -620,10 +644,13 @@ fn destination_path(req: Request, raw: String, uri: URI) -> Result[String, HttpE
       let scheme = str.to_lower(raw_scheme)
       if not destination_scheme_supported(scheme) {
         Err(http_error(400, "Destination scheme 不受支持"))
-      } else if not destination_authority_matches(req, uri, scheme) {
-        Err(http_error(400, "Destination 不属于当前服务器"))
       } else {
-        destination_raw_path(uri)
+        let _h = require_single_host(req)?
+        if not destination_authority_matches(req, uri, scheme) {
+          Err(http_error(400, "Destination 不属于当前服务器"))
+        } else {
+          destination_raw_path(uri)
+        }
       }
     }
   }
@@ -1123,6 +1150,20 @@ fn dest_req_at(dest: String, host: String, prefix: String) -> Request =
 
 fn dest_req(dest: String) -> Request = dest_req_at(dest, "dav.example", "/dav")
 
+# The same request with the Host header repeated, or absent — neither shape is
+# expressible through dest_req_at, which carries exactly one value.
+fn dest_req_hosts(dest: String, hosts: List[String]) -> Request =
+  Request {
+    method: "MOVE", path: "/dav", raw_path: "/dav",
+    params: map.from([("rest", ["x"])]),
+    query: map.empty(), headers: map.from([
+      ("destination", [dest]),
+      ("host", hosts),
+      ("x-dav-prefix", ["/dav"]),
+    ]),
+    body: "", raw: bytes.utf8(""), body_file: None, route: None,
+  }
+
 fn protocol_req(method: String, header_name: String, header_value: String, body: String) -> Request =
   Request {
     method: method, path: "/dav/source", raw_path: "/dav/source",
@@ -1205,6 +1246,33 @@ test "dest_rel rejects a foreign authority" {
   assert dest_error(dest_rel(dest_req("http://user@dav.example/dav/a")), wrong)
   assert dest_error(dest_rel(dest_req("http:///dav/a")), wrong)
   assert dest_error(dest_rel(dest_req_at("http://dav.example/dav/a", "dav.example/path", "/dav")), wrong)
+}
+
+test "dest_rel needs a Host header to place an absolute Destination" {
+  # Refused because the request named no local authority, not because the one it
+  # named was somebody else's — before this rule the two were the same answer.
+  assert dest_error(
+    dest_rel(dest_req_hosts("http://dav.example/dav/a", [])),
+    "缺少 Host 头，无法判断 Destination 是否属于当前服务器")
+  # A path-absolute Destination never consults Host, so it is unaffected.
+  assert dest_rel(dest_req_hosts("/dav/a", [])) == Ok(Some("a"))
+  assert dest_rel(dest_req_hosts("http://dav.example/dav/a", ["dav.example"])) == Ok(Some("a"))
+}
+
+test "dest_rel refuses a repeated Host header in either order" {
+  let repeated = "Host 头只能出现一次"
+  # first-wins used to accept this one and refuse the next, on header order alone
+  assert dest_error(
+    dest_rel(dest_req_hosts("http://dav.example/dav/a", ["dav.example", "evil.example"])), repeated)
+  assert dest_error(
+    dest_rel(dest_req_hosts("http://dav.example/dav/a", ["evil.example", "dav.example"])), repeated)
+  # two spellings of the same authority still have no single value
+  assert dest_error(
+    dest_rel(dest_req_hosts("http://dav.example/dav/a", ["dav.example", "dav.example"])), repeated)
+  assert dest_error(
+    dest_rel(dest_req_hosts("http://dav.example/dav/a", ["dav.example", "DAV.EXAMPLE"])), repeated)
+  assert dest_error(
+    dest_rel(dest_req_hosts("http://dav.example/dav/a", ["dav.example", "dav.example", "dav.example"])), repeated)
 }
 
 test "dest_rel maps malformed Host syntax to 400" {

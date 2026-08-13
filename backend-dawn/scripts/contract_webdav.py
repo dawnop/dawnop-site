@@ -124,6 +124,15 @@ def dav(base, method, path, auth, headers=None, body=None, timeout=30):
         return TRANSPORT_STATUS, {}, transport_error(e).encode()
 
 
+def file_exists(base, path, auth) -> bool:
+    """Whether the resource is there, for probes whose point is that it is not.
+
+    A refusal that still wrote would leave the status looking right, so the
+    status alone is not the whole claim.
+    """
+    return dav(base, "PROPFIND", path, auth, {"Depth": "0"})[0] == 207
+
+
 # A header line the wire format allows: a token, a colon, then no control
 # characters. Anything the server emits that fails this is a malformed header,
 # which is exactly what a stored CRLF in a content type produces.
@@ -132,20 +141,24 @@ _HEADER_LINE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+:[ \t]?[\x20-\x7e]*$")
 _VOLATILE_HEADERS = ("date", "server", "keep-alive", "connection")
 
 
-def raw_http(base, method, path, header_pairs, timeout=15):
+def raw_http(base, method, path, header_pairs, timeout=15, default_host=True):
     """One request over a plain socket, answered as (head bytes, body bytes).
 
     urllib cannot send the same header twice and reassembles the response before
     handing it over, so neither a repeated Depth header nor a malformed response
     header line is expressible through it. Both are the point of the cases that
     call this.
+
+    `default_host=False` drops the Host line this builds, which urllib cannot do
+    either: it is the only way to ask what the server does with a request that
+    names no authority at all.
     """
     parts = urllib.parse.urlsplit(base)
     host = parts.hostname
     port = parts.port or 80
     lines = [
         f"{method} {path} HTTP/1.1",
-        f"Host: {host}:{port}",
+        *([f"Host: {host}:{port}"] if default_host else []),
         "Connection: close",
         "Content-Length: 0",
         *(f"{k}: {v}" for k, v in header_pairs),
@@ -506,6 +519,48 @@ def main():
         f"/dav/{PREFIX}/rejected-host",
         {"Depth": "0"},
     )
+
+    # An absolute Destination is placed by comparing its authority against the
+    # request's own, and Host is the only source for that. The unit tests own the
+    # predicate; what only the wire can answer is whether a repeated Host even
+    # reaches it — if the server collapsed the two values into one, the rule
+    # would be unreachable and the Dawn assertions would be about a shape that
+    # never arrives. Sent over a socket because urllib can send neither a
+    # repeated header nor no Host at all.
+    #
+    # The accepted spelling is in the same case: a rule that refused every Host
+    # would be just as wrong, and a probe that only recorded refusals could not
+    # tell the two apart.
+    host_probe = {}
+    for label, hosts, keep_default in (
+        ("one", (), True),
+        ("repeat-identical", (authority,), True),
+        ("repeat-foreign-second", ("foreign.invalid",), True),
+        ("repeat-foreign-first", ("foreign.invalid", authority), False),
+        ("repeat-three", (authority, authority), True),
+        ("absent", (), False),
+    ):
+        head, raw = raw_http(
+            B,
+            "COPY",
+            "/dav/empty-dir",
+            [
+                ("Authorization", "Basic " + base64.b64encode(auth.encode()).decode()),
+                *(("Host", v) for v in hosts),
+                ("Destination", f"http://{authority}/dav/{PREFIX}/host-{label}"),
+            ],
+            default_host=keep_default,
+        )
+        report = wire_report(head, raw)
+        entry = {
+            "status_line": report["status_line"],
+            "malformed_header_lines": report["malformed_header_lines"],
+            "body": normalize(raw.decode("utf-8", "replace")),
+            # the refusal has to be a refusal to write, not only a status
+            "created": file_exists(B, f"/dav/{PREFIX}/host-{label}", auth),
+        }
+        host_probe[label] = entry
+    g.case("copy.dest.host.singleton.fail-closed", host_probe)
     case(
         "copy.dest.prefix.partial",
         "COPY",

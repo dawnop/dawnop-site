@@ -4,7 +4,7 @@
 import argparse
 from pathlib import Path
 
-VERSION = "4"
+VERSION = "5"
 VALID_ROLES = {"test", "qiniu"}
 EXPECTED_ROWS = [
     "drop-dot-check|test|dest_rel rejects one-dot segments after one decode",
@@ -17,6 +17,8 @@ EXPECTED_ROWS = [
     "use-http-default-for-https|test|destination default ports are scheme-correct",
     "allow-foreign-authority|test|dest_rel rejects a foreign authority",
     "uncatch-host-uri|test|dest_rel maps malformed Host syntax to 400",
+    "host-absent-fail-open|test|dest_rel needs a Host header to place an absolute Destination",
+    "host-repeat-first-wins|test|dest_rel refuses a repeated Host header in either order",
     "accept-non-simple-reference|test|dest_rel rejects non-Simple-ref relative forms",
     "uncatch-destination-uri|test|dest_rel maps malformed URI syntax to 400",
     "unwrap-opaque-raw-path|test|dest_rel rejects opaque URI forms",
@@ -120,7 +122,7 @@ def self_test() -> None:
         "hand-owned set",
     )
     expect_rejected(
-        "wrong-version", ["version=3", *EXPECTED_ROWS], EXPECTED_MUTANTS, "version"
+        "wrong-version", ["version=4", *EXPECTED_ROWS], EXPECTED_MUTANTS, "version"
     )
     expect_rejected("mutator-omission", base, EXPECTED_MUTANTS[:-1], "mutate.py --list")
     expect_rejected(
