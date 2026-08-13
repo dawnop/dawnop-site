@@ -1,35 +1,50 @@
 #!/usr/bin/env bash
-# 应急回滚：把 dawnop.com 从 Dawn 后端（:8001）切回原来的 FastAPI/uvicorn 后端（:8000）。
+# 回切：把 dawnop.com 从应急回滚的 FastAPI（:8000）切回 Dawn 后端（:8001）。
 #
-# 背景：M6 的 strangler-fig 迁移收口之后，每个 /api 端点与 dav.dawnop.com 的 WebDAV 都由
-# :8001 上的 Dawn 后端提供，FastAPI 服务（dawnop-backend，uvicorn :8000）已经退役
-# （`systemctl disable --now dawnop-backend`）。FastAPI 的代码、venv 和库访问都还原封不动
-# 留在 /opt/dawnop/backend，所以一次完整回滚就是：
-#   1. 把 uvicorn 拉回来（受守护地拉：文件路由关掉、库身份核定并闩死），
-#   2. 核验它确实是我们以为的那个进程、连的是我们以为的那个库，
-#   3. 才把 nginx 的 /api 与 dav 指回 :8000。
-# Dawn 服务（:8001）全程不动，所以回切就是反操作（return-to-dawn.sh）。
+# 这是 rollback-to-fastapi.sh 的反操作。它刻意**不**假设「切回去了就没事了」：
+#   - reload 之后要重新核验，而不是把 reload 成功当成回切成功；
+#   - Dawn 侧走的是完整探活，不是 curl 一个 /health 就算数——`/api/health` 是一个
+#     不碰库、不碰七牛、不碰鉴权的常量端点，它绿着的时候后端可以是任何程度的坏；
+#   - 任何「保留 FastAPI」的路径都重新完整核验一遍 FastAPI，不复用之前的结论。
 #
 # 以 root 在生产机上跑：
-#   ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/rollback-to-fastapi.sh
+#   ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/return-to-dawn.sh
 set -euo pipefail
 
-# 解析 nginx 真正读的那个文件，而不是假设某种布局——这里每一个写死的答案都至少错过一次：
-#
-#   - sites-enabled/dawnop，直接改：今天是对的（它是普通文件），但任何人一旦按文档恢复
-#     软链布局就错了，因为 GNU `sed -i` 不跟随符号链接——它写临时文件再 rename 覆盖过去，
-#     于是软链被替换成普通文件，真正的配置一个字没动。
-#   - sites-available/dawnop：这个脚本到 2026-07-17 为止就是这么说的，依据是部署文档声称
-#     有软链。生产根本没有软链：sites-enabled/dawnop 是普通文件，sites-available/dawnop
-#     是没人读的陈旧副本（nginx 只 include sites-enabled/*）。于是那个「修复」把回滚指向了
-#     一个毫无效果的文件——一次印着成功、什么都没改的回滚，正是它本该防住的失败。
-#
-# `readlink -f` 对两种布局都答得对：普通文件解析成自己，软链解析成目标。改解析后的路径
-# 永远是真配置，也永远吃不掉软链。
+# 与 rollback-to-fastapi.sh 同一套理由：改 readlink -f 解析后的路径，两种布局都对，
+# 也吃不掉软链。那段理由写在回滚脚本里，这里不重复。
 ENABLED=/etc/nginx/sites-enabled/dawnop
 CONF=""
 STAMP=$(date +%s)
 BACKUP=""
+
+# Dawn 侧的期望身份，逐条对着 backend-dawn/deploy/dawnop-dawn.service 抄。
+# FastAPI 侧的同类常量在下面的共享块里——两个方向各自只有一处定义，且 FastAPI 那处
+# 在两个脚本之间逐字节相同（见块首注释）。
+DAWN_UNIT="dawnop-dawn"
+DAWN_BASE="http://127.0.0.1:8001"
+DAWN_WORKDIR="/opt/dawnop-dawn"
+DAWN_USER="dawnop"
+DAWN_GROUP="dawnop"
+DAWN_PINNED_INTERPRETER="/usr/bin/java"
+DAWN_ARGV="/usr/bin/java -Xmx256m -jar /opt/dawnop-dawn/backend-dawn.jar"
+
+# 完整探活：每条都是「后端某一层真的活着」的证据，而不是进程还在。
+#   articles  → 库读得动（FTS 触发器要 libsimple，缺它这里就不是 200）
+#   pages/nav → 内置页在
+#   search    → 分词器/FTS 那条路走得通
+#   settings  → 鉴权是接上的（没 token 必须 401，不是 200 也不是 500）
+#   fm        → 401 而不是 503：证明我们真的落在 Dawn 上。受守护的 FastAPI 这里回 503，
+#               所以这一条是两个后端之间唯一一个不看端口就能分辨的判词。
+DAWN_PROBES=(
+  "GET /api/health 200"
+  "GET /api/articles?page=1&size=1 200"
+  "GET /api/pages/nav 200"
+  "GET /api/search?q=a&page=1&size=1 200"
+  "GET /api/settings 401"
+  "GET /api/fm?path=qiniu:// 401"
+  "GET /api/viz 401"
+)
 
 # >>> shared FastAPI verification block >>>
 # 这一段在 rollback-to-fastapi.sh 与 return-to-dawn.sh 里**逐字节相同**，
@@ -300,45 +315,82 @@ verify_guarded_fastapi_runtime() {
 }
 # <<< shared FastAPI verification block <<<
 
+probe_suite() {
+  local kind=$1 origin=$2 label=$3
+  shift 3
+  local spec method path want failed=0
+  for spec in "$@"; do
+    read -r method path want <<< "$spec"
+    if [ "$kind" = local ]; then
+      local_status_is "$origin" "$method" "$path" "$want" || {
+        echo "!!! [$label] $method $origin$path 不是 $want" >&2
+        failed=1
+      }
+    else
+      https_status_is "$origin" "$method" "$path" "$want" || {
+        echo "!!! [$label] $method $origin$path 不是 $want" >&2
+        failed=1
+      }
+    fi
+  done
+  [ "$failed" -eq 0 ]
+}
+
+verify_dawn_runtime() {
+  local pid
+  echo "    [verify] 完整核验 Dawn 运行时"
+  pid=$(unit_main_pid "$DAWN_UNIT") || {
+    echo "!!! $DAWN_UNIT 没有 MainPID" >&2
+    return 1
+  }
+  echo "    [verify] $DAWN_UNIT MainPID=$pid"
+  verify_unit_identity "$DAWN_UNIT" "$pid" \
+    "$DAWN_ARGV" "$DAWN_WORKDIR" "$DAWN_USER" "$DAWN_GROUP" || return 1
+  # 与 FastAPI 侧同样的三道：解释器 + 单元定义环境 + 进程环境。回滚和回切验的东西必须
+  # 是同一组，否则「回滚成功」和「回切成功」说的不是一回事。
+  verify_pinned_interpreter "$pid" "$DAWN_PINNED_INTERPRETER" || return 1
+  verify_unit_loader_environment "$DAWN_UNIT" || return 1
+  verify_process_loader_environment "$pid" || return 1
+  probe_suite local "$DAWN_BASE" "dawn-local" "${DAWN_PROBES[@]}" || return 1
+  echo "    [verify] 通过"
+}
+
+keep_fastapi_and_bail() {
+  echo "!!! $1" >&2
+  echo "!!! 保留 FastAPI：还原 nginx 并**重新完整核验** FastAPI" >&2
+  if [ -n "$BACKUP" ] && [ -f "$BACKUP" ]; then
+    cp -a "$BACKUP" "$CONF"
+    if nginx -t; then
+      systemctl reload nginx
+    else
+      fatal "还原后的配置 nginx -t 也不过——请人工介入，备份在 $BACKUP"
+    fi
+  fi
+  # 这里不允许复用任何「刚才验过了」的结论。世界在这中间被改过：nginx 切过去又切回来，
+  # Dawn 起过又被判定不健康。这个脚本里没有 FASTAPI_VERIFIED 之类的缓存变量，删掉它
+  # 就是为了让这一行没有捷径可走。
+  verify_guarded_fastapi_runtime
+  exit 1
+}
+
 require_root
 
-echo "==> 1/5 前置检查与守护开关"
+echo "==> 1/5 前置检查"
 [ -e "$ENABLED" ] || fatal "$ENABLED 不存在——这台机器对吗？"
 CONF=$(readlink -f "$ENABLED")
 [ -f "$CONF" ] || fatal "$CONF 不是普通文件"
-BACKUP="/etc/nginx/backups/dawnop.pre-rollback.$STAMP"
+BACKUP="/etc/nginx/backups/dawnop.pre-return.$STAMP"
 echo "    nginx 读的是：$ENABLED -> $CONF"
 
-# 哨兵**必须在进程起来之前**放好：守卫是进程级闩存，起来之后才放的哨兵这一代进程看不见
-# （见 backend/app/core/process_guard.py）。下一步用 restart 而不是 `enable --now`，就是
-# 为了保证读到哨兵的是一个全新的进程——`enable --now` 对一个已经在跑的服务什么都不做。
-mkdir -p "$(dirname "$FILE_ROUTE_SENTINEL")"
-: > "$FILE_ROUTE_SENTINEL"
-echo "    哨兵已放置：$FILE_ROUTE_SENTINEL（本次回滚是受守护的：/api/fm 关闭）"
+echo "==> 2/5 核验 Dawn 运行时（**在动 nginx 之前**，同回滚脚本第 3 步的纪律）"
+systemctl start "$DAWN_UNIT"
+wait_for_local_health "$DAWN_BASE" 40 || keep_fastapi_and_bail "$DAWN_BASE/api/health 没有变健康"
+verify_dawn_runtime || keep_fastapi_and_bail "Dawn 运行时核验没过"
 
-echo "==> 2/5 受守护地拉起 FastAPI（uvicorn :8000）"
-systemctl enable "$FASTAPI_UNIT"
-systemctl restart "$FASTAPI_UNIT"
-
-echo "==> 3/5 核验 FastAPI 运行时"
-# **顺序是有意的：核验在动 nginx 之前。**
-#
-# 单元定义的加载器环境检查有一个盲区——`systemctl show -p Environment` 看不见
-# EnvironmentFile= 指向的文件内容，而这个单元恰好有一个 EnvironmentFile=/opt/dawnop/backend/.env。
-# 补上盲区的是进程环境检查（/proc/PID/environ），但它要求进程已经在跑。
-#
-# 于是「进程已经起来」和「流量还没切过去」之间的这个窗口，是唯一能既看得见真实进程环境、
-# 又还来得及不切流的时刻。把核验挪到第 4 步之后，盲区就没人兜了：等到发现 .env 里有一行
-# PYTHONPATH，公网流量已经在那个进程上了。
-verify_guarded_fastapi_runtime
-
-echo "==> 4/5 把 nginx 的 /api 与 dav.dawnop.com 指回 :8000"
+echo "==> 3/5 把 nginx 的 /api 与 dav.dawnop.com 指回 :8001"
 mkdir -p /etc/nginx/backups
 cp -a "$CONF" "$BACKUP"
 
-# 每一处替换都先核对而不是假设。sed 匹配不到任何东西也退出 0，所以一个没核对的 sed 会把
-# 回滚变成一次仍然印着成功的空操作——`client_max_body_size 64m` 那行就是这么在这里活过
-# nginx.conf 改成 `0` 之后很久的。
 sub() {
   local pat=$1 desc=$2
   grep -qF -- "$pat" "$CONF" || {
@@ -346,32 +398,34 @@ sub() {
     fatal "$CONF 里没有 '$pat'（$desc）——配置漂了，不动 nginx"
   }
 }
-sub 'proxy_pass http://127.0.0.1:8001;' '/api/ upstream'
-sub 'proxy_pass http://127.0.0.1:8001/dav/;' 'dav vhost upstream'
-sed -i 's#proxy_pass http://127.0.0.1:8001;#proxy_pass http://127.0.0.1:8000;#' "$CONF"
-sed -i 's#proxy_pass http://127.0.0.1:8001/dav/;#proxy_pass http://127.0.0.1:8000/dav/;#' "$CONF"
-# client_max_body_size 不用动：dav vhost 已经是 `0`（不限），两个后端都把 PUT 的 body
-# 流到磁盘，这个上限与后端无关。
+sub 'proxy_pass http://127.0.0.1:8000;' '/api/ upstream'
+sub 'proxy_pass http://127.0.0.1:8000/dav/;' 'dav vhost upstream'
+sed -i 's#proxy_pass http://127.0.0.1:8000;#proxy_pass http://127.0.0.1:8001;#' "$CONF"
+sed -i 's#proxy_pass http://127.0.0.1:8000/dav/;#proxy_pass http://127.0.0.1:8001/dav/;#' "$CONF"
 
-# `nginx -t` 失败时如果就这么被 set -e 退掉，磁盘上会留着一份坏配置：nginx 还在用旧的，
-# 所以一切看起来都正常，直到某个毫不相干的 reload 或一次重启失败——那时站点挂掉的原因，
-# 和触发它的人没有任何关系。
 if ! nginx -t; then
   cp -a "$BACKUP" "$CONF"
   fatal "nginx -t 没过——已还原 $BACKUP，nginx 保持原样"
 fi
 systemctl reload nginx
 
-echo "==> 5/5 切流后复验"
-expect_https_status "$SITE_ORIGIN" GET /api/health 200
-expect_https_status "$SITE_ORIGIN" GET /api/pages/nav 200
+echo "==> 4/5 reload 之后重新核验"
+# reload 成功只说明配置能解析，不说明流量落到了一个好后端上。这一步把第 2 步的核验
+# **原样再跑一遍**（进程可能在这中间重启过），再加一轮公网探活。
+verify_dawn_runtime || keep_fastapi_and_bail "reload 之后 Dawn 运行时核验没过"
+probe_suite https "$SITE_ORIGIN" "dawn-public" \
+  "GET /api/health 200" \
+  "GET /api/articles?page=1&size=1 200" \
+  "GET /api/pages/nav 200" \
+  "GET /api/fm?path=qiniu:// 401" ||
+  keep_fastapi_and_bail "公网探活没过（/api/fm 若是 503，说明流量还在受守护的 FastAPI 上）"
 expect_https_status "$DAV_ORIGIN" OPTIONS / 401
-# 受守护 = 文件路由是关的，公网也必须这么表现（401 会说明守卫根本没生效）。
-https_status_is "$SITE_ORIGIN" GET '/api/fm?path=qiniu://' 503 ||
-  fatal "公网 /api/fm 不是 503——守卫没有生效"
+
+echo "==> 5/5 收尾：停掉 uvicorn，撤掉守护哨兵"
+systemctl disable --now "$FASTAPI_UNIT"
+rm -f "$FILE_ROUTE_SENTINEL"
 
 echo
-echo "已回滚到 FastAPI :8000。Dawn :8001 仍在运行（未动）。"
+echo "已回切到 Dawn :8001。FastAPI :8000 已停并 disable。"
 echo "  nginx 备份：$BACKUP"
-echo "  哨兵：$FILE_ROUTE_SENTINEL（回切时由 return-to-dawn.sh 移除）"
-echo "  回切：sudo bash /opt/dawnop-dawn/return-to-dawn.sh"
+echo "  再次回滚：sudo bash /opt/dawnop-dawn/rollback-to-fastapi.sh"
