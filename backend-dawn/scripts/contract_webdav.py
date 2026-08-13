@@ -38,6 +38,7 @@ import argparse
 import base64
 import os
 import re
+import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -121,6 +122,93 @@ def dav(base, method, path, auth, headers=None, body=None, timeout=30):
         return e.code, {k.lower(): v for k, v in (e.headers or {}).items()}, e.read()
     except Exception as e:  # noqa: BLE001 - transport failure is a case failure
         return TRANSPORT_STATUS, {}, transport_error(e).encode()
+
+
+# A header line the wire format allows: a token, a colon, then no control
+# characters. Anything the server emits that fails this is a malformed header,
+# which is exactly what a stored CRLF in a content type produces.
+_HEADER_LINE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+:[ \t]?[\x20-\x7e]*$")
+# Header values that move every run and say nothing about the contract.
+_VOLATILE_HEADERS = ("date", "server", "keep-alive", "connection")
+
+
+def raw_http(base, method, path, header_pairs, timeout=15):
+    """One request over a plain socket, answered as (head bytes, body bytes).
+
+    urllib cannot send the same header twice and reassembles the response before
+    handing it over, so neither a repeated Depth header nor a malformed response
+    header line is expressible through it. Both are the point of the cases that
+    call this.
+    """
+    parts = urllib.parse.urlsplit(base)
+    host = parts.hostname
+    port = parts.port or 80
+    lines = [
+        f"{method} {path} HTTP/1.1",
+        f"Host: {host}:{port}",
+        "Connection: close",
+        "Content-Length: 0",
+        *(f"{k}: {v}" for k, v in header_pairs),
+    ]
+    request = ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1")
+    with socket.create_connection((host, port), timeout=timeout) as sock:
+        sock.settimeout(timeout)
+        sock.sendall(request)
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+        head, _, body = buf.partition(b"\r\n\r\n")
+        want = None if method == "HEAD" else _content_length(head)
+        while want is None or len(body) < want:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            body += chunk
+    return head, body
+
+
+def _content_length(head: bytes):
+    for line in head.decode("latin-1").split("\r\n")[1:]:
+        name, _, value = line.partition(":")
+        if name.strip().lower() == "content-length":
+            try:
+                return int(value.strip())
+            except ValueError:
+                return None
+    return None
+
+
+def wire_report(head: bytes, body: bytes) -> dict:
+    """What a response looked like on the wire, with the per-run values dropped.
+
+    Header *names* are kept in order (an injected header changes the list even
+    when nobody looks at its value), the content-type values are kept in full
+    (the whole point is that there is exactly one and it is the fallback), and
+    every line is checked against the wire grammar.
+    """
+    text = head.decode("latin-1")
+    lines = text.split("\r\n")
+    fields = [line for line in lines[1:] if line]
+    named = [
+        (line.split(":", 1)[0].strip().lower(), line.split(":", 1)[-1].strip())
+        for line in fields
+    ]
+    return {
+        "status_line": lines[0] if lines else "",
+        "header_names": [name for name, _ in named],
+        "content_type_values": [v for name, v in named if name == "content-type"],
+        "kept_headers": {
+            name: value for name, value in named if name not in _VOLATILE_HEADERS
+        },
+        "malformed_header_lines": [
+            line for line in fields if not _HEADER_LINE.match(line)
+        ],
+        "mentions_injected": "injected" in text.lower(),
+        "body_size": len(body),
+    }
 
 
 def facts(xml: str) -> dict:
@@ -227,6 +315,52 @@ def main():
         {"Depth": "1", "X-Dav-Prefix": "/"},
         with_facts=True,
     )
+
+    print("\n== PROPFIND Depth fails closed ==")
+    # RFC 4918 gives PROPFIND 0, 1 and infinity; this server does two of them.
+    # A Depth it cannot honour used to be read as Depth 1, because the header was
+    # only ever compared against "0" — so "infinity" listed one level and said
+    # nothing about the rest, and a typo listed a directory the client had asked
+    # not to walk. Repetition has no single value in any order and is refused
+    # too. The valid readings are pinned in the same case, so a fix that closed
+    # the door on everything would be just as red.
+    depth_probe = {}
+    for label, values in (
+        ("missing", []),
+        ("zero", ["0"]),
+        ("one", ["1"]),
+        ("infinity", ["infinity"]),
+        ("infinity-uppercase", ["INFINITY"]),
+        ("garbage", ["garbage"]),
+        ("empty", [""]),
+        ("two", ["2"]),
+        ("comma-list", ["0,1"]),
+        ("repeat-zero-one", ["0", "1"]),
+        ("repeat-one-zero", ["1", "0"]),
+        ("repeat-identical", ["1", "1"]),
+        ("repeat-with-infinity", ["0", "infinity"]),
+    ):
+        head, raw = raw_http(
+            B,
+            "PROPFIND",
+            "/dav/docs",
+            [
+                ("Authorization", "Basic " + base64.b64encode(auth.encode()).decode()),
+                *(("Depth", v) for v in values),
+            ],
+        )
+        report = wire_report(head, raw)
+        body = normalize(raw.decode("utf-8", "replace"))
+        entry = {
+            "status_line": report["status_line"],
+            "content_type_values": report["content_type_values"],
+            "malformed_header_lines": report["malformed_header_lines"],
+            "responses": body.count("<D:response>"),
+        }
+        if not report["status_line"].startswith("HTTP/1.1 207"):
+            entry["body"] = body
+        depth_probe[label] = entry
+    g.case("propfind.depth.invalid.fail-closed", depth_probe)
 
     print("\n== HEAD (metadata only, no bytes) ==")
     case("head.file", "HEAD", "/dav/docs/notes.txt")

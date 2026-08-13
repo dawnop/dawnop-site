@@ -27,13 +27,13 @@ use java "java.text.SimpleDateFormat"
 use java "java.util.Date"
 use java "java.util.Locale"
 use java "java.util.TimeZone"
-use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, text, raw, binary, redirect, with_header, header, param_segs}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, text, raw, binary, redirect, with_header, header, headers_all, param_segs}
 use web/router.{Route, route_method_of, tagged}
 use db/db.{with_db}
 use svc/auth.{Auth, check_basic}
 use svc/files.{signed_url, gc_unreferenced, gc_rows_unreferenced, gc_copy_tree_unreferenced, copy_tree_objects}
 use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}
-use util/paths.{basename, parent_rel, ext, ts, guess_mime}
+use util/paths.{basename, parent_rel, ext, ts, guess_mime, safe_persisted_mime}
 use qiniu/rs.{upload_file}
 use java "java.io.File"
 use util/crypto.{sha256_hex, uuid, uuid_hex}
@@ -145,7 +145,7 @@ fn response_xml(prefix: String, rel: String, name: String, is_dir: Bool, size: I
     if is_dir {
       ""
     } else {
-      let m = if mime == "" { "application/octet-stream" } else { mime }
+      let m = safe_persisted_mime(mime)
       let etag_xml = if etag == "" { "" } else { "<D:getetag>${xml_escape(etag)}</D:getetag>" }
       "<D:getcontentlength>$size</D:getcontentlength><D:getcontenttype>${xml_escape(m)}</D:getcontenttype>$etag_xml"
     }
@@ -171,9 +171,38 @@ fn key_etag(k: Option[String]) -> String = match k { Some(v) -> "\"$v\"", None -
 fn kids_xml(prefix: String, rows: List[FileRow]) -> String !io =
   fold(rows, "", (acc, o) => acc ++ entry_xml(prefix, o))
 
+# RFC 4918 §9.1 gives PROPFIND three Depth values — 0, 1 and infinity — and this
+# server implements two of them. The header used to be read with a default and
+# then compared to "0", so every value that was not literally "0" (a typo, an
+# "infinity" this server does not do, a header the client meant as a constraint)
+# silently became a Depth 1 listing. A Depth the server cannot honour is a request
+# it has not understood, so it is refused rather than reinterpreted.
+#
+# Repetition is refused for the same reason and in any order: two Depth headers
+# have no single value, so picking either one (the first, the last) is a guess
+# about which of two contradicting instructions the client meant.
+#
+# Only PROPFIND is tightened here. MOVE and COPY read Depth through their own
+# predicates below, whose behaviour was audited separately and is closed.
+fn propfind_depth(req: Request) -> Result[String, HttpError] = {
+  let given = headers_all(req, "depth")
+  if len(given) == 0 {
+    Ok("1")
+  } else if len(given) > 1 {
+    Err(http_error(400, "PROPFIND Depth 只能出现一次"))
+  } else {
+    let only = given[0]
+    if only == "0" || only == "1" {
+      Ok(only)
+    } else {
+      Err(http_error(400, "PROPFIND Depth 只支持 0 或 1"))
+    }
+  }
+}
+
 fn propfind(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io = {
   let prefix = dav_prefix(req)
-  let depth = header_or(req, "depth", "1")
+  let depth = propfind_depth(req)?
   match as_http(with_db(a.db.path, a.db.ext, c => propfind_body(c, prefix, rel, depth)), 500)? {
     Some(body) -> Ok(raw(207, "application/xml; charset=\"utf-8\"", body))
     None -> Err(http_error(404, "资源不存在"))
@@ -223,7 +252,7 @@ fn get_or_head(a: Auth, req: Request, rel: String, head: Bool) -> Result[Respons
   }
 
 fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Result[Response, HttpError] !io = {
-  let mime = if o.content_type == "" { "application/octet-stream" } else { o.content_type }
+  let mime = safe_persisted_mime(o.content_type)
   let etag = "\"$key\""
   let lastmod = http_date(ts(o.updated_at))
   if head {
@@ -1269,6 +1298,56 @@ test "WebDAV precondition errors map to 412 at preflight and final edges" {
   let preflight = conflict_or(500)
   assert preflight(precondition("目标已出现")).status == 412
   assert mutation_error(precondition("目标已出现")).status == 412
+}
+
+# PROPFIND with the given Depth values, none at all for an empty list.
+fn depth_req(values: List[String]) -> Request =
+  Request {
+    method: "PROPFIND", path: "/dav/source", raw_path: "/dav/source",
+    params: map.from([("rest", ["source"])]),
+    query: map.empty(),
+    headers: if len(values) == 0 { map.empty() } else { map.from([("depth", values)]) },
+    body: "", raw: bytes.utf8(""), body_file: None, route: None,
+  }
+
+fn depth_error_status(r: Result[String, HttpError], status: Int) -> Bool =
+  match r {
+    Err(e) -> e.status == status
+    Ok(_) -> false
+  }
+
+test "PROPFIND rejects unsupported singleton Depth values" {
+  # a missing header still means Depth 1, the reading every client already has
+  assert propfind_depth(depth_req([])) == Ok("1")
+  assert propfind_depth(depth_req(["0"])) == Ok("0")
+  assert propfind_depth(depth_req(["1"])) == Ok("1")
+  # anything else is a Depth this server cannot honour, and used to be served as
+  # a Depth 1 listing because the old reader only ever compared against "0"
+  assert depth_error_status(propfind_depth(depth_req(["garbage"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["infinity"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["INFINITY"])), 400)
+  assert depth_error_status(propfind_depth(depth_req([""])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["2"])), 400)
+  # exact match only: no trimming, no case folding, no prefix acceptance
+  assert depth_error_status(propfind_depth(depth_req([" 0"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["1 "])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["0,1"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["01"])), 400)
+}
+
+test "PROPFIND rejects repeated Depth headers" {
+  # two Depth headers carry no single value, so neither "first wins" nor "last
+  # wins" is a reading of the request — every order is refused
+  assert depth_error_status(propfind_depth(depth_req(["0", "1"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["1", "0"])), 400)
+  # including when the repetition agrees with itself, or when every copy is one
+  # of the two values this server does support
+  assert depth_error_status(propfind_depth(depth_req(["0", "0"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["1", "1"])), 400)
+  # and when one copy is valid and the other is not, in either position
+  assert depth_error_status(propfind_depth(depth_req(["0", "infinity"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["infinity", "0"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["1", "0", "1"])), 400)
 }
 
 test "MOVE Depth only accepts infinity" {

@@ -51,16 +51,51 @@ fn unquote(s: String) -> String = {
   }
 }
 
-fn disp_name(headers: String) -> Option[String] = between(headers, "name=\"", "\"")
+## A part's header block as (lowercased name, trimmed value) pairs.
+##
+## The block used to be searched as one raw string for the literal "Content-Type: ",
+## which is one of several spellings of the same header: field names are
+## case-insensitive and the whitespace after the colon is optional (RFC 5322 §2.2,
+## RFC 7578 §4.8). A client sending "content-type: text/plain" or
+## "Content-Type:text/plain" declared a type the parser then reported as absent,
+## and the upload endpoint fell through to guessing from the filename — silently
+## storing a different type than the one the client asked for (#241). Lines with
+## no colon are not headers and are dropped.
+fn part_headers(block: String) -> List[(String, String)] =
+  fold(str.split(block, crlf()), [], (acc, line) =>
+      match str.index_of(line, ":") {
+        None -> acc
+        Some(i) ->
+          acc ++ [(
+            str.to_lower(str.trim(str.slice(line, 0, i))),
+            str.trim(str.slice(line, i + 1, str.len(line))),
+          )]
+      })
+
+## One header's value by name (which must be given lowercase); the first wins.
+fn part_header(block: String, name: String) -> Option[String] =
+  fold(part_headers(block), None, (acc, h) => {
+    let (k, v) = h
+    match acc {
+      Some(_) -> acc
+      None -> if k == name { Some(v) } else { None }
+    }
+  })
+
+fn disp_name(headers: String) -> Option[String] =
+  match part_header(headers, "content-disposition") {
+    Some(v) -> between(v, "name=\"", "\"")
+    None -> None
+  }
 
 fn disp_filename(headers: String) -> String =
-  match between(headers, "filename=\"", "\"") {
-    Some(f) -> f
+  match part_header(headers, "content-disposition") {
+    Some(v) -> unwrap_or(between(v, "filename=\"", "\""), "")
     None -> ""
   }
 
 ## The part's declared Content-Type ("" if the part has no Content-Type header).
-fn part_ctype(headers: String) -> String = unwrap_or(between(headers, "Content-Type: ", crlf()), "")
+fn part_ctype(headers: String) -> String = unwrap_or(part_header(headers, "content-type"), "")
 
 ## Split Bytes on a (non-empty) Bytes separator, like string split — the pieces
 ## between separators, including the preamble and epilogue.
@@ -145,6 +180,67 @@ test "parse a two-field multipart body (a text field and a file)" {
     Some(p) -> {
       assert p.filename == "a.txt"
       assert bytes.decode_utf8(p.content) == "hello"
+    }
+    None -> { assert false }
+  }
+}
+
+# One file part with the given header lines, in the shape a real client sends:
+# several headers, a blank line, then the content.
+fn one_file_part(header_lines: List[String]) -> Option[Part] = {
+  let nl = crlf()
+  let b = "BB"
+  let block = join(header_lines, nl)
+  let body = "--$b$nl" ++ block ++ "$nl$nl" ++ "payload$nl" ++ "--$b--$nl"
+  part_named(parse_multipart(bytes.utf8(body), b), "file")
+}
+
+fn part_ctype_of(header_lines: List[String]) -> String =
+  match one_file_part(header_lines) {
+    Some(p) -> p.content_type
+    None -> "<no part>"
+  }
+
+test "a declared part Content-Type survives every legal header spelling" {
+  # #241: these three parts declare the same header. The parser used to find only
+  # the first, so the other two reached the upload endpoint looking like parts
+  # with no declared type at all and were stored as a guess from the filename.
+  let cd = "Content-Disposition: form-data; name=\"file\"; filename=\"explicit.html\""
+  assert part_ctype_of([cd, "Content-Type: text/plain"]) == "text/plain"
+  assert part_ctype_of([cd, "content-type: text/plain"]) == "text/plain"
+  assert part_ctype_of([cd, "CONTENT-TYPE: text/plain"]) == "text/plain"
+  assert part_ctype_of([cd, "Content-Type:text/plain"]) == "text/plain"
+  assert part_ctype_of([cd, "Content-Type:   text/plain  "]) == "text/plain"
+
+  # parameters ride along with the type, and are not confused for the next header
+  assert part_ctype_of([cd, "Content-Type: text/plain; charset=utf-8"]) ==
+    "text/plain; charset=utf-8"
+  assert part_ctype_of(["Content-Type: application/x-dawn-contract", cd]) ==
+    "application/x-dawn-contract"
+
+  # the shape the harness sends: several headers, one of them non-ASCII, with the
+  # declared type neither first nor last
+  assert part_ctype_of([
+    "X-Note: 中文",
+    cd,
+    "content-type: application/x-dawn-contract",
+    "Content-Transfer-Encoding: binary",
+  ]) == "application/x-dawn-contract"
+
+  # a part that really declares nothing still reports nothing — the endpoint's
+  # filename guess must stay reachable
+  assert part_ctype_of([cd]) == ""
+  assert part_ctype_of([cd, "X-Not-A-Content-Type: text/plain"]) == ""
+}
+
+test "Content-Disposition is read case-insensitively too" {
+  match one_file_part([
+    "content-disposition: form-data; name=\"file\"; filename=\"a.txt\"",
+    "Content-Type: text/plain",
+  ]) {
+    Some(p) -> {
+      assert p.filename == "a.txt"
+      assert p.content_type == "text/plain"
     }
     None -> { assert false }
   }

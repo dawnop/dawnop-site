@@ -13,7 +13,7 @@ use util/jsonx.{obj, jstr, jint}
 use db/db.{with_db}
 use svc/auth.{Auth, guarded, guarded_flexible}
 use util/jsonread.{body_obj, str_or, str_list, opt_int}
-use util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime}
+use util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime, safe_persisted_mime}
 use repo/repo_fm.{fs_data, get_row, ledger_insert, search_files, entry_json, stats_db, validate_fm_ancestors, validate_fm_file_target, validate_register_preflight, finalize_register}
 use svc/files.{signed_url, gc_unreferenced, mk_folder, do_rename, do_move, do_copy, do_delete,
   item_paths, merge_deleted, do_create_file, do_save, run_upload, sanitize_name, token_rel }
@@ -197,7 +197,7 @@ pub fn content(a: Auth) -> Handler =
               close_stream(r.stream)
               Err(http_error(502, "qiniu ${r.status}"))
             } else {
-              Ok(stream_response(200, content_type_of(o.content_type), r.stream))
+              Ok(stream_response(200, safe_persisted_mime(o.content_type), r.stream))
             }
           }
           None -> Err(http_error(404, "文件不存在"))
@@ -230,8 +230,6 @@ fn mutation_status(msg: String) -> Int = {
     _ -> 500
   }
 }
-
-fn content_type_of(ct: String) -> String = if ct == "" { "application/octet-stream" } else { ct }
 
 ## GET /api/fm/preview?path=&w=&h=&mode= — 302 to the signed URL (inline). For a
 ## raster image with w/h given (and original >50KB) redirect to a seven-niu
@@ -559,7 +557,10 @@ fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpErro
   # fp.filename comes from the (UTF-8-decoded) part headers already
   let name = sanitize_name(fp.filename)
   let rel = fm_join(target, name)
-  let mime = if fp.content_type != "" { fp.content_type } else { guess_mime(name) }
+  # the part's declared type is a client-supplied string that ends up in the row
+  # and in the multipart body posted to qiniu, so it crosses the outbound boundary
+  # on the way in rather than being trusted because it arrived as a header
+  let mime = safe_persisted_mime(if fp.content_type != "" { fp.content_type } else { guess_mime(name) })
   let size = bytes.len(fp.content)
   Ok(json_ok(as_http_with(run_upload(a, rel, fp.content, mime, size), mutation_failure)?))
 }

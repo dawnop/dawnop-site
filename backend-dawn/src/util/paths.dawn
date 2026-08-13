@@ -2,6 +2,8 @@
 # storage prefix is "qiniu"; relative paths have no leading/trailing slash and
 # the root is the empty string.
 use std/str
+use std/char
+use std/list
 use java "java.time.LocalDateTime"
 use java "java.time.ZoneId"
 use java "java.time.format.DateTimeFormatter"
@@ -96,6 +98,36 @@ pub fn guess_mime(name: String) -> String =
     _ -> "application/octet-stream"
   }
 
+## The value every stored content type is replaced by when it cannot be shipped
+## verbatim.
+pub const FALLBACK_MIME: String = "application/octet-stream"
+
+## The single outbound boundary for a content type read out of the `files` table.
+##
+## `files.content_type` is not a trusted field: rows predate every check this
+## backend now runs, and the value goes straight into places where a control
+## character is not data but syntax — a `Content-Type:` response header, a
+## `<D:getcontenttype>` element, the header block of the multipart body posted to
+## qiniu. A stored CRLF there is header injection with no attacker beyond whoever
+## once wrote the row.
+##
+## The answer is deliberately NOT sanitisation. Stripping the bad bytes and
+## keeping the rest still lets the remainder be chosen: "text/plain\r\nX-Injected:
+## 1" cleaned character by character leaves "text/plainX-Injected: 1", which is a
+## different attack, not a fix. So the whole value is dropped and replaced —
+## either the stored type is entirely printable ASCII and travels as it is, or the
+## caller gets `application/octet-stream` and nothing of the original survives.
+##
+## Rejected wholesale: the empty string, C0 controls and DEL, and everything above
+## U+007F. The last one covers the JDK low-byte aliases (U+010A, U+010D and
+## friends) that an 8-bit decode of a CR/LF byte can produce and that re-encode
+## back into a line break.
+pub fn safe_persisted_mime(mime: String) -> String =
+  if is_shippable_mime(mime) { mime } else { FALLBACK_MIME }
+
+fn is_shippable_mime(mime: String) -> Bool =
+  mime != "" && list.all(code_points(mime), c => char.code(c) >= 0x20 && char.code(c) <= 0x7E)
+
 ## Unix seconds for a SQLite DATETIME, interpreted in the system-local zone —
 ## matches Python's naive `datetime.timestamp()`.
 pub fn ts(s: String) -> Int !io = {
@@ -123,6 +155,45 @@ test "path helpers" {
   assert ext("c.txt") == "txt"
   assert ext("noext") == ""
   assert ext(".hidden") == ""
+}
+
+# a single-code-point string, for the control characters a source file should not
+# carry literally
+fn cp(n: Int) -> String =
+  match char.of(n) {
+    Some(c) -> from_code_points([c])
+    None -> ""
+  }
+
+test "safe_persisted_mime ships printable ASCII verbatim" {
+  assert safe_persisted_mime("text/plain") == "text/plain"
+  assert safe_persisted_mime("text/plain; charset=utf-8") == "text/plain; charset=utf-8"
+  assert safe_persisted_mime("application/x-dawn-contract") == "application/x-dawn-contract"
+  # the bounds of the accepted range, both ends inclusive
+  assert safe_persisted_mime(cp(0x20)) == cp(0x20)
+  assert safe_persisted_mime(cp(0x7E)) == cp(0x7E)
+}
+
+test "safe_persisted_mime replaces an unshippable value whole, never cleans it" {
+  # the empty string is not a content type
+  assert safe_persisted_mime("") == FALLBACK_MIME
+  # a real CRLF: the injection this boundary exists for. Note what a sanitising
+  # boundary would have produced here — "text/plainX-Injected: 1" — and that this
+  # one produces nothing of the original at all.
+  let injected = "text/plain" ++ cp(0x0D) ++ cp(0x0A) ++ "X-Injected: 1"
+  assert safe_persisted_mime(injected) == FALLBACK_MIME
+  assert not str.contains(safe_persisted_mime(injected), "X-Injected")
+  assert not str.contains(safe_persisted_mime(injected), "text/plain")
+  # a lone control character anywhere in the value condemns the whole value
+  assert safe_persisted_mime("text/" ++ cp(0x00) ++ "plain") == FALLBACK_MIME
+  assert safe_persisted_mime(cp(0x09) ++ "text/plain") == FALLBACK_MIME
+  assert safe_persisted_mime("text/plain" ++ cp(0x1F)) == FALLBACK_MIME
+  assert safe_persisted_mime("text/plain" ++ cp(0x7F)) == FALLBACK_MIME
+  # the JDK low-byte aliases of CR and LF, and non-ASCII in general
+  assert safe_persisted_mime("text/plain" ++ cp(0x010D)) == FALLBACK_MIME
+  assert safe_persisted_mime("text/plain" ++ cp(0x010A)) == FALLBACK_MIME
+  assert safe_persisted_mime("text/plain" ++ cp(0x00A0)) == FALLBACK_MIME
+  assert safe_persisted_mime("文本/纯") == FALLBACK_MIME
 }
 
 test "guess_mime takes a bare name or a path, and defaults to octet-stream" {

@@ -4,7 +4,7 @@
 import argparse
 from pathlib import Path
 
-VERSION = "13"
+VERSION = "14"
 VALID_ROLES = {"test", "contract", "qiniu"}
 EXPECTED_ROWS = [
     "immediate-tx-as-deferred|test|with_immediate_tx reserves the writer before its body",
@@ -63,6 +63,11 @@ EXPECTED_ROWS = [
     "repo-fm-delete-list-root-blind|test|FM delete skips an absent root without deleting its descendants",
     "webdav-precondition-map-as-conflict|test|WebDAV precondition errors map to 412 at preflight and final edges",
     "fm-save-codepoint-size|qiniu|fm.save.utf8-byte-size",
+    "webdav-propfind-depth-singleton-fail-open|test|PROPFIND rejects unsupported singleton Depth values",
+    "webdav-propfind-depth-repeat-fail-open|test|PROPFIND rejects repeated Depth headers",
+    "qiniu-upload-mime-passthrough|test|Qiniu upload multipart replaces unsafe persisted MIME wholesale",
+    "multipart-part-ctype-literal-spelling|test|a declared part Content-Type survives every legal header spelling",
+    "fm-persisted-mime-passthrough|qiniu|fm.persisted-mime.fail-safe",
 ]
 EXPECTED_MUTANTS = [row.split("|", 1)[0] for row in EXPECTED_ROWS]
 EXPECTED_CONTRACT_OWNERS = [
@@ -71,7 +76,7 @@ EXPECTED_CONTRACT_OWNERS = [
 EXPECTED_QINIU_OWNERS = [
     row.split("|", 2)[2] for row in EXPECTED_ROWS if row.split("|", 2)[1] == "qiniu"
 ]
-EXPECTED_ROLE_COUNTS = {"test": 21, "contract": 34, "qiniu": 1}
+EXPECTED_ROLE_COUNTS = {"test": 25, "contract": 34, "qiniu": 2}
 
 
 def validate(lines, listed_mutants, listed_assertions, listed_qiniu_assertions):

@@ -48,7 +48,7 @@ import urllib.parse
 import urllib.request
 
 from contract_golden import TRANSPORT_STATUS, Golden, transport_error
-from contract_webdav import KEEP_HEADERS, PREFIX, facts
+from contract_webdav import KEEP_HEADERS, PREFIX, facts, raw_http, wire_report
 from contract_webdav import normalize as dav_normalize
 
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -124,6 +124,22 @@ def dav(base, method, path, auth, headers=None, body=None, opener=OPENER, timeou
         return e.code, {k.lower(): v for k, v in (e.headers or {}).items()}, e.read()
     except Exception as e:  # noqa: BLE001 - transport failure is a case failure
         return TRANSPORT_STATUS, {}, transport_error(e).encode()
+
+
+def _fresh_key(value):
+    """Replace any freshly minted object key with one fixed placeholder.
+
+    scrub() numbers keys in order of first appearance across the whole run, which
+    makes every case that records one depend on how many were minted before it. A
+    case that is not about key distinctness should not carry that coupling.
+    """
+    if isinstance(value, dict):
+        return {k: _fresh_key(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_fresh_key(v) for v in value]
+    if isinstance(value, str):
+        return _KEY.sub("<fresh-key>", value)
+    return value
 
 
 def scrub(value):
@@ -884,6 +900,92 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
         },
     )
     fake.clear_calls()
+
+    print("\n== a legacy content_type never leaves the process as written ==")
+    # files.content_type predates every check this backend runs, so these three
+    # rows are written straight into SQLite rather than through an endpoint —
+    # a row like this cannot be created through the API any more, and the point
+    # is what happens when one is already there.
+    #
+    # The wire is read over a plain socket because urllib reassembles the
+    # response before handing it over: "the header block is well formed and
+    # carries exactly one content type" is not a claim a parsed response can
+    # make.
+    legacy_bytes = "legacy-bytes"
+    mime_probe = {}
+    for label, stored in (
+        ("empty", ""),
+        ("crlf", "text/plain\r\nX-Injected: 1"),
+        ("low-byte-alias", "text/plainčĊX-Injected: 1"),
+    ):
+        rel = f"{PREFIX}/legacy-mime-{label}.bin"
+        key = f"legacy-mime-{label}-key"
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                'INSERT INTO files (path, is_dir, "key", content_type, size, '
+                "created_at, updated_at) VALUES (?, 0, ?, ?, ?, "
+                "'2026-08-12 00:00:00', '2026-08-12 00:00:00')",
+                (rel, key, stored, len(legacy_bytes)),
+            )
+        fake.plant(key, legacy_bytes, "application/octet-stream")
+        basic = "Basic " + base64.b64encode(auth.encode()).decode()
+        probes = {
+            "dav.head": ("HEAD", f"/dav/{rel}", [("Authorization", basic)]),
+            "dav.get": (
+                "GET",
+                f"/dav/{rel}",
+                [("Authorization", basic), ("User-Agent", PROXY_UA)],
+            ),
+            "fm.content": (
+                "GET",
+                "/api/fm/content?" + urllib.parse.urlencode({"path": f"qiniu://{rel}"}),
+                [("Authorization", f"Bearer {token}")],
+            ),
+            "dav.propfind": (
+                "PROPFIND",
+                f"/dav/{rel}",
+                [("Authorization", basic), ("Depth", "0")],
+            ),
+        }
+        entry = {"stored_content_type": stored}
+        for probe_name, (method, path, header_pairs) in probes.items():
+            head, raw = raw_http(B, method, path, header_pairs)
+            report = wire_report(head, raw)
+            report.pop("kept_headers", None)
+            if probe_name == "dav.propfind":
+                body = raw.decode("utf-8", "replace")
+                report["getcontenttype_values"] = re.findall(
+                    r"<D:getcontenttype>(.*?)</D:getcontenttype>", body
+                )
+            entry[probe_name] = report
+        mime_probe[label] = entry
+
+    # Saving reuses the row's own content type, so a dirty row is where a save
+    # would put an injected header into the multipart body posted to qiniu — and
+    # would then write the dirty value back, keeping the row dirty forever.
+    save_rel = f"{PREFIX}/legacy-mime-crlf.bin"
+    fake.clear_calls()
+    save_status, save_raw = api(
+        B,
+        "POST",
+        "/api/fm/save",
+        token,
+        {"path": f"qiniu://{save_rel}", "content": "rewritten"},
+    )
+    # The freshly minted key is normalized locally rather than through scrub():
+    # scrub's aliases are numbered in order of first appearance across the whole
+    # run, so a change anywhere earlier renumbers them and this case would go red
+    # for something that has nothing to do with content types. Distinctness is not
+    # what is being pinned here — the content type is.
+    mime_probe["save"] = {
+        "note": "the remote multipart and the rewritten row both carry the fallback",
+        "status": save_status,
+        "body": body_value(save_raw),
+        "calls": _fresh_key(fake.calls()),
+        "row_after": _fresh_key(file_metadata(db_path, save_rel)),
+    }
+    fake.clear_calls()
+    g.case("fm.persisted-mime.fail-safe", mime_probe)
 
     # What is still not covered here, and why it is not a fake's job.
     g.skip(
