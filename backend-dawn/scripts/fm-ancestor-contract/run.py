@@ -2616,7 +2616,8 @@ def assert_fm_addressing_lossless(ctx, checks):
                 f"/{key}?" in json.loads(sign_raw)["url"],
                 f"sign {full_path!r} addressed another row",
             )
-    for missing in ("qiniu://addr/a.txt  ", "qiniu:// addr/a.txt", "qiniu://addr/b.txt"):
+    unstored = ("qiniu://addr/a.txt  ", "qiniu:// addr/a.txt", "qiniu://addr/b.txt")
+    for missing in unstored:
         checks.equal(
             api(
                 ctx,
@@ -2646,7 +2647,10 @@ def assert_fm_addressing_lossless(ctx, checks):
         {"addr", "addr/a.txt", "addr/ b.txt"},
         "delete removed the wrong metadata row",
     )
-    checks.true("addr-plain-object" in ctx.fake.keys(), "delete collected the neighbour")
+    checks.true(
+        "addr-plain-object" in ctx.fake.keys(),
+        "delete collected the neighbour's object",
+    )
     checks.true(
         "addr-trailing-object" not in ctx.fake.keys(),
         "delete left the addressed object",
