@@ -61,6 +61,11 @@ MUTANTS = (
     "repo-fm-delete-list-root-blind",
     "webdav-precondition-map-as-conflict",
     "fm-save-codepoint-size",
+    "webdav-propfind-depth-singleton-fail-open",
+    "webdav-propfind-depth-repeat-fail-open",
+    "qiniu-upload-mime-passthrough",
+    "multipart-part-ctype-literal-spelling",
+    "fm-persisted-mime-passthrough",
 )
 
 
@@ -93,6 +98,8 @@ def main() -> int:
     service = args.project / "src/svc/files.dawn"
     fm_api = args.project / "src/api/api_fm.dawn"
     webdav = args.project / "src/api/webdav.dawn"
+    qiniu_rs = args.project / "src/qiniu/rs.dawn"
+    multipart = args.project / "src/util/multipart.dawn"
 
     if args.mutant == "immediate-tx-as-deferred":
         replace_once(
@@ -1088,6 +1095,59 @@ def main() -> int:
             service,
             "  match with_db(a.db.path, a.db.ext, c => save_db(c, rel, new_key, mime, text_byte_size(content))) {\n",
             "  match with_db(a.db.path, a.db.ext, c => save_db(c, rel, new_key, mime, str.len(content))) {\n",
+        )
+    elif args.mutant == "webdav-propfind-depth-singleton-fail-open":
+        # the reading before the tightening: whatever the single header said was
+        # accepted, and everything that was not "0" listed one level down
+        replace_once(
+            webdav,
+            "    let only = given[0]\n"
+            '    if only == "0" || only == "1" {\n'
+            "      Ok(only)\n"
+            "    } else {\n"
+            '      Err(http_error(400, "PROPFIND Depth 只支持 0 或 1"))\n'
+            "    }\n",
+            "    Ok(given[0])\n",
+        )
+    elif args.mutant == "webdav-propfind-depth-repeat-fail-open":
+        # first header wins, the guess this server refuses to make
+        replace_once(
+            webdav,
+            "  } else if len(given) > 1 {\n"
+            '    Err(http_error(400, "PROPFIND Depth 只能出现一次"))\n'
+            "  } else {\n",
+            "  } else {\n",
+        )
+    elif args.mutant == "qiniu-upload-mime-passthrough":
+        # a stored content type reaches the qiniu multipart header block as written
+        replace_once(
+            qiniu_rs,
+            'Content-Type: ${safe_persisted_mime(mime)}$nl$nl"',
+            'Content-Type: $mime$nl$nl"',
+        )
+    elif args.mutant == "multipart-part-ctype-literal-spelling":
+        # #241: one spelling of the header name recognised, the rest reported as
+        # "the part declared no type"
+        replace_once(
+            multipart,
+            'fn part_ctype(headers: String) -> String = unwrap_or(part_header(headers, "content-type"), "")\n',
+            'fn part_ctype(headers: String) -> String = unwrap_or(between(headers, "Content-Type: ", crlf()), "")\n',
+        )
+    elif args.mutant == "fm-persisted-mime-passthrough":
+        # save reuses the row's stored type without the outbound boundary, so a
+        # dirty row stays dirty across a rewrite
+        replace_once(
+            service,
+            "fn save_mime(existing: Option[FileRow], rel: String) -> String =\n"
+            "  safe_persisted_mime(match existing {\n"
+            '    Some(o) -> if o.content_type != "" { o.content_type } else { guess_mime(rel) }\n'
+            "    None -> guess_mime(rel)\n"
+            "  })\n",
+            "fn save_mime(existing: Option[FileRow], rel: String) -> String =\n"
+            "  match existing {\n"
+            '    Some(o) -> if o.content_type != "" { o.content_type } else { guess_mime(rel) }\n'
+            "    None -> guess_mime(rel)\n"
+            "  }\n",
         )
     return 0
 

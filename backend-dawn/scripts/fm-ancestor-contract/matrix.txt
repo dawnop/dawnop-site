@@ -1,5 +1,5 @@
 # Versioned, hand-owned red set. There is no record mode.
-version=13
+version=14
 immediate-tx-as-deferred|test|with_immediate_tx reserves the writer before its body
 immediate-tx-panic-no-rollback|test|with_immediate_tx rolls back when its body panics
 repo-file-ancestor-fail-open|test|insert_folder_strict rejects an existing file ancestor
@@ -56,3 +56,8 @@ repo-webdav-delete-root-blind|test|WebDAV delete preserves descendants when the 
 repo-fm-delete-list-root-blind|test|FM delete skips an absent root without deleting its descendants
 webdav-precondition-map-as-conflict|test|WebDAV precondition errors map to 412 at preflight and final edges
 fm-save-codepoint-size|qiniu|fm.save.utf8-byte-size
+webdav-propfind-depth-singleton-fail-open|test|PROPFIND rejects unsupported singleton Depth values
+webdav-propfind-depth-repeat-fail-open|test|PROPFIND rejects repeated Depth headers
+qiniu-upload-mime-passthrough|test|Qiniu upload multipart replaces unsafe persisted MIME wholesale
+multipart-part-ctype-literal-spelling|test|a declared part Content-Type survives every legal header spelling
+fm-persisted-mime-passthrough|qiniu|fm.persisted-mime.fail-safe

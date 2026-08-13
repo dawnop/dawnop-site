@@ -192,7 +192,10 @@ def wire_report(head: bytes, body: bytes) -> dict:
     text = head.decode("latin-1")
     lines = text.split("\r\n")
     fields = [line for line in lines[1:] if line]
-    named = [(line.split(":", 1)[0].strip().lower(), line.split(":", 1)[-1].strip()) for line in fields]
+    named = [
+        (line.split(":", 1)[0].strip().lower(), line.split(":", 1)[-1].strip())
+        for line in fields
+    ]
     return {
         "status_line": lines[0] if lines else "",
         "header_names": [name for name, _ in named],
@@ -347,14 +350,15 @@ def main():
             ],
         )
         report = wire_report(head, raw)
+        body = normalize(raw.decode("utf-8", "replace"))
         entry = {
             "status_line": report["status_line"],
             "content_type_values": report["content_type_values"],
             "malformed_header_lines": report["malformed_header_lines"],
-            "responses": normalize(raw.decode("utf-8", "replace")).count("<D:response>"),
+            "responses": body.count("<D:response>"),
         }
         if not report["status_line"].startswith("HTTP/1.1 207"):
-            entry["body"] = normalize(raw.decode("utf-8", "replace"))
+            entry["body"] = body
         depth_probe[label] = entry
     g.case("propfind.depth.invalid.fail-closed", depth_probe)
 
