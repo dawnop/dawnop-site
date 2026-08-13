@@ -4,7 +4,7 @@
 import argparse
 from pathlib import Path
 
-VERSION = "14"
+VERSION = "15"
 VALID_ROLES = {"test", "contract", "qiniu"}
 EXPECTED_ROWS = [
     "immediate-tx-as-deferred|test|with_immediate_tx reserves the writer before its body",
@@ -68,6 +68,7 @@ EXPECTED_ROWS = [
     "qiniu-upload-mime-passthrough|test|Qiniu upload multipart replaces unsafe persisted MIME wholesale",
     "multipart-part-ctype-literal-spelling|test|a declared part Content-Type survives every legal header spelling",
     "fm-persisted-mime-passthrough|qiniu|fm.persisted-mime.fail-safe",
+    "fm-split-trims-addressing|contract|fm.addressing.lossless",
 ]
 EXPECTED_MUTANTS = [row.split("|", 1)[0] for row in EXPECTED_ROWS]
 EXPECTED_CONTRACT_OWNERS = [
@@ -76,7 +77,7 @@ EXPECTED_CONTRACT_OWNERS = [
 EXPECTED_QINIU_OWNERS = [
     row.split("|", 2)[2] for row in EXPECTED_ROWS if row.split("|", 2)[1] == "qiniu"
 ]
-EXPECTED_ROLE_COUNTS = {"test": 25, "contract": 34, "qiniu": 2}
+EXPECTED_ROLE_COUNTS = {"test": 25, "contract": 35, "qiniu": 2}
 
 
 def validate(lines, listed_mutants, listed_assertions, listed_qiniu_assertions):
@@ -187,9 +188,15 @@ def self_test():
         EXPECTED_MUTANTS,
         "unknown matrix role",
     )
+    # the drifted role is derived, not spelled: writing one in by hand made this
+    # control a no-op the moment a row of another role was appended, and a
+    # no-op rewrite is accepted by validate() — the self-test then "passed" by
+    # checking nothing
+    last_mutant, last_role, last_owner = EXPECTED_ROWS[-1].split("|", 2)
+    other_role = sorted(VALID_ROLES - {last_role})[0]
     expect_rejected(
         "role-drift",
-        [*base[:-1], EXPECTED_ROWS[-1].replace("|qiniu|", "|test|")],
+        [*base[:-1], f"{last_mutant}|{other_role}|{last_owner}"],
         EXPECTED_MUTANTS,
         "hand-owned set",
     )

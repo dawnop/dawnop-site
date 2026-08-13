@@ -66,6 +66,7 @@ MUTANTS = (
     "qiniu-upload-mime-passthrough",
     "multipart-part-ctype-literal-spelling",
     "fm-persisted-mime-passthrough",
+    "fm-split-trims-addressing",
 )
 
 
@@ -100,6 +101,7 @@ def main() -> int:
     webdav = args.project / "src/api/webdav.dawn"
     qiniu_rs = args.project / "src/qiniu/rs.dawn"
     multipart = args.project / "src/util/multipart.dawn"
+    paths = args.project / "src/util/paths.dawn"
 
     if args.mutant == "immediate-tx-as-deferred":
         replace_once(
@@ -1148,6 +1150,16 @@ def main() -> int:
             '    Some(o) -> if o.content_type != "" { o.content_type } else { guess_mime(rel) }\n'
             "    None -> guess_mime(rel)\n"
             "  }\n",
+        )
+    elif args.mutant == "fm-split-trims-addressing":
+        # the lossy addressing this backend shipped with: fm_split normalised
+        # away the whitespace at the edges of a path, so "a.txt " and "a.txt"
+        # became one address and a write aimed at either hit whichever row the
+        # trimmed spelling matched
+        replace_once(
+            paths,
+            "    strip_slashes(after)\n",
+            "    strip_slashes(str.trim(after))\n",
         )
     return 0
 
