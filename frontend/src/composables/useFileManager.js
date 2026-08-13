@@ -18,6 +18,7 @@ import { fmApi as fm, settingsApi } from '../api'
 import { useIsMobile } from './useIsMobile'
 import { fmtBytes, fmtMonthDay } from '../utils/format'
 import { confirmDanger } from '../utils/confirm'
+import { createName, renamePlan, FmNameError } from '../utils/fmPath'
 import { useSelection } from './fileManager/useSelection'
 import { usePreview } from './fileManager/usePreview'
 import { useTransfers } from './fileManager/useTransfers'
@@ -309,12 +310,16 @@ export function useFileManager() {
         inputPattern: /.+/,
         inputErrorMessage: '名称不能为空',
       })
-      await fm.createFolder(cwd.value, value.trim())
+      // 名称原样发（判词见 utils/fmPath.js）：这里不 trim，" a " 就是 " a "。
+      await fm.createFolder(cwd.value, createName(value))
       ElMessage.success('已创建')
       await loadCwd()
       reloadTree()
-    } catch {
-      /* 取消或失败：失败已由 axios 拦截器统一提示 */
+    } catch (e) {
+      // 三类都落这儿：取消（ElMessageBox reject 'cancel'/'close'，不提示）、
+      // 名称非法（本地判词拦下的，后端没收到过，得自己提示）、
+      // 请求失败（axios 拦截器已统一提示）。
+      if (e instanceof FmNameError) ElMessage.error(e.message)
     }
   }
 
@@ -327,14 +332,16 @@ export function useFileManager() {
         inputPattern: /.+/,
         inputErrorMessage: '名称不能为空',
       })
-      const name = value.trim()
-      if (name === row.name) return
-      await fm.rename(cwd.value, row.path, name)
+      // 名称原样发、identity 逐字比（判词见 utils/fmPath.js）。
+      const plan = renamePlan(row.name, value)
+      if (!plan.send) return // 名字逐字没变：不打后端
+      await fm.rename(cwd.value, row.path, plan.name)
       ElMessage.success('已重命名')
       await loadCwd()
       if (row.is_dir) reloadTree()
-    } catch {
-      /* 取消或失败：失败已由 axios 拦截器统一提示 */
+    } catch (e) {
+      // 同 newFolder：取消 / 名称非法 / 请求失败三类都落这儿。
+      if (e instanceof FmNameError) ElMessage.error(e.message)
     }
   }
 
