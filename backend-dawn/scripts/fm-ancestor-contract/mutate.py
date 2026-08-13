@@ -89,6 +89,7 @@ MUTANTS = (
     "name-guard-webdav-destination-fail-open",
     "entry-json-mime-passthrough",
     "copy-mime-passthrough",
+    "receipt-read-after-commit",
 )
 
 
@@ -1360,6 +1361,29 @@ def main() -> int:
             repo,
             "        Some(key) -> insert_file_row(c, destination, key, safe_persisted_mime(row.source.content_type), row.source.size)\n",
             "        Some(key) -> insert_file_row(c, destination, key, row.source.content_type, row.source.size)\n",
+        )
+    elif args.mutant == "receipt-read-after-commit":
+        # the shape proxy upload had before: the write commits, and only then is
+        # the row the response describes read back. It is the same statement on
+        # the same connection, so it keeps reading a row at that path; it just
+        # stops being guaranteed to be the row this request wrote.
+        replace_once(
+            repo,
+            "pub fn replace_file_receipt(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[(FileRow, ReplaceOutcome), String] !io =\n"
+            "  with_immediate_tx(c, () => {\n"
+            "    let outcome = replace_file_tx(c, rel, key, content_type, size, AllowMissingAncestors)?\n"
+            "    match receipt_row(c, rel)? {\n"
+            "      Some(o) -> Ok((o, outcome))\n"
+            '      None -> Err("uploaded file vanished: ${full(rel)}")\n'
+            "    }\n"
+            "  })\n",
+            "pub fn replace_file_receipt(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[(FileRow, ReplaceOutcome), String] !io = {\n"
+            "  let outcome = with_immediate_tx(c, () => replace_file_tx(c, rel, key, content_type, size, AllowMissingAncestors))?\n"
+            "  match receipt_row(c, rel)? {\n"
+            "    Some(o) -> Ok((o, outcome))\n"
+            '    None -> Err("uploaded file vanished: ${full(rel)}")\n'
+            "  }\n"
+            "}\n",
         )
     return 0
 
