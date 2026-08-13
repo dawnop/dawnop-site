@@ -2786,6 +2786,84 @@ def assert_webdav_missing_parent(ctx, checks):
     checks.equal(ctx.fake.calls(), [], "WebDAV missing-parent rejection reached Qiniu")
 
 
+def assert_json_duplicate_members(ctx, checks):
+    """A body with two members of one name in one object is refused, not guessed.
+
+    RFC 8259 leaves the repeat to the implementation, and parsing into a map
+    takes the silent choice that one of the two wins. Which one is not something
+    the client said: `{"name":"a","name":"b"}` created a folder called "b" here,
+    and the same body with the members swapped created "a". A proxy, a buggy
+    client or a request-smuggling attempt only has to append a second member to
+    pick the write, and the answer looked identical either way.
+
+    Sent as raw text rather than through json.dumps, which cannot express a
+    repeat at all — the same reason the Depth probes go over a socket.
+
+    The accepted shapes are here too. Two *independent* objects may each carry a
+    "path" (that is every multi-item delete), so a rule that rejected the second
+    occurrence anywhere would break the API it was meant to protect, and a probe
+    that only recorded refusals could not tell that apart from working.
+    """
+
+    def post(path, body):
+        return request(
+            ctx.base + path,
+            "POST",
+            {
+                "Authorization": f"Bearer {ctx.token}",
+                "Content-Type": "application/json",
+            },
+            body.encode(),
+        )
+
+    add_file(ctx, "dup", True)
+    before = db_state(ctx)
+
+    # top level: the repeat decides the write, and used to do it silently
+    status, raw = post(
+        "/api/fm/create-folder",
+        '{"path":"qiniu://dup","name":"first","name":"second"}',
+    )
+    checks.equal(status, 422, "top-level duplicate member rejected")
+    checks.true(
+        "duplicate JSON object member" in raw.decode("utf-8", "replace"),
+        "top-level duplicate names the rule",
+    )
+
+    # the same name spelled two ways is the same name: comparing source text
+    # rather than decoded names would wave this through
+    escaped, _raw = post(
+        "/api/fm/create-folder",
+        '{"path":"qiniu://dup","name":"escaped","\\u006eame":"other"}',
+    )
+    checks.equal(escaped, 422, "escape-equal duplicate member rejected")
+
+    # nested inside an object, and inside an object inside an array
+    nested, _raw = post(
+        "/api/fm/delete",
+        '{"path":"qiniu://dup","items":[{"path":"qiniu://dup/a","path":"qiniu://dup/b"}]}',
+    )
+    checks.equal(nested, 422, "duplicate inside an array element rejected")
+
+    checks.equal(db_state(ctx), before, "a rejected body still wrote")
+
+    # ...and none of that touches the shapes the API actually uses
+    accepted, _raw = post(
+        "/api/fm/create-folder", '{"path":"qiniu://dup","name":"accepted"}'
+    )
+    checks.equal(accepted, 200, "an ordinary body still works")
+    siblings, _raw = post(
+        "/api/fm/delete",
+        '{"path":"qiniu://dup","items":[{"path":"qiniu://dup/x"},'
+        '{"path":"qiniu://dup/y"}]}',
+    )
+    checks.equal(siblings, 200, "sibling objects may reuse a member name")
+    checks.true(
+        any(row[0] == "dup/accepted" for row in rows(ctx)),
+        "the accepted body created its folder",
+    )
+
+
 ASSERTIONS = [
     ("fm.missing-ancestors.auto-created", assert_fm_missing_ancestors),
     ("fm.rename.missing-ancestor-no-fill", assert_rename_missing_ancestor_no_fill),
@@ -2846,6 +2924,7 @@ ASSERTIONS = [
     ("fm.copy.metadata-atomic", assert_fm_copy_metadata_atomic),
     ("webdav.copy.metadata-atomic", assert_webdav_copy_metadata_atomic),
     ("fm.addressing.lossless", assert_fm_addressing_lossless),
+    ("fm.json.duplicate-members", assert_json_duplicate_members),
 ]
 
 

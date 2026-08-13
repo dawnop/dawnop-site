@@ -67,6 +67,7 @@ MUTANTS = (
     "multipart-part-ctype-literal-spelling",
     "fm-persisted-mime-passthrough",
     "fm-split-trims-addressing",
+    "json-duplicate-members-fail-open",
 )
 
 
@@ -102,6 +103,7 @@ def main() -> int:
     qiniu_rs = args.project / "src/qiniu/rs.dawn"
     multipart = args.project / "src/util/multipart.dawn"
     paths = args.project / "src/util/paths.dawn"
+    jsonread = args.project / "src/util/jsonread.dawn"
 
     if args.mutant == "immediate-tx-as-deferred":
         replace_once(
@@ -1160,6 +1162,15 @@ def main() -> int:
             paths,
             "    strip_slashes(after)\n",
             "    strip_slashes(str.trim(after))\n",
+        )
+    elif args.mutant == "json-duplicate-members-fail-open":
+        # the silent "one of the two wins" the duplicate rule replaced: the
+        # per-object scope never records the names it walked past, so every
+        # membership test answers no
+        replace_once(
+            jsonread,
+            "            scan_members(src, cursor.next(src, k), seen ++ [name])\n",
+            "            scan_members(src, cursor.next(src, k), seen)\n",
         )
     return 0
 

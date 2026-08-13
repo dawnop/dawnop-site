@@ -2,8 +2,13 @@
 # the JObj entries map; presence checks support FastAPI's exclude_unset (PATCH)
 # semantics — a key absent from the body is left untouched on update.
 use std/map
+use std/char
+use std/cursor
+use std/list
+use std/cursor.{Cursor}
 use json/value.{Json, JObj, JBool, JNum, JInt, JStr, JArr, JNull, error_text}
 use json/parser.{parse}
+use json/lexer
 
 # json2's parse fails with a structured value.JsonError. Every layer here
 # reports Result[_, String], so this is where the structure is rendered down to
@@ -16,9 +21,116 @@ pub fn parse_text(body: String) -> Result[Json, String] =
     Err(e) -> Err(error_text(e))
   }
 
+# ---- duplicate member names ----
+#
+# RFC 8259 §4 says object names SHOULD be unique and leaves what to do about a
+# repeat to the implementation. Parsing one into a Map takes the silent choice
+# that the last spelling wins, and the fields that reach here are ones where
+# guessing wrong is a wrong write: `{"published":true,"published":false}` is a
+# draft or a live article depending on nothing the client stated, and two `path`
+# members address two different objects. A body with no single reading is not a
+# body this backend can act on, so it is refused.
+#
+# The check does not replace the parser and does not reimplement it: the body is
+# parsed first and stays parsed by `json/parser`, and this is a second walk over
+# the same text for the one question a Map cannot answer afterwards. It reads
+# names with the parser's own `json/lexer.scan_string`, so the comparison is
+# between *decoded* names — "a" and "a" are one name here because they are
+# one name to the parser too, which is what a scanner that compared source spans
+# would get wrong.
+#
+# Scope is per object: two independent objects may each carry a "key", so
+# `{"a":{"k":1},"b":{"k":2}}` is fine and only names within one pair of braces
+# are compared.
+
+## Refuse a body whose JSON has two members of the same name in one object.
+## Assumes the text already parsed; the walk reports its own Err rather than
+## returning "no duplicates" if it ever disagrees with the parser about shape.
+pub fn reject_duplicate_members(body: String) -> Result[Unit, String] = {
+  let _end = scan_value(body, cursor.start(body))?
+  Ok(())
+}
+
+fn scan_value(src: String, i: Cursor) -> Result[Cursor, String] = {
+  let j = lexer.skip_ws(src, i)
+  let c = lexer.peek(src, j)
+  if c == char.code('{') {
+    scan_members(src, cursor.next(src, j), [])
+  } else if c == char.code('[') {
+    scan_elements(src, cursor.next(src, j))
+  } else if c == char.code('"') {
+    scan_text(src, j)
+  } else {
+    Ok(scan_atom(src, j))
+  }
+}
+
+fn scan_text(src: String, i: Cursor) -> Result[Cursor, String] =
+  match lexer.scan_string(src, i) {
+    Ok((_, after)) -> Ok(after)
+    Err(e) -> Err(error_text(e))
+  }
+
+# true, false, null or a number: none of them can hold a quote or a structural
+# character, so the literal ends at the first one. Strings never reach here, so
+# nothing inside quotes is ever read as structure.
+fn scan_atom(src: String, i: Cursor) -> Cursor = {
+  let c = lexer.peek(src, i)
+  if c == -1 || c == char.code(',') || c == char.code('}') || c == char.code(']') ||
+    c == char.code(' ') || c == char.code('\t') || c == char.code('\n') || c == char.code('\r') {
+      i
+    } else {
+      scan_atom(src, cursor.next(src, i))
+    }
+}
+
+fn scan_elements(src: String, i: Cursor) -> Result[Cursor, String] = {
+  let j = lexer.skip_ws(src, i)
+  if lexer.peek(src, j) == char.code(']') {
+    Ok(cursor.next(src, j))
+  } else {
+    let after = scan_value(src, j)?
+    let k = lexer.skip_ws(src, after)
+    if lexer.peek(src, k) == char.code(',') {
+      scan_elements(src, cursor.next(src, k))
+    } else if lexer.peek(src, k) == char.code(']') {
+      Ok(cursor.next(src, k))
+    } else {
+      Err("malformed JSON array")
+    }
+  }
+}
+
+fn scan_members(src: String, i: Cursor, seen: List[String]) -> Result[Cursor, String] = {
+  let j = lexer.skip_ws(src, i)
+  if lexer.peek(src, j) == char.code('}') {
+    Ok(cursor.next(src, j))
+  } else {
+    match lexer.scan_string(src, j) {
+      Err(e) -> Err(error_text(e))
+      Ok((name, after_name)) ->
+        if list.contains(seen, name) {
+          Err("duplicate JSON object member: \"$name\"")
+        } else {
+          let colon = lexer.skip_ws(src, after_name)
+          let after = scan_value(src, cursor.next(src, colon))?
+          let k = lexer.skip_ws(src, after)
+          if lexer.peek(src, k) == char.code(',') {
+            scan_members(src, cursor.next(src, k), seen ++ [name])
+          } else if lexer.peek(src, k) == char.code('}') {
+            Ok(cursor.next(src, k))
+          } else {
+            Err("malformed JSON object")
+          }
+        }
+    }
+  }
+}
+
 ## Parse a request body into its top-level object entries. Err on non-objects.
 pub fn body_obj(body: String) -> Result[Map[String, Json], String] !io = {
   let j = parse_text(body)?
+  let _d = reject_duplicate_members(body)?
   match j {
     JObj(m) -> Ok(m)
     _ -> Err("request body must be a JSON object")
