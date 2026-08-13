@@ -46,6 +46,18 @@ def sub(old: str, new: str) -> Callable[[str], str]:
     return apply
 
 
+def sub_all(old: str, new: str) -> Callable[[str], str]:
+    """全部替换。`sub` 只换第一处，对「文档里这个名字必须出现」这类判词没用——
+    留下任何一处，断言就还是绿的，于是变异体证明不了任何事。"""
+
+    def apply(text: str) -> str:
+        if old not in text:
+            raise SystemExit(f"mutant 的锚点没了，请更新脚本：{old!r}")
+        return text.replace(old, new)
+
+    return apply
+
+
 def drop_line(needle: str) -> Callable[[str], str]:
     def apply(text: str) -> str:
         lines = text.splitlines(keepends=True)
@@ -264,7 +276,86 @@ MUTANTS: list[tuple[str, str, list[Path], Callable[[str], str], set[str]]] = [
         "加载器变量判词只认 PYTHON*，放过 LD_PRELOAD",
         BOTH_SCRIPTS,
         sub("/^(LD_|PYTHON)/", "/^(PYTHON)/"),
-        {"test_loader_environment_offender"},
+        # 逃生阀那三条也用 LD_* 当样本（放行判词对两个前缀族必须一视同仁），
+        # 所以这个 mutant 连坐它们——不是判词糊了，是 LD_ 真的被这四条一起守着。
+        {
+            "test_loader_environment_offender",
+            "test_allow_env_releases_only_the_exact_variable_name",
+            "test_allow_env_echoes_the_released_variable_name",
+            "test_allow_env_empty_or_unset_is_todays_behaviour",
+        },
+    ),
+    # ---- 逃生阀 ROLLBACK_ALLOW_ENV ----
+    # 一个「放行」的判词有四种烂法：放宽成前缀/子串/glob、放行了却不留痕、
+    # 名单一非空就整体开门、以及「第一个 offender 恰好在名单里就当整条流干净」。
+    # 每一种在这里都有一个变异体。
+    (
+        "allow-env-prefix-match",
+        "白名单退化成前缀匹配（PYTHONUNBUFFERED 顺带放行 PYTHONUNBUFFERED_EXTRA）",
+        BOTH_SCRIPTS,
+        sub('if [ "$entry" = "$name" ]; then', 'if [[ "$name" == "$entry"* ]]; then'),
+        {"test_allow_env_releases_only_the_exact_variable_name"},
+    ),
+    (
+        "allow-env-substring-match",
+        "白名单退化成子串匹配（PATH 顺带放行 PYTHONPATH）",
+        BOTH_SCRIPTS,
+        sub('if [ "$entry" = "$name" ]; then', 'if [[ "$name" == *"$entry"* ]]; then'),
+        {"test_allow_env_releases_only_the_exact_variable_name"},
+    ),
+    (
+        "allow-env-glob-match",
+        "白名单退化成 glob（PYTHON* 一条放行全部）",
+        BOTH_SCRIPTS,
+        sub('if [ "$entry" = "$name" ]; then', 'if [[ "$name" == $entry ]]; then'),
+        {"test_allow_env_releases_only_the_exact_variable_name"},
+    ),
+    (
+        "allow-env-releases-silently",
+        "放行了但不回显被放行的名字（无声接受 = 逃生阀白装）",
+        BOTH_SCRIPTS,
+        drop_line("[escape] ROLLBACK_ALLOW_ENV 放行了加载器环境变量"),
+        {"test_allow_env_echoes_the_released_variable_name"},
+    ),
+    (
+        "allow-env-first-offender-wins",
+        "awk 又自己 exit：第一个 offender 恰好被放行，后面的就没人看了",
+        BOTH_SCRIPTS,
+        sub("/^(LD_|PYTHON)/ { print $1 }", "/^(LD_|PYTHON)/ { print $1; exit }"),
+        {"test_allow_env_releases_only_the_exact_variable_name"},
+    ),
+    (
+        "allow-env-non-empty-list-opens-the-gate",
+        "名单一非空就整体放行（列了一个名字等于关掉这道检查）",
+        BOTH_SCRIPTS,
+        sub(
+            "  done\n  return 1\n}\n\nloader_environment_offender() {",
+            '  done\n  [ -n "$ROLLBACK_ALLOW_ENV" ]\n}\n\nloader_environment_offender() {',
+        ),
+        # 也红「名单为空 = 今天的行为」那条：那条的参数里有一个纯空白的名单，
+        # 而 `[ -n "   " ]` 是真——「有没有设」和「设了什么」是两个问题。
+        {
+            "test_allow_env_releases_only_the_exact_variable_name",
+            "test_allow_env_empty_or_unset_is_todays_behaviour",
+        },
+    ),
+    (
+        "allow-env-always-open",
+        "放行判词恒真：不设名单也 fail open",
+        BOTH_SCRIPTS,
+        sub("  local name=$1 entry", "  return 0\n  local name=$1 entry"),
+        {
+            "test_loader_environment_offender",
+            "test_allow_env_releases_only_the_exact_variable_name",
+            "test_allow_env_empty_or_unset_is_todays_behaviour",
+        },
+    ),
+    (
+        "escape-valve-undocumented",
+        "逃生阀从运维手册里消失（没人知道的出口等于没有出口）",
+        [DEPLOY_README],
+        sub_all("ROLLBACK_ALLOW_ENV", "ROLLBACK_UNDOCUMENTED_KNOB"),
+        {"test_deploy_readme_documents_the_escape_valve"},
     ),
     (
         "interpreter-check-gone",
