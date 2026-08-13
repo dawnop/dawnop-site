@@ -77,6 +77,7 @@ const rules = [
       t.eq(createName('a '), 'a ', 'createName("a ") 保留尾部空格')
       t.eq(createName(' 新文件夹'), ' 新文件夹', 'createName(" 新文件夹") 保留首部空格')
       t.eq(createName('   '), '   ', 'createName("   ") 全空格是合法名称')
+      t.eq(createName(' '), ' ', 'createName(" ") 单个空格也是名称，不是空串')
       t.eq(createName('\t'), '\t', 'createName("\\t") 制表符同理')
     },
   },
@@ -98,6 +99,10 @@ const rules = [
     desc: '只拒两种输入：非字符串、真正的空串（trim 后为空不算空）',
     // 负控：frontend/src/utils/fmPath.js 的 requireName 删掉
     //       `if (raw === '') throw ...` 那一行
+    //
+    // 「" " 不被当成空串」这句话最想放在这儿（它正是本条的「trim 后为空不算空」），
+    // 但它同时是 create-no-trim 的断言，create 的 trim 负控会连它一起红。
+    // 交集归第一条：那边的 createName("   ") / createName(" a ") 已经守着它。
     run(t) {
       t.rejects(() => createName(''), 'createName("") 被拒')
       t.rejects(() => renamePlan('x', ''), 'renamePlan(_, "") 被拒')
@@ -105,8 +110,6 @@ const rules = [
       t.rejects(() => createName(null), 'createName(null) 被拒')
       t.rejects(() => createName(42), 'createName(42) 被拒')
       t.rejects(() => renamePlan('x', ['a']), 'renamePlan(_, ["a"]) 被拒')
-      // 与上面成对：拒的是空串本身，不是「trim 后为空」。
-      t.eq(createName(' '), ' ', 'createName(" ") 不被当成空串')
     },
   },
   {
