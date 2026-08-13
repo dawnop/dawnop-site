@@ -33,7 +33,7 @@ use db/db.{with_db}
 use svc/auth.{Auth, check_basic}
 use svc/files.{signed_url, gc_unreferenced, gc_rows_unreferenced, gc_copy_tree_unreferenced, copy_tree_objects}
 use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}
-use util/paths.{basename, parent_rel, ext, ts, guess_mime}
+use util/paths.{basename, parent_rel, ext, ts, guess_mime, safe_persisted_mime}
 use qiniu/rs.{upload_file}
 use java "java.io.File"
 use util/crypto.{sha256_hex, uuid, uuid_hex}
@@ -145,7 +145,7 @@ fn response_xml(prefix: String, rel: String, name: String, is_dir: Bool, size: I
     if is_dir {
       ""
     } else {
-      let m = if mime == "" { "application/octet-stream" } else { mime }
+      let m = safe_persisted_mime(mime)
       let etag_xml = if etag == "" { "" } else { "<D:getetag>${xml_escape(etag)}</D:getetag>" }
       "<D:getcontentlength>$size</D:getcontentlength><D:getcontenttype>${xml_escape(m)}</D:getcontenttype>$etag_xml"
     }
@@ -223,7 +223,7 @@ fn get_or_head(a: Auth, req: Request, rel: String, head: Bool) -> Result[Respons
   }
 
 fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Result[Response, HttpError] !io = {
-  let mime = if o.content_type == "" { "application/octet-stream" } else { o.content_type }
+  let mime = safe_persisted_mime(o.content_type)
   let etag = "\"$key\""
   let lastmod = http_date(ts(o.updated_at))
   if head {

@@ -4,6 +4,7 @@
 # hand-rolls the three verbs fm needs.
 use std/str
 use std/bytes
+use std/char
 use std/map
 use java "java.io.File"
 use java "java.io.FileOutputStream"
@@ -11,6 +12,7 @@ use java "java.io.ByteArrayOutputStream"
 use java "com.sun.net.httpserver.HttpServer"
 use java "java.net.InetSocketAddress"
 use util/http.{HttpResp, RequestBody, post, post_bytes, file_body, post_body, fetch}
+use util/paths.{FALLBACK_MIME, safe_persisted_mime}
 use qiniu/sign.{entry_uri, entry_token, management_token, upload_token}
 
 const BOUNDARY: String = "----DawnFmBoundary7MA4YWxkTrZu0gW"
@@ -60,12 +62,19 @@ fn multipart(token: String, key: String, content: Bytes, mime: String) -> Bytes 
 
 # The multipart framing around the file part, split out so the streaming upload
 # can put a file between the two without ever concatenating it into one buffer.
+#
+# `mime` reaches here from `files.content_type`, i.e. from a row this backend did
+# not necessarily write, and it is interpolated straight into a header line. A
+# stored CRLF would end the Content-Type line and start whatever the rest of the
+# value says, inside a request signed with this bucket's upload token. Every mime
+# crossing into the framing therefore goes through the outbound boundary, which
+# replaces an unshippable value entirely rather than cleaning it.
 fn mp_head(token: String, key: String, mime: String) -> String = {
   let nl = from_code_points(['\r', '\n']) # CRLF
   let d = "--$BOUNDARY$nl"
   let field = (name: String, value: String) => "${d}Content-Disposition: form-data; name=\"$name\"$nl$nl$value$nl"
   field("token", token) ++ field("key", key) ++
-    "${d}Content-Disposition: form-data; name=\"file\"; filename=\"$key\"${nl}Content-Type: $mime$nl$nl"
+    "${d}Content-Disposition: form-data; name=\"file\"; filename=\"$key\"${nl}Content-Type: ${safe_persisted_mime(mime)}$nl$nl"
 }
 
 fn mp_tail() -> String = {
@@ -122,6 +131,35 @@ pub fn copy_obj(rs_host: String, ak: String, sk: String, bucket: String, src_key
 }
 
 # ---- tests ----
+
+test "Qiniu upload multipart replaces unsafe persisted MIME wholesale" {
+  let nl = from_code_points(['\r', '\n'])
+  let framed = (mime: String) => mp_head("tok", "k.bin", mime)
+
+  # a shippable type is framed verbatim, parameters and all
+  assert str.contains(framed("text/plain; charset=utf-8"), "Content-Type: text/plain; charset=utf-8$nl$nl")
+
+  # a stored CRLF would close the Content-Type line and open an attacker-chosen
+  # one inside a token-signed request. The whole value is dropped, so neither the
+  # injected header nor the prefix that carried it appears anywhere in the body.
+  let injected = framed("text/plain${nl}X-Injected: 1")
+  assert str.contains(injected, "Content-Type: $FALLBACK_MIME$nl$nl")
+  assert not str.contains(injected, "X-Injected")
+  assert not str.contains(injected, "text/plain")
+  # exactly one Content-Type line survives in the file part's header block
+  assert len(str.split(injected, "${nl}Content-Type: ")) == 2
+
+  # an empty stored type, and the JDK low-byte aliases of CR/LF that an 8-bit
+  # decode turns a line break into, take the same wholesale replacement
+  assert str.contains(framed(""), "Content-Type: $FALLBACK_MIME$nl$nl")
+  let low_byte = match (char.of(0x010D), char.of(0x010A)) {
+    (Some(cr), Some(lf)) -> from_code_points([cr, lf])
+    _ -> ""
+  }
+  let aliased = framed("text/plain${low_byte}X-Injected: 1")
+  assert str.contains(aliased, "Content-Type: $FALLBACK_MIME$nl$nl")
+  assert not str.contains(aliased, "X-Injected")
+}
 
 test "the streaming multipart body goes on the wire byte-exactly, across many chunks" {
   # 20000 bytes: many times over the chunk size ofFile reads with, so the file
