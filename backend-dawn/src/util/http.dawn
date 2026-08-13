@@ -4,7 +4,7 @@
 # inspects .status) — only transport errors are failures here.
 use std/str
 use std/bytes
-use util/ferr.{fe_text, catch_text}
+use util/ferr.{fe_text}
 use web/types.{Response, streaming}
 use java "java.net.URI"
 use java "java.net.http.HttpClient"
@@ -17,8 +17,45 @@ use java "java.io.File"
 use java "java.io.InputStream"
 use java "java.time.Duration"
 use java "java.lang.String"
+use java "java.lang.System"
+use java "java.lang.Thread"
 use java "com.sun.net.httpserver.HttpServer"
 use java "java.net.InetSocketAddress"
+
+# How long an outbound call may take, end to end.
+#
+# `shared_client`'s connectTimeout only covers the TCP handshake. A peer that
+# accepts the connection and then says nothing left `send()` blocked forever,
+# and one of those calls runs inside a SQLite write transaction: files.dawn's
+# gc_unreferenced_on holds BEGIN IMMEDIATE across `delete_obj`, deliberately, so
+# that "is this key still referenced" and the delete cannot interleave. SQLite
+# has a single writer, so a hung rs endpoint stopped every write on the site --
+# article saves, /register, WebDAV PUT, mkdir -- with no attacker involved. A
+# request deadline is what puts a ceiling on how long that lock can be held.
+#
+# Measured, not assumed (JDK 26, loopback peer that accepts and then stalls):
+# HttpRequest.Builder.timeout is a hard deadline on the WHOLE exchange, not an
+# idle timer and not a headers-only timer. A body trickling steadily for 10s
+# still died at a 3s deadline, and a POST to a slow-draining peer died at its
+# deadline mid-upload. The deadline also covers connect: with connectTimeout
+# 10s and a 2s request deadline, a blackholed SYN failed at 2.2s.
+#
+# That is why one value cannot serve both kinds of call. A management REST call
+# is small and answers in well under a second, so a tight ceiling costs nothing
+# and buys a short worst-case lock hold. A transfer moves object bytes, and a
+# hard deadline there is a cap on transfer duration, so it has to sit far above
+# any legitimate transfer rather than track expected latency.
+
+## Ceiling for small management/probe calls: qiniu rs stat/delete/copy, the
+## qiniu usage and CDN APIs, the Tencent Cloud API, the vault liveness probe.
+## Also the ceiling on how long gc's delete can hold the SQLite write lock.
+const MANAGEMENT_TIMEOUT_S: Int = 10
+
+## Ceiling for calls that move object bytes: proxy upload, WebDAV PUT, and the
+## download proxies. Deliberately far above any plausible transfer on this site
+## (browser uploads go straight to qiniu and never reach this code), because the
+## deadline is a hard cap on duration, not an idle timer.
+const TRANSFER_TIMEOUT_S: Int = 3600
 
 pub type HttpResp = { status: Int, body: String }
 
@@ -47,13 +84,13 @@ pub type StreamResp = { status: Int, stream: ResponseStream }
 ## resp.body() is an erased-generic Object that is a byte[] at runtime — cast
 ## reclaims it (Result since v0.33.0; a mismatch was a ClassCastException that
 ## catch_fault turned into Err, so it still maps to this function's Err).
-pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[BytesResp, String] !io = {
+pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[BytesResp, String] !io =
+  fetch_bytes_within(url, headers, TRANSFER_TIMEOUT_S)
+
+fn fetch_bytes_within(url: String, headers: List[(String, String)], budget_s: Int) -> Result[BytesResp, String] !io = {
   let r: Result[Result[BytesResp, String], ForeignError] = catch_fault(() => {
-    let uri = URI.create(url)!
-    let base = HttpRequest.newBuilder()!.uri(uri)!
-    let withHeaders = add_headers(base, headers, 0)
     let nobody: BodyPublisher = BodyPublishers.noBody()!
-    let req = withHeaders.method("GET", nobody)!.build()!
+    let req = request_for(url, headers, "GET", nobody, budget_s)
     let resp = shared_client().send(req, BodyHandlers.ofByteArray()!)!
     let got: Result[Bytes, ForeignError] = cast(resp.body()!)
     match got {
@@ -63,7 +100,7 @@ pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[Bytes
   })
   match r {
     Ok(inner) -> inner
-    Err(e) -> Err(fe_text(e))
+    Err(e) -> Err(deadline_text(budget_s, e))
   }
 }
 
@@ -80,13 +117,13 @@ pub fn ok_status(r: BytesResp) -> Bool = r.status >= 200 && r.status < 300
 ## the StreamResp.stream field type). The stream is unconsumed here — reading it later
 ## pumps bytes; it MUST be closed (transferTo to EOF, or close_stream) or the
 ## HttpClient connection leaks.
-pub fn fetch_stream(url: String, headers: List[(String, String)]) -> Result[StreamResp, String] !io = {
+pub fn fetch_stream(url: String, headers: List[(String, String)]) -> Result[StreamResp, String] !io =
+  fetch_stream_within(url, headers, TRANSFER_TIMEOUT_S)
+
+fn fetch_stream_within(url: String, headers: List[(String, String)], budget_s: Int) -> Result[StreamResp, String] !io = {
   let r: Result[Result[StreamResp, String], ForeignError] = catch_fault(() => {
-    let uri = URI.create(url)!
-    let base = HttpRequest.newBuilder()!.uri(uri)!
-    let withHeaders = add_headers(base, headers, 0)
     let nobody: BodyPublisher = BodyPublishers.noBody()!
-    let req = withHeaders.method("GET", nobody)!.build()!
+    let req = request_for(url, headers, "GET", nobody, budget_s)
     let resp = shared_client().send(req, BodyHandlers.ofInputStream()!)!
     let got: Result[InputStream, ForeignError] = cast(resp.body()!)
     match got {
@@ -96,7 +133,7 @@ pub fn fetch_stream(url: String, headers: List[(String, String)]) -> Result[Stre
   })
   match r {
     Ok(inner) -> inner
-    Err(e) -> Err(fe_text(e))
+    Err(e) -> Err(deadline_text(budget_s, e))
   }
 }
 
@@ -126,6 +163,39 @@ fn shared_client() -> HttpClient !io = {
   cb.build()!
 }
 
+# The one place a request is assembled, so the deadline cannot be forgotten by a
+# body handler that gets added later. Every outbound call in this module comes
+# through here; there is exactly one `.timeout(` in the file and this is it.
+fn request_for(url: String, headers: List[(String, String)], method: String, publisher: BodyPublisher, budget_s: Int) -> HttpRequest !io = {
+  let uri = URI.create(url)!
+  let base = HttpRequest.newBuilder()!.uri(uri)!
+  let timed = base.timeout(Duration.ofSeconds(budget_s)!)!
+  let withHeaders = add_headers(timed, headers, 0)
+  withHeaders.method(method, publisher)!.build()!
+}
+
+# A timeout reads as a plain transport failure otherwise: the JDK's own text is
+# "request timed out" with no hint of which budget expired, and for a stalled
+# connect it is "HTTP connect timed out". Naming the budget is what separates
+# "the endpoint is refusing us" from "the endpoint went quiet and we gave up",
+# which is the difference between a credentials problem and a network one.
+#
+# Only a timeout is reworded. Every other fault keeps `fe_text`'s byte-exact
+# rendering, which callers' error surfaces and the contract goldens rely on.
+fn deadline_text(budget_s: Int, e: ForeignError) -> String =
+  if str.ends_with(e.kind, "TimeoutException") {
+    "outbound HTTP timed out after ${to_string(budget_s)}s: ${fe_text(e)}"
+  } else {
+    fe_text(e)
+  }
+
+# `ferr.catch_text` with the timeout rewording folded in.
+fn catch_within[T](budget_s: Int, body: fn() -> T !io) -> Result[T, String] !io =
+  match catch_fault(body) {
+    Ok(v) -> Ok(v)
+    Err(e) -> Err(deadline_text(budget_s, e))
+  }
+
 # apply (header_name, value) pairs onto a builder, threading the builder through
 fn add_headers(b: Builder, hs: List[(String, String)], i: Int) -> Builder !io =
   if i == len(hs) {
@@ -136,16 +206,17 @@ fn add_headers(b: Builder, hs: List[(String, String)], i: Int) -> Builder !io =
     add_headers(b2, hs, i + 1)
   }
 
-fn send(method: String, url: String, headers: List[(String, String)], body: Option[String]) -> Result[HttpResp, String] !io =
-  catch_text(() => {
-    let uri = URI.create(url)!
-    let base = HttpRequest.newBuilder()!.uri(uri)!
-    let withHeaders = add_headers(base, headers, 0)
-    let publisher: BodyPublisher = match body {
-      Some(s) -> BodyPublishers.ofString(s)!
-      None -> BodyPublishers.noBody()!
-    }
-    let req = withHeaders.method(method, publisher)!.build()!
+fn send(method: String, url: String, headers: List[(String, String)], body: Option[String]) -> Result[HttpResp, String] !io = {
+  let publisher: BodyPublisher = match body {
+    Some(s) -> BodyPublishers.ofString(s)!
+    None -> BodyPublishers.noBody()!
+  }
+  send_body(method, url, headers, publisher, MANAGEMENT_TIMEOUT_S)
+}
+
+fn send_body(method: String, url: String, headers: List[(String, String)], publisher: BodyPublisher, budget_s: Int) -> Result[HttpResp, String] !io =
+  catch_within(budget_s, () => {
+    let req = request_for(url, headers, method, publisher, budget_s)
     let resp = shared_client().send(req, BodyHandlers.ofString()!)!
     HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! }
   })
@@ -177,18 +248,13 @@ pub fn file_body(head: Bytes, src: String, tail: Bytes) -> Result[RequestBody, S
     Ok(p) -> Ok(p)
   }
 
-## POST a request body produced by this module. Transport failures retain
-## `catch_text`'s original text so callers keep their established error surface.
-pub fn post_body(url: String, headers: List[(String, String)], publisher: RequestBody) -> Result[HttpResp, String] !io =
-  catch_text(() => {
-    let uri = URI.create(url)!
-    let base = HttpRequest.newBuilder()!.uri(uri)!
-    let withHeaders = add_headers(base, headers, 0)
-    let raw: BodyPublisher = publisher
-    let req = withHeaders.method("POST", raw)!.build()!
-    let resp = shared_client().send(req, BodyHandlers.ofString()!)!
-    HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! }
-  })
+## POST a request body produced by this module, on the transfer deadline (this
+## is WebDAV PUT's path to qiniu). Transport failures other than a timeout
+## retain their original text so callers keep their established error surface.
+pub fn post_body(url: String, headers: List[(String, String)], publisher: RequestBody) -> Result[HttpResp, String] !io = {
+  let raw: BodyPublisher = publisher
+  send_body("POST", url, headers, raw, TRANSFER_TIMEOUT_S)
+}
 
 # ---- tests ----
 #
@@ -269,6 +335,140 @@ test "fetch_stream hands back a readable upstream stream" {
     Err(m) -> panic("fetch_stream failed: $m")
   }
   server.stop(0)
+}
+
+## A peer that accepts the connection, reads the request, and then says nothing
+## for `stall_ms` before answering normally. The stall is finite on purpose: a
+## request with no deadline finishes late instead of hanging, so an assertion
+## that the call must fail turns RED under a mutant rather than wedging the
+## suite. Testing "it timed out" against a peer that never answers can only be
+## done with a bound of its own, and this is that bound.
+fn stall_server(stall_ms: Int, status: Int, body: String) -> (HttpServer, Int) !io = {
+  let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
+  server.createContext("/", ex => {
+    Thread.sleep(stall_ms)
+    let payload = bytes.utf8(body)
+    ex.sendResponseHeaders(status, bytes.len(payload))
+    let os = ex.getResponseBody()!
+    os.write(payload)
+    os.close()
+  })
+  server.start()
+  (server, server.getAddress()!.getPort())
+}
+
+test "a quiet peer hits the management deadline instead of blocking forever" {
+  # This is the regression: before the deadline existed, `fetch` against a peer
+  # that accepts and then goes quiet blocked in send() with no upper bound, and
+  # gc's delete_obj runs that call while holding BEGIN IMMEDIATE.
+  #
+  # The peer answers 200 five seconds AFTER the budget. Both failure modes are
+  # therefore visible and bounded: no deadline (or an absurd one, ofDays(1)) is
+  # a late Ok, and a too-tight deadline is an early Err. Asserting only "Err" or
+  # only "there is a .timeout( in the source" would pass for both.
+  let stall_ms = (MANAGEMENT_TIMEOUT_S + 5) * 1000
+  let (server, port) = stall_server(stall_ms, 200, "late")
+  let t0 = System.currentTimeMillis()
+  let outcome = fetch("http://127.0.0.1:$port/", [])
+  let elapsed = System.currentTimeMillis() - t0
+  server.stop(0)
+  match outcome {
+    Ok(r) ->
+      panic("a quiet peer must not answer: got ${to_string(r.status)} after ${to_string(elapsed)}ms")
+    Err(m) -> {
+      # the text names the budget, so a timeout is not just another 500 line
+      assert str.contains(m, "outbound HTTP timed out after ${to_string(MANAGEMENT_TIMEOUT_S)}s")
+      # it waited for the budget rather than failing on the spot ...
+      assert elapsed >= (MANAGEMENT_TIMEOUT_S - 2) * 1000
+      # ... and gave up on the budget rather than riding the peer's stall out
+      assert elapsed <= (MANAGEMENT_TIMEOUT_S + 3) * 1000
+    }
+  }
+}
+
+test "every request shape carries its deadline, whichever body handler it uses" {
+  # `send()` returns at different points per handler: ofString/ofByteArray only
+  # once the body is complete, ofInputStream as soon as the headers land. Each
+  # shape assembles its own request, so each is asked separately whether the
+  # deadline made it onto the wire. Small budget, small stall: the point here is
+  # coverage of the shapes, not the production values.
+  let budget = 1
+  let stall_ms = 6000
+  let ceiling = 4000
+
+  let (s1, p1) = stall_server(stall_ms, 200, "late")
+  let t1 = System.currentTimeMillis()
+  let bytes_outcome = fetch_bytes_within("http://127.0.0.1:$p1/", [], budget)
+  let e1 = System.currentTimeMillis() - t1
+  s1.stop(0)
+  match bytes_outcome {
+    Ok(_) -> panic("fetch_bytes rode out the stall: ${to_string(e1)}ms")
+    Err(m) -> { assert str.contains(m, "timed out") }
+  }
+  assert e1 <= ceiling
+
+  let (s2, p2) = stall_server(stall_ms, 200, "late")
+  let t2 = System.currentTimeMillis()
+  let stream_outcome = fetch_stream_within("http://127.0.0.1:$p2/", [], budget)
+  let e2 = System.currentTimeMillis() - t2
+  s2.stop(0)
+  match stream_outcome {
+    Ok(_) -> panic("fetch_stream rode out the stall: ${to_string(e2)}ms")
+    Err(m) -> { assert str.contains(m, "timed out") }
+  }
+  assert e2 <= ceiling
+
+  # the POST/publisher shape, i.e. what upload_file and upload_bytes ride on
+  let (s3, p3) = stall_server(stall_ms, 200, "late")
+  let publisher: BodyPublisher = BodyPublishers.ofString("x")!
+  let t3 = System.currentTimeMillis()
+  let post_outcome = send_body("POST", "http://127.0.0.1:$p3/", [], publisher, budget)
+  let e3 = System.currentTimeMillis() - t3
+  s3.stop(0)
+  match post_outcome {
+    Ok(_) -> panic("send_body rode out the stall: ${to_string(e3)}ms")
+    Err(m) -> { assert str.contains(m, "timed out") }
+  }
+  assert e3 <= ceiling
+}
+
+test "the two deadlines say what they are for" {
+  # A management call is small and runs inside the SQLite write lock, so its
+  # ceiling doubles as the ceiling on a global write stall.
+  assert MANAGEMENT_TIMEOUT_S > 0
+  assert MANAGEMENT_TIMEOUT_S <= 30
+  # A transfer moves object bytes and the deadline is a hard cap on duration,
+  # not an idle timer, so it must not be anywhere near the management value.
+  assert TRANSFER_TIMEOUT_S >= 600
+  assert TRANSFER_TIMEOUT_S > MANAGEMENT_TIMEOUT_S * 10
+}
+
+test "only a timeout is reworded; every other fault keeps its text" {
+  let timed_out = ForeignError {
+    kind: "java.net.http.HttpTimeoutException",
+    message: "request timed out",
+    cause: None
+  }
+  assert deadline_text(10, timed_out) ==
+    "outbound HTTP timed out after 10s: java.net.http.HttpTimeoutException: request timed out"
+
+  # the connect variant is a different class and must be recognised too
+  let connect_timed_out = ForeignError {
+    kind: "java.net.http.HttpConnectTimeoutException",
+    message: "HTTP connect timed out",
+    cause: None
+  }
+  assert str.contains(deadline_text(10, connect_timed_out), "outbound HTTP timed out after 10s")
+
+  # a refusal is not a timeout: its text stays byte for byte what it was, which
+  # is what callers' error surfaces and the contract goldens were recorded on
+  let refused = ForeignError {
+    kind: "java.net.ConnectException",
+    message: "Connection refused",
+    cause: None
+  }
+  assert deadline_text(10, refused) == "java.net.ConnectException: Connection refused"
+  assert deadline_text(10, refused) == fe_text(refused)
 }
 
 test "fetch_stream carries a non-2xx status; ok_stream is false" {
