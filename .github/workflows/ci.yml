@@ -246,6 +246,19 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      # Before npm ci, deliberately: the file-manager name rules live in
+      # frontend/src/utils/fmPath.js, which imports nothing, and the checker
+      # imports nothing either, so this needs no node_modules and fails in about
+      # a second. The rules it holds are all subtractions — "does not trim", "does
+      # not send a request" — which no lint, build or type check can see: putting
+      # a .trim() back is valid code that silently rewrites what the user typed.
+      # Each of the five rules names, in a comment beside it, the one-line
+      # production mutant that turns it and only it red; the matrix was measured,
+      # not assumed. Runs in ~0.3s locally; 2 minutes is a hang, not a slow run.
+      - name: file-manager name rules
+        run: node scripts/check-fm-path.mjs
+        timeout-minutes: 2
+
       # npm ci, not install: it fails loudly when the lockfile and package.json
       # disagree, which is the whole point of having the lockfile committed.
       - name: install
