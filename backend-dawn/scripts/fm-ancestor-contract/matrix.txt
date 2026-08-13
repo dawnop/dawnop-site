@@ -1,5 +1,5 @@
 # Versioned, hand-owned red set. There is no record mode.
-version=14
+version=15
 immediate-tx-as-deferred|test|with_immediate_tx reserves the writer before its body
 immediate-tx-panic-no-rollback|test|with_immediate_tx rolls back when its body panics
 repo-file-ancestor-fail-open|test|insert_folder_strict rejects an existing file ancestor
@@ -61,3 +61,4 @@ webdav-propfind-depth-repeat-fail-open|test|PROPFIND rejects repeated Depth head
 qiniu-upload-mime-passthrough|test|Qiniu upload multipart replaces unsafe persisted MIME wholesale
 multipart-part-ctype-literal-spelling|test|a declared part Content-Type survives every legal header spelling
 fm-persisted-mime-passthrough|qiniu|fm.persisted-mime.fail-safe
+fm-split-trims-addressing|contract|fm.addressing.lossless

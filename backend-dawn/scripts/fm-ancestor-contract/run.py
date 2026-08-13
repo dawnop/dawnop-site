@@ -2551,6 +2551,211 @@ def assert_webdav_full_ancestor(ctx, checks):
     checks.equal(ctx.fake.calls(), [], "WebDAV full-ancestor rejection reached Qiniu")
 
 
+def assert_fm_addressing_lossless(ctx, checks):
+    """`qiniu://<path>` addresses exactly the row spelled that way.
+
+    Whitespace at the edges of a stored path is not hypothetical: multipart
+    filenames arrive verbatim (util/multipart disp_filename, svc/files
+    sanitize_name), WebDAV MKCOL/PUT/MOVE/COPY never trim, and every POSIX
+    filesystem lets a user create " a.txt". So the store really can hold
+    "a.txt" and "a.txt " at once, and paths.fm_split used to collapse the
+    second onto the first — a delete of one dropped the other's row and
+    collected the other's object, irreversibly. Every write here addresses the
+    whitespace spelling and must leave its plain neighbour untouched.
+    """
+    add_file(ctx, "addr", True)
+    add_file(ctx, "addr/a.txt", False, "addr-plain-object", content="plain bytes")
+    add_file(
+        ctx,
+        "addr/a.txt ",
+        False,
+        "addr-trailing-object",
+        content="trailing space bytes",
+    )
+    add_file(
+        ctx,
+        "addr/ b.txt",
+        False,
+        "addr-leading-object",
+        content="leading space bytes",
+    )
+    # whitespace directly after the storage prefix: "qiniu:// root.txt" is the
+    # row " root.txt", never "root.txt"
+    add_file(ctx, "root.txt", False, "addr-root-plain-object", content="root plain")
+    add_file(ctx, " root.txt", False, "addr-root-space-object", content="root spaced")
+
+    list_status, list_raw = api(
+        ctx,
+        "/api/fm?" + urllib.parse.urlencode({"path": "qiniu://addr"}),
+        method="GET",
+    )
+    checks.equal(list_status, 200, "listing status")
+    checks.equal(
+        {entry["path"] for entry in json.loads(list_raw)["files"]},
+        {"qiniu://addr/ b.txt", "qiniu://addr/a.txt", "qiniu://addr/a.txt "},
+        "listing echoes every stored spelling",
+    )
+
+    # reads: the path the listing handed out resolves to that row's object, and
+    # a spelling no row carries is a 404 rather than a neighbour's bytes
+    for full_path, key in (
+        ("qiniu://addr/a.txt", "addr-plain-object"),
+        ("qiniu://addr/a.txt ", "addr-trailing-object"),
+        ("qiniu://addr/ b.txt", "addr-leading-object"),
+        ("qiniu://root.txt", "addr-root-plain-object"),
+        ("qiniu:// root.txt", "addr-root-space-object"),
+    ):
+        sign_status, sign_raw = api(
+            ctx,
+            "/api/fm/sign?" + urllib.parse.urlencode({"path": full_path}),
+            method="GET",
+        )
+        checks.equal(sign_status, 200, f"sign {full_path!r} status")
+        if sign_status == 200:
+            checks.true(
+                f"/{key}?" in json.loads(sign_raw)["url"],
+                f"sign {full_path!r} addressed another row",
+            )
+    unstored = ("qiniu://addr/a.txt  ", "qiniu:// addr/a.txt", "qiniu://addr/b.txt")
+    for missing in unstored:
+        checks.equal(
+            api(
+                ctx,
+                "/api/fm/sign?" + urllib.parse.urlencode({"path": missing}),
+                method="GET",
+            )[0],
+            404,
+            f"sign {missing!r} resolved an unstored spelling",
+        )
+
+    # delete: the reproduction. Only the addressed row and its object go.
+    ctx.fake.clear_calls()
+    delete_status, delete_raw = api(
+        ctx,
+        "/api/fm/delete",
+        {"path": "qiniu://addr", "items": [{"path": "qiniu://addr/a.txt "}]},
+    )
+    checks.equal(delete_status, 200, "delete status")
+    if delete_status == 200:
+        checks.equal(
+            [entry["path"] for entry in json.loads(delete_raw).get("deleted", [])],
+            ["qiniu://addr/a.txt "],
+            "delete reported another row",
+        )
+    checks.equal(
+        {row[0] for row in rows(ctx, "addr")},
+        {"addr", "addr/a.txt", "addr/ b.txt"},
+        "delete removed the wrong metadata row",
+    )
+    checks.true(
+        "addr-plain-object" in ctx.fake.keys(),
+        "delete collected the neighbour's object",
+    )
+    checks.true(
+        "addr-trailing-object" not in ctx.fake.keys(),
+        "delete left the addressed object",
+    )
+    checks.equal(
+        [call.get("key") for call in ctx.fake.calls() if call.get("op") == "delete"],
+        ["addr-trailing-object"],
+        "delete object set",
+    )
+
+    # rename: `item` is addressed the same way
+    add_file(ctx, "addr-rename", True)
+    add_file(ctx, "addr-rename/e.txt", False, "addr-rename-plain-object")
+    add_file(ctx, "addr-rename/e.txt ", False, "addr-rename-space-object")
+    rename_status, _ = api(
+        ctx,
+        "/api/fm/rename",
+        {
+            "path": "qiniu://addr-rename",
+            "item": "qiniu://addr-rename/e.txt ",
+            "name": "renamed.txt",
+        },
+    )
+    checks.equal(rename_status, 200, "rename status")
+    checks.equal(
+        {(row[0], row[2]) for row in rows(ctx, "addr-rename")},
+        {
+            ("addr-rename", None),
+            ("addr-rename/e.txt", "addr-rename-plain-object"),
+            ("addr-rename/renamed.txt", "addr-rename-space-object"),
+        },
+        "rename rewrote the wrong row",
+    )
+
+    # move: `sources` entries are addressed the same way, and the basename keeps
+    # its whitespace at the destination
+    add_file(ctx, "addr-move", True)
+    add_file(ctx, "addr-move/c.txt", False, "addr-move-plain-object")
+    add_file(ctx, "addr-move/c.txt ", False, "addr-move-space-object")
+    add_file(ctx, "addr-move-dest", True)
+    move_status, _ = api(
+        ctx,
+        "/api/fm/move",
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://addr-move-dest",
+            "sources": ["qiniu://addr-move/c.txt "],
+        },
+    )
+    checks.equal(move_status, 200, "move status")
+    checks.equal(
+        {(row[0], row[2]) for row in rows(ctx, "addr-move")},
+        {("addr-move", None), ("addr-move/c.txt", "addr-move-plain-object")},
+        "move took the wrong source row",
+    )
+    checks.equal(
+        {(row[0], row[2]) for row in rows(ctx, "addr-move-dest")},
+        {
+            ("addr-move-dest", None),
+            ("addr-move-dest/c.txt ", "addr-move-space-object"),
+        },
+        "move landed the wrong destination path",
+    )
+
+    # copy: same addressing, and the fresh object carries the addressed row's
+    # bytes rather than its neighbour's
+    add_file(ctx, "addr-copy", True)
+    add_file(ctx, "addr-copy/d.txt", False, "addr-copy-plain-object", content="d plain")
+    add_file(
+        ctx,
+        "addr-copy/d.txt ",
+        False,
+        "addr-copy-space-object",
+        content="d spaced",
+    )
+    add_file(ctx, "addr-copy-dest", True)
+    copy_status, _ = api(
+        ctx,
+        "/api/fm/copy",
+        {
+            "path": "qiniu://",
+            "destination": "qiniu://addr-copy-dest",
+            "sources": ["qiniu://addr-copy/d.txt "],
+        },
+    )
+    checks.equal(copy_status, 200, "copy status")
+    checks.equal(
+        {(row[0], row[2]) for row in rows(ctx, "addr-copy")},
+        {
+            ("addr-copy", None),
+            ("addr-copy/d.txt", "addr-copy-plain-object"),
+            ("addr-copy/d.txt ", "addr-copy-space-object"),
+        },
+        "copy changed its source subtree",
+    )
+    copied = rows(ctx, "addr-copy-dest/d.txt ")
+    checks.equal(len(copied), 1, "copy destination row count")
+    if len(copied) == 1:
+        checks.equal(
+            object_bytes(ctx, copied[0][2]),
+            b"d spaced",
+            "copy duplicated the neighbour's bytes",
+        )
+
+
 def assert_webdav_missing_parent(ctx, checks):
     add_file(ctx, "good", True)
     before_db = db_state(ctx)
@@ -2640,6 +2845,7 @@ ASSERTIONS = [
     ),
     ("fm.copy.metadata-atomic", assert_fm_copy_metadata_atomic),
     ("webdav.copy.metadata-atomic", assert_webdav_copy_metadata_atomic),
+    ("fm.addressing.lossless", assert_fm_addressing_lossless),
 ]
 
 

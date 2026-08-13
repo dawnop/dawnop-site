@@ -10,7 +10,28 @@ use java "java.time.format.DateTimeFormatter"
 
 pub const STORAGE: String = "qiniu"
 
-## Strip the storage prefix, return a normalized relative path ("" at root).
+## Strip the storage prefix, return the relative path ("" at root).
+##
+## This is the addressing function: every fm endpoint turns a client-supplied
+## `qiniu://<rel>` into the `files.path` it will read, rewrite or delete with it.
+## So it has to be injective on stored paths — two different rows must never
+## share an address.
+##
+## It was not. It used to run `str.trim` over the whole path after dropping the
+## prefix, and a stored path may legitimately carry leading or trailing spaces:
+## multipart filenames are taken verbatim (`util/multipart.dawn` `disp_filename`,
+## `sanitize_name` here), and WebDAV MKCOL/PUT/MOVE/COPY never trim either. With
+## rows "a.txt" and "a.txt " both present, `POST /api/fm/delete` on the second
+## address resolved to the first: the wrong metadata row was dropped and the
+## wrong object collected. move/copy sources and rename items addressed through
+## the same function missed the same way.
+##
+## The fix is not to trim harder anywhere else — it is to stop rewriting the
+## address at all. `full` and `fm_split` are now exact inverses, so an address
+## that matches no row 404s instead of silently landing on a neighbour. The
+## FastAPI reference (`backend/app/api/fm/paths.py` `_split`, frozen) still ends
+## in `.strip()` and keeps the lossy behaviour; the divergence is deliberate and
+## recorded in the contract goldens.
 pub fn fm_split(p: String) -> String =
   if p == "" {
     ""
@@ -19,7 +40,7 @@ pub fn fm_split(p: String) -> String =
       Some(i) -> str.slice(p, i + 3, str.len(p))
       None -> p
     }
-    strip_slashes(str.trim(after))
+    strip_slashes(after)
   }
 
 ## Python `str.strip("/")`: drop leading and trailing slashes, keep internal
