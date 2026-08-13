@@ -166,7 +166,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   事务内复验源快照、对象形状、完整目标子树与父链并一次提交。FM COPY 将冲突、七牛失败和普通
   SQLite/内部失败分别映射为 409、502 和 500。84 个 fail-closed mutant 按依赖层精确归属到 30 条
   Dawn 单测、51 条逐项重置数据库、假七牛与调用日志的 HTTP 合同，以及 3 条 qiniu golden
-  （`scripts/fm-ancestor-contract/`，矩阵 v19）。Dawn
+  （`scripts/fm-ancestor-contract/`，矩阵 v19）。其中 `create-folder-rejects-subpath-name` 方向相反：
+  它给 create-folder 加上 rename 的单段规则，钉住的是「多段名是有意接受的」。Dawn
   角色只核对自己的单测红集；
   HTTP 角色必须保持全部 Dawn 单测绿色，再唯一打红自己的合同，避免把低层事务退化对上层的真实影响
   误判为同层 collateral。
