@@ -4,6 +4,7 @@
 use std/str
 use std/char
 use std/list
+use web/types.{HttpError, http_error}
 use java "java.time.LocalDateTime"
 use java "java.time.ZoneId"
 use java "java.time.format.DateTimeFormatter"
@@ -68,6 +69,78 @@ pub fn basename(rel: String) -> String =
   }
 
 pub fn fm_join(parent: String, name: String) -> String = if parent == "" { name } else { "$parent/$name" }
+
+## Whether a name may be written, and when it may not, which of the two ways it
+## fails. A verdict only; `require_trimmed_names` puts the HTTP shape on it.
+pub type NameVerdict =
+  | NameAccepted
+  | NameAllBlank
+  | NameEdgeBlank
+
+## The admission check every write entry runs over the path it is about to
+## create: a segment is refused when it differs from its own `str.trim`.
+##
+## This is deliberately not part of `fm_split`. That function addresses an
+## existing row and has to stay lossless (it used to trim, and a delete aimed at
+## "a.txt " then dropped "a.txt"; see its comment above). Addressing and
+## admission are separate questions, and folding the second into the first is
+## what produced that defect. So a legacy row spelled "a.txt " remains
+## addressable and can still be listed, downloaded, renamed clean or deleted,
+## while no write can produce another one. The frontend stopped trimming as well
+## (#243), so the name a user typed arrives here exactly as typed and neither
+## end rewrites it silently.
+##
+## The whitespace this rejects is exactly the set `str.trim` removes, measured
+## on this compiler: U+0009 through U+000D, U+001C through U+001F, U+0020,
+## U+1680, U+2000 through U+2006, U+2008 through U+200A, U+2028, U+2029, U+205F,
+## U+3000. That is `Character.isWhitespace`, and it is not the set of invisible
+## characters; do not describe it that way. U+00A0 (no-break space), U+2007
+## (figure space), U+202F (narrow no-break space), U+200B (zero width space) and
+## U+FEFF are all outside it, so "a.txt\u{00A0}" is admitted here while
+## "a.txt\u{3000}" is refused. Widening the set is a separate decision and would
+## be taken in this one function.
+##
+## Every segment is checked, not only the last, so no write can bring a dirty
+## directory into being on its way to a clean leaf. The accepted cost: a legacy
+## row whose own path carries an edge space is frozen against writes until
+## someone renames it clean.
+pub fn name_verdict(path: String) -> NameVerdict = first_verdict(str.split(path, "/"), 0)
+
+fn first_verdict(segs: List[String], i: Int) -> NameVerdict =
+  if i >= len(segs) {
+    NameAccepted
+  } else {
+    match segment_verdict(segs[i]) {
+      NameAccepted -> first_verdict(segs, i + 1)
+      NameAllBlank -> NameAllBlank
+      NameEdgeBlank -> NameEdgeBlank
+    }
+  }
+
+# An empty segment is accepted here: "" equals its own trim. Emptiness is a
+# different defect with its own checks at the call sites ("缺少 name",
+# `valid_rename_name`), and this predicate answers one question only.
+fn segment_verdict(seg: String) -> NameVerdict = {
+  let trimmed = str.trim(seg)
+  if trimmed == seg {
+    NameAccepted
+  } else if trimmed == "" {
+    NameAllBlank
+  } else {
+    NameEdgeBlank
+  }
+}
+
+## `name_verdict` as the 400 a write entry returns. The two messages are
+## distinct because the two failures read differently to whoever typed the name:
+## a name that is only whitespace looks empty, a name with an edge space looks
+## exactly like its clean neighbour.
+pub fn require_trimmed_names(path: String) -> Result[Unit, HttpError] =
+  match name_verdict(path) {
+    NameAccepted -> Ok(())
+    NameAllBlank -> Err(http_error(400, "名称不能只由空白组成"))
+    NameEdgeBlank -> Err(http_error(400, "名称不能以空白开头或结尾"))
+  }
 
 pub fn ext(name: String) -> String =
   match str.last_index_of(name, ".") {
@@ -185,6 +258,67 @@ fn cp(n: Int) -> String =
     Some(c) -> from_code_points([c])
     None -> ""
   }
+
+test "a name is admitted exactly when it equals its own trim" {
+  assert name_verdict("a.txt") == NameAccepted
+  assert name_verdict("docs/a.txt") == NameAccepted
+  # internal whitespace is a legal name, only the edges are refused
+  assert name_verdict("my notes.txt") == NameAccepted
+  assert name_verdict("a b/c d.txt") == NameAccepted
+  # the root and an empty segment: "" is its own trim, and emptiness is checked
+  # elsewhere
+  assert name_verdict("") == NameAccepted
+  assert name_verdict("a//b") == NameAccepted
+  assert name_verdict("a.txt ") == NameEdgeBlank
+  assert name_verdict(" a.txt") == NameEdgeBlank
+  assert name_verdict("\ta.txt") == NameEdgeBlank
+  assert name_verdict("a.txt\n") == NameEdgeBlank
+  # any segment, not only the last
+  assert name_verdict("docs /a.txt") == NameEdgeBlank
+  assert name_verdict("docs/ sub/a.txt") == NameEdgeBlank
+  # whitespace all the way through is its own verdict: it reads as empty
+  assert name_verdict("   ") == NameAllBlank
+  assert name_verdict("docs/   ") == NameAllBlank
+  assert name_verdict("\t") == NameAllBlank
+}
+
+test "the admitted whitespace set is str.trim's, not the invisible characters" {
+  # U+3000 IDEOGRAPHIC SPACE is inside Character.isWhitespace, so it is refused
+  assert name_verdict("a.txt" ++ cp(0x3000)) == NameEdgeBlank
+  assert name_verdict(cp(0x2028) ++ "a.txt") == NameEdgeBlank
+  assert name_verdict(cp(0x205F) ++ "a.txt") == NameEdgeBlank
+  assert name_verdict(cp(0x001C) ++ "a.txt") == NameEdgeBlank
+  # the non-breaking spaces and the zero-width characters are outside it. This
+  # is the claim the doc comment makes; pinning it here keeps the comment from
+  # drifting into "rejects invisible characters", which would be false.
+  assert name_verdict("a.txt" ++ cp(0x00A0)) == NameAccepted
+  assert name_verdict("a.txt" ++ cp(0x2007)) == NameAccepted
+  assert name_verdict("a.txt" ++ cp(0x202F)) == NameAccepted
+  assert name_verdict("a.txt" ++ cp(0x200B)) == NameAccepted
+  assert name_verdict("a.txt" ++ cp(0xFEFF)) == NameAccepted
+  assert name_verdict("a.txt" ++ cp(0x0085)) == NameAccepted
+}
+
+test "the write guard maps each verdict to its own 400" {
+  match require_trimmed_names("docs/a.txt") {
+    Ok(_) -> { assert true }
+    Err(_) -> { assert false }
+  }
+  match require_trimmed_names("docs/a.txt ") {
+    Err(e) -> {
+      assert e.status == 400
+      assert e.message == "名称不能以空白开头或结尾"
+    }
+    Ok(_) -> { assert false }
+  }
+  match require_trimmed_names("docs/   ") {
+    Err(e) -> {
+      assert e.status == 400
+      assert e.message == "名称不能只由空白组成"
+    }
+    Ok(_) -> { assert false }
+  }
+}
 
 test "safe_persisted_mime ships printable ASCII verbatim" {
   assert safe_persisted_mime("text/plain") == "text/plain"
