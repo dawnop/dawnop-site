@@ -80,6 +80,10 @@ MUTANTS = (
     "name-guard-fm-upload-token-fail-open",
     "name-guard-fm-register-fail-open",
     "name-guard-fm-proxy-upload-fail-open",
+    "name-guard-dot-segment-single-fail-open",
+    "name-guard-dot-segment-double-fail-open",
+    "rename-name-allows-subpath",
+    "create-folder-rejects-subpath-name",
     "name-guard-webdav-put-fail-open",
     "name-guard-webdav-mkcol-fail-open",
     "name-guard-webdav-destination-fail-open",
@@ -1221,14 +1225,14 @@ def main() -> int:
     elif args.mutant == "name-guard-fm-create-folder-fail-open":
         replace_once(
             fm_api,
-            "          let _n = require_trimmed_names(rel)?\n"
+            "          let _n = require_admissible_names(rel)?\n"
             "          match as_http_with(with_db(a.db.path, a.db.ext, c => mk_folder(c, rel, cur)), conflict_or(500))? {\n",
             "          match as_http_with(with_db(a.db.path, a.db.ext, c => mk_folder(c, rel, cur)), conflict_or(500))? {\n",
         )
     elif args.mutant == "name-guard-fm-rename-fail-open":
         replace_once(
             fm_api,
-            "          let _n = require_trimmed_names(new_rel)?\n",
+            "          let _n = require_admissible_names(new_rel)?\n",
             "",
         )
     elif args.mutant == "name-guard-fm-move-fail-open":
@@ -1248,56 +1252,99 @@ def main() -> int:
     elif args.mutant == "name-guard-fm-create-file-fail-open":
         replace_once(
             fm_api,
-            "          let _n = require_trimmed_names(rel)?\n"
+            "          let _n = require_admissible_names(rel)?\n"
             "          match as_http_with(do_create_file(a, rel, cur), mutation_failure)? {\n",
             "          match as_http_with(do_create_file(a, rel, cur), mutation_failure)? {\n",
         )
     elif args.mutant == "name-guard-fm-save-fail-open":
         replace_once(
             fm_api,
-            "          let _n = require_trimmed_names(rel)?\n"
+            "          let _n = require_admissible_names(rel)?\n"
             "          Ok(json_ok(as_http_with(do_save(a, rel, content), mutation_failure)?))\n",
             "          Ok(json_ok(as_http_with(do_save(a, rel, content), mutation_failure)?))\n",
         )
     elif args.mutant == "name-guard-fm-upload-token-fail-open":
         replace_once(
             fm_api,
-            "    let _n = require_trimmed_names(rel)?\n"
+            "    let _n = require_admissible_names(rel)?\n"
             "    let _p = as_http_with(with_db(a.db.path, a.db.ext, c => upload_token_preflight(c, rel)), conflict_or(500))?\n",
             "    let _p = as_http_with(with_db(a.db.path, a.db.ext, c => upload_token_preflight(c, rel)), conflict_or(500))?\n",
         )
     elif args.mutant == "name-guard-fm-register-fail-open":
         replace_once(
             fm_api,
-            "          let _n = require_trimmed_names(rel)?\n"
+            "          let _n = require_admissible_names(rel)?\n"
             "          let _preflight = as_http_with(register_preflight(a, rel, key), conflict_or(500))?\n",
             "          let _preflight = as_http_with(register_preflight(a, rel, key), conflict_or(500))?\n",
         )
     elif args.mutant == "name-guard-fm-proxy-upload-fail-open":
         replace_once(
             fm_api,
-            "  let _n = require_trimmed_names(rel)?\n"
+            "  let _n = require_admissible_names(rel)?\n"
             "  # the part's declared type is a client-supplied string that ends up in the row\n",
             "  # the part's declared type is a client-supplied string that ends up in the row\n",
+        )
+    # The dot rule, one spelling at a time. Both halves live in one predicate,
+    # so each mutant keeps the other half intact: a guard that refuses ".." but
+    # admits "." is a defect its mirror image cannot stand in for, and one test
+    # covering both spellings could not tell the two apart. The webdav copy of
+    # this literal is deliberately not shared (see util/paths.dawn); breaking it
+    # is scripts/webdav-destination-mutants/'s business, and sharing would leave
+    # neither layer's mutant uniquely ownable.
+    elif args.mutant == "name-guard-dot-segment-single-fail-open":
+        replace_once(
+            paths,
+            'fn dot_segment(seg: String) -> Bool = seg == "." || seg == ".."\n',
+            'fn dot_segment(seg: String) -> Bool = seg == ".."\n',
+        )
+    elif args.mutant == "name-guard-dot-segment-double-fail-open":
+        replace_once(
+            paths,
+            'fn dot_segment(seg: String) -> Bool = seg == "." || seg == ".."\n',
+            'fn dot_segment(seg: String) -> Bool = seg == "."\n',
+        )
+    elif args.mutant == "rename-name-allows-subpath":
+        # rename stops being an in-place rewrite of the last segment: a subpath
+        # name would move the row to another directory under the name of a
+        # rename
+        replace_once(
+            fm_api,
+            '  name != "" && not str.contains(name, "/") && not str.contains(name, "\\\\")\n',
+            '  name != "" && not str.contains(name, "\\\\")\n',
+        )
+    elif args.mutant == "create-folder-rejects-subpath-name":
+        # the other direction, and the reason this one is here: handing rename's
+        # single-segment rule to create-folder is the tidy-up that silently
+        # takes folder upload away. It is applied after the shared guard so the
+        # name-guard cases still see their own messages.
+        replace_once(
+            fm_api,
+            "          let _n = require_admissible_names(rel)?\n"
+            "          match as_http_with(with_db(a.db.path, a.db.ext, c => mk_folder(c, rel, cur)), conflict_or(500))? {\n",
+            "          let _n = require_admissible_names(rel)?\n"
+            "          let single: Result[Unit, HttpError] =\n"
+            '            if str.contains(name, "/") { Err(http_error(400, "name 必须是单段名称")) } else { Ok(()) }\n'
+            "          let _s = single?\n"
+            "          match as_http_with(with_db(a.db.path, a.db.ext, c => mk_folder(c, rel, cur)), conflict_or(500))? {\n",
         )
     elif args.mutant == "name-guard-webdav-put-fail-open":
         replace_once(
             webdav,
-            "    let _n = require_trimmed_names(rel)?\n"
+            "    let _n = require_admissible_names(rel)?\n"
             "    match as_http_with(with_db(a.db.path, a.db.ext, c => put_preflight(c, rel)), conflict_or(500))? {\n",
             "    match as_http_with(with_db(a.db.path, a.db.ext, c => put_preflight(c, rel)), conflict_or(500))? {\n",
         )
     elif args.mutant == "name-guard-webdav-mkcol-fail-open":
         replace_once(
             webdav,
-            "    let _n = require_trimmed_names(rel)?\n"
+            "    let _n = require_admissible_names(rel)?\n"
             "    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {\n",
             "    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {\n",
         )
     elif args.mutant == "name-guard-webdav-destination-fail-open":
         replace_once(
             webdav,
-            "              let _n = require_trimmed_names(dst)?\n",
+            "              let _n = require_admissible_names(dst)?\n",
             "",
         )
     elif args.mutant == "entry-json-mime-passthrough":

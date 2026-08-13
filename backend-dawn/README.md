@@ -131,15 +131,27 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 **文件管理（刀 11）**
 - `api/api_fm.dawn` — 17 端点（除 `upload`）：列目录 / 预览 / 下载（302）/ 内容代理（二进制）/ stats / search / CRUD / save / register / upload-token。
   只剩路由与线格式，树操作在 `svc/files.dawn`。
-- **写入的每一段名称必须等于自己的 `str.trim`**（`util/paths.dawn` 的 `require_trimmed_names`）。
+- **写入的每一段名称必须等于自己的 `str.trim`，且不能是 `.` 或 `..`**（`util/paths.dawn` 的
+  `require_admissible_names`）。
   12 个写入入口各自守住自己要写的整条相对路径：FM 的 create-folder / rename / move / copy /
   create-file / save / upload-token / register / upload，WebDAV 的 PUT / MKCOL / MOVE+COPY
-  （后两者共用一处 `Destination` 守卫）。违反回 400，纯空白名与首尾带空白的名各有自己的消息。
+  （后两者共用一处 `Destination` 守卫）。违反回 400，三种失败各有自己的消息。
   create-folder / create-file / rename 从前在这里 `str.trim` 后照建，前端也 trim；两层现在都不再
   改写用户输入。判词与寻址是分开的：`fm_split` 保持无损，所以已存在的「a.txt 」仍可列目录、下载、
   改名改干净、删除，只是不能再被创建、移动或复制到别处。拒的空白集合就是 `str.trim` 的
   （`Character.isWhitespace`：含 U+3000，不含 U+00A0 / U+2007 / U+202F / U+200B / U+FEFF），
   不是「不可见字符」。
+  拒 `.` / `..` 的理由不是路径穿越（这里没有任何东西解析它们，建出来的只是一行 path 写作
+  `docs/.` 的普通行），而是**那行只有一个界面够得着**：WebDAV 在把请求路径转成 rel 时就拒绝点号段，
+  于是网页文件管理器能列能开的东西，挂载客户端永远指不到，删不掉也移不走。同一棵树的两个界面，
+  一个拼不出的名字就不该存在。判词只管写入，遗留的 `.` 行仍可列目录、改名改干净、删除。
+  这个字面量在 `util/paths.dawn` 与 `api/webdav.dawn` 各有一份，是刻意的：前者是写入准入、
+  后者是寻址本身（读也拒），且两层的 mutant 必须能各自唯一归属，共用一份会让两边都归属不了。
+- **create 的 `name` 可以是多段，rename 的不行**，这是产品决定不是疏漏：rename 就地替换最后一段，
+  多段名对它没有意义；create-folder 把 name 接在当前目录下，upload-token 读的是同一个字段，而
+  文件夹上传送的正是浏览器的 `webkitRelativePath`（前端 `api/fmApi.js`），指望后端把树重建出来。
+  两条路唯一共用的规则就是上面那条写入判词。想把两者「统一成一条判词」的改动会被
+  `fm.create-folder.subpath-name` 合同挡下。
 - **`files.content_type` 出站一律过 `safe_persisted_mime`**（整体替换成 `application/octet-stream`，
   不做清洗）：PROPFIND 的 `getcontenttype`、HEAD/GET 的 Content-Type、`/api/fm/content` 代理、
   save 复用旧类型、七牛 multipart 头、代理上传申报的类型，加上 DirEntry 的 `mime_type` 与 COPY
@@ -163,9 +175,10 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   干净子树仍可从遗留脏外部祖先下移出。FM 与 WebDAV COPY 会在对象操作前拒绝携带 key 的目录、
   缺少有效非空 key 的文件、映射目标冲突和目标根下的未映射遗留项，随后把全部 metadata 在一个即时
   事务内复验源快照、对象形状、完整目标子树与父链并一次提交。FM COPY 将冲突、七牛失败和普通
-  SQLite/内部失败分别映射为 409、502 和 500。80 个 fail-closed mutant 按依赖层精确归属到 27 条
-  Dawn 单测、50 条逐项重置数据库、假七牛与调用日志的 HTTP 合同，以及 3 条 qiniu golden
-  （`scripts/fm-ancestor-contract/`，矩阵 v18）。Dawn
+  SQLite/内部失败分别映射为 409、502 和 500。84 个 fail-closed mutant 按依赖层精确归属到 30 条
+  Dawn 单测、51 条逐项重置数据库、假七牛与调用日志的 HTTP 合同，以及 3 条 qiniu golden
+  （`scripts/fm-ancestor-contract/`，矩阵 v19）。其中 `create-folder-rejects-subpath-name` 方向相反：
+  它给 create-folder 加上 rename 的单段规则，钉住的是「多段名是有意接受的」。Dawn
   角色只核对自己的单测红集；
   HTTP 角色必须保持全部 Dawn 单测绿色，再唯一打红自己的合同，避免把低层事务退化对上层的真实影响
   误判为同层 collateral。

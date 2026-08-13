@@ -33,7 +33,7 @@ use db/db.{with_db}
 use svc/auth.{Auth, check_basic}
 use svc/files.{signed_url, gc_unreferenced, gc_rows_unreferenced, gc_copy_tree_unreferenced, copy_tree_objects}
 use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}
-use util/paths.{basename, parent_rel, ext, ts, guess_mime, safe_persisted_mime, require_trimmed_names}
+use util/paths.{basename, parent_rel, ext, ts, guess_mime, safe_persisted_mime, require_admissible_names}
 use qiniu/rs.{upload_file}
 use java "java.io.File"
 use util/crypto.{sha256_hex, uuid, uuid_hex}
@@ -420,7 +420,7 @@ fn put(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io =
   if rel == "" {
     Err(http_error(405, "不能写入根"))
   } else {
-    let _n = require_trimmed_names(rel)?
+    let _n = require_admissible_names(rel)?
     match as_http_with(with_db(a.db.path, a.db.ext, c => put_preflight(c, rel)), conflict_or(500))? {
       Some(o) -> if o.is_dir { Err(http_error(405, "目标是目录")) } else { put_do(a, req, rel) }
       None -> put_do(a, req, rel)
@@ -501,7 +501,7 @@ fn mkcol(a: Auth, rel: String) -> Result[Response, HttpError] !io =
   if rel == "" {
     Err(http_error(405, "根已存在"))
   } else {
-    let _n = require_trimmed_names(rel)?
+    let _n = require_admissible_names(rel)?
     match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
       Some(_) -> Err(http_error(405, "已存在同名项"))
       None -> {
@@ -909,7 +909,7 @@ fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Res
               # the Destination names the path this request creates, so the
               # admission check lands here and not on `rel`, which only
               # addresses the source
-              let _n = require_trimmed_names(dst)?
+              let _n = require_admissible_names(dst)?
               if dst == rel || str.starts_with(dst, rel ++ "/") {
                 Err(http_error(409, "不能移动/复制到自身或子目录"))
               } else {
