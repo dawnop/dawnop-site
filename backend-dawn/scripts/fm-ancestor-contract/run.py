@@ -2751,12 +2751,17 @@ def assert_name_guard_create_folder(ctx, checks):
         NAME_BLANK_DETAIL,
     )
     checks.equal(db_state(ctx), before, "a refused create-folder wrote a row")
+    # one new segment under a directory that already exists: the control says
+    # the guard lets an ordinary create through, and nothing else. Creating
+    # "a/b" here would also be asserting that missing ancestors get backfilled,
+    # which is fm.missing-ancestors.auto-created's claim, and would make this
+    # case a second owner of the mutant that removes the backfill.
     status, _ = api(
-        ctx, "/api/fm/create-folder", {"path": "qiniu://docs", "name": "a/b"}
+        ctx, "/api/fm/create-folder", {"path": "qiniu://docs", "name": "created"}
     )
     checks.equal(status, 200, "clean create-folder status")
     checks.true(
-        file_row(ctx, "docs/a/b") is not None, "clean create-folder wrote no row"
+        file_row(ctx, "docs/created") is not None, "clean create-folder wrote no row"
     )
 
 
