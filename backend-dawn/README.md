@@ -175,15 +175,17 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   干净子树仍可从遗留脏外部祖先下移出。FM 与 WebDAV COPY 会在对象操作前拒绝携带 key 的目录、
   缺少有效非空 key 的文件、映射目标冲突和目标根下的未映射遗留项，随后把全部 metadata 在一个即时
   事务内复验源快照、对象形状、完整目标子树与父链并一次提交。FM COPY 将冲突、七牛失败和普通
-  SQLite/内部失败分别映射为 409、502 和 500。84 个 fail-closed mutant 按依赖层精确归属到 30 条
+  SQLite/内部失败分别映射为 409、502 和 500。85 个 fail-closed mutant 按依赖层精确归属到 31 条
   Dawn 单测、51 条逐项重置数据库、假七牛与调用日志的 HTTP 合同，以及 3 条 qiniu golden
-  （`scripts/fm-ancestor-contract/`，矩阵 v19）。其中 `create-folder-rejects-subpath-name` 方向相反：
+  （`scripts/fm-ancestor-contract/`，矩阵 v20）。其中 `create-folder-rejects-subpath-name` 方向相反：
   它给 create-folder 加上 rename 的单段规则，钉住的是「多段名是有意接受的」。Dawn
   角色只核对自己的单测红集；
   HTTP 角色必须保持全部 Dawn 单测绿色，再唯一打红自己的合同，避免把低层事务退化对上层的真实影响
   误判为同层 collateral。
 - SQLite 与七牛无法组成分布式事务。上传、保存和 COPY 在对象操作前做只读预检，SQLite 最终写在
-  自己的即时事务内复验；代理上传和其他覆盖写总是使用新 key。DELETE、PUT 覆盖、COPY 覆盖与 MOVE
+  自己的即时事务内复验；代理上传和其他覆盖写总是使用新 key。代理上传与 /register 的收据行都在写它的
+  那个即时事务内读回（`repo_fm.receipt_row` 的 `require_tx` 挡住读跑到事务外），响应描述的因此是本次
+  请求提交的行，而不是提交之后碰巧在那个 path 上的行。DELETE、PUT 覆盖、COPY 覆盖与 MOVE
   覆盖都先原子提交 metadata 删除或切换，再按事务返回的真实旧 key 做引用感知回收，远端失败不会留下
   指向已删对象的旧 metadata。当前回收会在一个 `BEGIN IMMEDIATE` 内复验 `files` 与
   `pending_uploads`，并在持有写锁时调用七牛 DELETE；慢或无响应的对象存储会阻塞其他 SQLite writer。
