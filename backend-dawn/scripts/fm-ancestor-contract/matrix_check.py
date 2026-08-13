@@ -4,7 +4,7 @@
 import argparse
 from pathlib import Path
 
-VERSION = "16"
+VERSION = "17"
 VALID_ROLES = {"test", "contract", "qiniu"}
 EXPECTED_ROWS = [
     "immediate-tx-as-deferred|test|with_immediate_tx reserves the writer before its body",
@@ -70,6 +70,9 @@ EXPECTED_ROWS = [
     "fm-persisted-mime-passthrough|qiniu|fm.persisted-mime.fail-safe",
     "fm-split-trims-addressing|contract|fm.addressing.lossless",
     "json-duplicate-members-fail-open|contract|fm.json.duplicate-members",
+    "config-range-falls-back-to-default|test|a config integer outside its range refuses to start",
+    "config-nonnumeric-falls-back-to-default|test|a config integer that is not a number refuses to start",
+    "upload-token-expired-deadline|qiniu|fm.upload-token.deadline-window",
 ]
 EXPECTED_MUTANTS = [row.split("|", 1)[0] for row in EXPECTED_ROWS]
 EXPECTED_CONTRACT_OWNERS = [
@@ -78,7 +81,7 @@ EXPECTED_CONTRACT_OWNERS = [
 EXPECTED_QINIU_OWNERS = [
     row.split("|", 2)[2] for row in EXPECTED_ROWS if row.split("|", 2)[1] == "qiniu"
 ]
-EXPECTED_ROLE_COUNTS = {"test": 25, "contract": 36, "qiniu": 2}
+EXPECTED_ROLE_COUNTS = {"test": 27, "contract": 36, "qiniu": 3}
 
 
 def validate(lines, listed_mutants, listed_assertions, listed_qiniu_assertions):

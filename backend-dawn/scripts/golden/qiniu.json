@@ -1528,6 +1528,19 @@
      "size": 9
     }
    }
+  },
+  "fm.upload-token.deadline-window": {
+   "note": "the policy deadline is ahead of now and inside a day, and the bucket takes the token",
+   "mint_status": 200,
+   "policy_keys": [
+    "deadline",
+    "scope"
+   ],
+   "scope_is_bucket_and_key": true,
+   "deadline_valid": true,
+   "spend_status": 200,
+   "spend_echoes_key": true,
+   "object_stored": true
   }
  }
 }

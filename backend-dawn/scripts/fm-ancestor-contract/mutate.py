@@ -68,6 +68,9 @@ MUTANTS = (
     "fm-persisted-mime-passthrough",
     "fm-split-trims-addressing",
     "json-duplicate-members-fail-open",
+    "config-range-falls-back-to-default",
+    "config-nonnumeric-falls-back-to-default",
+    "upload-token-expired-deadline",
 )
 
 
@@ -104,6 +107,7 @@ def main() -> int:
     multipart = args.project / "src/util/multipart.dawn"
     paths = args.project / "src/util/paths.dawn"
     jsonread = args.project / "src/util/jsonread.dawn"
+    config = args.project / "src/config.dawn"
 
     if args.mutant == "immediate-tx-as-deferred":
         replace_once(
@@ -1171,6 +1175,29 @@ def main() -> int:
             jsonread,
             "            scan_members(src, cursor.next(src, k), seen ++ [name])\n",
             "            scan_members(src, cursor.next(src, k), seen)\n",
+        )
+    elif args.mutant == "config-range-falls-back-to-default":
+        # the shape this rule replaced: a stated value the bound rejects quietly
+        # becomes the default, so a typo and an omission run the same server
+        replace_once(
+            config,
+            "          if n < lo || n > hi {\n"
+            '            Err("expected an integer in ${to_string(lo)}..${to_string(hi)}, got ${to_string(n)}")\n',
+            "          if n < lo || n > hi {\n            Ok(dflt)\n",
+        )
+    elif args.mutant == "config-nonnumeric-falls-back-to-default":
+        replace_once(
+            config,
+            '        None -> Err("expected an integer in ${to_string(lo)}..${to_string(hi)}, got \\"$s\\"")\n',
+            "        None -> Ok(dflt)\n",
+        )
+    elif args.mutant == "upload-token-expired-deadline":
+        # a token minted already out of date: same 200, same well-formed
+        # credential, and nothing on this backend's own paths can tell
+        replace_once(
+            fm_api,
+            "    let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_s() + a.qiniu.expires)\n",
+            "    let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_s() - a.qiniu.expires)\n",
         )
     return 0
 

@@ -20,7 +20,9 @@ This serves qiniu's documented wire protocol for exactly what the backend uses:
 
 It is a *protocol* fake, not a stub: every request's signature is recomputed
 with HMAC-SHA1 and rejected if it does not match, so qiniu_sign.dawn's tokens
-are exercised end to end rather than asserted against themselves. What it does
+are exercised end to end rather than asserted against themselves. An upload
+token's putPolicy deadline is held to the same standard: it must still be in
+date and inside a day, so a token that cannot be spent cannot pass. What it does
 not model — regions, quotas, rate limits, real 612/631 taxonomy beyond the two
 codes the backend branches on — is exactly the part a golden could not pin
 against the live bucket either.
@@ -51,6 +53,7 @@ import hmac
 import json
 import re
 import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -403,8 +406,20 @@ def _multipart(body: bytes) -> dict:
     return out
 
 
+# The longest putPolicy lifetime this bucket will honour. qiniu's own ceiling is
+# larger; a day is the one this deployment states (QINIU_TOKEN_EXPIRES is bounded
+# to 1..86400), and a fake that accepted any deadline could not tell a token
+# that works from a token that merely parses.
+MAX_TOKEN_LIFETIME = 86400
+
+
 def _check_upload_token(token: str, key: str) -> bool:
-    """`<ak>:<sign>:<encodedPutPolicy>`, with the policy scoped to this key."""
+    """`<ak>:<sign>:<encodedPutPolicy>`, scoped to this key and still in date.
+
+    The deadline is checked, not just carried: a real bucket refuses an expired
+    putPolicy, and without that the signing code could hand out tokens nobody
+    could spend and every upload case here would still be green.
+    """
     try:
         ak, sign, policy_b64 = token.split(":")
     except ValueError:
@@ -413,7 +428,13 @@ def _check_upload_token(token: str, key: str) -> bool:
         return False
     pad = "=" * (-len(policy_b64) % 4)
     policy = json.loads(base64.urlsafe_b64decode(policy_b64 + pad))
-    return policy.get("scope") == f"{FAKE_BUCKET}:{key}"
+    if policy.get("scope") != f"{FAKE_BUCKET}:{key}":
+        return False
+    deadline = policy.get("deadline")
+    if not isinstance(deadline, int) or isinstance(deadline, bool):
+        return False
+    now = int(time.time())
+    return now < deadline <= now + MAX_TOKEN_LIFETIME
 
 
 def _range(header: str, total: int):

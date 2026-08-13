@@ -2,7 +2,7 @@
 # binds 127.0.0.1:PORT. nginx terminates TLS and reverse-proxies /api here
 # during the gradual cutover from the FastAPI backend.
 use std/io
-use config.{load, get_or}
+use config.{load, get_or, require_int_in_range}
 use db/db.{Db}
 use web/server.{serve_app_with, ServerConfig, DEFAULT_MAX_BODY}
 use util/jsonx.{fastapi_errors}
@@ -34,7 +34,12 @@ pub fn main() -> Unit !io = {
     sk: get_or(cfg, "QINIU_SECRET_KEY", ""),
     bucket: get_or(cfg, "QINIU_BUCKET", ""),
     domain: get_or(cfg, "QINIU_DOMAIN", ""),
-    expires: parse_or(get_or(cfg, "QINIU_TOKEN_EXPIRES", "3600"), 3600),
+    # Every qiniu deadline this backend signs is now() + this: the upload tokens
+    # /upload-token hands the browser, the private download URLs behind preview
+    # and download, the proxy uploads. One second is the shortest useful window
+    # and one day the longest defensible one, and a value outside that is a
+    # refusal to start rather than a silent 3600 (see config.int_in_range).
+    expires: require_int_in_range(cfg, "QINIU_TOKEN_EXPIRES", 1, 86400, 3600),
     # The real qiniu endpoints unless overridden. Nothing in production sets
     # these; the contract harness points them (and QINIU_DOMAIN) at its fake
     # object store so the copy/upload/delete paths can be held to a golden.
