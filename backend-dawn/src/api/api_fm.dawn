@@ -13,7 +13,7 @@ use util/jsonx.{obj, jstr, jint}
 use db/db.{with_db}
 use svc/auth.{Auth, guarded, guarded_flexible}
 use util/jsonread.{body_obj, str_or, str_list, opt_int}
-use util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime, safe_persisted_mime, require_trimmed_names}
+use util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime, safe_persisted_mime, require_admissible_names, name_verdict, NameAccepted}
 use repo/repo_fm.{fs_data, get_row, ledger_insert, search_files, entry_json, stats_db, validate_fm_ancestors, validate_fm_file_target, validate_register_preflight, finalize_register}
 use svc/files.{signed_url, gc_unreferenced, mk_folder, do_rename, do_move, do_copy, do_delete,
   item_paths, merge_deleted, do_create_file, do_save, run_upload, sanitize_name, token_rel }
@@ -53,7 +53,7 @@ pub fn create_folder(a: Auth) -> Handler =
           Err(http_error(400, "缺少 name"))
         } else {
           let rel = fm_join(cur, name)
-          let _n = require_trimmed_names(rel)?
+          let _n = require_admissible_names(rel)?
           match as_http_with(with_db(a.db.path, a.db.ext, c => mk_folder(c, rel, cur)), conflict_or(500))? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
@@ -76,7 +76,7 @@ pub fn rename(a: Auth) -> Handler =
           Err(http_error(400, "name 必须是单段名称"))
         } else {
           let new_rel = fm_join(parent_rel(old), new_name)
-          let _n = require_trimmed_names(new_rel)?
+          let _n = require_admissible_names(new_rel)?
           match as_http_with(with_db(a.db.path, a.db.ext, c => do_rename(c, old, new_rel, cur)), conflict_or(500))? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(409, "已存在同名项：${basename(new_rel)}"))
@@ -85,15 +85,22 @@ pub fn rename(a: Auth) -> Handler =
       })
 
 # Structural, and rename's alone: rename replaces the last segment in place, so
-# its `name` has to BE one segment. It sits beside `require_trimmed_names`
+# its `name` has to BE one segment. It sits beside `require_admissible_names`
 # rather than absorbing it, because the two answer different questions and have
 # different scopes. This one asks "is this one path segment", which is false for
-# create-folder and upload, where a name legitimately spells a subpath ("a/b").
-# The other asks "may this segment be stored", which holds at every write entry
-# and over every segment of the target. Folding either into the other would hand
-# one endpoint's rule to the rest.
+# create-folder and upload, where a name legitimately spells a subpath: a folder
+# upload sends the browser's webkitRelativePath as the name and expects the tree
+# under it to be rebuilt. The other asks "may this segment be stored", which
+# holds at every write entry and over every segment of the target.
+#
+# So the "." and ".." it used to reject here are gone from this predicate, not
+# from the endpoint: they ARE single segments, they pass this question honestly,
+# and `require_admissible_names(new_rel)` two lines below refuses them together
+# with every other write entry's target. One rule, one implementation. Adding
+# them back here would give the dot rule a second spelling that only rename
+# runs, which is how the two paths drifted apart in the first place.
 fn valid_rename_name(name: String) -> Bool =
-  name != "" && name != "." && name != ".." && not str.contains(name, "/") && not str.contains(name, "\\")
+  name != "" && not str.contains(name, "/") && not str.contains(name, "\\")
 
 ## POST /api/fm/move — {path, destination, sources[]}.
 pub fn move(a: Auth) -> Handler =
@@ -114,9 +121,9 @@ pub fn move(a: Auth) -> Handler =
 # could drift away from the one svc/files plans with.
 fn check_relocation_targets(dest: String, sources: List[String], i: Int) -> Result[Unit, HttpError] =
   if i >= len(sources) {
-    require_trimmed_names(dest)
+    require_admissible_names(dest)
   } else {
-    let _leaf = require_trimmed_names(basename(fm_split(sources[i])))?
+    let _leaf = require_admissible_names(basename(fm_split(sources[i])))?
     check_relocation_targets(dest, sources, i + 1)
   }
 
@@ -356,7 +363,7 @@ pub fn upload_token_ep(a: Auth) -> Handler =
     let rel = token_rel(str_or(m, "path", ""), raw_name)
     # the token is minted for a path /register will later be handed back, so the
     # name is refused here rather than after the client has spent the credential
-    let _n = require_trimmed_names(rel)?
+    let _n = require_admissible_names(rel)?
     let _p = as_http_with(with_db(a.db.path, a.db.ext, c => upload_token_preflight(c, rel)), conflict_or(500))?
     let e = ext(sanitize_name(raw_name))
     let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
@@ -417,7 +424,7 @@ pub fn create_file(a: Auth) -> Handler =
           Err(http_error(400, "缺少 name"))
         } else {
           let rel = fm_join(cur, name)
-          let _n = require_trimmed_names(rel)?
+          let _n = require_admissible_names(rel)?
           match as_http_with(do_create_file(a, rel, cur), mutation_failure)? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
@@ -438,7 +445,7 @@ pub fn save(a: Auth) -> Handler =
         if rel == "" {
           Err(http_error(400, "缺少 path"))
         } else {
-          let _n = require_trimmed_names(rel)?
+          let _n = require_admissible_names(rel)?
           Ok(json_ok(as_http_with(do_save(a, rel, content), mutation_failure)?))
         }
       })
@@ -470,7 +477,7 @@ pub fn register(a: Auth) -> Handler =
         if rel == "" || key == "" {
           Err(http_error(400, "缺少 path / key"))
         } else {
-          let _n = require_trimmed_names(rel)?
+          let _n = require_admissible_names(rel)?
           let _preflight = as_http_with(register_preflight(a, rel, key), conflict_or(500))?
           let r = as_http(stat(a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key), 502)?
           if r.status == 200 {
@@ -589,7 +596,7 @@ fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpErro
   let rel = fm_join(target, name)
   # the filename rides in verbatim from the multipart headers (disp_filename),
   # so this is the door a " a.txt" from a non-browser client arrives at
-  let _n = require_trimmed_names(rel)?
+  let _n = require_admissible_names(rel)?
   # the part's declared type is a client-supplied string that ends up in the row
   # and in the multipart body posted to qiniu, so it crosses the outbound boundary
   # on the way in rather than being trusted because it arrived as a header
@@ -635,13 +642,36 @@ test "register size/mime fall back like FastAPI (stat -> client hint -> guess)" 
   assert reg_mime("{}", "", "a/b.md") == "text/markdown"
 }
 
-test "rename accepts only one basename segment" {
+# The one place the two name rules are compared, so the difference between them
+# is written down where a reader meets both. It is a difference of question, not
+# of strictness:
+#
+#   rename   asks "is this one path segment" -> structural, rename's alone
+#   the guard asks "may a write store this segment" -> every write entry, every
+#                                                     segment of the target
+#
+# Nothing here asserts that "." is refused; that claim belongs to the guard's
+# own tests in util/paths.dawn, and repeating it would make this test a second
+# owner of the mutants that break it.
+test "rename asks for one segment; storing a subpath is create's business" {
   assert valid_rename_name("new.txt")
   assert not valid_rename_name("")
-  assert not valid_rename_name(".")
-  assert not valid_rename_name("..")
+  # rename rewrites the last segment in place, so a subpath is not a new name
+  # for the row it was handed
   assert not valid_rename_name("missing/deep.txt")
   assert not valid_rename_name("missing\\deep.txt")
+  # "." and ".." pass the structural question honestly: each is one segment.
+  # The guard on `new_rel` is what refuses them, the same guard that refuses
+  # them at every other write entry.
+  assert valid_rename_name(".")
+  assert valid_rename_name("..")
+  # the other half of the difference, and a drift alarm rather than a rule: a
+  # multi-segment name IS admissible, because folder upload sends one
+  # (webkitRelativePath) and create-folder joins it under the current
+  # directory. Whoever makes this line fail is proposing that create-folder,
+  # create-file and upload-token all become single-segment endpoints, which is
+  # a product decision and not a tidy-up.
+  assert name_verdict("a/b") == NameAccepted
 }
 
 test "FM mutation errors keep DB failures distinct from upstream failures" {

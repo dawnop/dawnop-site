@@ -70,15 +70,17 @@ pub fn basename(rel: String) -> String =
 
 pub fn fm_join(parent: String, name: String) -> String = if parent == "" { name } else { "$parent/$name" }
 
-## Whether a name may be written, and when it may not, which of the two ways it
-## fails. A verdict only; `require_trimmed_names` puts the HTTP shape on it.
+## Whether a name may be written, and when it may not, which of the three ways
+## it fails. A verdict only; `require_admissible_names` puts the HTTP shape on it.
 pub type NameVerdict =
   | NameAccepted
   | NameAllBlank
   | NameEdgeBlank
+  | NameDotSegment
 
 ## The admission check every write entry runs over the path it is about to
-## create: a segment is refused when it differs from its own `str.trim`.
+## create. A segment is refused when it differs from its own `str.trim`, and
+## when it is `.` or `..`.
 ##
 ## This is deliberately not part of `fm_split`. That function addresses an
 ## existing row and has to stay lossless (it used to trim, and a delete aimed at
@@ -100,6 +102,24 @@ pub type NameVerdict =
 ## "a.txt\u{3000}" is refused. Widening the set is a separate decision and would
 ## be taken in this one function.
 ##
+## `.` and `..` are refused for a different reason, and it is not path
+## traversal: nothing here resolves them, so a created `.` row is an ordinary
+## row whose path happens to spell `docs/.`. The defect is that the row is then
+## reachable from one surface only. `api/webdav.dawn` refuses a `.` or `..`
+## segment while it is still turning a request path into a rel, before any
+## dispatch, so a row spelled that way can be listed and opened in the web file
+## manager and can never be named by a mounted client: not to read it, not to
+## move it, not to delete it. Both surfaces address the same tree, so a name one
+## of them cannot spell is not a name this tree may hold.
+##
+## That leaves two spellings of the same literal, one here and one in
+## `api/webdav.dawn`, which is deliberate rather than a copy waiting to drift.
+## The questions differ: WebDAV refuses to *address* a dot segment at all, on
+## reads as much as on writes, while this is a write-admission rule that leaves
+## an existing row addressable. And each has to be independently breakable, or
+## neither layer's mutant could be uniquely owned (`scripts/webdav-destination-
+## mutants/` owns that one, `scripts/fm-ancestor-contract/` owns this one).
+##
 ## Every segment is checked, not only the last, so no write can bring a dirty
 ## directory into being on its way to a clean leaf. The accepted cost: a legacy
 ## row whose own path carries an edge space is frozen against writes until
@@ -114,15 +134,22 @@ fn first_verdict(segs: List[String], i: Int) -> NameVerdict =
       NameAccepted -> first_verdict(segs, i + 1)
       NameAllBlank -> NameAllBlank
       NameEdgeBlank -> NameEdgeBlank
+      NameDotSegment -> NameDotSegment
     }
   }
 
 # An empty segment is accepted here: "" equals its own trim. Emptiness is a
 # different defect with its own checks at the call sites ("缺少 name",
 # `valid_rename_name`), and this predicate answers one question only.
+#
+# The dot verdict comes first because " ." is both: it is not its own trim, and
+# it is not a dot segment either. Refusing it as a dot segment would be a false
+# statement about what it is.
 fn segment_verdict(seg: String) -> NameVerdict = {
   let trimmed = str.trim(seg)
-  if trimmed == seg {
+  if dot_segment(seg) {
+    NameDotSegment
+  } else if trimmed == seg {
     NameAccepted
   } else if trimmed == "" {
     NameAllBlank
@@ -131,15 +158,20 @@ fn segment_verdict(seg: String) -> NameVerdict = {
   }
 }
 
-## `name_verdict` as the 400 a write entry returns. The two messages are
-## distinct because the two failures read differently to whoever typed the name:
-## a name that is only whitespace looks empty, a name with an edge space looks
-## exactly like its clean neighbour.
-pub fn require_trimmed_names(path: String) -> Result[Unit, HttpError] =
+# The whole segment, never a substring: ".hidden", "a.b" and "..." are ordinary
+# names and stay that way.
+fn dot_segment(seg: String) -> Bool = seg == "." || seg == ".."
+
+## `name_verdict` as the 400 a write entry returns. The messages are distinct
+## because the failures read differently to whoever typed the name: a name that
+## is only whitespace looks empty, a name with an edge space looks exactly like
+## its clean neighbour, and `.` looks like it should mean "here".
+pub fn require_admissible_names(path: String) -> Result[Unit, HttpError] =
   match name_verdict(path) {
     NameAccepted -> Ok(())
     NameAllBlank -> Err(http_error(400, "名称不能只由空白组成"))
     NameEdgeBlank -> Err(http_error(400, "名称不能以空白开头或结尾"))
+    NameDotSegment -> Err(http_error(400, "名称不能是 . 或 .."))
   }
 
 pub fn ext(name: String) -> String =
@@ -300,21 +332,63 @@ test "the admitted whitespace set is str.trim's, not the invisible characters" {
 }
 
 test "the write guard maps each verdict to its own 400" {
-  match require_trimmed_names("docs/a.txt") {
+  match require_admissible_names("docs/a.txt") {
     Ok(_) -> { assert true }
     Err(_) -> { assert false }
   }
-  match require_trimmed_names("docs/a.txt ") {
+  match require_admissible_names("docs/a.txt ") {
     Err(e) -> {
       assert e.status == 400
       assert e.message == "名称不能以空白开头或结尾"
     }
     Ok(_) -> { assert false }
   }
-  match require_trimmed_names("docs/   ") {
+  match require_admissible_names("docs/   ") {
     Err(e) -> {
       assert e.status == 400
       assert e.message == "名称不能只由空白组成"
+    }
+    Ok(_) -> { assert false }
+  }
+}
+
+# The two dot verdicts are pinned in two tests, one per spelling, and nothing
+# else in this repo asserts on either. That is what lets the matrix own each
+# half separately: a guard that accepts "." while still refusing ".." is a
+# distinct defect from its mirror, and one test covering both could not tell
+# them apart.
+test "a `.` segment is refused: it names a row WebDAV can never address" {
+  assert name_verdict(".") == NameDotSegment
+  assert name_verdict("docs/.") == NameDotSegment
+  assert name_verdict("./a.txt") == NameDotSegment
+  # only the whole segment is a dot segment
+  assert name_verdict(".hidden") == NameAccepted
+  assert name_verdict("a.b/c.txt") == NameAccepted
+  # " ." is not its own trim and is not a dot segment either; it is refused as
+  # what it is
+  assert name_verdict(" .") == NameEdgeBlank
+  match require_admissible_names("docs/.") {
+    Err(e) -> {
+      assert e.status == 400
+      assert e.message == "名称不能是 . 或 .."
+    }
+    Ok(_) -> { assert false }
+  }
+}
+
+test "a `..` segment is refused: it names a row WebDAV can never address" {
+  assert name_verdict("..") == NameDotSegment
+  assert name_verdict("docs/..") == NameDotSegment
+  assert name_verdict("../a.txt") == NameDotSegment
+  # nothing here resolves the segment, so this is not traversal defence: the
+  # neighbouring spellings are ordinary names and stay accepted
+  assert name_verdict("...") == NameAccepted
+  assert name_verdict("a..b") == NameAccepted
+  assert name_verdict(".. ") == NameEdgeBlank
+  match require_admissible_names("docs/..") {
+    Err(e) -> {
+      assert e.status == 400
+      assert e.message == "名称不能是 . 或 .."
     }
     Ok(_) -> { assert false }
   }
