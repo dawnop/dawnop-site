@@ -71,12 +71,20 @@ rsync -az --delete frontend/dist/ <user>@<server>:/var/www/dawnop/dist/
 
 **改了 Nginx/gzip 配置**：`sudo nginx -t && sudo systemctl reload nginx`。
 
-**紧急回滚到 FastAPI**：
+**紧急回滚到 FastAPI**（从本地把脚本 pipe 过去跑，别跑服务器上的副本，理由见下）：
 ```bash
-ssh <user>@<server> 'sudo bash /opt/dawnop-dawn/rollback-to-fastapi.sh'   # 切到 FastAPI :8000
-ssh <user>@<server> 'sudo bash /opt/dawnop-dawn/return-to-dawn.sh'        # 切回 Dawn :8001
+ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/rollback-to-fastapi.sh   # 切到 FastAPI :8000
+ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/return-to-dawn.sh        # 切回 Dawn :8001
 ```
-两套共用同一个 SQLite 文件（WAL），**没有数据迁移要撤**——切流与回滚都是纯路由变更。
+
+> ⚠️ **没有任何步骤把这两个脚本装到服务器上**：`deploy.sh` 只装 jar 与 `lib/`，本文档也没有
+> 装它们的一步。`/opt/dawnop-dawn/` 下若有一份 `rollback-to-fastapi.sh`，那是 M6 切流时手工放的
+> 旧副本，早于 2026-07 的重写，不含现在这条安全链（重写之前它改的是 `sites-available/dawnop`，
+> 一个 nginx 根本不读的文件，于是回滚印着成功却什么都没改）；`return-to-dawn.sh` 服务器上根本
+> 没有。两个脚本自己在结尾印的 `sudo bash /opt/dawnop-dawn/...` 是同一个错，以本节为准。
+
+两套共用同一个 SQLite 文件（WAL），**没有数据迁移要撤**：切流与回滚都是路由变更加一个守护
+开关（回滚期间 `/api/fm` 关闭、回 503，见「四」）。
 细节见下面「四、回滚安全链」，**第一次用之前先把那一节的两个前置条件配好**，否则回滚脚本
 会在核验那一步停下来（它宁可不切，也不切到一个说不清的进程上）。
 
@@ -91,17 +99,23 @@ ssh <user>@<server> 'sudo bash /opt/dawnop-dawn/return-to-dawn.sh'        # 切�
 ```bash
 sudo apt-get update
 sudo apt-get install -y nginx rsync python3-venv python3-pip openjdk-21-jre-headless
+# Dawn 服务以 dawnop 身份跑（dawnop-dawn.service 的 User=/Group=），这个账号要先存在
+id dawnop || sudo useradd --system --no-create-home --shell /usr/sbin/nologin dawnop
 sudo mkdir -p /opt/dawnop/backend /opt/dawnop/data /opt/dawnop-dawn /var/www/dawnop/dist
 sudo chown -R <user>:<user> /opt/dawnop /var/www/dawnop
-sudo chown dawnop:dawnop /opt/dawnop/data     # 服务以 dawnop 身份写库
+# /opt/dawnop/data 先留给 <user>：第 2 步的 seed_admin.py 以 <user> 身份在里面建库，
+# 目录若已经归 dawnop，那一步会以「unable to open database file」失败。建完库再交出去。
 ```
 
 ### 1. FastAPI 侧（提供 .env / libsimple / 回滚能力）
 ```bash
 # 本地传代码
+# ⚠️ .env 与 .rollback-probe 必须排除：本地 backend/.env 是开发用的（DATABASE_URL 是相对
+#    路径），传上去会盖掉生产的那份；而 --delete 会把服务器上本地没有的 .rollback-probe
+#    删掉，回滚就会卡在核验那一步。两者都只该在服务器上生成，见下面与「四」。
 rsync -az --delete \
   --exclude='.venv' --exclude='__pycache__' --exclude='*.db' --exclude='.pytest_cache' \
-  --exclude='extensions/libsimple.*' \
+  --exclude='extensions/libsimple.*' --exclude='.env' --exclude='.rollback-probe' \
   backend/ <user>@<server>:/opt/dawnop/backend/
 
 # 服务器上
@@ -112,12 +126,17 @@ python3 -m venv .venv
 ./.venv/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
 ```
 
-`.env`（**不进仓库**，以 `backend/.env.example` 为模板）：
+`.env`（**不进仓库**，以 `backend/.env.example` 为模板；上面的 rsync 只送来 `.env.example`）：
 ```bash
 cd /opt/dawnop/backend
+cp .env.example .env
 python3 -c "import secrets;print('SECRET_KEY='+secrets.token_urlsafe(48))"   # 别用示例里的弱默认
+vi .env      # 填 SECRET_KEY / QINIU_* / ADMIN_*，并按下面那条警告改掉 DATABASE_URL
 chmod 600 .env
 ```
+`ROLLBACK_PROBE_HEADER` 也在这一份 `.env` 里，和它配套的 `.rollback-probe` 文件一起配，
+见「[四、回滚安全链](#四回滚安全链)」的前置条件。**这一步跳过的代价要到回滚当天才付**：
+回滚脚本会停在核验那一步，不切流。
 
 > ⚠️ **`DATABASE_URL` 必须写绝对路径指向共用库**：
 > ```
@@ -140,12 +159,32 @@ python backend/scripts/fetch_simple_ext.py        # 本地（若本地也连不�
 scp backend/extensions/libsimple.so <user>@<server>:/opt/dawnop/backend/extensions/
 ```
 
+**装 uvicorn 的 systemd 单元**（现在就装：它是回滚目标，不装的话第 3 步的
+`systemctl disable dawnop-backend` 会报 unit 不存在，回滚脚本也没有单元可拉）：
+```bash
+sudo cp deploy/dawnop-backend.service /etc/systemd/system/    # 或 scp 后 mv
+sudo systemctl daemon-reload
+```
+> 单元里的 `User=dawn` / `WorkingDirectory=/opt/dawnop/backend` / `ExecStart=` 不是随便写的：
+> 回滚脚本逐字节比对进程的 argv、cwd 与有效 UID:GID。**改这个单元就要同步改
+> `backend-dawn/deploy/rollback-to-fastapi.sh` 里的 `FASTAPI_*` 常量**（两个脚本共享那段，
+> `backend/tests/test_rollback_chain.py` 会比对），否则回滚会在核验那一步停下。
+
 ### 2. 初始化库与管理员
 ```bash
 cd /opt/dawnop/backend
 ./.venv/bin/python scripts/seed_admin.py    # 读 .env 的 ADMIN_*，建表 + 默认页面
 ls -l /opt/dawnop/data/dawnop.db            # 确认库建在这里，不是 backend/ 下
+
+# 库建好了再安排权限。**两个账号都要能写这个库**：Dawn 服务是 dawnop，回滚目标 uvicorn
+# 是 dawn，而 WAL 模式下连纯读也要在同目录建 -wal/-shm，所以目录和文件都要给写权限。
+sudo chown -R dawnop:dawnop /opt/dawnop/data
+sudo chmod 2775 /opt/dawnop/data              # setgid：新建的 -wal/-shm 自动落在 dawnop 组
+sudo chmod 664 /opt/dawnop/data/dawnop.db
+sudo usermod -aG dawnop dawn                  # uvicorn 以 dawn 身份跑（见单元的 User=）
 ```
+> 只把库 `chown dawnop:dawnop` 而不管组写权限，是一个**只在回滚当天才暴露**的配置：
+> Dawn 一切正常，直到某天切到 uvicorn，它连库就报 `attempt to write a readonly database`。
 
 ### 3. Dawn 后端（生产）
 ```bash
@@ -161,11 +200,18 @@ sudo install -m 600 /dev/stdin /opt/dawnop-dawn/.github-token   # 粘贴 PAT，C
 # 代理地址（artifact 下载那一段直连慢到不可用，理由见「一、日常更新」）
 sudo install -m 600 /dev/stdin /opt/dawnop-dawn/.deploy-proxy   # 一行 host:port，Ctrl-D
 
-# 首次部署（脚本装 jar + lib/、restart、健康检查，不健康自动回滚）
+# 首次部署（脚本装 jar + lib/、restart、健康检查）
 ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/deploy.sh
+
+# 以下两条在服务器上跑
 curl -s http://127.0.0.1:8001/api/health    # 期望 {"status":"ok",...}
 systemctl is-enabled dawnop-dawn            # 期望 enabled（否则重启后站点不起）
 ```
+
+> **首次部署没有自动回滚**：日常更新时 `deploy.sh` 会把在跑的 jar 存进 `/opt/dawnop-dawn/.prev`，
+> 新构建不健康就还原回去；首次部署没有「上一个构建」可还原，脚本会在开头就说明这一点，
+> 起不来时它把新 jar 留在原地、服务停着、退出码非 0。此时看
+> `journalctl -u dawnop-dawn -n 50 --no-pager`。
 
 > `dawnop-dawn.service` 开了 `ProtectSystem=strict` + `ReadWritePaths=/opt/dawnop/data`：
 > **服务只能写库那一个目录**。这正是库放在 `/opt/dawnop/data/` 而非 `backend/` 下的原因；
@@ -239,8 +285,10 @@ HTTPS 与证书（含 `storage.` / `cdn.` / `dav.` 子域名的通配符证书�
    printf '%s' "$secret" | sudo install -m 600 /dev/stdin /opt/dawnop/backend/.rollback-probe
    echo "ROLLBACK_PROBE_HEADER=$secret" | sudo tee -a /opt/dawnop/backend/.env
    ```
-   脚本从 `.rollback-probe` 读，FastAPI 从 `.env` 读。**不一致 = 探针回 404**，回滚会在
-   核验那一步停下。留空则探针整体关闭（任何请求都 404，不泄露它存在）。
+   脚本从 `.rollback-probe` 读（以 root 跑，文件是 root 的 600），FastAPI 从 `.env` 读。
+   **不一致 = 探针回 404**，回滚会在核验那一步停下。留空则探针整体关闭（任何请求都 404，
+   不泄露它存在）。`.env` 里本来就有一行空的 `ROLLBACK_PROBE_HEADER=`（来自 `.env.example`），
+   `tee -a` 追加的这行在后面、读取时生效；嫌重复可以把前一行删掉。
 2. **`DATABASE_URL` 是绝对路径**（见「二、1」那条警告）。这正是核验要抓的东西。
 
 ### 回滚脚本按什么顺序做事
@@ -300,13 +348,14 @@ ssh <user>@<server> "sudo env ROLLBACK_ALLOW_ENV='PYTHONUNBUFFERED PYTHONDONTWRI
 
 ### 手工核对库身份
 
-脚本比的就是这两个值，你可以自己敲：
+脚本比的就是这两个值，你可以自己敲（在服务器上；`.rollback-probe` 是 root 的 600 文件，
+`sudo` 不能省，非 root 读不到秘密时头是空的，探针只会回 404，看起来像「探针没配」）：
 
 ```bash
 # 库文件的指纹
 printf '%s' "$(stat -Lc '%d:%i' -- /opt/dawnop/data/dawnop.db)" | sha256sum
 # 进程闩住的指纹（回滚期间 FastAPI 在跑时）
-curl -s -H "X-Rollback-Probe: $(cat /opt/dawnop/backend/.rollback-probe)" \
+curl -s -H "X-Rollback-Probe: $(sudo cat /opt/dawnop/backend/.rollback-probe)" \
   http://127.0.0.1:8000/api/rollback/db-identity
 ```
 两者必须相等。不等 = FastAPI 连的不是生产库（最常见原因还是 `.env` 里的相对
