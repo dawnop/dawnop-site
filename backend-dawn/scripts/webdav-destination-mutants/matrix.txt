@@ -1,5 +1,5 @@
 # Versioned, hand-owned red set. There is no record mode.
-version=4
+version=5
 drop-dot-check|test|dest_rel rejects one-dot segments after one decode
 drop-dotdot-check|test|dest_rel rejects two-dot segments after one decode
 reject-dot-containing-names|test|dest_rel accepts names that merely contain dots
@@ -10,6 +10,8 @@ compare-ports-literally|test|dest_rel normalizes default HTTP ports
 use-http-default-for-https|test|destination default ports are scheme-correct
 allow-foreign-authority|test|dest_rel rejects a foreign authority
 uncatch-host-uri|test|dest_rel maps malformed Host syntax to 400
+host-absent-fail-open|test|dest_rel needs a Host header to place an absolute Destination
+host-repeat-first-wins|test|dest_rel refuses a repeated Host header in either order
 accept-non-simple-reference|test|dest_rel rejects non-Simple-ref relative forms
 uncatch-destination-uri|test|dest_rel maps malformed URI syntax to 400
 unwrap-opaque-raw-path|test|dest_rel rejects opaque URI forms

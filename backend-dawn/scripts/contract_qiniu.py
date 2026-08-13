@@ -43,10 +43,12 @@ import os
 import re
 import sqlite3
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
+import contract_qiniu_fake
 from contract_golden import TRANSPORT_STATUS, Golden, transport_error
 from contract_webdav import KEEP_HEADERS, PREFIX, facts, raw_http, wire_report
 from contract_webdav import normalize as dav_normalize
@@ -186,6 +188,52 @@ def api(base, method, path, token=None, body=None, headers=None, timeout=30):
         return e.code, e.read()
     except Exception as e:  # noqa: BLE001 - transport failure is a case failure
         return TRANSPORT_STATUS, transport_error(e).encode()
+
+
+def put_policy(upload_token: str) -> dict:
+    """The putPolicy carried in `<ak>:<sign>:<base64url policy>`, or {}."""
+    parts = upload_token.split(":")
+    if len(parts) != 3:
+        return {}
+    encoded = parts[2]
+    pad = "=" * (-len(encoded) % 4)
+    try:
+        return json.loads(base64.urlsafe_b64decode(encoded + pad))
+    except (ValueError, TypeError):
+        return {}
+
+
+def spend_upload_token(fake_base, upload_token, key, content):
+    """Upload straight to the bucket with a minted token, as the browser does.
+
+    /upload-token exists so the bytes never touch this backend, so nothing on the
+    backend's own paths can tell whether the token it minted is usable. Only
+    spending it can.
+    """
+    boundary = contract_qiniu_fake.BOUNDARY
+    parts = [
+        f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"'
+        f"\r\n\r\n{value}\r\n".encode()
+        for name, value in (("token", upload_token), ("key", key))
+    ]
+    parts.append(
+        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
+        f'filename="{key}"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode()
+    )
+    parts.append(content + f"\r\n--{boundary}--\r\n".encode())
+    request = urllib.request.Request(
+        fake_base + "/",
+        data=b"".join(parts),
+        method="POST",
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+    try:
+        with OPENER.open(request, timeout=10) as response:
+            return response.status, body_value(response.read())
+    except urllib.error.HTTPError as e:
+        return e.code, body_value(e.read())
+    except Exception as e:  # noqa: BLE001 - transport failure is a case failure
+        return TRANSPORT_STATUS, transport_error(e)
 
 
 def body_value(raw: bytes):
@@ -986,6 +1034,53 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
     }
     fake.clear_calls()
     g.case("fm.persisted-mime.fail-safe", mime_probe)
+
+    print("\n== fm: the minted upload token is in date, and it spends ==")
+    # The rest of the upload-token cases pin what the endpoint answers. What they
+    # cannot see is whether the credential works, because the whole point of
+    # direct upload is that the bytes never come back through this backend: an
+    # already-expired deadline, or one years out, produced exactly the same 200
+    # and the same well-formed token. So this case reads the window out of the
+    # policy and then spends the token against the bucket.
+    #
+    # The deadline itself is wall clock and is never recorded — only whether it
+    # is in the future and inside a day, which is the claim.
+    mint_status, mint_raw = api(
+        B,
+        "POST",
+        "/api/fm/upload-token",
+        token,
+        {"path": SANDBOX, "name": "deadline-window.bin"},
+    )
+    minted_window = json.loads(mint_raw) if mint_status == 200 else {}
+    window_key = minted_window.get("key", "")
+    policy = put_policy(minted_window.get("token", ""))
+    deadline = policy.get("deadline")
+    issued_at = int(time.time())
+    fake.clear_calls()
+    spend_status, spend_body = spend_upload_token(
+        fake_base, minted_window.get("token", ""), window_key, b"spent in window\n"
+    )
+    g.case(
+        "fm.upload-token.deadline-window",
+        {
+            "note": "the policy deadline is ahead of now and inside a day, and the bucket takes the token",
+            "mint_status": mint_status,
+            "policy_keys": sorted(policy),
+            "scope_is_bucket_and_key": policy.get("scope")
+            == f"{contract_qiniu_fake.FAKE_BUCKET}:{window_key}",
+            "deadline_valid": isinstance(deadline, int)
+            and not isinstance(deadline, bool)
+            and issued_at
+            < deadline
+            <= issued_at + contract_qiniu_fake.MAX_TOKEN_LIFETIME,
+            "spend_status": spend_status,
+            "spend_echoes_key": isinstance(spend_body, dict)
+            and spend_body.get("key") == window_key,
+            "object_stored": window_key != "" and window_key in fake.keys(),
+        },
+    )
+    fake.clear_calls()
 
     # What is still not covered here, and why it is not a fake's job.
     g.skip(

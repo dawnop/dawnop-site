@@ -816,6 +816,44 @@
    },
    "body": "{\"detail\":\"资源不存在\"}"
   },
+  "copy.dest.host.singleton.fail-closed": {
+   "one": {
+    "status_line": "HTTP/1.1 201 Created",
+    "malformed_header_lines": [],
+    "body": "",
+    "created": true
+   },
+   "repeat-identical": {
+    "status_line": "HTTP/1.1 400 Bad Request",
+    "malformed_header_lines": [],
+    "body": "{\"detail\":\"Host 头只能出现一次\"}",
+    "created": false
+   },
+   "repeat-foreign-second": {
+    "status_line": "HTTP/1.1 400 Bad Request",
+    "malformed_header_lines": [],
+    "body": "{\"detail\":\"Host 头只能出现一次\"}",
+    "created": false
+   },
+   "repeat-foreign-first": {
+    "status_line": "HTTP/1.1 400 Bad Request",
+    "malformed_header_lines": [],
+    "body": "{\"detail\":\"Host 头只能出现一次\"}",
+    "created": false
+   },
+   "repeat-three": {
+    "status_line": "HTTP/1.1 400 Bad Request",
+    "malformed_header_lines": [],
+    "body": "{\"detail\":\"Host 头只能出现一次\"}",
+    "created": false
+   },
+   "absent": {
+    "status_line": "HTTP/1.1 400 Bad Request",
+    "malformed_header_lines": [],
+    "body": "{\"detail\":\"缺少 Host 头，无法判断 Destination 是否属于当前服务器\"}",
+    "created": false
+   }
+  },
   "copy.dest.prefix.partial": {
    "method": "COPY",
    "path": "/dav/empty-dir",

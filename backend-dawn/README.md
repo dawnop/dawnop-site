@@ -7,9 +7,26 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 与 `POST /api/fm/upload`（multipart 代理上传，`src/util/multipart.dawn`）**也已落地**。
 
 契约由 `scripts/golden/*.json` 钉住（`scripts/contract_run.py`，CI 每次 push 都跑）：
-播种固定 fixture → 起后端 → 292 条响应逐字节比对。四套脚本里 `contract_qiniu.py` 另起一个
-**指向本地假七牛**（`contract_qiniu_fake.py`）的后端，把子目录 COPY、PUT→GET 字节往返、
-覆盖写换 key、register 的 stat 校验这些必须有对象存储才走得到的路径也钉住；
+播种固定 fixture → 起后端 → 300 条响应比对（read 48 / edge 85 / webdav 103 / qiniu 64）。
+
+**比的是什么，别当成「逐字节」**——三种粒度，各自的理由写在 `contract_golden.py` 与
+`contract_webdav.py` 的注释里：
+
+- **JSON 响应体是结构比较**：录进 golden 前先 `json.loads`，比的是解析后的值，因此键序与
+  空白不参与。这是有意的：wire 上的键序由 `jsonx` 的构造顺序决定，不是契约。
+- **WebDAV 的 XML 体是 scrub 之后的文本比较**：本次运行创建的资源，其
+  `getlastmodified`/`creationdate` 换成 `WALL-CLOCK`、`opaquelocktoken:<uuid>` 归一
+  （fixture 行的时间戳保持钉死，这个区分本身就是要点）；七牛签名 URL 的
+  `?e=…&token=…`、每次新生成的 32 位 hex key、假桶的 base URL 同样归一。
+- **只有专门的案例持有真实响应字节的合同**：`propfind.depth.invalid.fail-closed`、
+  `copy.dest.host.singleton.fail-closed`、`fm.persisted-mime.fail-safe` 三条走裸 socket
+  （`raw_http`），录状态行、头名字顺序、不合语法的头行与 body 字节数——重复的请求头和被注入
+  的响应头只有在这一层看得见，urllib 表达不出来。
+
+四套脚本里 `contract_qiniu.py` 另起一个**指向本地假七牛**（`contract_qiniu_fake.py`）的后端，
+把子目录 COPY、PUT→GET 字节往返、覆盖写换 key、register 的 stat 校验这些必须有对象存储才走得到
+的路径也钉住；假桶会重算每个 HMAC 签名，并校验上传凭证 putPolicy 的 `deadline` 仍在有效期内且
+不超过一天，所以「签出来的凭证真能用」是花掉它换来的结论，不是看它长得对。
 剩下的具名 skip 只有一件事——桶用量统计（`fm.stats`，走七牛计费/空间 API，假桶不模拟）。
 
 ## 依赖与构建
@@ -23,8 +40,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   **jar 与 `lib/` 都是构建产物，不入库**——jar 曾经入库，结果是它悄悄落后于 `src/`（要靠手动
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
-- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、148 个本仓单测，连 web/json/sha2 三个包
-  共 216 个；`use java` import 共 61 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
+- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、159 个本仓单测，连 web/json/sha2 三个包
+  共 227 个；`use java` import 共 61 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
   libsimple / 网络，CI 每次 push 都跑）。用到 SQLite 的几个跑内存库（`jdbc:sqlite::memory:`），
   自带建表，不碰 fixture。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
@@ -38,6 +55,13 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `DAWN_PORT`（默认 8001）、`DAWN_CORS_ORIGIN`（默认 `https://dawnop.com`）。
 - `DAWN_DB_PATH`（默认 `backend/dawnop.db`；生产 `/opt/dawnop/data/dawnop.db`，与 FastAPI 同文件，WAL 共享）。
 - `DAWN_SIMPLE_EXT`（`libsimple` 路径，无扩展名；写 `articles` 触发 FTS `tokenize='simple'` 必须加载）。
+
+共享的那批里有一个带边界：`QINIU_TOKEN_EXPIRES`（默认 3600）只收 **1..86400**（闭区间，单位秒）。
+它是本后端签的每一个七牛 deadline——直传凭证、私有下载 URL、代理上传——的时效。写了但不合法
+（非数字、0、负数、超过一天）**在启动时 fail closed**，不回落默认值：默认值是「没写」的意思，
+拿它去兜一个写错的值，等于把打错的字变成一台跑着、且没人知道凭证活多久的服务器。判词在
+`config.int_in_range`，越界与非数字各有一条 Dawn 单测和一个变异体；假七牛那侧另有
+`fm.upload-token.deadline-window` 真去花掉一次凭证。
 
 ## 模块地图
 
@@ -65,8 +89,15 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   `Stream`/`ResponseBody` 与 `streaming` 两个独立 seam 门禁阻止业务模块绕过 owner。扫描时忽略
   普通、三引号与 raw string 的文本，但 `$name` 和 `${expr}` 插值表达式仍按 Dawn 代码检查。
 - `util/jsonx.dawn` / `util/jsonread.dawn` — JSON 构造（`obj/jint/jstr/jopt_*`）/ 请求体读取（`opt_int/str_or/str_list`）。
+  `body_obj` 先按正式 parser 解析（错误文案不变），再用同一个 `json/lexer` 走第二遍，
+  拒绝**同一 object 内的重复成员**——解析进 Map 等于默默选了「后写的赢」，而
+  `{"name":"a","name":"b"}` 建出来的是哪个目录，客户端并没有说。比较的是**解码后**的名字
+  （`"a"` 与 `"a"` 同名），逐 object 独立记名（`{"a":{"k":1},"b":{"k":2}}` 合法），
+  嵌套 object 与数组里的 object 一样查。记名用 Map 不用 List：2MB 体上限对应十几万成员，
+  线性查表是二次的（实测 5 万成员 11s → 0.2s）。唯一归属 `fm.json.duplicate-members`。
 - `json` — **dawn-lang 的 `packages/json`**（`[deps.json]` url+hash 依赖，vendored 副本已删）；游标版解析器，整数字面量产 `JInt`（保真、免 round-trip 变 `x.0`）。
-- `config.dawn` — .env 读取，env 优先（对齐 pydantic-settings 精度）。
+- `config.dawn` — .env 读取，env 优先（对齐 pydantic-settings 精度）；`int_in_range` /
+  `require_int_in_range` 是带上下界的整数项，写错就在启动时 panic（见上「关键环境变量」）。
 - `web` — **dawn-lang 的 `packages/web`**（`[deps.web]` url+hash 依赖，vendored 副本已删）：`server`（HttpServer + G6 二进制响应体 + 流式）/`router`（tags/任意动词）/`types`/`middleware`（logging/cors/body-limit）。
 
 **鉴权（刀 7）**
@@ -92,9 +123,12 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `api/webdav.dawn`：`Destination` 只把 path-absolute 或 authority 与请求 `Host` 归一后相同的
   HTTP(S) absolute URI 映射到本地树。`Request` 没有可信的外部 scheme 字段，因此 `Host` 未带端口时
   同站的 HTTP 与 HTTPS 形式都接受，各自按 80/443 归一；其他 scheme、远端 authority、query 与
-  fragment 都返回 400，不会只取 path 后写入本地。前缀比较只展开 percent-encoded unreserved，
-  路径段按严格 UTF-8 解码。25 个 fail-closed mutant 中 24 个由完整 Dawn test 唯一归属，1 个由
-  qiniu golden 唯一归属；
+  fragment 都返回 400，不会只取 path 后写入本地。本机 authority 的唯一来源是 `Host`，故要求它
+  **恰好出现一次**：缺失和重复各回一条自己的 400。重复此前是「取第一条」，于是
+  `Host: dav.example` 后跟 `Host: evil.example` 被接受、两条对调则被拒，答案由头的顺序决定。
+  前缀比较只展开 percent-encoded unreserved，路径段按严格 UTF-8 解码。
+  27 个 fail-closed mutant 中 26 个由完整 Dawn test 唯一归属，1 个由 qiniu golden 唯一归属
+  （`scripts/webdav-destination-mutants/`，矩阵 v5）；
   overwrite purge 的祖先顺序由下述更强的完整文件树合同统一持有，不在这里重复造 owner。
 - `repo/repo_fm.dawn`：所有新写入与重挂接都守完整祖先类型。FM 写入与整个多源 move 请求各自在一个
   `BEGIN IMMEDIATE` 事务内补缺失目录并完成最终写入；多源 move 按请求顺序逐项复验和重挂，后项失败会
@@ -105,8 +139,9 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   干净子树仍可从遗留脏外部祖先下移出。FM 与 WebDAV COPY 会在对象操作前拒绝携带 key 的目录、
   缺少有效非空 key 的文件、映射目标冲突和目标根下的未映射遗留项，随后把全部 metadata 在一个即时
   事务内复验源快照、对象形状、完整目标子树与父链并一次提交。FM COPY 将冲突、七牛失败和普通
-  SQLite/内部失败分别映射为 409、502 和 500。56 个 fail-closed mutant 按依赖层精确归属到 21 条
-  Dawn 单测、34 条逐项重置数据库、假七牛与调用日志的 HTTP 合同，以及 1 条 qiniu golden。Dawn
+  SQLite/内部失败分别映射为 409、502 和 500。66 个 fail-closed mutant 按依赖层精确归属到 27 条
+  Dawn 单测、36 条逐项重置数据库、假七牛与调用日志的 HTTP 合同，以及 3 条 qiniu golden
+  （`scripts/fm-ancestor-contract/`，矩阵 v17）。Dawn
   角色只核对自己的单测红集；
   HTTP 角色必须保持全部 Dawn 单测绿色，再唯一打红自己的合同，避免把低层事务退化对上层的真实影响
   误判为同层 collateral。

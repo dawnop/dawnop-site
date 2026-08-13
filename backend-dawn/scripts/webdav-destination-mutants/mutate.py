@@ -15,6 +15,8 @@ MUTANTS = (
     "use-http-default-for-https",
     "allow-foreign-authority",
     "uncatch-host-uri",
+    "host-absent-fail-open",
+    "host-repeat-first-wins",
     "accept-non-simple-reference",
     "uncatch-destination-uri",
     "unwrap-opaque-raw-path",
@@ -115,6 +117,21 @@ def main() -> int:
             "  }\n",
             "fn parse_destination_host_uri(scheme: String, raw_host: String) -> Option[URI] !io =\n"
             '  Some(URI.create("$scheme://$raw_host")!)\n',
+        )
+    elif args.mutant == "host-absent-fail-open":
+        replace_once(
+            source,
+            "  if len(given) == 0 {\n"
+            '    Err(http_error(400, "缺少 Host 头，无法判断 Destination 是否属于当前服务器"))\n',
+            "  if len(given) == 0 {\n    Ok(())\n",
+        )
+    elif args.mutant == "host-repeat-first-wins":
+        replace_once(
+            source,
+            "  } else if len(given) > 1 {\n"
+            '    Err(http_error(400, "Host 头只能出现一次"))\n',
+            "  } else if len(given) > 2 {\n"
+            '    Err(http_error(400, "Host 头只能出现一次"))\n',
         )
     elif args.mutant == "accept-non-simple-reference":
         replace_once(

@@ -62,6 +62,78 @@ pub fn require(cfg: Config, key: String) -> String !io =
 pub fn get_or(cfg: Config, key: String, fallback: String) -> String !io =
   unwrap_or(lookup(cfg, key), fallback)
 
+# An integer setting the operator may leave out but may not get wrong.
+#
+# The pattern this replaces read the key, parsed it, and used the default when
+# the parse failed — so an absent key and a typo produced the same running
+# server, and nothing said which had happened. That is the wrong shape for a
+# bound: the default is what *silence* means, and reusing it for a stated value
+# turns "QINIU_TOKEN_EXPIRES=36000000" (or "3600 ", or "0") into a server whose
+# tokens live for a length nobody chose. Config is read once at startup, so the
+# refusal costs one restart and is the last chance to catch it.
+#
+# The range is part of the setting, not a caller's opinion: a deadline in the
+# past mints tokens nothing will accept, and one far in the future mints
+# credentials that outlive the reason they were issued.
+
+## An integer config value that must land in `lo..hi` (both ends included).
+## Absent is the only thing the default answers for; anything present and
+## unusable is an Err naming what was read.
+pub fn int_in_range(raw: Option[String], lo: Int, hi: Int, dflt: Int) -> Result[Int, String] =
+  match raw {
+    None -> Ok(dflt)
+    Some(s) ->
+      match parse_int(str.trim(s)) {
+        None -> Err("expected an integer in ${to_string(lo)}..${to_string(hi)}, got \"$s\"")
+        Some(n) ->
+          if n < lo || n > hi {
+            Err("expected an integer in ${to_string(lo)}..${to_string(hi)}, got ${to_string(n)}")
+          } else {
+            Ok(n)
+          }
+      }
+  }
+
+## `int_in_range` read from the config, refusing to start on a bad value.
+pub fn require_int_in_range(cfg: Config, key: String, lo: Int, hi: Int, dflt: Int) -> Int !io =
+  match int_in_range(lookup(cfg, key), lo, hi, dflt) {
+    Ok(n) -> n
+    Err(why) -> panic("invalid config value for $key: $why")
+  }
+
+fn range_accepted(r: Result[Int, String]) -> Bool =
+  match r {
+    Ok(_) -> true
+    Err(_) -> false
+  }
+
+test "a config integer outside its range refuses to start" {
+  # absent is the only silence the default speaks for
+  assert int_in_range(None, 1, 86400, 3600) == Ok(3600)
+  # both ends are inside
+  assert int_in_range(Some("1"), 1, 86400, 3600) == Ok(1)
+  assert int_in_range(Some("86400"), 1, 86400, 3600) == Ok(86400)
+  assert int_in_range(Some(" 7200 "), 1, 86400, 3600) == Ok(7200)
+  assert not range_accepted(int_in_range(Some("0"), 1, 86400, 3600))
+  assert not range_accepted(int_in_range(Some("-1"), 1, 86400, 3600))
+  assert not range_accepted(int_in_range(Some("86401"), 1, 86400, 3600))
+  assert not range_accepted(int_in_range(Some("36000000"), 1, 86400, 3600))
+  # and the refusal is a refusal, not the default wearing one
+  assert int_in_range(Some("0"), 1, 86400, 3600) != Ok(3600)
+  assert int_in_range(Some("86401"), 1, 86400, 3600) != Ok(3600)
+}
+
+test "a config integer that is not a number refuses to start" {
+  assert not range_accepted(int_in_range(Some(""), 1, 86400, 3600))
+  assert not range_accepted(int_in_range(Some("abc"), 1, 86400, 3600))
+  assert not range_accepted(int_in_range(Some("3600.0"), 1, 86400, 3600))
+  assert not range_accepted(int_in_range(Some("36 00"), 1, 86400, 3600))
+  assert not range_accepted(int_in_range(Some("1h"), 1, 86400, 3600))
+  assert int_in_range(Some("abc"), 1, 86400, 3600) != Ok(3600)
+  # a value that is a number is still read
+  assert int_in_range(Some("3600"), 1, 86400, 3600) == Ok(3600)
+}
+
 test "parse env: comments, quotes, spacing, embedded =" {
   let c = Config {
     values: parse_env("# comment\nA=1\n B = two words \nURL=\"jdbc:sqlite:/x?y=1\"\nEMPTY=\n"),
