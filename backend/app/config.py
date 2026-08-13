@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     # CORS：逗号分隔的来源列表
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
+    # 回滚探针（GET /api/rollback/db-identity）的共享秘密，随 X-Rollback-Probe 头出示。
+    # 留空 = 探针整体关闭（任何请求都 404），本地开发与测试就是这个状态。
+    rollback_probe_header: str = ""
+
     # 七牛云 Kodo
     qiniu_access_key: str = ""
     qiniu_secret_key: str = ""
