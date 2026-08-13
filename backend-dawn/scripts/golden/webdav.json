@@ -320,6 +320,122 @@
     ]
    }
   },
+  "propfind.depth.invalid.fail-closed": {
+   "missing": {
+    "status_line": "HTTP/1.1 207 ",
+    "content_type_values": [
+     "application/xml; charset=\"utf-8\""
+    ],
+    "malformed_header_lines": [],
+    "responses": 3
+   },
+   "zero": {
+    "status_line": "HTTP/1.1 207 ",
+    "content_type_values": [
+     "application/xml; charset=\"utf-8\""
+    ],
+    "malformed_header_lines": [],
+    "responses": 1
+   },
+   "one": {
+    "status_line": "HTTP/1.1 207 ",
+    "content_type_values": [
+     "application/xml; charset=\"utf-8\""
+    ],
+    "malformed_header_lines": [],
+    "responses": 3
+   },
+   "infinity": {
+    "status_line": "HTTP/1.1 400 Bad Request",
+    "content_type_values": [
+     "application/json; charset=utf-8"
+    ],
+    "malformed_header_lines": [],
+    "responses": 0,
+    "body": "{\"detail\":\"PROPFIND Depth 只支持 0 或 1\"}"
+   },
+   "infinity-uppercase": {
+    "status_line": "HTTP/1.1 400 Bad Request",
+    "content_type_values": [
+     "application/json; charset=utf-8"
+    ],
+    "malformed_header_lines": [],
+    "responses": 0,
+    "body": "{\"detail\":\"PROPFIND Depth 只支持 0 或 1\"}"
+   },
+   "garbage": {
+    "status_line": "HTTP/1.1 400 Bad Request",
+    "content_type_values": [
+     "application/json; charset=utf-8"
+    ],
+    "malformed_header_lines": [],
+    "responses": 0,
+    "body": "{\"detail\":\"PROPFIND Depth 只支持 0 或 1\"}"
+   },
+   "empty": {
+    "status_line": "HTTP/1.1 400 Bad Request",
+    "content_type_values": [
+     "application/json; charset=utf-8"
+    ],
+    "malformed_header_lines": [],
+    "responses": 0,
+    "body": "{\"detail\":\"PROPFIND Depth 只支持 0 或 1\"}"
+   },
+   "two": {
+    "status_line": "HTTP/1.1 400 Bad Request",
+    "content_type_values": [
+     "application/json; charset=utf-8"
+    ],
+    "malformed_header_lines": [],
+    "responses": 0,
+    "body": "{\"detail\":\"PROPFIND Depth 只支持 0 或 1\"}"
+   },
+   "comma-list": {
+    "status_line": "HTTP/1.1 400 Bad Request",
+    "content_type_values": [
+     "application/json; charset=utf-8"
+    ],
+    "malformed_header_lines": [],
+    "responses": 0,
+    "body": "{\"detail\":\"PROPFIND Depth 只支持 0 或 1\"}"
+   },
+   "repeat-zero-one": {
+    "status_line": "HTTP/1.1 400 Bad Request",
+    "content_type_values": [
+     "application/json; charset=utf-8"
+    ],
+    "malformed_header_lines": [],
+    "responses": 0,
+    "body": "{\"detail\":\"PROPFIND Depth 只能出现一次\"}"
+   },
+   "repeat-one-zero": {
+    "status_line": "HTTP/1.1 400 Bad Request",
+    "content_type_values": [
+     "application/json; charset=utf-8"
+    ],
+    "malformed_header_lines": [],
+    "responses": 0,
+    "body": "{\"detail\":\"PROPFIND Depth 只能出现一次\"}"
+   },
+   "repeat-identical": {
+    "status_line": "HTTP/1.1 400 Bad Request",
+    "content_type_values": [
+     "application/json; charset=utf-8"
+    ],
+    "malformed_header_lines": [],
+    "responses": 0,
+    "body": "{\"detail\":\"PROPFIND Depth 只能出现一次\"}"
+   },
+   "repeat-with-infinity": {
+    "status_line": "HTTP/1.1 400 Bad Request",
+    "content_type_values": [
+     "application/json; charset=utf-8"
+    ],
+    "malformed_header_lines": [],
+    "responses": 0,
+    "body": "{\"detail\":\"PROPFIND Depth 只能出现一次\"}"
+   }
+  },
   "head.file": {
    "method": "HEAD",
    "path": "/dav/docs/notes.txt",

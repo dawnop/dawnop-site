@@ -1292,6 +1292,242 @@
    "metadata_equivalent_after_each_method": true,
    "objects_unchanged": true,
    "object_calls": []
+  },
+  "fm.persisted-mime.fail-safe": {
+   "empty": {
+    "stored_content_type": "",
+    "dav.head": {
+     "status_line": "HTTP/1.1 200 OK",
+     "header_names": [
+      "date",
+      "last-modified",
+      "content-type",
+      "etag",
+      "content-length",
+      "accept-ranges"
+     ],
+     "content_type_values": [
+      "application/octet-stream"
+     ],
+     "malformed_header_lines": [],
+     "mentions_injected": false,
+     "body_size": 0
+    },
+    "dav.get": {
+     "status_line": "HTTP/1.1 200 OK",
+     "header_names": [
+      "date",
+      "transfer-encoding",
+      "last-modified",
+      "content-type",
+      "etag",
+      "accept-ranges"
+     ],
+     "content_type_values": [
+      "application/octet-stream"
+     ],
+     "malformed_header_lines": [],
+     "mentions_injected": false,
+     "body_size": 22
+    },
+    "fm.content": {
+     "status_line": "HTTP/1.1 200 OK",
+     "header_names": [
+      "date",
+      "transfer-encoding",
+      "content-type",
+      "vary"
+     ],
+     "content_type_values": [
+      "application/octet-stream"
+     ],
+     "malformed_header_lines": [],
+     "mentions_injected": false,
+     "body_size": 22
+    },
+    "dav.propfind": {
+     "status_line": "HTTP/1.1 207 ",
+     "header_names": [
+      "date",
+      "content-type",
+      "content-length"
+     ],
+     "content_type_values": [
+      "application/xml; charset=\"utf-8\""
+     ],
+     "malformed_header_lines": [],
+     "mentions_injected": false,
+     "body_size": 595,
+     "getcontenttype_values": [
+      "application/octet-stream"
+     ]
+    }
+   },
+   "crlf": {
+    "stored_content_type": "text/plain\r\nX-Injected: 1",
+    "dav.head": {
+     "status_line": "HTTP/1.1 200 OK",
+     "header_names": [
+      "date",
+      "last-modified",
+      "content-type",
+      "etag",
+      "content-length",
+      "accept-ranges"
+     ],
+     "content_type_values": [
+      "application/octet-stream"
+     ],
+     "malformed_header_lines": [],
+     "mentions_injected": false,
+     "body_size": 0
+    },
+    "dav.get": {
+     "status_line": "HTTP/1.1 200 OK",
+     "header_names": [
+      "date",
+      "transfer-encoding",
+      "last-modified",
+      "content-type",
+      "etag",
+      "accept-ranges"
+     ],
+     "content_type_values": [
+      "application/octet-stream"
+     ],
+     "malformed_header_lines": [],
+     "mentions_injected": false,
+     "body_size": 22
+    },
+    "fm.content": {
+     "status_line": "HTTP/1.1 200 OK",
+     "header_names": [
+      "date",
+      "transfer-encoding",
+      "content-type",
+      "vary"
+     ],
+     "content_type_values": [
+      "application/octet-stream"
+     ],
+     "malformed_header_lines": [],
+     "mentions_injected": false,
+     "body_size": 22
+    },
+    "dav.propfind": {
+     "status_line": "HTTP/1.1 207 ",
+     "header_names": [
+      "date",
+      "content-type",
+      "content-length"
+     ],
+     "content_type_values": [
+      "application/xml; charset=\"utf-8\""
+     ],
+     "malformed_header_lines": [],
+     "mentions_injected": false,
+     "body_size": 592,
+     "getcontenttype_values": [
+      "application/octet-stream"
+     ]
+    }
+   },
+   "low-byte-alias": {
+    "stored_content_type": "text/plainčĊX-Injected: 1",
+    "dav.head": {
+     "status_line": "HTTP/1.1 200 OK",
+     "header_names": [
+      "date",
+      "last-modified",
+      "content-type",
+      "etag",
+      "content-length",
+      "accept-ranges"
+     ],
+     "content_type_values": [
+      "application/octet-stream"
+     ],
+     "malformed_header_lines": [],
+     "mentions_injected": false,
+     "body_size": 0
+    },
+    "dav.get": {
+     "status_line": "HTTP/1.1 200 OK",
+     "header_names": [
+      "date",
+      "transfer-encoding",
+      "last-modified",
+      "content-type",
+      "etag",
+      "accept-ranges"
+     ],
+     "content_type_values": [
+      "application/octet-stream"
+     ],
+     "malformed_header_lines": [],
+     "mentions_injected": false,
+     "body_size": 22
+    },
+    "fm.content": {
+     "status_line": "HTTP/1.1 200 OK",
+     "header_names": [
+      "date",
+      "transfer-encoding",
+      "content-type",
+      "vary"
+     ],
+     "content_type_values": [
+      "application/octet-stream"
+     ],
+     "malformed_header_lines": [],
+     "mentions_injected": false,
+     "body_size": 22
+    },
+    "dav.propfind": {
+     "status_line": "HTTP/1.1 207 ",
+     "header_names": [
+      "date",
+      "content-type",
+      "content-length"
+     ],
+     "content_type_values": [
+      "application/xml; charset=\"utf-8\""
+     ],
+     "malformed_header_lines": [],
+     "mentions_injected": false,
+     "body_size": 622,
+     "getcontenttype_values": [
+      "application/octet-stream"
+     ]
+    }
+   },
+   "save": {
+    "note": "the remote multipart and the rewritten row both carry the fallback",
+    "status": 200,
+    "body": {
+     "path": "qiniu://dav-test/legacy-mime-crlf.bin"
+    },
+    "calls": [
+     {
+      "op": "upload",
+      "key": "<key19>.bin",
+      "size": 9,
+      "mime": "application/octet-stream"
+     },
+     {
+      "op": "delete",
+      "key": "legacy-mime-crlf-key",
+      "existed": true
+     }
+    ],
+    "row_after": {
+     "path": "dav-test/legacy-mime-crlf.bin",
+     "is_dir": false,
+     "key": "<key19>.bin",
+     "content_type": "application/octet-stream",
+     "size": 9
+    }
+   }
   }
  }
 }
