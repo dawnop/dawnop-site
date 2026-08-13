@@ -450,6 +450,24 @@ MUTANTS: list[tuple[str, str, list[Path], Callable[[str], str], set[str]]] = [
         sub("'/^Uid:/ { print $3 }'", "'/^Uid:/ { print $2 }'"),
         {"test_unit_identity_check_covers_unit_argv_cwd_uid_gid"},
     ),
+    # ---- 脚本印出来的「下一步」 ----
+    (
+        "tail-points-at-a-server-side-copy",
+        "结尾的「下一步」改回 /opt/dawnop-dawn/ 下那个不存在的脚本副本",
+        BOTH_SCRIPTS,
+        None,  # 占位，见下方特判
+        {
+            "test_deploy_scripts_never_point_at_a_server_side_copy_of_themselves",
+            "test_each_script_ends_by_pointing_at_the_pipe_over_ssh_form",
+        },
+    ),
+    (
+        "tail-points-at-itself",
+        "结尾的「下一步」指向自己而不是对方（回滚完印回滚）",
+        BOTH_SCRIPTS,
+        None,  # 占位，见下方特判
+        {"test_each_script_ends_by_pointing_at_the_pipe_over_ssh_form"},
+    ),
 ]
 
 
@@ -470,9 +488,39 @@ def _health_only_probes(text: str) -> str:
     )
 
 
+def _tail_points_at_a_server_side_copy(text: str) -> str:
+    """把结尾的「下一步」改回 #250 之前那个不存在的路径。"""
+    new, n = re.subn(
+        r'echo "  (回切|再次回滚)（[^）]*）："\n'
+        r"echo \"    ssh <user>@<server> 'sudo bash -s' "
+        r'< backend-dawn/deploy/(\S+\.sh)"',
+        lambda m: f'echo "  {m.group(1)}：sudo bash /opt/dawnop-dawn/{m.group(2)}"',
+        text,
+    )
+    if n != 1:
+        raise SystemExit("mutant 的锚点不唯一或没了：结尾的「下一步」那两行")
+    return new
+
+
+def _tail_points_at_itself(text: str) -> str:
+    """让结尾的「下一步」指向自己。`"` 结尾把它与文件头注释里的同款调用形式区分开。"""
+    names = ("rollback-to-fastapi.sh", "return-to-dawn.sh")
+
+    def swap(m: "re.Match[str]") -> str:
+        other = names[1] if m.group(1) == names[0] else names[0]
+        return m.group(0).replace(m.group(1), other)
+
+    new, n = re.subn(r'< backend-dawn/deploy/(\S+\.sh)"', swap, text)
+    if n != 1:
+        raise SystemExit("mutant 的锚点不唯一或没了：结尾的 pipe-over-ssh 行")
+    return new
+
+
 SPECIAL = {
     "shared-block-emptied": _empty_the_shared_block,
     "health-only-liveness": _health_only_probes,
+    "tail-points-at-a-server-side-copy": _tail_points_at_a_server_side_copy,
+    "tail-points-at-itself": _tail_points_at_itself,
 }
 
 

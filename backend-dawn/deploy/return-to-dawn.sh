@@ -464,4 +464,5 @@ rm -f "$FILE_ROUTE_SENTINEL"
 echo
 echo "已回切到 Dawn :8001。FastAPI :8000 已停并 disable。"
 echo "  nginx 备份：$BACKUP"
-echo "  再次回滚：sudo bash /opt/dawnop-dawn/rollback-to-fastapi.sh"
+echo "  再次回滚（服务器上没有这两个脚本的副本，要从本地仓库 pipe 过去跑）："
+echo "    ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/rollback-to-fastapi.sh"

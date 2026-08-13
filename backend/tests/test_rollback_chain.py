@@ -856,6 +856,44 @@ def test_guarded_verification_checks_both_unit_and_process_loader_environment():
 
 
 # --------------------------------------------------------------------------
+# 8. 脚本印出来的「下一步」必须是能照抄的
+# --------------------------------------------------------------------------
+
+
+def test_deploy_scripts_never_point_at_a_server_side_copy_of_themselves():
+    """`/opt/dawnop-dawn/` 下没有任何 `.sh`，别叫人去那里跑一个不存在的文件。
+
+    `deploy.sh` 只装 `backend-dawn.jar` 与 `lib/`，仓库里没有任何一步把这些脚本装到服务器上
+    （`deploy/README.md`「一」那条警告说的就是这件事）。回滚脚本结尾曾经印着
+    `sudo bash /opt/dawnop-dawn/return-to-dawn.sh`，那是回滚成功之后立刻打印的一行，
+    正是人在事故中最可能直接照抄的那行，而照抄的结果是 No such file or directory。
+    """
+    scripts = sorted((REPO / "backend-dawn" / "deploy").glob("*.sh"))
+    assert len(scripts) >= 3, f"部署脚本的位置变了：{[p.name for p in scripts]}"
+    for path in scripts:
+        found = re.findall(r"/opt/dawnop-dawn/\S*\.sh", read(path))
+        assert not found, f"{path.name} 指向服务器上不存在的脚本副本：{found}"
+
+
+@pytest.mark.parametrize(
+    ("path", "other"), [(ROLLBACK_SH, RETURN_SH), (RETURN_SH, ROLLBACK_SH)]
+)
+def test_each_script_ends_by_pointing_at_the_pipe_over_ssh_form(path, other):
+    """结尾的「下一步」印的是 README 里那条正规调用形式，而且指向的是**对方**。
+
+    脚本跑在服务器上，读它输出的人站在本地：提示得说清「从本地仓库 pipe 过去」，
+    否则那行照抄不动。指向对方也是判词的一部分：回滚之后要给的是回切，反过来同理。
+    """
+    tail = read(path).rsplit("\necho\n", 1)[-1]
+    assert re.search(
+        rf"^echo \"\s*ssh <user>@<server> 'sudo bash -s' "
+        rf"< backend-dawn/deploy/{re.escape(other.name)}\"$",
+        tail,
+        re.M,
+    ), f"{path.name} 结尾没有指向 {other.name} 的 pipe-over-ssh 调用形式"
+
+
+# --------------------------------------------------------------------------
 # 关键顺序：核验必须在动 nginx 之前
 # --------------------------------------------------------------------------
 

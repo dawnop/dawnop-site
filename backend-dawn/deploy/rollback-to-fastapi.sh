@@ -410,4 +410,5 @@ echo
 echo "已回滚到 FastAPI :8000。Dawn :8001 仍在运行（未动）。"
 echo "  nginx 备份：$BACKUP"
 echo "  哨兵：$FILE_ROUTE_SENTINEL（回切时由 return-to-dawn.sh 移除）"
-echo "  回切：sudo bash /opt/dawnop-dawn/return-to-dawn.sh"
+echo "  回切（服务器上没有这两个脚本的副本，要从本地仓库 pipe 过去跑）："
+echo "    ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/return-to-dawn.sh"
