@@ -2695,11 +2695,12 @@ def assert_fm_addressing_lossless(ctx, checks):
     # operations that address a whitespace row without spelling a new name.
 
 
-# The two messages util/paths require_trimmed_names answers with. Asserting the
+# The two messages util/paths require_admissible_names answers with. Asserting the
 # text, not only the 400, is what keeps these cases pinned to their own guard: a
 # handler has several other ways to answer 400.
 NAME_EDGE_DETAIL = "名称不能以空白开头或结尾"
 NAME_BLANK_DETAIL = "名称不能只由空白组成"
+NAME_DOT_DETAIL = "名称不能是 . 或 .."
 
 # Where a probe puts its whitespace is not cosmetic. Anything an endpoint reads
 # through paths.fm_split is also seen by the fm-split-trims-addressing mutant,
@@ -2732,6 +2733,12 @@ def assert_name_guard_create_folder(ctx, checks):
     the trimmed spelling, so "new " and "new" were the same request with no way
     to tell. Nothing rewrites the name now: it is either stored as typed or
     refused.
+
+    "." and ".." are refused by the same guard. They used to be accepted here
+    while rename refused them, and the row they produced was reachable from the
+    web file manager and from nowhere else: WebDAV rejects a dot segment while
+    it is still turning the request path into a rel, so no mounted client could
+    name the row to read, move or delete it.
     """
     before = db_state(ctx)
     refuse_name(
@@ -2750,6 +2757,24 @@ def assert_name_guard_create_folder(ctx, checks):
         "create-folder all-blank segment",
         NAME_BLANK_DETAIL,
     )
+    refuse_name(
+        checks,
+        api(ctx, "/api/fm/create-folder", {"path": "qiniu://docs", "name": "."}),
+        "create-folder one-dot name",
+        NAME_DOT_DETAIL,
+    )
+    refuse_name(
+        checks,
+        api(ctx, "/api/fm/create-folder", {"path": "qiniu://docs", "name": ".."}),
+        "create-folder two-dot name",
+        NAME_DOT_DETAIL,
+    )
+    refuse_name(
+        checks,
+        api(ctx, "/api/fm/create-folder", {"path": "qiniu://docs", "name": "a/./b"}),
+        "create-folder dot segment inside the name",
+        NAME_DOT_DETAIL,
+    )
     checks.equal(db_state(ctx), before, "a refused create-folder wrote a row")
     # one new segment under a directory that already exists: the control says
     # the guard lets an ordinary create through, and nothing else. Creating
@@ -2762,6 +2787,35 @@ def assert_name_guard_create_folder(ctx, checks):
     checks.equal(status, 200, "clean create-folder status")
     checks.true(
         file_row(ctx, "docs/created") is not None, "clean create-folder wrote no row"
+    )
+
+
+def assert_create_folder_subpath_name(ctx, checks):
+    """create-folder's `name` may spell a subpath. That is a decision, not an oversight.
+
+    rename's name must be exactly one segment: it replaces the last segment of
+    an existing row in place, so a subpath is not a new name for that row.
+    create-folder's name is joined onto the current directory, and upload-token
+    reads the same field from a folder upload, where the browser sends
+    webkitRelativePath and the tree under it is expected to be rebuilt. Making
+    the two endpoints share rename's rule would take that away.
+
+    So this case is aimed at a future change rather than a past defect: it is
+    what makes "unify the two name predicates" fail loudly instead of quietly
+    dropping folder upload. The only shared rule is the write guard both run,
+    and its own cases are the name-guard.* family.
+
+    The target's parent is already in the fixture ("docs/img"), so nothing here
+    claims anything about backfilling missing ancestors; that is
+    fm.missing-ancestors.auto-created's claim.
+    """
+    status, _ = api(
+        ctx, "/api/fm/create-folder", {"path": "qiniu://docs", "name": "img/gallery"}
+    )
+    checks.equal(status, 200, "subpath create-folder status")
+    checks.true(
+        file_row(ctx, "docs/img/gallery") is not None,
+        "subpath create-folder wrote no row",
     )
 
 
@@ -2928,8 +2982,10 @@ def assert_name_guard_copy(ctx, checks):
 def assert_name_guard_create_file(ctx, checks):
     """create-file refuses a name that is not its own trim, before it mints an object.
 
-    Like create-folder it used to trim. The refusal has to land before the empty
-    object is uploaded, otherwise a rejected request still leaves a key behind.
+    Like create-folder it used to trim, and like create-folder it used to accept
+    "." and ".." while rename refused them. Both refusals have to land before the
+    empty object is uploaded, otherwise a rejected request still leaves a key
+    behind.
     """
     before = db_state(ctx)
     refuse_name(
@@ -2941,6 +2997,18 @@ def assert_name_guard_create_file(ctx, checks):
         checks,
         api(ctx, "/api/fm/create-file", {"path": "qiniu://docs", "name": "a/ b.txt"}),
         "create-file leading space on the leaf",
+    )
+    refuse_name(
+        checks,
+        api(ctx, "/api/fm/create-file", {"path": "qiniu://docs", "name": ".."}),
+        "create-file two-dot name",
+        NAME_DOT_DETAIL,
+    )
+    refuse_name(
+        checks,
+        api(ctx, "/api/fm/create-file", {"path": "qiniu://docs", "name": "../x.txt"}),
+        "create-file dot segment inside the name",
+        NAME_DOT_DETAIL,
     )
     checks.equal(db_state(ctx), before, "a refused create-file wrote a row")
     checks.equal(ctx.fake.calls(), [], "a refused create-file reached Qiniu")
@@ -3428,6 +3496,7 @@ ASSERTIONS = [
     ("fm.addressing.lossless", assert_fm_addressing_lossless),
     ("fm.json.duplicate-members", assert_json_duplicate_members),
     ("name-guard.fm.create-folder", assert_name_guard_create_folder),
+    ("fm.create-folder.subpath-name", assert_create_folder_subpath_name),
     ("name-guard.fm.rename", assert_name_guard_rename),
     ("name-guard.fm.move", assert_name_guard_move),
     ("name-guard.fm.copy", assert_name_guard_copy),

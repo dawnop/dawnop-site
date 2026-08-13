@@ -4,7 +4,7 @@
 import argparse
 from pathlib import Path
 
-VERSION = "18"
+VERSION = "19"
 VALID_ROLES = {"test", "contract", "qiniu"}
 EXPECTED_ROWS = [
     "immediate-tx-as-deferred|test|with_immediate_tx reserves the writer before its body",
@@ -82,6 +82,10 @@ EXPECTED_ROWS = [
     "name-guard-fm-upload-token-fail-open|contract|name-guard.fm.upload-token",
     "name-guard-fm-register-fail-open|contract|name-guard.fm.register",
     "name-guard-fm-proxy-upload-fail-open|contract|name-guard.fm.proxy-upload",
+    "name-guard-dot-segment-single-fail-open|test|a `.` segment is refused: it names a row WebDAV can never address",
+    "name-guard-dot-segment-double-fail-open|test|a `..` segment is refused: it names a row WebDAV can never address",
+    "rename-name-allows-subpath|test|rename asks for one segment; storing a subpath is create's business",
+    "create-folder-rejects-subpath-name|contract|fm.create-folder.subpath-name",
     "name-guard-webdav-put-fail-open|contract|name-guard.webdav.put",
     "name-guard-webdav-mkcol-fail-open|contract|name-guard.webdav.mkcol",
     "name-guard-webdav-destination-fail-open|contract|name-guard.webdav.destination",
@@ -95,7 +99,7 @@ EXPECTED_CONTRACT_OWNERS = [
 EXPECTED_QINIU_OWNERS = [
     row.split("|", 2)[2] for row in EXPECTED_ROWS if row.split("|", 2)[1] == "qiniu"
 ]
-EXPECTED_ROLE_COUNTS = {"test": 27, "contract": 50, "qiniu": 3}
+EXPECTED_ROLE_COUNTS = {"test": 30, "contract": 51, "qiniu": 3}
 
 
 def validate(lines, listed_mutants, listed_assertions, listed_qiniu_assertions):

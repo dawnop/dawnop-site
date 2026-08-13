@@ -1,5 +1,5 @@
 # Versioned, hand-owned red set. There is no record mode.
-version=18
+version=19
 immediate-tx-as-deferred|test|with_immediate_tx reserves the writer before its body
 immediate-tx-panic-no-rollback|test|with_immediate_tx rolls back when its body panics
 repo-file-ancestor-fail-open|test|insert_folder_strict rejects an existing file ancestor
@@ -75,6 +75,10 @@ name-guard-fm-save-fail-open|contract|name-guard.fm.save
 name-guard-fm-upload-token-fail-open|contract|name-guard.fm.upload-token
 name-guard-fm-register-fail-open|contract|name-guard.fm.register
 name-guard-fm-proxy-upload-fail-open|contract|name-guard.fm.proxy-upload
+name-guard-dot-segment-single-fail-open|test|a `.` segment is refused: it names a row WebDAV can never address
+name-guard-dot-segment-double-fail-open|test|a `..` segment is refused: it names a row WebDAV can never address
+rename-name-allows-subpath|test|rename asks for one segment; storing a subpath is create's business
+create-folder-rejects-subpath-name|contract|fm.create-folder.subpath-name
 name-guard-webdav-put-fail-open|contract|name-guard.webdav.put
 name-guard-webdav-mkcol-fail-open|contract|name-guard.webdav.mkcol
 name-guard-webdav-destination-fail-open|contract|name-guard.webdav.destination
