@@ -1084,6 +1084,48 @@
     "detail": "文件不存在"
    }
   },
+  "fm.list.trailingSpace": {
+   "method": "GET",
+   "path": "/api/fm?path=qiniu%3A%2F%2Fdocs+",
+   "status": 200,
+   "body": {
+    "storages": [
+     "qiniu"
+    ],
+    "dirname": "qiniu://docs ",
+    "files": [],
+    "read_only": false
+   }
+  },
+  "fm.list.prefixSpace": {
+   "method": "GET",
+   "path": "/api/fm?path=qiniu%3A%2F%2F+docs",
+   "status": 200,
+   "body": {
+    "storages": [
+     "qiniu"
+    ],
+    "dirname": "qiniu:// docs",
+    "files": [],
+    "read_only": false
+   }
+  },
+  "fm.sign.trailingSpace": {
+   "method": "GET",
+   "path": "/api/fm/sign?path=qiniu%3A%2F%2Fdocs%2Fnotes.txt+",
+   "status": 404,
+   "body": {
+    "detail": "文件不存在"
+   }
+  },
+  "fm.download.trailingSpace": {
+   "method": "GET",
+   "path": "/api/fm/download?path=qiniu%3A%2F%2Fdocs%2Fnotes.txt+",
+   "status": 404,
+   "body": {
+    "detail": "文件不存在"
+   }
+  },
   "fm.sign.noPath": {
    "method": "GET",
    "path": "/api/fm/sign",

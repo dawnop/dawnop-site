@@ -280,6 +280,40 @@ def build_cases(token, content_page_id):
     # a written rationale for accepting that pair; the golden simply records the
     # backend under test, so pointing this script at FastAPI will show these four
     # as diffs. Both refuse, nothing mutates, the frontend keys on status.
+    # Addressing is lossless: `qiniu://<path>` names the row spelled exactly
+    # that way. Every case below aims at a real fixture path plus one space,
+    # which is a DIFFERENT path — so the answers are "empty directory" and
+    # "not found", not `docs` and `docs/notes.txt`. paths.fm_split used to trim
+    # the whole path and collapse the two spellings onto one row, which is how
+    # a delete aimed at "a.txt " removed "a.txt"; these four are the wire-level
+    # tripwire for that. Note that they are only recordable *because* of the
+    # fix: under the old behaviour sign/download answered with a signed URL
+    # carrying a wall-clock expiry, which no golden can own.
+    add(
+        "fm.list.trailingSpace",
+        "GET",
+        "/api/fm?" + urllib.parse.urlencode({"path": "qiniu://docs "}),
+        AUTH,
+    )
+    add(
+        "fm.list.prefixSpace",
+        "GET",
+        "/api/fm?" + urllib.parse.urlencode({"path": "qiniu:// docs"}),
+        AUTH,
+    )
+    add(
+        "fm.sign.trailingSpace",
+        "GET",
+        "/api/fm/sign?" + urllib.parse.urlencode({"path": "qiniu://docs/notes.txt "}),
+        AUTH,
+    )
+    add(
+        "fm.download.trailingSpace",
+        "GET",
+        "/api/fm/download?"
+        + urllib.parse.urlencode({"path": "qiniu://docs/notes.txt "}),
+        AUTH,
+    )
     add("fm.sign.noPath", "GET", "/api/fm/sign", AUTH)
     add("fm.content.noPath", "GET", "/api/fm/content", AUTH)
     add("fm.preview.noPath", "GET", "/api/fm/preview", AUTH)
