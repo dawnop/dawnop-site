@@ -18,6 +18,12 @@ if [[ ${#shard_rest[@]} -ne 0 ]]; then
 fi
 shard_begin webdav-destination-mutants
 
+# The mutators only write into a directory carrying a .mutant-workdir sentinel,
+# and this proves that gate can still go red -- for every harness, not just this
+# one. Without it a mutate.py that lost the guard would look exactly like one
+# that has it, right up until somebody aimed it at a checkout.
+python3 "$BACKEND/scripts/mutant_workdir.py" --self-test
+
 if [[ -z "$DAWN" ]]; then
   DAWN="$("$ROOT/scripts/fetch-dawn.sh")"
 fi
@@ -128,7 +134,11 @@ printf 'PASS  qiniu report collateral negative control\n'
 python3 "$MATRIX_CHECK" --self-test
 python3 "$MUTATOR" --list >"$work/mutants.txt"
 python3 "$MATRIX_CHECK" --matrix "$MATRIX" --mutants "$work/mutants.txt"
-if python3 "$MUTATOR" unknown-mutant "$BACKEND" >"$work/unknown.log" 2>&1; then
+# Aimed at a scratch path, not at "$BACKEND": the name is rejected before the
+# project argument is ever looked at, so pointing this at the live checkout only
+# ever proved that argparse runs first. Nothing here should be able to write to
+# a tree we keep, whichever check fires.
+if python3 "$MUTATOR" unknown-mutant "$work/unknown-probe" >"$work/unknown.log" 2>&1; then
   printf 'FAIL  mutate.py accepted an unknown mutant\n' >&2
   exit 1
 fi
@@ -192,6 +202,8 @@ for index in "${!mutants[@]}"; do
   mkdir -p "$project"
   cp "$BACKEND/dawn.toml" "$BACKEND/dawn.lock" "$project/"
   cp -R "$BACKEND/src" "$project/src"
+  # mutate.py refuses a directory without this; see scripts/mutant_workdir.py
+  : >"$project/.mutant-workdir"
   python3 "$MUTATOR" "$mutant" "$project"
 
   build_log="$work/$mutant.build.log"

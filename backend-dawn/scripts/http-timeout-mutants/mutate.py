@@ -9,7 +9,11 @@ the source reads as already true -- there is a `.timeout(`, the message says
 """
 
 import argparse
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from mutant_workdir import require_workdir  # noqa: E402
 
 MUTANTS = (
     "client-per-call",
@@ -38,7 +42,9 @@ def main() -> int:
     parser.add_argument("project", type=Path)
     args = parser.parse_args()
 
-    http = args.project / "src/util/http.dawn"
+    project = require_workdir(args.project)
+
+    http = project / "src/util/http.dawn"
 
     if args.mutant == "client-per-call":
         # "shared" goes back to being only a name: every call builds its own
@@ -74,12 +80,12 @@ def main() -> int:
     elif args.mutant == "edge-times-out-as-502":
         # One rule, both edges: a timeout collapses back into 502 on the wire.
         replace_once(
-            args.project / "src/api/api_fm.dawn",
+            project / "src/api/api_fm.dawn",
             "    KTimeout -> 504\n",
             "    KTimeout -> 502\n",
         )
         replace_once(
-            args.project / "src/api/webdav.dawn",
+            project / "src/api/webdav.dawn",
             "    KTimeout -> http_error(504, t)\n",
             "    KTimeout -> http_error(502, t)\n",
         )

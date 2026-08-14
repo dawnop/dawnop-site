@@ -2,7 +2,11 @@
 """Apply one compiling WebDAV Destination mutant in place."""
 
 import argparse
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from mutant_workdir import require_workdir  # noqa: E402
 
 MUTANTS = (
     "drop-dot-check",
@@ -60,7 +64,9 @@ def main() -> int:
     if args.project is None:
         parser.error("project is required")
 
-    source = args.project / "src/api/webdav.dawn"
+    project = require_workdir(args.project)
+
+    source = project / "src/api/webdav.dawn"
     if args.mutant == "drop-dot-check":
         replace_once(source, '  s == "." || s == ".."\n', '  s == ".."\n')
     elif args.mutant == "drop-dotdot-check":

@@ -10,7 +10,11 @@ suite, not by the static FFI walker.
 """
 
 import argparse
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from mutant_workdir import require_workdir  # noqa: E402
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
@@ -54,7 +58,9 @@ def main() -> int:
     parser.add_argument("project", type=Path)
     args = parser.parse_args()
 
-    sql = args.project / "src/db/sql.dawn"
+    project = require_workdir(args.project)
+
+    sql = project / "src/db/sql.dawn"
     if args.mutant == "make-dbconn-transparent":
         replace_once(
             sql,
@@ -62,7 +68,7 @@ def main() -> int:
             "pub alias DbConn = Connection\n",
         )
     elif args.mutant == "leak-java-sql":
-        repo = args.project / "src/repo/repo_tag.dawn"
+        repo = project / "src/repo/repo_tag.dawn"
         replace_once(
             repo,
             "use db/sql.{DbConn, ",

@@ -18,6 +18,12 @@ if [[ ${#shard_rest[@]} -ne 0 ]]; then
 fi
 shard_begin http-body-boundary-mutants
 
+# The mutators only write into a directory carrying a .mutant-workdir sentinel,
+# and this proves that gate can still go red -- for every harness, not just this
+# one. Without it a mutate.py that lost the guard would look exactly like one
+# that has it, right up until somebody aimed it at a checkout.
+python3 "$BACKEND/scripts/mutant_workdir.py" --self-test
+
 if [[ -z "$DAWN" ]]; then
   DAWN="$("$ROOT/scripts/fetch-dawn.sh")"
 fi
@@ -60,6 +66,8 @@ for index in "${!mutants[@]}"; do
   mkdir -p "$project"
   cp "$BACKEND/dawn.toml" "$project/dawn.toml"
   cp -R "$BACKEND/src" "$project/src"
+  # mutate.py refuses a directory without this; see scripts/mutant_workdir.py
+  : >"$project/.mutant-workdir"
   python3 "$MUTATOR" "$mutant" "$project"
 
   build_log="$work/$mutant.build.log"

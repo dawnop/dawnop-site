@@ -13,7 +13,11 @@ a mutant that fails to build tests the compiler, not the assertions.
 """
 
 import argparse
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from mutant_workdir import require_workdir  # noqa: E402
 
 ARTICLE_TOUCH = "let _u = if after != before { touch_article(c, id)? } else { 0 }"
 PAGE_TOUCH = "let _u = if after != before { touch_page(c, id)? } else { 0 }"
@@ -131,8 +135,10 @@ def main() -> int:
     if not args.mutant or args.project is None:
         parser.error("need a mutant name and a project directory")
 
+    project = require_workdir(args.project)
+
     rel, old, new = MUTANTS[args.mutant]
-    replace_once(args.project / rel, old, new)
+    replace_once(project / rel, old, new)
     return 0
 
 

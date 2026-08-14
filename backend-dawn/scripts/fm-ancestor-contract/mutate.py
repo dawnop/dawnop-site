@@ -2,7 +2,11 @@
 """Apply one compiling FM/WebDAV ancestor mutant in place."""
 
 import argparse
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from mutant_workdir import require_workdir  # noqa: E402
 
 MUTANTS = (
     "immediate-tx-as-deferred",
@@ -117,16 +121,18 @@ def main() -> int:
     if args.project is None:
         parser.error("project is required")
 
-    repo = args.project / "src/repo/repo_fm.dawn"
-    db_sql = args.project / "src/db/sql.dawn"
-    service = args.project / "src/svc/files.dawn"
-    fm_api = args.project / "src/api/api_fm.dawn"
-    webdav = args.project / "src/api/webdav.dawn"
-    qiniu_rs = args.project / "src/qiniu/rs.dawn"
-    multipart = args.project / "src/util/multipart.dawn"
-    paths = args.project / "src/util/paths.dawn"
-    jsonread = args.project / "src/util/jsonread.dawn"
-    config = args.project / "src/config.dawn"
+    project = require_workdir(args.project)
+
+    repo = project / "src/repo/repo_fm.dawn"
+    db_sql = project / "src/db/sql.dawn"
+    service = project / "src/svc/files.dawn"
+    fm_api = project / "src/api/api_fm.dawn"
+    webdav = project / "src/api/webdav.dawn"
+    qiniu_rs = project / "src/qiniu/rs.dawn"
+    multipart = project / "src/util/multipart.dawn"
+    paths = project / "src/util/paths.dawn"
+    jsonread = project / "src/util/jsonread.dawn"
+    config = project / "src/config.dawn"
 
     if args.mutant == "immediate-tx-as-deferred":
         replace_once(

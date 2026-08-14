@@ -2,7 +2,11 @@
 """Apply one compiling response stream boundary mutant in place."""
 
 import argparse
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from mutant_workdir import require_workdir  # noqa: E402
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
@@ -37,8 +41,10 @@ def main() -> int:
     parser.add_argument("project", type=Path)
     args = parser.parse_args()
 
-    http = args.project / "src/util/http.dawn"
-    api_fm = args.project / "src/api/api_fm.dawn"
+    project = require_workdir(args.project)
+
+    http = project / "src/util/http.dawn"
+    api_fm = project / "src/api/api_fm.dawn"
     if args.mutant == "make-response-stream-transparent":
         replace_once(
             http,
