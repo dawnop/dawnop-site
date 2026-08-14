@@ -3,7 +3,9 @@
 dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 仓库 `docs/m6.md`）。
 与 `backend/`（FastAPI，现为冻结的回滚目标 + 契约参照）**共用同一 SQLite 库与七牛空间**；
 迁移期 nginx 按路由灰度切流，**2026-07 已全量切到 Dawn**（uvicorn 退役、只回滚时拉起）。
-`/api` 全部端点已迁移并与 FastAPI 逐字段对拍一致；曾留待 M6.5 的 **WebDAV**（`src/api/webdav.dawn`）
+`/api` 全部端点已迁移。M6 期间逐路由与 FastAPI 对拍过，但**今天的契约是 `scripts/golden/*.json`
+而不是 FastAPI**：钉住的是 Dawn 自己的答案，其中若干处与 FastAPI 刻意不同，见
+[「与 FastAPI 的已知分歧」](#与-fastapi-的已知分歧)。曾留待 M6.5 的 **WebDAV**（`src/api/webdav.dawn`）
 与 `POST /api/fm/upload`（multipart 代理上传，`src/util/multipart.dawn`）**也已落地**。
 
 契约由 `scripts/golden/*.json` 钉住（`scripts/contract_run.py`，CI 每次 push 都跑）：
@@ -65,6 +67,54 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 拿它去兜一个写错的值，等于把打错的字变成一台跑着、且没人知道凭证活多久的服务器。判词在
 `config.int_in_range`，越界与非数字各有一条 Dawn 单测和一个变异体；假七牛那侧另有
 `fm.upload-token.deadline-window` 真去花掉一次凭证。
+
+## 与 FastAPI 的已知分歧
+
+`backend/` 冻结之后，两套的线上形状不再逐字段相同。下面这些是**看过并接受**的，不是漏掉的。
+它们此前只以各自代码点上的注释存在（M6 的差分 harness 里曾有一张 `RATIONALIZED_STATUS`
+登记表，改成 golden 对拍时随 harness 一起删了），所以在这里收一份。平时跑的只有 Dawn，
+这些差异只在回滚到 FastAPI 的那段时间里才看得见。
+
+- **`POST /api/fm/register` 的准入，Dawn 严格得多。** Dawn 要求 `(key, path)` 这一对在
+  `pending_uploads` 账本里确有其行，且该 key 尚未被任何 `files` 行引用，任一条不满足都是 409。
+  预检在碰七牛之前跑（`repo_fm.validate_register_preflight`），最终写入的即时事务里再验一遍
+  （`repo_fm.finalize_register`），账本行按 `(key, path)` 消费并断言恰好消费一行。FastAPI
+  （`backend/app/api/fm/uploads.py`）只校验 `path`/`key` 非空、`stat(key)` 成功，然后**按 key
+  单独**删账本行，既不比对账本里记的 path，也不看这个 key 有没有被别的行占着。
+  于是同一个请求 Dawn 回 409、FastAPI 回 200：把一次成功过的 `register` 换个 path 重放，
+  FastAPI 会再建一行（`files.key` 上没有唯一约束），结果是**两行元数据指向同一个七牛对象**。
+  这不是纸面问题。FastAPI 的 `/api/fm/delete` 不做引用计数，删掉其中一行就把对象删了，
+  另一行成为指向已删对象的悬空引用；而这行落在两套共用的那个库里，回切到 Dawn 之后仍在。
+  Dawn 的回收是引用感知的（`svc/files.gc_unreferenced` 在即时事务里查 `files` 与
+  `pending_uploads`），所以它既造不出这个状态，回切后也不会把它踩坏。
+  够不够得着取决于回滚方式：**受守护的回滚**（哨兵 `/etc/dawnop/fastapi-file-routes-disabled`，
+  `backend/app/core/process_guard.py`）把整个 `/api/fm` 关成 503，这条路径够不着；
+  手工拉起一个不带哨兵的 uvicorn 就够得着。回滚脚本会放哨兵，手起的进程不会。
+  **不要为此去改 `backend/`**：那棵树是冻结的回滚目标，给它加准入是没人要的行为变更。
+  没有 golden 钉住这道门（假七牛那套录的是 `register` 的成功、对象不存在、对端不响应三条），
+  钉住它的是 `src/repo/repo_fm.dawn` 里那两条单测。
+
+- **缺查询参数 `path` 时的状态码。** `GET /api/fm/{sign,content,preview,download}` 完全不带
+  `path` 时，Dawn 的 `qparam()` 把缺失参数取成空串、落到「文件不存在」的 404；FastAPI 把它声明成
+  必填 `Query(...)`，在进 handler 之前就 422。两边都是拒绝、都不改任何东西，前端只认状态码。
+  用例上的注释在 `scripts/contract_edge.py`。
+
+- **未鉴权时 `detail` 的文案。** Dawn 的每一个 401 都是 `{"detail": "无效或过期的凭证"}`。FastAPI
+  在**完全没有 Authorization 头**时由 `OAuth2PasswordBearer` 自己答掉，文案是 `Not authenticated`；
+  头在但无效，才走到 `backend/app/deps.py` 里同样那句中文。状态码两边都是 401。
+
+- **路径参数不是整数时的 422 文案。** 查询参数那批（`page`/`size` 的类型与范围）Dawn 逐字复刻了
+  pydantic 的英文句子，两边一致；路径参数不是这样：`GET /api/pages/admin/abc` 在 Dawn 是
+  `page_id must be an integer`，FastAPI 会是 `page_id：Input should be a valid integer, ...`。
+  状态码都是 422。
+
+- **`fm_split` 的寻址是无损的。** Dawn 的 `full` 与 `fm_split` 互为逆，`"a.txt "` 与 `"a.txt"` 是
+  两个地址，指不到行就 404；FastAPI 冻结的 `_split` 末尾仍是 `.strip()`，两个拼写会塌到同一行，
+  这正是「删 a.txt 删掉了 a.txt」的来源。理由写在 `src/util/paths.dawn`。
+
+- **`QINIU_TOKEN_EXPIRES` 的边界只有 Dawn 有**，见上面「关键环境变量」。FastAPI 那边只有 pydantic
+  的类型检查，`0`、负数、`36000000` 它都收下。两套读同一份 .env，所以回滚会把一个让 Dawn 拒绝启动
+  的值变成一台跑着的服务器。
 
 ## 模块地图
 
