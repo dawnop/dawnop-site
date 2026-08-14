@@ -5,6 +5,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.core.crud import drop_null_created_at, get_or_404
@@ -92,9 +93,13 @@ def reorder(
             seen.add(pid)
             ordered_ids.append(pid)
     for order, pid in enumerate(ordered_ids):
-        page = db.get(Page, pid)
-        if page is not None:
-            page.nav_order = order
+        # 重排导航不是对页面的编辑，故显式自赋值 updated_at 压住 onupdate（它对本表的
+        # 任何 UPDATE 都生效）。对齐 Dawn 侧 repo_pagetag.reorder_pages。
+        db.execute(
+            update(Page)
+            .where(Page.id == pid)
+            .values(nav_order=order, updated_at=Page.updated_at)
+        )
     db.commit()
     return db.query(Page).order_by(Page.nav_order, Page.id).all()
 
@@ -135,8 +140,11 @@ def delete_page(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "内置页面不可删除，可在导航中隐藏"
         )
-    # 解除文章对本页的归属
-    db.query(Article).filter(Article.page_id == page.id).update({Article.page_id: None})
+    # 解除文章对本页的归属。这是删页面顺带引起的，不是对文章的编辑，故显式自赋值
+    # updated_at 压住 onupdate。对齐 Dawn 侧 repo_pagetag.delete_page。
+    db.query(Article).filter(Article.page_id == page.id).update(
+        {Article.page_id: None, Article.updated_at: Article.updated_at}
+    )
     db.delete(page)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

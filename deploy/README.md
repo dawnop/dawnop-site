@@ -434,8 +434,9 @@ journalctl -u dawnop-backup -n 20 --no-pager
 # 下次触发时间
 systemctl list-timers dawnop-backup.timer
 
-# 产物自己校验自己
-cd /opt/dawnop/backups && sudo -u dawnop sha256sum -c ./*.sha256
+# 产物自己校验自己。整条都要在 dawnop 身份里跑：目录是 700 dawnop，
+# 你自己的账号连 cd 进去都不行，`cd` 写在 sudo 外面这条命令就废了
+sudo -u dawnop sh -c 'cd /opt/dawnop/backups && sha256sum -c ./*.sha256'
 ```
 
 ### 恢复
