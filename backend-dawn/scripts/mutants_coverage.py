@@ -14,6 +14,13 @@ the harness's own matrix.txt — the same file its runner iterates. A missing
 shard, a wrong `--shard I/N`, a matrix entry nobody picked up, or a shard that
 ran a mutant twice all show up here as a named difference.
 
+The set of harnesses is asked of the tree too, not inferred from which coverage
+files turned up. Inferring it was the same bug one level up: a harness dropped
+from ci.yml's `mutants` matrix contributes no coverage file, so it was absent
+from the reassembly and nothing missed it — the run went green with six
+harnesses and reported "every harness covered". Every scripts/<harness>/
+directory holding a matrix.txt is expected to report, by name.
+
 Usage:
     mutants_coverage.py --coverage-dir DIR [--root BACKEND_DAWN]
     mutants_coverage.py --self-test
@@ -21,6 +28,7 @@ Usage:
 
 import argparse
 import pathlib
+import tempfile
 from collections import defaultdict
 
 
@@ -72,6 +80,57 @@ def expected_mutants(root, harness):
     return names
 
 
+def expected_harnesses(root):
+    """Which harnesses are supposed to report, asked of the tree.
+
+    Membership is "the directory has a matrix.txt", and nothing else. A
+    matrix.txt *is* a list of mutants somebody promised to run; if one exists
+    and no shard reports against it, that is the failure this file is for.
+    scripts/golden/ and scripts/__pycache__/ have none and so are not harnesses.
+
+    Deliberately not derived from ci.yml's `mutants` matrix, though that is the
+    list that actually dispatches the jobs: checking ci.yml against ci.yml
+    cannot notice a harness missing from ci.yml. The tree is the independent
+    witness, so a row deleted there surfaces here as a named absence.
+
+    run.sh is *not* part of the test for membership, on purpose. Requiring both
+    files would mean deleting run.sh quietly shrinks the expected set — the
+    exact move being defended against. A harness that has a matrix.txt and no
+    runner stays expected and is reported as broken (see run()).
+    """
+    scripts = root / "scripts"
+    names = sorted(matrix.parent.name for matrix in scripts.glob("*/matrix.txt"))
+    if not names:
+        raise SystemExit(
+            f"no scripts/*/matrix.txt under {scripts}; refusing to conclude "
+            "anything about coverage from a tree with no harnesses in it"
+        )
+    return names
+
+
+def check_harness_set(expected, reported):
+    """Return the problems with *which* harnesses reported, before what they ran.
+
+    Kept separate from check() because check() only ever sees a harness that
+    turned up. This is the half that can see one that did not.
+    """
+    problems = []
+
+    missing = sorted(set(expected) - set(reported))
+    if missing:
+        problems.append(
+            f"no shard reported any coverage for harness(es): {missing} — "
+            "each has a matrix.txt, so each is expected in ci.yml's mutants matrix"
+        )
+    unknown = sorted(set(reported) - set(expected))
+    if unknown:
+        problems.append(
+            f"coverage from harness(es) with no matrix.txt in the tree: {unknown}"
+        )
+
+    return problems
+
+
 def check(harness, shards, expected):
     """Return the problems with one harness's reassembled coverage."""
     problems = []
@@ -110,6 +169,11 @@ def check(harness, shards, expected):
 
 
 def run(coverage_dir, root):
+    harnesses = expected_harnesses(root)
+    print(
+        f"      expecting {len(harnesses)} harness(es) from {root / 'scripts'}: {harnesses}"
+    )
+
     files = sorted(coverage_dir.rglob("*.coverage"))
     if not files:
         raise SystemExit(
@@ -123,9 +187,18 @@ def run(coverage_dir, root):
         by_harness[harness].append((index, total, ran))
 
     failed = False
-    for harness in sorted(by_harness):
+    for problem in check_harness_set(harnesses, by_harness):
+        failed = True
+        print(f"FAIL  {problem}")
+
+    for harness in harnesses:
+        if harness not in by_harness:
+            continue  # already named by check_harness_set
+        problems = []
+        if not (root / "scripts" / harness / "run.sh").is_file():
+            problems.append("has a matrix.txt but no run.sh, so no CI job can run it")
         expected = expected_mutants(root, harness)
-        problems = check(harness, by_harness[harness], expected)
+        problems += check(harness, by_harness[harness], expected)
         if problems:
             failed = True
             for problem in problems:
@@ -138,7 +211,7 @@ def run(coverage_dir, root):
             )
     if failed:
         raise SystemExit(1)
-    print(f"PASS  every mutation harness fully covered ({len(by_harness)} harness(es))")
+    print(f"PASS  every mutation harness fully covered ({len(harnesses)} harness(es))")
 
 
 def self_test():
@@ -190,6 +263,25 @@ def self_test():
         ),
     ]
 
+    # The other half: which harnesses reported at all. check() cannot see a
+    # harness that contributed nothing, because it is only ever called with one
+    # that did — so before this block the "six harnesses instead of seven" case
+    # had no test, and the job that runs this self-test claimed otherwise.
+    seven = [f"h{i}" for i in range(7)]
+
+    set_cases = [
+        ("every harness reported", seven, list(seven), 0),
+        ("a harness dropped from ci.yml's matrix", seven, seven[:-1], 1),
+        ("only one harness's jobs ran at all", seven, seven[:1], 1),
+        ("coverage from a harness with no matrix.txt", seven, seven + ["ghost"], 1),
+        (
+            "a harness swapped for one the tree does not know",
+            seven,
+            seven[:-1] + ["x"],
+            2,
+        ),
+    ]
+
     bad = 0
     for name, shards, expected, want in cases:
         problems = check("demo", shards, expected)
@@ -201,9 +293,46 @@ def self_test():
                 print(f"          {problem}")
         else:
             print(f"PASS  self-test: {name}")
+
+    for name, expected, reported, want in set_cases:
+        problems = check_harness_set(expected, reported)
+        got = len(problems)
+        if got != want:
+            bad += 1
+            print(f"FAIL  self-test {name!r}: expected {want} problem(s), got {got}")
+            for problem in problems:
+                print(f"          {problem}")
+        else:
+            print(f"PASS  self-test: {name}")
+
+    # And the derivation feeding it, since "expected" is only trustworthy if the
+    # glob finds harnesses and skips the directories that merely sit next to
+    # them (golden/, __pycache__/). Built in a temp tree: a self-test that reads
+    # the real checkout would pass for as long as the checkout happens to agree.
+    with tempfile.TemporaryDirectory() as tmp:
+        scripts = pathlib.Path(tmp) / "scripts"
+        for name in ("alpha-mutants", "beta-mutants"):
+            (scripts / name).mkdir(parents=True)
+            (scripts / name / "matrix.txt").write_text("m1\n", encoding="utf-8")
+        (scripts / "alpha-mutants" / "run.sh").write_text(
+            "#!/bin/sh\n", encoding="utf-8"
+        )
+        (scripts / "golden").mkdir()
+        (scripts / "golden" / "read.json").write_text("{}\n", encoding="utf-8")
+        (scripts / "__pycache__").mkdir()
+
+        got = expected_harnesses(pathlib.Path(tmp))
+        want_names = ["alpha-mutants", "beta-mutants"]
+        if got != want_names:
+            bad += 1
+            print(f"FAIL  self-test 'harnesses derived from the tree': {got}")
+        else:
+            print("PASS  self-test: harnesses derived from the tree, not from reports")
+
+    total = len(cases) + len(set_cases) + 1
     if bad:
         raise SystemExit(1)
-    print(f"PASS  coverage checker self-test ({len(cases)} cases)")
+    print(f"PASS  coverage checker self-test ({total} cases)")
 
 
 def main():

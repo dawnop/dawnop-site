@@ -150,7 +150,7 @@ jobs:
 
       # The contract scripts (read / edge / WebDAV) were written during M6 to
       # diff Dawn against FastAPI request by request. That needed both backends
-      # up at once, so CI never ran them. The current four goldens hold 292 wire
+      # up at once, so CI never ran them. The current four goldens hold 312 wire
       # shapes, all exercised against a freshly seeded fixture on every run.
       # They are golden-based now: contract_run.py seeds a pinned SQLite fixture
       # (contract_fixture.py), boots the jar this job just built on 127.0.0.1,
@@ -294,6 +294,13 @@ jobs:
   # matrix.txt, so a dropped shard, a miscounted `--shard I/N`, or a matrix row
   # nobody picked up is a named failure rather than a quietly smaller gate.
   #
+  # The harness list above is still hand-written — the one shape the shellcheck
+  # step above already learned to stop trusting. Deleting a row here is not
+  # caught here; it is caught by the checker, which derives the harnesses it
+  # expects from scripts/*/matrix.txt and fails by name when one of them
+  # reported nothing. That is why the expected set is read from the tree and not
+  # from this file: a list checked against itself cannot notice its own gap.
+  #
   # `if: always()` so it still reports when a shard failed: a red mutant and a
   # missing mutant are different news and both are worth having.
   mutants-complete:
@@ -304,10 +311,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Before trusting the checker's verdict, make it fail on the seven shapes
-      # it exists to catch. A coverage checker that returns "all good" for every
+      # Before trusting the checker's verdict, make it fail on the shapes it
+      # exists to catch. A coverage checker that returns "all good" for every
       # input is the same green as a real one, and it is the last thing standing
       # between a dropped shard and a silently smaller gate.
+      #
+      # Covers both halves: what a harness ran (check) and which harnesses
+      # reported at all (check_harness_set). The second half had no case here
+      # while the checker built its harness set from whatever coverage arrived,
+      # so this step vouched for a checker that could not see a whole harness
+      # go missing — the largest instance of the failure it is named for.
       - name: the coverage checker still catches gaps
         run: python3 backend-dawn/scripts/mutants_coverage.py --self-test
 
