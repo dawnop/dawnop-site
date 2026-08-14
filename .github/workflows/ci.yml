@@ -90,6 +90,7 @@ jobs:
           shellcheck -x backend-dawn/deploy/*.sh backend-dawn/build.sh
           backend-dawn/scripts/mutant-shard.sh
           backend-dawn/scripts/*/run.sh scripts/fetch-dawn.sh
+          deploy/*.sh
 
   backend:
     runs-on: ubuntu-latest
