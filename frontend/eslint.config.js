@@ -50,8 +50,12 @@ export default [
   },
 
   {
-    // Build/tooling files run in node, not the browser.
-    files: ['vite.config.js', 'eslint.config.js', 'scripts/**/*.js'],
+    // Build/tooling files run in node, not the browser. The .mjs is load-bearing:
+    // scripts/ holds exactly one node script and it is gen-viz-seed.mjs, so a
+    // `scripts/**/*.js` glob matches nothing and the override silently does not
+    // apply. It uses only `node:` imports today, so nothing is red — but the
+    // first `process.env` in there would be reported as an undefined global.
+    files: ['vite.config.js', 'eslint.config.js', 'scripts/**/*.{js,mjs}'],
     languageOptions: { globals: { ...globals.node } },
   },
 
@@ -59,7 +63,9 @@ export default [
     // viz components are single-purpose demos the author names freely
     // ("coalescing"); the multi-word convention exists to avoid clashing with
     // HTML elements, which these never do — they are mounted by the viz runtime.
-    files: ['scripts/viz-seed/**/*.vue', 'src/viz/**/*.vue'],
+    // Only the seed .vue files on disk need this: the ones authored in the admin
+    // UI are compiled from a string in src/viz/, never linted as files.
+    files: ['scripts/viz-seed/**/*.vue'],
     rules: { 'vue/multi-word-component-names': 'off' },
   },
 ]

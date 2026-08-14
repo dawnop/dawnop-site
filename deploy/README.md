@@ -487,5 +487,3 @@ curl -s http://127.0.0.1:8001/api/health
   用 `backend/scripts/sweep_qiniu_orphans.py` 清。
 - **没有恢复演练。** 上面那套恢复步骤是写出来的，没在生产上走过一遍。
   第一次跑它的时候就是出事的时候，这一点和回滚脚本一样（见「四、回滚安全链」）。
-- **两个 unit 文件本身没有自动化判词覆盖。** `scripts/check_server_drift.py` 只盯
-  `dawnop-backend` 和 `dawnop-dawn` 两个单元，`dawnop-backup` 还没登记进去。

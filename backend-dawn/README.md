@@ -7,7 +7,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 与 `POST /api/fm/upload`（multipart 代理上传，`src/util/multipart.dawn`）**也已落地**。
 
 契约由 `scripts/golden/*.json` 钉住（`scripts/contract_run.py`，CI 每次 push 都跑）：
-播种固定 fixture → 起后端 → 300 条响应比对（read 48 / edge 85 / webdav 103 / qiniu 64）。
+播种固定 fixture → 起后端 → 312 条响应比对（read 48 / edge 95 / webdav 103 / qiniu 66）。
 
 **比的是什么，别当成「逐字节」**——三种粒度，各自的理由写在 `contract_golden.py` 与
 `contract_webdav.py` 的注释里：
@@ -27,7 +27,10 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 把子目录 COPY、PUT→GET 字节往返、覆盖写换 key、register 的 stat 校验这些必须有对象存储才走得到
 的路径也钉住；假桶会重算每个 HMAC 签名，并校验上传凭证 putPolicy 的 `deadline` 仍在有效期内且
 不超过一天，所以「签出来的凭证真能用」是花掉它换来的结论，不是看它长得对。
-剩下的具名 skip 只有一件事——桶用量统计（`fm.stats`，走七牛计费/空间 API，假桶不模拟）。
+剩下的具名 skip 是两类共 7 条（`golden/*.json` 的 `skipped` 里逐条列着理由）：桶用量统计
+3 条（read/edge/qiniu 各一，走七牛计费/空间 API，假桶不模拟），以及 `webdav` 那套里搬字节的
+4 条（`get.file`/`put.new`/`copy.file`/`delete.file`）——它跑在没有凭据的后端上，同样的路径
+由 `contract_qiniu.py` 在假桶上钉住，所以是移交而不是漏掉。
 
 ## 依赖与构建
 
@@ -40,8 +43,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   **jar 与 `lib/` 都是构建产物，不入库**——jar 曾经入库，结果是它悄悄落后于 `src/`（要靠手动
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
-- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、162 个本仓单测，连 web/json/sha2 三个包
-  共 230 个；`use java` import 共 61 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
+- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、202 个本仓单测，连 web/json/sha2 三个包
+  共 270 个；`use java` import 共 63 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
   libsimple / 网络，CI 每次 push 都跑）。用到 SQLite 的几个跑内存库（`jdbc:sqlite::memory:`），
   自带建表，不碰 fixture。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
@@ -87,9 +90,16 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   按位置读更短也不易错，**故意保留**，不是漏迁。
 - `util/ferr.dawn` — `ForeignError` → 旧版 `Throwable.toString()` 文本（`fe_text`）：v0.33.0+ 的
   `catch_fault`/`cast` 返回结构化 `ForeignError`，各屏障模块经它转回 `Result[T, String]`，错误文案与升级前逐字节一致。
+- `util/errkind.dawn` — 一条 `Result[T, String]` 的失败到底该出什么状态码：`Kind` ADT
+  （`KPlain`/`KConflict`/`KPrecondition`/`KInvalid`/`KUpstream`/`KTimeout` → 沿用调用点默认 / 409 / 412 /
+  400 / 502 / 504）。生产者用 `conflict/precondition/invalid/upstream/timeout` 打标，API 边缘用
+  `split_kind` 拆开。标签走 `U+0001` 前缀而不是另开一个类型：这样**线上的文案与生产者写的逐字节一致**，
+  迁过来时没有一个端点要改措辞。从前是在 API 层匹配中文子串（「已存在」「所属页面」「七牛」）反推，
+  那是一份没人声明的跨层契约，改一句话就悄悄改了状态码——并且已经错过一次（`qiniu/rs` 写的是
+  `qiniu` 不是「七牛」，于是被对象存储拒掉的 WebDAV COPY 回 500，而 FastAPI 参照回 502）。
 - `db/db.dawn` — 每请求一连接（`with_db`）：WAL + `load_extension(libsimple)`。
 - `util/crypto.dawn` — sha256 / hmac-sha1 / hmac-sha256 / base64url / uuid（auth、七牛、JWT、腾讯共用）。
-- `util/http.dawn` — java.net.http 出站客户端：`fetch/post/post_form` + `fetch_bytes`（二进制体，G6）；
+- `util/http.dawn` — java.net.http 出站客户端：`fetch/post` + `fetch_bytes`（二进制体，G6）；
   **每个出站请求都带单请求超时**。`request_for` 是全模块唯一装配请求的地方，也是唯一一处 `.timeout(`，
   新加的 body handler 想漏掉超时都没有位置。分两档：管理类调用 `MANAGEMENT_TIMEOUT_S` = 10s
   （七牛 rs stat/delete/copy、用量与 CDN、腾讯云、vault 探活），搬字节的调用
@@ -148,7 +158,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `svc/search.dawn` — FTS5 排序委托同一 SQL bm25，仅高亮在 Dawn 侧重写。
 
 **文件管理（刀 11）**
-- `api/api_fm.dawn` — 17 端点（除 `upload`）：列目录 / 预览 / 下载（302）/ 内容代理（二进制）/ stats / search / CRUD / save / register / upload-token。
+- `api/api_fm.dawn` — 共 17 个端点，`upload` 之外的 16 个是：列目录 / sign / 预览 / 下载（302）/
+  内容代理（二进制）/ stats / search / CRUD / save / create-file / register / upload-token。
   只剩路由与线格式，树操作在 `svc/files.dawn`。
 - **写入的每一段名称必须等于自己的 `str.trim`，且不能是 `.` 或 `..`**（`util/paths.dawn` 的
   `require_admissible_names`）。
@@ -216,6 +227,9 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `qiniu/sign.dawn` — 三类七牛签名：上传凭证、私有下载 URL、QBox 管理、QiniuMacAuth（统计/CDN/账单，含 body）。
 - `qiniu/rs.dawn` — 管理 REST：stat/delete/copy/upload_text/upload_bytes/upload_file。
 - `util/paths.dawn` / `repo/repo_fm.dawn` — 路径原语 / 虚拟树（path↔key，DirEntry 序列化）。
+- `util/multipart.dawn` — 入站 `multipart/form-data` 解析，只服务 `POST /api/fm/upload`（代理上传）。
+  结构在**字节层**定位（`byte_index_of`/`byte_slice`），每个 part 的正文原样留作 `Bytes`，
+  只有 ASCII 头块解成字符串取字段：文件字节不经过一次 String 往返，二进制上传才不会被改写。
 
 **监控（刀 12）**
 - `api/api_monitor.dawn` — `/api/monitor`，120s TTL + `?refresh`，配额从 settings 表实时注入。

@@ -205,6 +205,12 @@ fn validate_ancestor_loop(c: DbConn, ancestors: List[String], policy: AncestorPo
 ## Backfill ancestor directory rows for `rel` (not rel itself), idempotently.
 ## Validation and insertion share one transaction so a late conflict cannot
 ## leave a partial prefix behind.
+##
+## Not called in production, and deliberately kept: three fail-open mutants in
+## scripts/fm-ancestor-contract/mutate.py are built by *inserting* calls to it
+## (backfill where the live code refuses), so deleting it stops those mutants
+## compiling and the harness loses three of its red set. A dead-code sweep that
+## finds it again should read that file before reaching for the delete key.
 pub fn ensure_dirs(c: DbConn, rel: String) -> Result[Int, String] !io =
   with_immediate_tx(c, () => ensure_dirs_tx(c, rel))
 
@@ -442,9 +448,6 @@ pub fn key_pending(c: DbConn, key: String) -> Result[Bool, String] !io = {
   let rows = query(c, "select count(*) from pending_uploads where key = ?", [PStr(key)], [ColInt])?
   Ok(first_bool_or(rows, false))
 }
-
-pub fn ledger_delete(c: DbConn, key: String) -> Result[Int, String] !io =
-  exec(c, "delete from pending_uploads where key = ?", [PStr(key)])
 
 pub fn validate_register_preflight(c: DbConn, rel: String, key: String) -> Result[Unit, String] !io = {
   let pending = pending_upload_matches(c, key, full(rel))?

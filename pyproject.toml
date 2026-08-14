@@ -1,4 +1,6 @@
-# Ruff config for every .py in the repo (backend/, backend-dawn/scripts/, deploy/).
+# Ruff config for every .py in the repo — backend/, backend-dawn/scripts/,
+# deploy/ and the root scripts/. Run it from the repo root, which is what CI
+# does; running it inside backend/ silently checks a quarter of the tree.
 # There is no Python package to build here — this file exists for tool config only.
 
 [tool.ruff]

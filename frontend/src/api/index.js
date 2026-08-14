@@ -13,9 +13,6 @@ export const authApi = {
     form.append('password', password)
     return client.post('/auth/login', form)
   },
-  me() {
-    return client.get('/auth/me')
-  },
 }
 
 // ---- 文章 ----
@@ -136,9 +133,8 @@ export const vizApi = {
   getForEdit(id) {
     return client.get(`/viz/admin/${id}`)
   },
-  get(slug) {
-    return client.get(`/viz/${slug}`)
-  },
+  // 公开读没有对应方法：文章里的 viz island 由 viz/registry.js 用裸 fetch 取，
+  // 为的是避开 axios 的全局错误 toast（拼错 id 不该弹全局错误），理由写在那儿。
   create(data) {
     return client.post('/viz', data)
   },

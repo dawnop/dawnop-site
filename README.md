@@ -35,7 +35,9 @@ backend/        FastAPI 实现：回滚目标 + 契约参照
 frontend/       Vue 3 + Vite
 deploy/         nginx / systemd / 证书 / vaultwarden
 docs/           设计文档、文章、viz 组件
-scripts/        fetch-dawn.sh（按 .dawn-version 解析工具链）
+scripts/        工具链解析（fetch-dawn.sh）+ 四个门禁：服务器身份 / Claude 署名 / 服务器
+                配置漂移 / 前端文件名判词，前两个另接在 git hook 上；两个负控脚本
+                （改坏生产文件验证门禁真能转红，不进 CI）
 .dawn-version   钉住的 Dawn 编译器版本（单一事实源，CI 与本地共用）
 .dawn-version.sha256  每个 tag 的编译器 jar sha256（升钉时同批更新）
 ```
@@ -85,6 +87,9 @@ npm run format        # prettier
 ### 质量检查（CI 跑的就是这些）
 
 ```bash
+cd "$(git rev-parse --show-toplevel)"   # ★ 必须在仓库根跑：根 pyproject.toml 管着
+                                        #   backend/、backend-dawn/scripts/、deploy/、scripts/，
+                                        #   在 backend/ 里跑会漏掉后三个，而 CI 跑的是根
 ruff check . && ruff format --check .   # Python，配置见 pyproject.toml，target 钉 3.10
 cd frontend && npm run lint && npm run format:check
 ```
