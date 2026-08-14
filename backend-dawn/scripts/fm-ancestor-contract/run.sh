@@ -18,14 +18,19 @@ EXPECTED_CONTRACT_TOTAL=51
 DAWN="${DAWN_BIN:-}"
 preflight_only=false
 
+# shellcheck source=backend-dawn/scripts/mutant-shard.sh
+source "$BACKEND/scripts/mutant-shard.sh"
+shard_parse "$@"
+set -- "${shard_rest[@]+"${shard_rest[@]}"}"
 if [[ ${1:-} == --preflight-only ]]; then
   preflight_only=true
   shift
 fi
 if [[ $# -ne 0 ]]; then
-  printf 'usage: %s [--preflight-only]\n' "$0" >&2
+  printf 'usage: %s [--preflight-only] [--shard I/N]\n' "$0" >&2
   exit 2
 fi
+shard_begin fm-ancestor-contract
 
 if [[ -z "$DAWN" ]]; then
   DAWN="$("$ROOT/scripts/fetch-dawn.sh")"
@@ -335,9 +340,11 @@ if [[ "$preflight_only" == true ]]; then
 fi
 
 for index in "${!mutants[@]}"; do
+  if shard_skips "$index"; then continue; fi
   mutant="${mutants[$index]}"
   role="${roles[$index]}"
   owner="${owners[$index]}"
+  shard_record "$mutant"
   project="$work/$mutant/backend-dawn"
   mkdir -p "$project"
   cp "$BACKEND/dawn.toml" "$BACKEND/dawn.lock" "$project/"
@@ -439,4 +446,6 @@ for index in "${!mutants[@]}"; do
 done
 
 elapsed=$(( $(date +%s) - started ))
-printf 'PASS  FM ancestor mutation matrix: %s mutants in %ss\n' "${#mutants[@]}" "$elapsed"
+printf 'PASS  FM ancestor mutation matrix: %s of %s mutants in %ss\n' \
+  "$shard_ran" "${#mutants[@]}" "$elapsed"
+shard_report "${#mutants[@]}"

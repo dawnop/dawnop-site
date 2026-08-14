@@ -19,6 +19,15 @@ MUTATOR="$HERE/mutate.py"
 MATRIX="$HERE/matrix.txt"
 DAWN="${DAWN_BIN:-}"
 
+# shellcheck source=backend-dawn/scripts/mutant-shard.sh
+source "$BACKEND/scripts/mutant-shard.sh"
+shard_parse "$@"
+if [[ ${#shard_rest[@]} -ne 0 ]]; then
+  printf 'usage: %s [--shard I/N]\n' "$0" >&2
+  exit 2
+fi
+shard_begin http-timeout-mutants
+
 # Generous next to a ~40s suite, but finite: this is the wedge guard.
 STEP_TIMEOUT="${STEP_TIMEOUT:-600}"
 
@@ -80,7 +89,9 @@ if [[ "${mutants[*]}" != "${expected_mutants[*]}" ]]; then
 fi
 
 for index in "${!mutants[@]}"; do
+  if shard_skips "$index"; then continue; fi
   mutant="${mutants[$index]}"
+  shard_record "$mutant"
   owners="${owner_sets[$index]}"
   project="$work/$mutant/backend-dawn"
   mkdir -p "$project"
@@ -121,3 +132,5 @@ for index in "${!mutants[@]}"; do
   red_count="$(printf '%s\n' "$actual" | grep -c .)"
   printf 'PASS  %s turns red exactly its %s owner(s)\n' "$mutant" "$red_count"
 done
+
+shard_report "${#mutants[@]}"

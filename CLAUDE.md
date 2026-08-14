@@ -299,15 +299,31 @@ python3 backend-dawn/scripts/contract_run.py --only read
 # 环境指纹不同（qiniu_configured），互相录不进去。**密钥不进 CI**：假桶只在 127.0.0.1。
 # 仅剩的具名 skip 是桶用量统计（fm.stats，走计费/空间 API）。
 # 不再需要 FastAPI 陪跑（脚本仍可 --base 指向它，golden 就是契约）。
+
+# ---- 变异体 harness（六个，CI 里分 16 个并行 job 跑）----
+backend-dawn/scripts/fm-ancestor-contract/run.sh              # 全量，本地约 70 分钟
+backend-dawn/scripts/fm-ancestor-contract/run.sh --shard 0/9  # CI 跑的那一片，约 10 分钟
+backend-dawn/scripts/fm-ancestor-contract/run.sh --preflight-only  # 只验锚点，约 1 分钟
+# 全量 = 不带 --shard。分片按 index 取模，所以 0/9..8/9 恰好是一次全量的划分。
+# MUTANT_COVERAGE_OUT=<路径> 让本次运行记下真跑了哪些变异体；
+# mutants_coverage.py --coverage-dir <目录> 把各分片拼回去，与 matrix.txt 对账。
+python3 backend-dawn/scripts/mutants_coverage.py --self-test
 ```
 
 ## 10. 工程约定（机器强制的部分）
 
 规范尽量落在 CI 与配置里，而不是文档里——文档会过期，CI 不会。
 
-- **CI**（`.github/workflows/ci.yml`，push main + PR 触发）：Dawn 后端测试 + 打 jar 传
-  artifact、FastAPI 测试（**钉 Python 3.10**，对齐生产）、前端 lint/format/build、
-  ruff check + format。任一红都别合。
+- **CI**（`.github/workflows/ci.yml`，push main + PR 触发）：`secrets`（三道守卫 + shellcheck）、
+  `backend`（Dawn 测试 + 打 jar 传 artifact + 四套 golden）、`mutants`（**16 个并行分片**，
+  跑六个变异体 harness 共 125 个变异体）、`mutants-complete`（断言各分片并集覆盖全矩阵）、
+  `python-backend`（**钉 Python 3.10**，对齐生产 + ruff）、`frontend`（lint/format/build）。
+  任一红都别合。
+  > **变异体矩阵是分片跑的，加变异体要顺手看一眼 job 数**。单个变异体约 52s（实测
+  > 2026-08-14：`dawn build` 5.9s 吃 236% CPU、`dawn test` 38.4s 只吃 41%），串行 125 个 =
+  > 108 分钟，曾把 `backend` job 顶到 62 分钟上限被取消。分片规格写在 ci.yml 的
+  > `mutants.strategy.matrix`，harness 侧的 `--shard I/N` 在 `backend-dawn/scripts/mutant-shard.sh`。
+  > 并发上限是 20 个 job，现在正好用满——再加分片不会失败，但会排队，也就不再省墙钟时间。
 - **本地 hook（每台开发机装一次）**：`git config core.hooksPath .githooks`（`.githooks/` 已入库）。
   三个 hook 都是把 CI 的红灯提前、省一次往返，临时跳过 `git commit/push --no-verify`：
   `pre-commit`（身份守卫，`--allow-offline` 容离线）、`commit-msg`（Claude 署名守卫）、`pre-push`（身份守卫，严格在线）。

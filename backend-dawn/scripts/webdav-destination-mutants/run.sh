@@ -9,6 +9,15 @@ MATRIX="$HERE/matrix.txt"
 MATRIX_CHECK="$HERE/matrix_check.py"
 DAWN="${DAWN_BIN:-}"
 
+# shellcheck source=backend-dawn/scripts/mutant-shard.sh
+source "$BACKEND/scripts/mutant-shard.sh"
+shard_parse "$@"
+if [[ ${#shard_rest[@]} -ne 0 ]]; then
+  printf 'usage: %s [--shard I/N]\n' "$0" >&2
+  exit 2
+fi
+shard_begin webdav-destination-mutants
+
 if [[ -z "$DAWN" ]]; then
   DAWN="$("$ROOT/scripts/fetch-dawn.sh")"
 fi
@@ -174,7 +183,9 @@ if printf '%s\n' "${roles[@]}" | grep -qx qiniu; then
 fi
 
 for index in "${!mutants[@]}"; do
+  if shard_skips "$index"; then continue; fi
   mutant="${mutants[$index]}"
+  shard_record "$mutant"
   role="${roles[$index]}"
   owner="${owners[$index]}"
   project="$work/$mutant/backend-dawn"
@@ -262,3 +273,5 @@ for index in "${!mutants[@]}"; do
   fi
   printf 'PASS  %s (%s) uniquely turns red: %s\n' "$mutant" "$role" "$owner"
 done
+
+shard_report "${#mutants[@]}"

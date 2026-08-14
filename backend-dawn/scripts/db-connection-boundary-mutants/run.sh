@@ -9,6 +9,15 @@ MATRIX="$HERE/matrix.txt"
 FFI_CHECK="$BACKEND/scripts/check-ffi-boundaries.py"
 DAWN="${DAWN_BIN:-}"
 
+# shellcheck source=backend-dawn/scripts/mutant-shard.sh
+source "$BACKEND/scripts/mutant-shard.sh"
+shard_parse "$@"
+if [[ ${#shard_rest[@]} -ne 0 ]]; then
+  printf 'usage: %s [--shard I/N]\n' "$0" >&2
+  exit 2
+fi
+shard_begin db-connection-boundary-mutants
+
 if [[ -z "$DAWN" ]]; then
   DAWN="$("$ROOT/scripts/fetch-dawn.sh")"
 fi
@@ -38,8 +47,10 @@ if [[ "${mutants[*]}" != "${expected_mutants[*]}" ]]; then
 fi
 
 for index in "${!mutants[@]}"; do
+  if shard_skips "$index"; then continue; fi
   mutant="${mutants[$index]}"
   owner="${owners[$index]}"
+  shard_record "$mutant"
   project="$work/$mutant/backend-dawn"
   mkdir -p "$project"
   cp "$BACKEND/dawn.toml" "$project/dawn.toml"
@@ -86,3 +97,5 @@ for index in "${!mutants[@]}"; do
   fi
   printf 'PASS  %s uniquely turns red: %s\n' "$mutant" "$owner"
 done
+
+shard_report "${#mutants[@]}"
