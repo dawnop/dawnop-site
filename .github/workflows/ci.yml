@@ -209,11 +209,13 @@ jobs:
   # account. Adding a shard past that does not fail, it queues — but it also
   # stops buying wall clock, so re-measure before growing this list.
   #
-  # updated-at-boundary-mutants is deliberately unsharded: its 11 mutants
-  # measured 8m47s locally on 2026-08-14, under the ~12 minutes the largest
-  # fm-ancestor shard is projected to take, so it does not extend the critical
-  # path. Splitting it would add a job that queues behind the ceiling and halve
-  # nine minutes that nobody is waiting on.
+  # updated-at-boundary-mutants is deliberately unsharded: its 13 mutants
+  # measured 10m24s locally on 2026-08-14 (11 measured 8m47s the same day,
+  # before #267 added two), under the ~12 minutes the largest fm-ancestor shard
+  # is projected to take, so it does not extend the critical path. Splitting it
+  # would add a job that queues behind the ceiling and halve ten minutes that
+  # nobody is waiting on. Growing it further does eventually cross that line —
+  # re-measure before adding more.
   #
   # fail-fast is off on purpose: one red harness should not cancel the others,
   # or a run tells you about the first failure only and hides the rest.

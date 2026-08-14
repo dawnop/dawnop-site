@@ -16,6 +16,14 @@ page-never-touches|api/api_pages :: PUT page: changing one field advances update
 viz-touch-unconditional|api/api_viz :: PUT viz: an empty body is not an edit,api/api_viz :: PUT viz: an explicit null is skipped so it is not an edit either,api/api_viz :: PUT viz: re-saving every field with the stored value is not an edit
 viz-never-touches|api/api_viz :: PUT viz: changing one field advances updated_at,api/api_viz :: PUT viz: each field on its own counts as an edit
 
+# ---- a move is not an edit (#267) ----
+# Both directions again. "Stamp the row it moves" is what both backends used to
+# do; "never stamp anything" is the way an over-eager fix breaks the file write
+# that shares this table, and only the second mutant separates a working guard
+# from a deleted one.
+move-stamps-now|repo/repo_fm :: FM move leaves every stamp in the moved subtree alone,repo/repo_fm :: FM rename rewrites path without advancing updated_at,repo/repo_fm :: WebDAV MOVE leaves every stamp in the moved subtree alone
+file-write-never-stamps|repo/repo_fm :: overwriting a file's bytes still advances updated_at
+
 # ---- what the signature is made of ----
 # Retagging is an edit to the article (the user pressed save), so dropping tags
 # from the signature must be caught; and the tag set is a set, so losing the

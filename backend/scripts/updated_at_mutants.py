@@ -11,12 +11,15 @@
 #266 又添了一条同族的：PUT 没真改动任何字段就别推进（三个资源都算），以及它的
 反面——改标签**要**推进，因为那是用户在编辑这篇文章，只不过落在关联表上。
 
+#267 是最后一处：改名 / 移动只改 path，整棵子树的 `updated_at` 都不推进
+（两个后端过去一致地在这里刷时间戳）；反面是写文件 / 覆盖上传**仍然**推进。
+
 这类判词平时永远绿，而永远绿的判词和根本没看的判词输出一样。这个脚本把每个 mutant
-打进**生产文件**，跑一遍下面三个测试文件，然后要求：
+打进**生产文件**，跑一遍下面四个测试文件，然后要求：
   1. 至少有一个测试红了，且
   2. 红的恰好是预期的那些（判词指着的是它声称守着的东西，不是被别的连坐）。
 
-三个文件一起跑：mutant 是跨文件的（删模型上的 onupdate 会打到另外两个文件里的
+四个文件一起跑：mutant 是跨文件的（删模型上的 onupdate 会打到另外几个文件里的
 判词），分开跑就看不见这种连坐。期望集写成 `文件名::函数名[参数]`——参数化的用例
 不带 `[参数]` 就分不出「哪个资源红了」，两边重名时也会糊在一起。
 
@@ -46,13 +49,16 @@ REPO = BACKEND.parent
 VC = "test_view_counter.py"
 PG = "test_page_updated_at.py"
 NP = "test_noop_put_updated_at.py"
-TEST_FILES = [f"tests/{VC}", f"tests/{PG}", f"tests/{NP}"]
+MV = "test_move_updated_at.py"
+TEST_FILES = [f"tests/{VC}", f"tests/{PG}", f"tests/{NP}", f"tests/{MV}"]
 
 ARTICLES_API = BACKEND / "app" / "api" / "articles.py"
 PAGES_API = BACKEND / "app" / "api" / "pages.py"
 VIZ_API = BACKEND / "app" / "api" / "viz.py"
+FM_TREE = BACKEND / "app" / "api" / "fm" / "tree.py"
 ARTICLE_MODEL = BACKEND / "app" / "models" / "article.py"
 PAGE_MODEL = BACKEND / "app" / "models" / "page.py"
+FILE_MODEL = BACKEND / "app" / "models" / "file_object.py"
 
 
 def sub(old: str, new: str) -> Callable[[str], str]:
@@ -127,6 +133,35 @@ PAGE_COMMIT = """    for key, value in data.items():
         setattr(page, key, value)
     db.commit()
 """
+
+# ---- 改名 / 移动（fm/tree.py）----
+
+FIXED_REPARENT = """    for o in _subtree(db, old_rel):
+        db.execute(
+            update(FileObject)
+            .where(FileObject.id == o.id)
+            .values(
+                path=new_rel + o.path[len(old_rel) :],
+                updated_at=FileObject.updated_at,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        db.expire(o)
+"""
+
+# #267 之前两个后端跑的就是这行
+BUGGY_REPARENT = """    for o in _subtree(db, old_rel):
+        o.path = new_rel + o.path[len(old_rel) :]
+"""
+
+# 「子树整棵都不推进」的五条判词
+MOVE_STAYS = {
+    f"{MV}::test_renaming_a_file_does_not_advance_its_updated_at",
+    f"{MV}::test_renaming_a_directory_leaves_every_descendant_alone",
+    f"{MV}::test_moving_a_directory_leaves_every_descendant_alone",
+    f"{MV}::test_moving_several_sources_in_one_request_leaves_them_all_alone",
+    f"{MV}::test_webdav_move_leaves_updated_at_alone",
+}
 
 
 def touch_before_commit(block: str, expr: str) -> str:
@@ -303,6 +338,47 @@ MUTANTS: list[tuple[str, str, Path, Callable[[str], str], set[str]]] = [
         {
             f"{NP}::test_resaving_the_same_values_is_not_an_edit[page]",
             f"{NP}::test_empty_body_is_not_an_edit[page]",
+        },
+    ),
+    # ---- #267：改名/移动不推进 / 真写文件仍推进 ----
+    (
+        "reparent-touches-updated-at",
+        "改名/移动改回 ORM 属性赋值（= #267 之前两个后端的行为），整棵子树被刷成此刻",
+        FM_TREE,
+        sub(FIXED_REPARENT, BUGGY_REPARENT),
+        # 「session 不留旧 path」那条不在这里红：ORM 属性赋值本来就顺手改了内存里
+        # 的对象，它守的是 Core update 才有的那个缺口
+        MOVE_STAYS,
+    ),
+    (
+        "reparent-drops-explicit-updated-at",
+        "改名/移动的 SET 子句里不再显式写 updated_at（onupdate 照样赢）",
+        FM_TREE,
+        sub("                updated_at=FileObject.updated_at,\n", ""),
+        MOVE_STAYS,
+    ),
+    (
+        "reparent-leaves-session-stale",
+        "Core update 之后不再 expire：库改了、session 里还留着旧 path",
+        FM_TREE,
+        sub("        db.expire(o)\n", ""),
+        {f"{MV}::test_reparent_leaves_no_stale_path_in_the_session"},
+    ),
+    (
+        "reparent-doesnt-reparent",
+        "path 压根不改（时间戳纹丝不动，但改名/移动没了）——判词不能只盯着时间戳",
+        FM_TREE,
+        sub("path=new_rel + o.path[len(old_rel) :],", "path=o.path,"),
+        MOVE_STAYS | {f"{MV}::test_reparent_leaves_no_stale_path_in_the_session"},
+    ),
+    (
+        "file-updated-at-onupdate-removed",
+        "把 FileObject 上的 onupdate 删掉——「移动不推进」也会绿，但那是拆表不是修",
+        FILE_MODEL,
+        sub(", onupdate=func.now()", ""),
+        {
+            f"{MV}::test_saving_text_still_advances_updated_at",
+            f"{MV}::test_overwriting_by_register_still_advances_updated_at",
         },
     ),
 ]

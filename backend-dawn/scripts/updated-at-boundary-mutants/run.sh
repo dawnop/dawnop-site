@@ -2,12 +2,14 @@
 set -euo pipefail
 
 # Negative control for the "updated_at only moves on a real edit" assertions
-# (#264, #266). Those assertions are green every single day, and a green that
-# has never been able to go red carries no information — the whole family sits
-# on three one-line guards that a refactor could delete without any other test
-# noticing. Each mutant below deletes or weakens one of them and must turn red
-# exactly the assertions that claim to own it: no fewer (the guard was
-# unguarded) and no more (the assertion is red for someone else's reason).
+# (#264, #266, #267). Those assertions are green every single day, and a green
+# that has never been able to go red carries no information — the whole family
+# sits on a handful of one-line guards (three touch-if-changed conditions, plus
+# the SET clause of the reparent that must *not* stamp) that a refactor could
+# delete without any other test noticing. Each mutant below deletes or weakens
+# one of them and must turn red exactly the assertions that claim to own it: no
+# fewer (the guard was unguarded) and no more (the assertion is red for someone
+# else's reason).
 #
 # Usage:
 #   run.sh                       # the whole matrix

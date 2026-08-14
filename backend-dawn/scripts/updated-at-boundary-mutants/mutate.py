@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Apply one compiling updated_at boundary mutant in place.
 
-The contract under test (#264, #266): only an explicit edit to a row advances
-its `updated_at`. A PUT that rewrites every field with the value already stored
-changed nothing and must leave the stamp alone; changing any one of them — tags
-included, they are that article's tags — must advance it.
+The contract under test (#264, #266, #267): only an explicit edit to a row
+advances its `updated_at`. A PUT that rewrites every field with the value
+already stored changed nothing and must leave the stamp alone; changing any one
+of them — tags included, they are that article's tags — must advance it. A
+rename or a move rewrites `path` and nothing else, so it leaves every stamp in
+the subtree alone; writing a file's bytes still advances it.
 
 Each mutant is a plausible way to get that wrong, and each must still compile:
 a mutant that fails to build tests the compiler, not the assertions.
@@ -24,6 +26,14 @@ ARTICLE_TAG_FOLD = """  let tags = article_tag_sig(c, id)?
 ARTICLE_COLS = '["title", "slug", "summary", "content", "published", "auto_title", "page_id", "created_at"]'
 
 TAG_ORDERED = "select tag_id from article_tags where article_id = ? order by tag_id"
+
+REPARENT = '"update files set path = ? where path = ?"'
+
+# The upsert behind every file write (proxy upload, /register, WebDAV PUT, text
+# save). Its stamp is the one a move must *not* imitate.
+FILE_UPSERT_STAMP = (
+    ", size = excluded.size, updated_at = datetime('now') where files.is_dir = 0"
+)
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
@@ -81,6 +91,17 @@ MUTANTS = {
         "src/repo/repo_write.dawn",
         ARTICLE_COLS,
         ARTICLE_COLS.replace('"created_at"]', '"created_at", "views"]'),
+    ),
+    # ---- a move is not an edit, both directions ----
+    "move-stamps-now": (
+        "src/repo/repo_fm.dawn",
+        REPARENT,
+        "\"update files set path = ?, updated_at = datetime('now') where path = ?\"",
+    ),
+    "file-write-never-stamps": (
+        "src/repo/repo_fm.dawn",
+        FILE_UPSERT_STAMP,
+        ", size = excluded.size where files.is_dir = 0",
     ),
     # ---- how a signature is spelled ----
     "row-sig-drops-separator": (
