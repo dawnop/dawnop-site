@@ -50,12 +50,20 @@ BACKUP=""
 FASTAPI_UNIT="dawnop-backend"
 FASTAPI_BASE="http://127.0.0.1:8000"
 FASTAPI_WORKDIR="/opt/dawnop/backend"
-FASTAPI_USER="dawn"
-FASTAPI_GROUP="dawn"
+FASTAPI_USER="dawnop"
+FASTAPI_GROUP="dawnop"
 # /proc/PID/exe 解析后要落在这里。venv 的 python3 本身是个符号链接，所以两边都 readlink -f
 # 之后再比：比的是「跑的是不是同一个二进制」，不是「路径字符串长得像不像」。
 FASTAPI_PINNED_INTERPRETER="/opt/dawnop/backend/.venv/bin/python3"
-FASTAPI_ARGV="/opt/dawnop/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000"
+# **不是**单元的 ExecStart=，是它前面再加一个解释器。ExecStart= 指向的 uvicorn 是个
+# console script，头一行写着 `#!/opt/dawnop/backend/.venv/bin/python3`，内核 exec 时会把
+# 解释器插到 argv[0]，于是 /proc/PID/cmdline 永远比 ExecStart= 多一个 token。
+# 照 ExecStart= 抄下来的常量因此在**任何**机器上都匹配不上——2026-08-14 的演练里，
+# 这一条让回滚停在第 3 步，而在那之前它从没对着一个真进程跑过。
+# Dawn 侧的 DAWN_ARGV 一直是对的，因为它的 ExecStart= 本来就以 /usr/bin/java 开头。
+# 判据落在 tests/test_rollback_chain.py 的
+# test_argv_constant_starts_with_the_pinned_interpreter：argv[0] 必须是钉住的解释器。
+FASTAPI_ARGV="/opt/dawnop/backend/.venv/bin/python3 /opt/dawnop/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000"
 FASTAPI_PROBE_PATH="/api/rollback/db-identity"
 FASTAPI_PROBE_HEADER_NAME="X-Rollback-Probe"
 FASTAPI_PROBE_SECRET_FILE="/opt/dawnop/backend/.rollback-probe"

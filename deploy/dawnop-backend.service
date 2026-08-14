@@ -23,8 +23,11 @@ After=network.target
 
 [Service]
 Type=simple
-User=dawn
-Group=dawn
+# 必须是 dawnop，不是 dawn：库目录 /opt/dawnop/data 是 0750 dawnop:dawnop，以 dawn 跑
+# 连 stat 都会 Permission denied（2026-08-14 在生产上实测过）。装机单元一直是对的，
+# 这份仓库副本曾经写着 dawn，两边漂了而没人比对——现在由 scripts/check_server_drift.py 兜。
+User=dawnop
+Group=dawnop
 WorkingDirectory=/opt/dawnop/backend
 # .env 由 EnvironmentFile 加载（也可让 app.config 自行读取 backend/.env，二选一即可）
 EnvironmentFile=/opt/dawnop/backend/.env

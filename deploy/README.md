@@ -77,16 +77,20 @@ ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/rollback-to-fastapi.sh 
 ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/return-to-dawn.sh        # 切回 Dawn :8001
 ```
 
-> ⚠️ **没有任何步骤把这两个脚本装到服务器上**：`deploy.sh` 只装 jar 与 `lib/`，本文档也没有
-> 装它们的一步。`/opt/dawnop-dawn/` 下若有一份 `rollback-to-fastapi.sh`，那是 M6 切流时手工放的
-> 旧副本，早于 2026-07 的重写，不含现在这条安全链（重写之前它改的是 `sites-available/dawnop`，
-> 一个 nginx 根本不读的文件，于是回滚印着成功却什么都没改）；`return-to-dawn.sh` 服务器上根本
-> 没有。两个脚本跑完在结尾印的「下一步」就是上面这两行（由
+> ⚠️ **服务器上不该有这两个脚本的副本**：`deploy.sh` 只装 jar 与 `lib/`，本文档也没有装它们
+> 的一步。M6 切流时手工放过一份 `rollback-to-fastapi.sh` 在 `/opt/dawnop-dawn/`，50 行、
+> 早于 2026-07 的重写，不含现在这条安全链的任何一件（无库身份核验、无哨兵、无逃生阀），
+> 而且它 `systemctl enable --now`（持久化到重启）又不放哨兵，等于回滚到一份会写库、
+> 且 `/api/fm` 全开对着共用七牛桶的旧代码。**已于 2026-08-14 删除**，
+> 现在由 `scripts/check_server_drift.py` 的 `stale-scripts` 组盯着它不再长回来。
+> 两个脚本跑完在结尾印的「下一步」就是上面这两行（由
 > `backend/tests/test_rollback_chain.py` 钉住，它们曾经印过一个 `/opt/dawnop-dawn/` 下的
 > 不存在路径）。
 
-两套共用同一个 SQLite 文件（WAL），**没有数据迁移要撤**：切流与回滚都是路由变更加一个守护
+两套共用同一个 SQLite 文件，**没有数据迁移要撤**：切流与回滚都是路由变更加一个守护
 开关（回滚期间 `/api/fm` 关闭、回 503，见「四」）。
+（`journal_mode` 实测是 `delete`，不是 WAL——这里以前写着 WAL，据此推导出来的权限配方是错的，
+见第二节第 2 步。）
 细节见下面「四、回滚安全链」，**第一次用之前先把那一节的两个前置条件配好**，否则回滚脚本
 会在核验那一步停下来（它宁可不切，也不切到一个说不清的进程上）。
 
@@ -167,7 +171,7 @@ scp backend/extensions/libsimple.so <user>@<server>:/opt/dawnop/backend/extensio
 sudo cp deploy/dawnop-backend.service /etc/systemd/system/    # 或 scp 后 mv
 sudo systemctl daemon-reload
 ```
-> 单元里的 `User=dawn` / `WorkingDirectory=/opt/dawnop/backend` / `ExecStart=` 不是随便写的：
+> 单元里的 `User=dawnop` / `WorkingDirectory=/opt/dawnop/backend` / `ExecStart=` 不是随便写的：
 > 回滚脚本逐字节比对进程的 argv、cwd 与有效 UID:GID。**改这个单元就要同步改
 > `backend-dawn/deploy/rollback-to-fastapi.sh` 里的 `FASTAPI_*` 常量**（两个脚本共享那段，
 > `backend/tests/test_rollback_chain.py` 会比对），否则回滚会在核验那一步停下。
@@ -178,20 +182,21 @@ cd /opt/dawnop/backend
 ./.venv/bin/python scripts/seed_admin.py    # 读 .env 的 ADMIN_*，建表 + 默认页面
 ls -l /opt/dawnop/data/dawnop.db            # 确认库建在这里，不是 backend/ 下
 
-# 库建好了再安排权限。**两个账号都要能写这个库**：Dawn 服务是 dawnop，回滚目标 uvicorn
-# 是 dawn，而 WAL 模式下连纯读也要在同目录建 -wal/-shm，所以目录和文件都要给写权限。
+# 库建好了再安排权限。**两个单元都以 dawnop 跑**（`dawnop-dawn` 与 `dawnop-backend` 的
+# User= 都是 dawnop），所以这里只有一个身份要伺候，不需要任何跨账号的组安排。
 sudo chown -R dawnop:dawnop /opt/dawnop/data
-sudo chmod 2775 /opt/dawnop/data              # setgid：新建的 -wal/-shm 自动落在 dawnop 组
-sudo chmod 664 /opt/dawnop/data/dawnop.db
-sudo usermod -aG dawnop dawn                  # uvicorn 以 dawn 身份跑（见单元的 User=）
+sudo chmod 750 /opt/dawnop/data
+sudo chmod 644 /opt/dawnop/data/dawnop.db
 ```
-> 只把库 `chown dawnop:dawnop` 而不管组写权限，是一个**只在回滚当天才暴露**的配置：
-> Dawn 一切正常，直到某天切到 uvicorn，它连库就报 `attempt to write a readonly database`。
+> 以上四行是 **2026-08-14 在生产机上实测抄下来的**，不是推导的：`/opt/dawnop/data` =
+> `drwxr-x--- dawnop:dawnop`，库 = `-rw-r--r-- dawnop:dawnop`，`journal_mode=delete`。
 >
-> ⚠️ 这四行是**新机首次部署**的配方，按两个单元的 `User=` 与 SQLite WAL 的行为推导，
-> **未在现有生产机上核对过**。现有生产机可能是别的做法（例如库文件直接 666）。
-> 要在跑着的机器上照这段改，先 `ls -ld /opt/dawnop/data` 和 `ls -l /opt/dawnop/data/dawnop.db`
-> 看清现状，再决定动不动。这段是补齐一个缺失的步骤，不是要你去改一台正常工作的机器。
+> 这里曾经写着一套 `chmod 2775` + `chmod 664` + `usermod -aG dawnop dawn` 的配方，理由是
+> 「回滚目标 uvicorn 以 dawn 跑」加「WAL 模式要在同目录建 -wal/-shm」。**两个前提实测都不成立**：
+> 装机单元的 `User=` 是 dawnop（仓库副本那时写着 dawn，两边漂了），库也不是 WAL 而是 delete。
+> 照那套配方在一台正常工作的机器上执行，会把库目录从 0750 放宽到 0775 并把 `dawn` 拉进
+> `dawnop` 组，纯属白送权限。留在这里当个记号：**运维手册里没被机器核对过的那部分，
+> 默认当它是错的。** 现在这份由 `scripts/check_server_drift.py` 盯着单元文件那一半。
 
 ### 3. Dawn 后端（生产）
 ```bash

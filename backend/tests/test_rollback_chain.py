@@ -695,19 +695,68 @@ def test_shared_fastapi_verification_block_is_identical():
 def test_fastapi_identity_constants_match_the_systemd_unit():
     block = shared_block(read(ROLLBACK_SH))
     unit = unit_directives(FASTAPI_UNIT_FILE)
-    assert f'FASTAPI_ARGV="{unit["ExecStart"]}"' in block
     assert f'FASTAPI_WORKDIR="{unit["WorkingDirectory"]}"' in block
     assert f'FASTAPI_USER="{unit["User"]}"' in block
     assert f'FASTAPI_GROUP="{unit["Group"]}"' in block
+    # ARGV **不**在这里比。它不等于 ExecStart=，理由见下面两条。
 
 
 def test_dawn_identity_constants_match_the_systemd_unit():
     text = read(RETURN_SH)
     unit = unit_directives(DAWN_UNIT_FILE)
-    assert f'DAWN_ARGV="{unit["ExecStart"]}"' in text
     assert f'DAWN_WORKDIR="{unit["WorkingDirectory"]}"' in text
     assert f'DAWN_USER="{unit["User"]}"' in text
     assert f'DAWN_GROUP="{unit["Group"]}"' in text
+
+
+ARGV_CASES = [
+    ("FASTAPI", ROLLBACK_SH, FASTAPI_UNIT_FILE),
+    ("DAWN", RETURN_SH, DAWN_UNIT_FILE),
+]
+
+
+def shell_constant(text: str, name: str) -> str:
+    m = re.search(rf'^{name}="(.*)"$', text, re.M)
+    assert m, f"找不到常量 {name}"
+    return m.group(1)
+
+
+@pytest.mark.parametrize(("label", "script", "unit_file"), ARGV_CASES)
+def test_argv_constant_starts_with_the_pinned_interpreter(label, script, unit_file):
+    """argv[0] 是**内核实际执行的那个程序**，不是 systemd 的 ExecStart=。
+
+    ExecStart= 指向 shebang 脚本时（uvicorn 就是一个 `#!.../python3` 的 console script），
+    内核 exec 会把解释器插到 argv[0]，于是 `/proc/PID/cmdline` 恒比 ExecStart= 多一个 token。
+    照 ExecStart= 抄的常量因此在**任何**机器上都匹配不上。这条判词此前不存在，取而代之的是
+    「ARGV 必须等于 ExecStart」，那条恰好把错的东西钉死了：2026-08-14 的生产演练里，
+    回滚停在 verify_unit_identity 的 argv 那一步，而在那之前它从没对着一个真进程跑过。
+    """
+    text = read(script)
+    argv = shell_constant(text, f"{label}_ARGV")
+    pinned = shell_constant(text, f"{label}_PINNED_INTERPRETER")
+    assert argv.split(" ")[0] == pinned, (
+        f"{label}_ARGV 的 argv[0] 是 {argv.split(' ')[0]!r}，"
+        f"而钉住的解释器是 {pinned!r}；/proc/PID/cmdline 里 argv[0] 一定是后者"
+    )
+
+
+@pytest.mark.parametrize(("label", "script", "unit_file"), ARGV_CASES)
+def test_argv_constant_is_execstart_modulo_the_interpreter_prefix(
+    label, script, unit_file
+):
+    """常量仍必须由 ExecStart= 派生，只是允许前面多一个解释器。
+
+    只要求「以钉住的解释器开头」是不够的：那样 ARGV 的其余部分可以和单元完全无关，
+    而单元才是真正决定进程被怎么拉起来的东西。
+    """
+    text = read(script)
+    argv = shell_constant(text, f"{label}_ARGV")
+    pinned = shell_constant(text, f"{label}_PINNED_INTERPRETER")
+    execstart = unit_directives(unit_file)["ExecStart"]
+    assert argv in (execstart, f"{pinned} {execstart}"), (
+        f"{label}_ARGV 既不等于 ExecStart=，也不等于「解释器 + ExecStart=」：\n"
+        f"  ARGV      = {argv!r}\n  ExecStart = {execstart!r}"
+    )
 
 
 def test_fastapi_constants_live_only_in_the_shared_block():

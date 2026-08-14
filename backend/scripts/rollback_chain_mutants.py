@@ -443,6 +443,25 @@ MUTANTS: list[tuple[str, str, list[Path], Callable[[str], str], set[str]]] = [
         "共享块里的 argv 与 systemd 单元漂开",
         BOTH_SCRIPTS,
         sub('--host 127.0.0.1 --port 8000"', '--host 0.0.0.0 --port 8000"'),
+        {"test_argv_constant_is_execstart_modulo_the_interpreter_prefix"},
+    ),
+    (
+        "argv-copied-from-execstart",
+        "argv 照抄 ExecStart=，丢掉 shebang 会插进 argv[0] 的解释器（2026-08-14 的真实缺陷）",
+        BOTH_SCRIPTS,
+        sub(
+            'FASTAPI_ARGV="/opt/dawnop/backend/.venv/bin/python3 '
+            "/opt/dawnop/backend/.venv/bin/uvicorn",
+            'FASTAPI_ARGV="/opt/dawnop/backend/.venv/bin/uvicorn',
+        ),
+        # 只红这一条：ARGV 变回 == ExecStart，所以「由单元派生」那条仍然成立。
+        {"test_argv_constant_starts_with_the_pinned_interpreter"},
+    ),
+    (
+        "user-drift-from-unit",
+        "共享块里的运行身份与 systemd 单元漂开（改回历史上那个错的 dawn）",
+        BOTH_SCRIPTS,
+        sub('FASTAPI_USER="dawnop"', 'FASTAPI_USER="dawn"'),
         {"test_fastapi_identity_constants_match_the_systemd_unit"},
     ),
     (
