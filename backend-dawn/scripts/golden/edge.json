@@ -1189,6 +1189,460 @@
    "body": {
     "detail": "已存在同名项：empty-dir"
    }
+  },
+  "art.put.edit": {
+   "write": {
+    "method": "PUT",
+    "path": "/api/articles/6",
+    "status": 200
+   },
+   "body": {
+    "id": 6,
+    "title": "Pagination probe",
+    "slug": "pagination-probe",
+    "summary": "edited by the contract run",
+    "content": "Filler.\n",
+    "published": true,
+    "auto_title": false,
+    "page_id": 3,
+    "word_count": 1,
+    "views": 0,
+    "tags": []
+   },
+   "read": "/api/articles/admin/6",
+   "stamps": {
+    "created_at": {
+     "start": "seed",
+     "change": "unchanged"
+    },
+    "updated_at": {
+     "start": "seed",
+     "change": "advanced"
+    }
+   },
+   "fields": {
+    "summary": [
+     "Page two must not be empty.",
+     "edited by the contract run"
+    ]
+   }
+  },
+  "page.put.edit": {
+   "write": {
+    "method": "PUT",
+    "path": "/api/pages/3",
+    "status": 200
+   },
+   "body": {
+    "id": 3,
+    "title": "博客",
+    "slug": "blog",
+    "type": "article_list",
+    "path": "/p/blog",
+    "description": "edited by the contract run",
+    "content": "",
+    "auto_title": false,
+    "nav_visible": true,
+    "nav_order": 10
+   },
+   "read": "/api/pages/admin/3",
+   "stamps": {
+    "created_at": {
+     "start": "seed",
+     "change": "unchanged"
+    },
+    "updated_at": {
+     "start": "seed",
+     "change": "advanced"
+    }
+   },
+   "fields": {
+    "description": [
+     "所有文章",
+     "edited by the contract run"
+    ]
+   }
+  },
+  "viz.put.edit": {
+   "write": {
+    "method": "PUT",
+    "path": "/api/viz/2",
+    "status": 200
+   },
+   "body": {
+    "id": 2,
+    "slug": "chart-demo",
+    "name": "Chart demo, edited",
+    "source": "<template><svg width=\"10\" height=\"10\"/></template>\n",
+    "compiled": "const _sfc_main = {};\n",
+    "style": ""
+   },
+   "read": "/api/viz/admin/2",
+   "stamps": {
+    "created_at": {
+     "start": "seed",
+     "change": "unchanged"
+    },
+    "updated_at": {
+     "start": "seed",
+     "change": "advanced"
+    }
+   },
+   "fields": {
+    "name": [
+     "Chart demo",
+     "Chart demo, edited"
+    ]
+   }
+  },
+  "art.put.noop": {
+   "write": {
+    "method": "PUT",
+    "path": "/api/articles/10",
+    "status": 200
+   },
+   "body": {
+    "id": 10,
+    "title": "Zzz last",
+    "slug": "zzz-last",
+    "summary": "Sorted last by design.",
+    "content": "The tail article.\n",
+    "published": true,
+    "auto_title": false,
+    "page_id": null,
+    "word_count": 3,
+    "views": 0,
+    "tags": []
+   },
+   "read": "/api/articles/admin/10",
+   "stamps": {
+    "created_at": {
+     "start": "seed",
+     "change": "unchanged"
+    },
+    "updated_at": {
+     "start": "seed",
+     "change": "unchanged"
+    }
+   },
+   "fields": {
+    "title": [
+     "Zzz last",
+     "Zzz last"
+    ],
+    "slug": [
+     "zzz-last",
+     "zzz-last"
+    ],
+    "tags": [
+     [],
+     []
+    ]
+   }
+  },
+  "page.put.noop": {
+   "write": {
+    "method": "PUT",
+    "path": "/api/pages/4",
+    "status": 200
+   },
+   "body": {
+    "id": 4,
+    "title": "关于",
+    "slug": "about",
+    "type": "content",
+    "path": "/p/about",
+    "description": "关于本站",
+    "content": "# 关于\n\n这是一个 **内容页**，正文里有 `code`、[链接](https://example.invalid) 和公式 $E = mc^2$。\n",
+    "auto_title": false,
+    "nav_visible": true,
+    "nav_order": 20
+   },
+   "read": "/api/pages/admin/4",
+   "stamps": {
+    "created_at": {
+     "start": "seed",
+     "change": "unchanged"
+    },
+    "updated_at": {
+     "start": "seed",
+     "change": "unchanged"
+    }
+   },
+   "fields": {
+    "title": [
+     "关于",
+     "关于"
+    ],
+    "slug": [
+     "about",
+     "about"
+    ],
+    "nav_order": [
+     20,
+     20
+    ]
+   }
+  },
+  "viz.put.noop": {
+   "write": {
+    "method": "PUT",
+    "path": "/api/viz/1",
+    "status": 200
+   },
+   "body": {
+    "id": 1,
+    "slug": "counter-demo",
+    "name": "计数器",
+    "source": "<template><button @click=\"n++\">{{ n }}</button></template>\n",
+    "compiled": "const _sfc_main = { data: () => ({ n: 0 }) };\n",
+    "style": ".counter { color: red }\n"
+   },
+   "read": "/api/viz/admin/1",
+   "stamps": {
+    "created_at": {
+     "start": "seed",
+     "change": "unchanged"
+    },
+    "updated_at": {
+     "start": "seed",
+     "change": "unchanged"
+    }
+   },
+   "fields": {
+    "slug": [
+     "counter-demo",
+     "counter-demo"
+    ],
+    "name": [
+     "计数器",
+     "计数器"
+    ]
+   }
+  },
+  "art.put.tagsReordered": {
+   "write": {
+    "method": "PUT",
+    "path": "/api/articles/1",
+    "status": 200
+   },
+   "body": {
+    "id": 1,
+    "title": "Dawn 自举：从 Kotlin 到 selfhost",
+    "slug": "dawn-selfhost",
+    "summary": "编译器自己编译自己的那一天。",
+    "content": "Dawn 的自举分三步走：先用 Kotlin 写出编译器，再用 Dawn 重写一遍，最后让 Dawn 版编译自己。\n\n每一代产物都要和上一代逐字节对拍。\n",
+    "published": true,
+    "auto_title": false,
+    "page_id": 3,
+    "word_count": 48,
+    "views": 0,
+    "tags": [
+     {
+      "id": 1,
+      "name": "dawn",
+      "slug": "dawn"
+     },
+     {
+      "id": 2,
+      "name": "编译器",
+      "slug": "bianyiqi"
+     }
+    ]
+   },
+   "read": "/api/articles/admin/1",
+   "stamps": {
+    "created_at": {
+     "start": "seed",
+     "change": "unchanged"
+    },
+    "updated_at": {
+     "start": "seed",
+     "change": "unchanged"
+    }
+   },
+   "fields": {
+    "tags": [
+     [
+      {
+       "id": 1,
+       "name": "dawn",
+       "slug": "dawn"
+      },
+      {
+       "id": 2,
+       "name": "编译器",
+       "slug": "bianyiqi"
+      }
+     ],
+     [
+      {
+       "id": 1,
+       "name": "dawn",
+       "slug": "dawn"
+      },
+      {
+       "id": 2,
+       "name": "编译器",
+       "slug": "bianyiqi"
+      }
+     ]
+    ]
+   }
+  },
+  "art.view.doesNotTouchStamp": {
+   "write": {
+    "method": "GET",
+    "path": "/api/articles/latex-in-markdown",
+    "status": 200
+   },
+   "body": {
+    "id": 2,
+    "title": "LaTeX in Markdown",
+    "slug": "latex-in-markdown",
+    "summary": "KaTeX renders $x^2$ inline.",
+    "content": "LaTeX inside markdown needs a plugin. We use KaTeX, not MathJax:\n\n$$\\int_0^1 x^2 \\,dx = \\frac{1}{3}$$\n",
+    "published": true,
+    "auto_title": false,
+    "page_id": 3,
+    "word_count": 20,
+    "views": 1,
+    "tags": [
+     {
+      "id": 3,
+      "name": "latex",
+      "slug": "latex"
+     }
+    ]
+   },
+   "read": "/api/articles/admin/2",
+   "stamps": {
+    "created_at": {
+     "start": "seed",
+     "change": "unchanged"
+    },
+    "updated_at": {
+     "start": "seed",
+     "change": "unchanged"
+    }
+   },
+   "fields": {
+    "views": [
+     0,
+     1
+    ]
+   }
+  },
+  "page.reorder.doesNotTouchStamp": {
+   "write": {
+    "method": "POST",
+    "path": "/api/pages/reorder",
+    "status": 200
+   },
+   "body": [
+    {
+     "id": 1,
+     "title": "首页",
+     "slug": "home",
+     "type": "builtin",
+     "path": "/",
+     "description": "",
+     "content": "",
+     "auto_title": false,
+     "nav_visible": true,
+     "nav_order": -1000
+    },
+    {
+     "id": 5,
+     "title": "手记",
+     "slug": "notes",
+     "type": "article_list",
+     "path": "/p/notes",
+     "description": "零散记录",
+     "content": "",
+     "auto_title": false,
+     "nav_visible": false,
+     "nav_order": 0
+    },
+    {
+     "id": 4,
+     "title": "关于",
+     "slug": "about",
+     "type": "content",
+     "path": "/p/about",
+     "description": "关于本站",
+     "content": "# 关于\n\n这是一个 **内容页**，正文里有 `code`、[链接](https://example.invalid) 和公式 $E = mc^2$。\n",
+     "auto_title": false,
+     "nav_visible": true,
+     "nav_order": 1
+    },
+    {
+     "id": 3,
+     "title": "博客",
+     "slug": "blog",
+     "type": "article_list",
+     "path": "/p/blog",
+     "description": "edited by the contract run",
+     "content": "",
+     "auto_title": false,
+     "nav_visible": true,
+     "nav_order": 2
+    },
+    {
+     "id": 2,
+     "title": "标签",
+     "slug": "tags",
+     "type": "builtin",
+     "path": "/tags",
+     "description": "",
+     "content": "",
+     "auto_title": false,
+     "nav_visible": false,
+     "nav_order": 1000
+    }
+   ],
+   "read": "/api/pages/admin/5",
+   "stamps": {
+    "created_at": {
+     "start": "seed",
+     "change": "unchanged"
+    },
+    "updated_at": {
+     "start": "seed",
+     "change": "unchanged"
+    }
+   },
+   "fields": {
+    "nav_order": [
+     30,
+     0
+    ]
+   }
+  },
+  "page.delete.unbindsWithoutTouchingStamp": {
+   "write": {
+    "method": "DELETE",
+    "path": "/api/pages/5",
+    "status": 204
+   },
+   "body": "",
+   "read": "/api/articles/admin/9",
+   "stamps": {
+    "created_at": {
+     "start": "seed",
+     "change": "unchanged"
+    },
+    "updated_at": {
+     "start": "seed",
+     "change": "unchanged"
+    }
+   },
+   "fields": {
+    "page_id": [
+     5,
+     null
+    ]
+   }
   }
  }
 }

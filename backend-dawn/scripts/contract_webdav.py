@@ -44,6 +44,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import contract_fixture
 from contract_golden import TRANSPORT_STATUS, Golden, transport_error
 
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -63,13 +64,13 @@ KEEP_HEADERS = (
 # Two wall-clock sites, both found by recording the file twice and diffing —
 # neither was predicted by reading the code:
 #
-#  1. Rows this script creates (MKCOL/MOVE/COPY under dav-test/) get their
+#  1. Rows this script creates (MKCOL/COPY under dav-test/) get their
 #     created_at/updated_at from SQLite's CURRENT_TIMESTAMP, so their
 #     <getlastmodified>/<creationdate> move every run. The virtual root is the
 #     same story with no row at all: webdav.dawn stamps it with now().
-#     Timestamps on *fixture* rows stay pinned — that is the distinction the
-#     href test below draws, and it is why the normalization is per-response
-#     rather than a blanket "drop all dates".
+#     Timestamps on *fixture* rows stay pinned — that is the distinction
+#     `_run_created` below draws, and it is why the normalization is
+#     per-response rather than a blanket "drop all dates".
 #  2. LOCK mints a fresh uuid per grant (a fake lock; nothing tracks it), in the
 #     body AND in the Lock-Token header.
 #
@@ -84,14 +85,50 @@ _LOCKTOKEN = re.compile(r"opaquelocktoken:[0-9a-fA-F-]+")
 
 PREFIX = "dav-test"  # sandbox subtree for the mutating cases
 
+# Which rows carry a stamp a golden can own. A fixture row does: contract_fixture
+# plants a literal, and #267 settled that a rename or a move rewrites `path` and
+# nothing else, so the stamp survives the move and stays reviewable.
+#
+# The test used to be on the HREF — "is it under dav-test/?" — which is not the
+# same question. `move.file` moves the fixture row /dav/docs/notes.txt into the
+# sandbox, so `propfind.moved.new` read it back at an href under the prefix and
+# masked its stamp, erasing the one observation that proves a move does not
+# restamp. The test is on the ROW now, and a successful MOVE carries the row's
+# identity across (see `note_move`).
+_FIXTURE_ROWS = {row[1] for row in contract_fixture.FILES}
+
+
+def _rel(href: str) -> str:
+    """An href as a `files.path` value: prefix off, decoded, no trailing slash.
+
+    Split first, so an absolute Destination (`http://host/dav/x`) reduces the
+    same way an href does.
+    """
+    h = urllib.parse.urlsplit(href.strip()).path
+    if h.startswith("/dav/"):
+        h = h[len("/dav/") :]
+    return urllib.parse.unquote(h.lstrip("/")).rstrip("/")
+
+
+def note_move(src_href: str, dest_href: str) -> None:
+    """Carry row identity across a MOVE, for the source row and its subtree."""
+    src, dest = _rel(src_href), _rel(dest_href)
+    for path in sorted(_FIXTURE_ROWS):
+        if path == src or path.startswith(src + "/"):
+            _FIXTURE_ROWS.discard(path)
+            _FIXTURE_ROWS.add(dest + path[len(src) :])
+
 
 def _run_created(href: str) -> bool:
-    """True for the virtual root and for anything this run created under dav-test/."""
+    """True for the virtual root and for any row this run created.
+
+    The root has no row at all — webdav.dawn stamps it with now() — so it is
+    always masked.
+    """
     h = href.strip()
     if h in ("/", "/dav/"):
         return True
-    rel = h[len("/dav/") :] if h.startswith("/dav/") else h.lstrip("/")
-    return rel.split("/", 1)[0] == PREFIX
+    return _rel(h) not in _FIXTURE_ROWS
 
 
 def normalize(text: str) -> str:
@@ -280,6 +317,11 @@ def main():
         if with_facts:
             value["facts"] = facts(text)
         g.case(name, value)
+        # A MOVE that landed took the row with it, stamp and all; the masking
+        # test keys on the row, so it has to follow. Done here rather than at
+        # the two call sites so a MOVE added later cannot forget.
+        if method == "MOVE" and st in (201, 204):
+            note_move(path, (headers or {}).get("Destination", ""))
         return st, hd
 
     print("\n== OPTIONS / auth challenge ==")

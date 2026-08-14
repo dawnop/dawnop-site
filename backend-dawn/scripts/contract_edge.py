@@ -13,6 +13,10 @@ wall-clock stamps SQLite fills in. This script is no longer safe to point at a
 live store, and no longer needs to be — the env fingerprint would reject the
 golden anyway.
 
+The last block is a different shape: successful writes, each observed twice
+(read, write, read) so the golden can hold what the stamps DID rather than
+having to drop them. See `stamp_cases` below and contract_golden.stamp_facts.
+
 Normally driven by contract_run.py. Standalone:
 
     TOKEN=... python3 contract_edge.py --base http://127.0.0.1:18001 [--record]
@@ -26,17 +30,22 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from contract_golden import TRANSPORT_STATUS, Golden, transport_error
+import contract_fixture
+from contract_golden import TRANSPORT_STATUS, Golden, stamp_facts, transport_error
 
 # urllib's no_proxy matching is suffix-based and does not exempt 127.0.0.1 from
 # a `no_proxy=127.*` export; go direct.
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-# Nothing is scrubbed globally. The two stamps below are dropped from the three
-# row-creating cases only: SQLite fills created_at/updated_at with the wall
-# clock at insert time, which is the one value in this script that a golden
-# cannot own. Everything else in those responses — the generated id, the
-# slugified slug, published, page_id — is pinned.
+# Nothing is scrubbed globally. The two stamps below are dropped from the bodies
+# of the cases that write a row: SQLite fills created_at/updated_at with the wall
+# clock, which is the one value in this script that a golden cannot own.
+# Everything else in those responses — the generated id, the slugified slug,
+# published, page_id — is pinned.
+#
+# Dropping them from the BODY is not the same as being blind to them: the cases
+# in `stamp_cases` read the row on both sides of the write and record how the
+# stamps moved. That relation is what the golden owns instead of the value.
 ROW_STAMPS = {"created_at", "updated_at"}
 
 
@@ -62,6 +71,248 @@ def as_json(text):
         return json.loads(text)
     except ValueError:
         return None
+
+
+# ---- one case, two observations --------------------------------------------
+#
+# Everything above fires one request and records the answer. That shape cannot
+# see a stamp: `updated_at` is wall clock, so it has to be dropped, and dropping
+# it is what left the whole updated_at family uncovered here.
+#
+# These cases read the row, write, and read it again, then record the RELATION
+# between the two readings (contract_golden.stamp_facts) instead of either
+# value. The write's own response body is still recorded — with the same two
+# stamps dropped — because the rest of it (slug, tags, nav_order, page_id) is
+# the other half of what a successful PUT promises.
+
+
+def drop_stamps(value):
+    """The response body with every wall-clock field removed, at any depth."""
+    if isinstance(value, list):
+        return [drop_stamps(item) for item in value]
+    if isinstance(value, dict):
+        return {k: drop_stamps(v) for k, v in value.items() if k not in ROW_STAMPS}
+    return value
+
+
+def read_row(base, path, auth):
+    """One observation: the row as the admin API renders it, or None."""
+    status, text = req(base, "GET", path, auth)
+    parsed = as_json(text)
+    return parsed if status == 200 and isinstance(parsed, dict) else None
+
+
+def two_shot(g, base, auth, name, read_path, write, seeded, watch=()):
+    """Read, write, read. `write` is (method, path, headers, body) or a callable
+    taking the first reading and returning one — a no-op re-save has to echo
+    back exactly what it just read.
+
+    `watch` names the non-stamp fields whose before/after pair is recorded
+    literally; those are ordinary values (views, nav_order, page_id) and a
+    golden can own them. It is what keeps a "stamp did not move" case honest:
+    without it, a write that did nothing at all would look the same.
+    """
+    before = read_row(base, read_path, auth)
+    if before is None:
+        # No first observation, so there is nothing to write against and nothing
+        # to compare. Recorded as a case failure rather than raised: a run that
+        # dies here would take the remaining cases with it, and the golden's own
+        # "case did not run" guard is the better place for that to surface.
+        g.case(name, {"read": read_path, "error": "no pre-write observation"})
+        return
+    method, path, headers, body = write(before) if callable(write) else write
+    status, text = req(base, method, path, headers, body)
+    after = read_row(base, read_path, auth)
+    parsed = as_json(text)
+    g.case(
+        name,
+        {
+            "write": {"method": method, "path": path, "status": status},
+            "body": drop_stamps(parsed) if parsed is not None else text,
+            "read": read_path,
+            "stamps": stamp_facts(before, after, seeded),
+            "fields": {k: [(before or {}).get(k), (after or {}).get(k)] for k in watch},
+        },
+    )
+
+
+def article_resave_body(before):
+    """Every editable article field, exactly as it was just read.
+
+    `created_at` is left out on purpose: the API takes it through
+    `datetime(?)`, which normalizes the ISO spelling this read back into a
+    different stored string, so echoing it would make the save a real edit.
+    Tags arrive as objects and go back as names.
+    """
+    return {
+        "title": before["title"],
+        "slug": before["slug"],
+        "summary": before["summary"],
+        "content": before["content"],
+        "published": before["published"],
+        "auto_title": before["auto_title"],
+        "page_id": before["page_id"],
+        "tags": [t["name"] for t in before["tags"]],
+    }
+
+
+def page_resave_body(before):
+    """Every editable page field, as read. `path` is derived, not stored."""
+    return {
+        k: before[k]
+        for k in (
+            "title",
+            "slug",
+            "type",
+            "description",
+            "content",
+            "auto_title",
+            "nav_visible",
+            "nav_order",
+        )
+    }
+
+
+def viz_resave_body(before):
+    return {k: before[k] for k in ("slug", "name", "source", "compiled", "style")}
+
+
+def stamp_cases(g, base, auth):
+    """The write cases whose subject is the timestamp, not the status code.
+
+    Each one names the issue it holds down. They run last because they mutate
+    rows the read cases above have already been compared against, and they pick
+    a different row per case so every one of them starts from the planted stamp
+    rather than from whatever the previous case left behind.
+    """
+    print("\n== writes observed twice (updated_at semantics) ==")
+
+    # --- a real edit advances the stamp. The control for everything below: if
+    # these read "unchanged" too, the harness is measuring nothing.
+    two_shot(
+        g,
+        base,
+        auth,
+        "art.put.edit",
+        "/api/articles/admin/6",
+        ("PUT", "/api/articles/6", auth, {"summary": "edited by the contract run"}),
+        contract_fixture.seeded_article_stamps(6),
+        watch=("summary",),
+    )
+    two_shot(
+        g,
+        base,
+        auth,
+        "page.put.edit",
+        "/api/pages/admin/3",
+        ("PUT", "/api/pages/3", auth, {"description": "edited by the contract run"}),
+        contract_fixture.seeded_page_stamps(3),
+        watch=("description",),
+    )
+    two_shot(
+        g,
+        base,
+        auth,
+        "viz.put.edit",
+        "/api/viz/admin/2",
+        ("PUT", "/api/viz/2", auth, {"name": "Chart demo, edited"}),
+        contract_fixture.seeded_viz_stamps(2),
+        watch=("name",),
+    )
+
+    # --- #266: opening a row and pressing save without changing anything is not
+    # an edit. Without this the stamp advanced and the row jumped to the top of
+    # the admin list, which is ordered by it.
+    two_shot(
+        g,
+        base,
+        auth,
+        "art.put.noop",
+        "/api/articles/admin/10",
+        lambda before: ("PUT", "/api/articles/10", auth, article_resave_body(before)),
+        contract_fixture.seeded_article_stamps(10),
+        watch=("title", "slug", "tags"),
+    )
+    two_shot(
+        g,
+        base,
+        auth,
+        "page.put.noop",
+        "/api/pages/admin/4",
+        lambda before: ("PUT", "/api/pages/4", auth, page_resave_body(before)),
+        contract_fixture.seeded_page_stamps(4),
+        watch=("title", "slug", "nav_order"),
+    )
+    two_shot(
+        g,
+        base,
+        auth,
+        "viz.put.noop",
+        "/api/viz/admin/1",
+        lambda before: ("PUT", "/api/viz/1", auth, viz_resave_body(before)),
+        contract_fixture.seeded_viz_stamps(1),
+        watch=("slug", "name"),
+    )
+    # tags are a set: re-saving the same two in the other order is still a no-op.
+    # Article 1 carries exactly two, which is the smallest case that can tell an
+    # order-blind signature from an order-sensitive one.
+    two_shot(
+        g,
+        base,
+        auth,
+        "art.put.tagsReordered",
+        "/api/articles/admin/1",
+        lambda before: (
+            "PUT",
+            "/api/articles/1",
+            auth,
+            {"tags": [t["name"] for t in reversed(before["tags"])]},
+        ),
+        contract_fixture.seeded_article_stamps(1),
+        watch=("tags",),
+    )
+
+    # --- #262: a view is not an edit. The write here is an anonymous public
+    # read (the counter only moves for one), and `views` in the watch list is
+    # what proves the request did land.
+    two_shot(
+        g,
+        base,
+        auth,
+        "art.view.doesNotTouchStamp",
+        "/api/articles/admin/2",
+        ("GET", "/api/articles/latex-in-markdown", None, None),
+        contract_fixture.seeded_article_stamps(2),
+        watch=("views",),
+    )
+
+    # --- #264: reordering the nav writes nav_order on every page named, and
+    # nothing else. Page 5 is untouched by the cases above, so its reading
+    # starts from the planted stamp.
+    two_shot(
+        g,
+        base,
+        auth,
+        "page.reorder.doesNotTouchStamp",
+        "/api/pages/admin/5",
+        ("POST", "/api/pages/reorder", auth, {"ids": [5, 4, 3]}),
+        contract_fixture.seeded_page_stamps(5),
+        watch=("nav_order",),
+    )
+
+    # --- #264, the other half: deleting a list page unbinds its articles.
+    # Losing a page is not an edit of the article, so article 9's stamp holds
+    # while its page_id goes null. Last, because it removes page 5.
+    two_shot(
+        g,
+        base,
+        auth,
+        "page.delete.unbindsWithoutTouchingStamp",
+        "/api/articles/admin/9",
+        ("DELETE", "/api/pages/5", auth, None),
+        contract_fixture.seeded_article_stamps(9),
+        watch=("page_id",),
+    )
 
 
 def build_cases(token, content_page_id):
@@ -403,6 +654,8 @@ def main():
             bad_writes.append(
                 f"{name}: {method} {path} answered {st} on a rejection path"
             )
+
+    stamp_cases(g, B, {"Authorization": f"Bearer {token}"})
 
     # /api/fm/stats reports live bucket usage from qiniu; with no credentials the
     # HMAC signer refuses an empty key, and with credentials the number moves.

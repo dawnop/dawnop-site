@@ -500,6 +500,49 @@ def _build_fts(con: sqlite3.Connection) -> None:
         )
 
 
+def api_stamp(stored: str) -> str:
+    """A planted stamp as the API emits it (util/jsonx.jdatetime).
+
+    That function drops an all-zero fraction and joins date and time with "T";
+    everything seeded here has one, so the readings a contract script compares
+    against are "2026-01-05T08:00:00", not the stored spelling.
+    """
+    whole, dot, frac = stored.partition(".")
+    return (whole if dot and set(frac) == {"0"} else stored).replace(" ", "T")
+
+
+def _both(stored: str) -> dict:
+    return {"created_at": api_stamp(stored), "updated_at": api_stamp(stored)}
+
+
+def seeded_article_stamps(article_id: int) -> dict:
+    """The stamps this fixture plants on one article row.
+
+    Deliberately far in the past: a contract case that claims a write left
+    `updated_at` alone needs a starting value no `datetime('now')` could
+    coincide with, because the column has second resolution and two equal
+    readings a second apart would otherwise prove nothing.
+    """
+    for row in ARTICLES:
+        if row[0] == article_id:
+            return _both(_ts(row[-1]))
+    raise KeyError(f"no fixture article {article_id}")
+
+
+def seeded_page_stamps(page_id: int) -> dict:
+    """Pages are all planted at T0."""
+    if not any(row[0] == page_id for row in PAGES):
+        raise KeyError(f"no fixture page {page_id}")
+    return _both(T0)
+
+
+def seeded_viz_stamps(viz_id: int) -> dict:
+    """Viz components are all planted at T0."""
+    if not any(row[0] == viz_id for row in VIZ):
+        raise KeyError(f"no fixture viz component {viz_id}")
+    return _both(T0)
+
+
 def fingerprint() -> str:
     """Short hash of the fixture *data*, recorded into the golden files.
 

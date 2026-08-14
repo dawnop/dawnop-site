@@ -683,7 +683,7 @@
     "content-type": "application/xml; charset=\"utf-8\"",
     "content-length": "930"
    },
-   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/renamed/</D:href><D:propstat><D:prop><D:displayname>renamed</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/renamed/notes.txt</D:href><D:propstat><D:prop><D:displayname>notes.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>137</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"11111111-2222-3333-4444-555555555555\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/renamed/</D:href><D:propstat><D:prop><D:displayname>renamed</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/renamed/notes.txt</D:href><D:propstat><D:prop><D:displayname>notes.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>Tue, 06 Jan 2026 12:00:00 GMT</D:getlastmodified><D:creationdate>2026-01-06T12:00:00Z</D:creationdate><D:getcontentlength>137</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"11111111-2222-3333-4444-555555555555\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
    "facts": {
     "hrefs": [
      "/dav/dav-test/renamed/",
@@ -701,7 +701,7 @@
     ],
     "lastmodified": [
      "WALL-CLOCK",
-     "WALL-CLOCK"
+     "Tue, 06 Jan 2026 12:00:00 GMT"
     ],
     "collections": 1,
     "statuses": [

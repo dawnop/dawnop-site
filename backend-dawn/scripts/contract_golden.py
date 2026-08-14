@@ -78,6 +78,58 @@ def transport_error(e):
     return f"__ERR__ {type(e).__name__}: {e}"
 
 
+# --- two observations of one row, recorded as a relation ---------------------
+#
+# The write paths stamp `updated_at` with `datetime('now')`. A golden cannot own
+# that value, which is why every write case used to drop it — and why the whole
+# updated_at family (#262 view counter, #264 reorder / page delete, #266 no-op
+# re-save, #267 rename & move) was invisible at the contract layer: the goldens
+# held no successful PUT at all, and would have masked the stamp if they had.
+#
+# What a golden CAN own is the relation between two observations of the same
+# row: read it, write, read it again, record only "same as before" / "newer than
+# before". No wall clock enters the file.
+#
+# One trap that shape has to answer: the stamps are second-resolution, so two
+# equal readings do not by themselves mean nothing was written — a rewrite
+# inside the same second reads identical. So each fact also records where the
+# BEFORE reading stood: `seed` means the row still carried the value
+# contract_fixture planted (2026-01-xx), which any `datetime('now')` rewrite
+# would have replaced with something months later. "unchanged, starting from
+# seed" is therefore a real claim; "unchanged" alone would not be.
+
+
+def stamp_change(before, after):
+    """How the second reading relates to the first. Never a timestamp."""
+    if before is None or after is None:
+        return "absent"
+    if after == before:
+        return "unchanged"
+    # the wire format is ISO-8601 seconds, so lexical order is chronological
+    return "advanced" if after > before else "receded"
+
+
+def stamp_facts(before_row, after_row, seeded):
+    """Per-field {start, change} for the stamps named in `seeded`.
+
+    `seeded` maps a field name to the value contract_fixture planted in that
+    row, rendered the way the API emits it. `start` says whether the pre-write
+    reading was still that planted value.
+    """
+    facts = {}
+    for field, seed in sorted(seeded.items()):
+        before = (before_row or {}).get(field)
+        after = (after_row or {}).get(field)
+        if before is None:
+            start = "absent"
+        elif before == seed:
+            start = "seed"
+        else:
+            start = "not-seed"
+        facts[field] = {"start": start, "change": stamp_change(before, after)}
+    return facts
+
+
 RESET = "\033[0m"
 GREEN = "\033[32m"
 RED = "\033[31m"
