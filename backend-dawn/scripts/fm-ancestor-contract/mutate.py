@@ -131,14 +131,14 @@ def main() -> int:
     if args.mutant == "immediate-tx-as-deferred":
         replace_once(
             db_sql,
-            '  let _b = exec(c, "begin immediate", [])?\n',
-            '  let _b = exec(c, "begin", [])?\n',
+            '  match exec(c, "begin immediate", []) {\n',
+            '  match exec(c, "begin", []) {\n',
         )
     elif args.mutant == "immediate-tx-panic-no-rollback":
         replace_once(
             db_sql,
-            "  bracket(c, h => rollback_immediate(h), _h => finish_immediate_tx(c, body))\n",
-            "  finish_immediate_tx(c, body)\n",
+            "    Ok(_) -> bracket(c, h => rollback_immediate(h), _h => finish_immediate_tx(c, body))\n",
+            "    Ok(_) -> finish_immediate_tx(c, body)\n",
         )
     elif args.mutant == "repo-file-ancestor-fail-open":
         replace_once(

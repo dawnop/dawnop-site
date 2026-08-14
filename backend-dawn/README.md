@@ -73,6 +73,13 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `db/sql.dawn` — SQLite JDBC 薄包装：`SqlV/Col/Cell` ADT、`query/exec/with_tx`、类型化取值、
   `first_*` 首行取值（`match get(rows, 0)` 的样板收在这里）。
   JDBC `Connection` 只在本模块可见，其他模块统一使用公开不透明的 `DbConn`。
+  **「这条连接上是不是已经有事务」只有 SQLite 答得了**（`nested_tx_refusal`，两个事务入口与
+  `require_tx` 共读这一处判据）：sqlite-jdbc 自留一份 JDBC 层 autoCommit 标志，而本后端的事务
+  全部由裸 `begin immediate` 开出，压根不碰那个标志——实测在 `with_immediate_tx` 体内
+  `getAutoCommit()` 仍读到 true。两个入口原先用它当守卫，既发不出来，也不该发：真发出来时它
+  回滚的是**外层调用方**的未提交写入。现在两个入口都**拒绝**而不是回滚，把它找到的事务原样留下
+  （`with_immediate_tx` 直接读 `begin immediate` 自己的拒绝，不额外探测；`with_tx` 用 `in_tx`
+  探一次，它没有生产调用方）。负控在 `scripts/db-connection-boundary-mutants/`。
   **按列名读行（`query_rows` + `row.col_int("id")`）只用在选择列表是共享常量的三处**：
   `repo_article` 的 `LIST_COLS`(12 列)、`repo_page` 的 `PAGE_COLS`(11 列)、`repo_viz` 的
   `OUT_COLS`(8 列)——这类列表被多条查询共用，加一列就得数所有下标，位置索引在这里是负担。

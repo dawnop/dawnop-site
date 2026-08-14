@@ -156,29 +156,69 @@ pub fn scalar_int(c: DbConn, q: String, ps: List[SqlV]) -> Result[Int, String] !
 pub fn last_id(c: DbConn) -> Result[Int, String] !io =
   scalar_int(c, "select last_insert_rowid()", [])
 
-## Run `body` in a transaction: commit on Ok, roll back on Err. A transaction
-## left open on this connection is rolled back on entry. That entry rollback is
-## now belt and braces rather than the only recovery point: `db.with_db` closes
-## the per-request handle through `bracket`, so a panicking request takes its
-## open transaction down with the connection instead of leaving one behind.
+# Whether a failed statement failed because a transaction was already open.
+#
+# SQLite is the only thing that can answer "is this connection in a
+# transaction". sqlite-jdbc keeps a JDBC-level autoCommit flag of its own, and
+# every transaction below is opened with a raw `begin immediate`, which never
+# touches that flag — measured, and pinned by the test below: inside
+# `with_immediate_tx`'s body, `getAutoCommit()` still reads true. A nested
+# `begin` IS an error, so asking SQLite means trying to begin one and reading
+# the refusal.
+#
+# One needle, read from here by everything that needs the answer, so that the
+# entry guards and `require_tx` cannot end up disagreeing about what an open
+# transaction looks like.
+fn nested_tx_refusal(m: String) -> Bool = str.contains(m, "within a transaction")
+
+# Is a transaction open on this connection? Inside one the probe's `begin` fails
+# and changes nothing; outside one it opens a deferred transaction, which takes
+# no lock, and rolls it straight back. A failure that is not the nested refusal
+# (a closed connection, say) is reported as "no transaction" here; `require_tx`
+# is the caller that needs to tell that case apart and does so itself.
+fn in_tx(c: DbConn) -> Bool !io =
+  match exec(c, "begin", []) {
+    Ok(_) -> {
+      let _r = exec(c, "rollback", [])
+      false
+    }
+    Err(m) -> nested_tx_refusal(m)
+  }
+
+## Run `body` in a transaction: commit on Ok, roll back on Err. Refuses, rather
+## than starting, when the connection already has a transaction open.
+##
+## Refusing is deliberate. Until #254 the entry read `if not getAutoCommit()`
+## and rolled back whatever it found, which could not fire (the flag is blind to
+## a raw `begin immediate`, see nested_tx_refusal) and would have been the wrong
+## move if it had: the transaction it would discard belongs to a caller further
+## out, and throwing away someone else's uncommitted writes to make room is a
+## silent corruption where refusing is a loud, bounded failure. Measured before
+## the change: on a connection carrying a raw `begin immediate`, the old entry
+## sailed past its guard into `setAutoCommit(false)` and died there with an
+## uncaught SQLiteException — a panic, not even an Err.
+##
+## NOTE: this helper has no production callers (2026-08-15; every transaction in
+## this backend goes through `with_immediate_tx`). It is kept because it is the
+## generic shape and is exercised by the tests below, but nothing depends on it.
 pub fn with_tx[T](c: DbConn, body: fn() -> Result[T, String] !io) -> Result[T, String] !io = {
   let conn = raw(c)
-  if not conn.getAutoCommit() {
-    conn.rollback()
-    conn.setAutoCommit(true)
-  }
-  conn.setAutoCommit(false)
-  let r = body()
-  match r {
-    Ok(v) -> {
-      conn.commit()
-      conn.setAutoCommit(true)
-      Ok(v)
-    }
-    Err(m) -> {
-      conn.rollback()
-      conn.setAutoCommit(true)
-      Err(m)
+  if in_tx(c) {
+    Err("with_tx entered with a transaction already open on this connection")
+  } else {
+    conn.setAutoCommit(false)
+    let r = body()
+    match r {
+      Ok(v) -> {
+        conn.commit()
+        conn.setAutoCommit(true)
+        Ok(v)
+      }
+      Err(m) -> {
+        conn.rollback()
+        conn.setAutoCommit(true)
+        Err(m)
+      }
     }
   }
 }
@@ -186,27 +226,30 @@ pub fn with_tx[T](c: DbConn, body: fn() -> Result[T, String] !io) -> Result[T, S
 ## Run `body` after acquiring SQLite's write reservation up front. Repository
 ## primitives use this when validation and the following metadata mutation must
 ## observe one stable tree shape rather than beginning as a deferred reader.
-pub fn with_immediate_tx[T](c: DbConn, body: fn() -> Result[T, String] !io) -> Result[T, String] !io = {
-  let conn = raw(c)
-  if not conn.getAutoCommit() {
-    conn.rollback()
-    conn.setAutoCommit(true)
+##
+## There is no separate entry probe here: `begin immediate` is the probe. It
+## fails exactly when a transaction is already open, so the refusal costs
+## nothing on the path that matters (every write on the site takes it) and, like
+## `with_tx`, it leaves the transaction it found alone.
+pub fn with_immediate_tx[T](c: DbConn, body: fn() -> Result[T, String] !io) -> Result[T, String] !io =
+  match exec(c, "begin immediate", []) {
+    Err(m) ->
+      if nested_tx_refusal(m) {
+        Err("with_immediate_tx entered with a transaction already open on this connection")
+      } else {
+        Err(m)
+      }
+    Ok(_) -> bracket(c, h => rollback_immediate(h), _h => finish_immediate_tx(c, body))
   }
-  let _b = exec(c, "begin immediate", [])?
-  bracket(c, h => rollback_immediate(h), _h => finish_immediate_tx(c, body))
-}
 
 ## Confirm the caller is inside an open transaction. A read that has to observe
 ## the write it describes calls this, so that moving it after the commit becomes
 ## a loud failure instead of a plausible-looking wrong answer.
 ##
-## `getAutoCommit()` cannot answer the question: sqlite-jdbc keeps its own
-## JDBC-level flag, and the transactions here are opened with a raw
-## `begin immediate`, which never touches that flag (measured: it still reads
-## true inside with_immediate_tx's body). SQLite does answer, because a nested
-## `begin` is an error, so this asks SQLite. Inside a transaction the probe fails
-## and changes nothing; outside one it opens a deferred transaction, which takes
-## no lock, and rolls it straight back.
+## `getAutoCommit()` cannot answer the question — see nested_tx_refusal, which
+## is where that judgement lives now and which the two transaction entries read
+## as well. This adds to `in_tx` only the part it needs: telling "SQLite refused
+## because we are inside a transaction" from "the probe itself broke".
 ##
 ## What it pins is "a transaction is open on this connection", not "the one that
 ## wrote the row": nothing SQLite exposes names a transaction. The two readings
@@ -219,7 +262,7 @@ pub fn require_tx(c: DbConn, what: String) -> Result[Unit, String] !io =
       Err("$what ran outside a transaction")
     }
     Err(m) ->
-      if str.contains(m, "within a transaction") {
+      if nested_tx_refusal(m) {
         Ok(())
       } else {
         Err("$what could not confirm its transaction: $m")
@@ -538,8 +581,115 @@ test "with_immediate_tx rolls back when its body panics" {
     Err(e) -> { assert str.contains(e.message, "transaction body panic") }
   }
   assert scalar_int(c, "select count(*) from panic_items", []) == Ok(0)
+  # and nothing is left open on the connection: the bracket's release runs on the
+  # panic path too. Asked of SQLite, because getAutoCommit cannot see this
+  # transaction (see nested_tx_refusal); this is the assertion the removed entry
+  # guard was supposedly the backstop for.
+  assert not in_tx(c)
   assert with_immediate_tx(c, () => exec(c, "insert into panic_items values (2)", [])) == Ok(1)
   assert scalar_int(c, "select sum(v) from panic_items", []) == Ok(2)
+}
+
+test "getAutoCommit is blind to a raw begin immediate; SQLite is not" {
+  # The measurement the two transaction entries used to be built on the wrong
+  # side of. Their guard was `if not conn.getAutoCommit()`, and the transaction
+  # it was there to catch is one this backend opens with a raw `begin immediate`
+  # — which sqlite-jdbc's flag never sees. So the guard could not fire on the
+  # only leak it named.
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table blind_probe (v integer)", []) == Ok(0)
+  assert not in_tx(c)
+  assert raw(c).getAutoCommit()
+
+  assert exec(c, "begin immediate", []) == Ok(0)
+  assert exec(c, "insert into blind_probe values (1)", []) == Ok(1)
+  # a transaction is open, and holds an uncommitted row
+  assert in_tx(c)
+  # ... and the JDBC flag says the connection is autocommitting
+  assert raw(c).getAutoCommit()
+
+  let _r = exec(c, "rollback", [])
+  assert not in_tx(c)
+}
+
+test "both transaction entries refuse an already-open transaction by name" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table refuse_probe (v integer)", []) == Ok(0)
+  assert exec(c, "begin immediate", []) == Ok(0)
+  assert exec(c, "insert into refuse_probe values (1)", []) == Ok(1)
+
+  match with_immediate_tx(c, () => exec(c, "insert into refuse_probe values (2)", [])) {
+    Ok(_) -> panic("a second immediate transaction must not start")
+    Err(m) -> { assert str.contains(m, "already open") }
+  }
+
+  # with_tx used to reach setAutoCommit(false) with the transaction still open
+  # and die there with an uncaught SQLiteException. An Err was not on the table;
+  # a panic out of a repo primitive is a 500 with no message anyone can act on.
+  match with_tx(c, () => exec(c, "insert into refuse_probe values (3)", [])) {
+    Ok(_) -> panic("with_tx must not start on top of an open transaction")
+    Err(m) -> { assert str.contains(m, "already open") }
+  }
+
+  let _r = exec(c, "rollback", [])
+}
+
+test "a refused entry leaves the transaction it found alone" {
+  # Refusing, not recovering, is the whole change. The transaction on this
+  # connection belongs to a caller further out; rolling it back on entry — what
+  # the old guard's doc comment promised it did — would silently discard writes
+  # this call never made, turning a loud bounded failure into a quiet wrong
+  # answer. Measured here: after both refusals the transaction is still open and
+  # still holds its row.
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table keep_probe (v integer)", []) == Ok(0)
+  assert exec(c, "begin immediate", []) == Ok(0)
+  assert exec(c, "insert into keep_probe values (1)", []) == Ok(1)
+
+  let _a: Result[Int, String] = with_immediate_tx(c, () => exec(c, "insert into keep_probe values (2)", []))
+  assert in_tx(c)
+  assert scalar_int(c, "select count(*) from keep_probe", []) == Ok(1)
+
+  let _b: Result[Int, String] = with_tx(c, () => exec(c, "insert into keep_probe values (3)", []))
+  assert in_tx(c)
+  assert scalar_int(c, "select count(*) from keep_probe", []) == Ok(1)
+
+  # and it is still the caller's to commit
+  match exec(c, "commit", []) {
+    Ok(_) -> ()
+    Err(m) -> panic("the caller could not commit its own transaction: $m")
+  }
+  assert not in_tx(c)
+  assert scalar_int(c, "select count(*) from keep_probe", []) == Ok(1)
+}
+
+test "with_immediate_tx closes its transaction on every exit path" {
+  # Why the removed entry guard had nothing to recover: no exit leaves a
+  # transaction for the next caller to find. Asked of SQLite rather than argued
+  # from the source. The panic path is the neighbouring test's, not this one's —
+  # it owns the mutant that deletes the bracket, and two owners for one mutant
+  # is a red set the fm-ancestor harness (rightly) refuses.
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table exit_probe (v integer)", []) == Ok(0)
+
+  let _ok: Result[Int, String] = with_immediate_tx(c, () => exec(c, "insert into exit_probe values (1)", []))
+  assert not in_tx(c)
+
+  let _err: Result[Int, String] = with_immediate_tx(c, () => Err("abort"))
+  assert not in_tx(c)
+
+  # a nested call fails, and the OUTER transaction is what rolls back — the
+  # inner one never started, so there is nothing of its own to undo
+  let nested: Result[Int, String] = with_immediate_tx(c, () => {
+    let _i = exec(c, "insert into exit_probe values (9)", [])?
+    with_immediate_tx(c, () => exec(c, "insert into exit_probe values (10)", []))
+  })
+  match nested {
+    Ok(_) -> panic("a nested immediate transaction must not start")
+    Err(m) -> { assert str.contains(m, "already open") }
+  }
+  assert not in_tx(c)
+  assert scalar_int(c, "select count(*) from exit_probe", []) == Ok(1)
 }
 
 test "require_tx tells a transaction from no transaction" {

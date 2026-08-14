@@ -1,4 +1,19 @@
-# Hand-owned red set. The runner has no record mode and rejects every extra red.
+# Hand-owned red sets for src/db/sql.dawn's two boundaries: the FFI one
+# (java.sql stays inside the module) and the transaction one (what an entry does
+# when the connection already has a transaction open).
+#
+# `mutant|owner;;owner` -- the runner rejects a mutant that reddens anything
+# other than exactly this set, and has no record mode. FFI owners are the
+# static walker's assertion names (ffi.*); the rest are test names.
+#
+# The transaction mutants are here because the guard they attack reads as
+# already correct: `if not conn.getAutoCommit()` is a plausible-looking check
+# that cannot fire, since sqlite-jdbc's flag never sees the raw `begin
+# immediate` every write on this site opens. Only running the suite against a
+# connection that really carries one tells the difference.
 make-dbconn-transparent|ffi.db-conn-opaque
 leak-java-sql|ffi.java-sql-confined
 leak-raw-connection|ffi.db-conn-raw-confined
+guard-tx-by-autocommit|a refused entry leaves the transaction it found alone;;both transaction entries refuse an already-open transaction by name;;getAutoCommit is blind to a raw begin immediate; SQLite is not
+rollback-open-tx-on-entry|a refused entry leaves the transaction it found alone;;both transaction entries refuse an already-open transaction by name;;with_immediate_tx closes its transaction on every exit path
+unnamed-nested-refusal|both transaction entries refuse an already-open transaction by name;;with_immediate_tx closes its transaction on every exit path
