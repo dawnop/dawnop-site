@@ -59,7 +59,9 @@ OPT_SCRIPTS_EMIT = """for f in /opt/dawnop/*.sh; do
 done
 """
 
-FROM_DEPLOY_LOOP = '            expected[group][name] = sha256_of(REPO / "deploy" / name)'
+FROM_DEPLOY_LOOP = (
+    '            expected[group][name] = sha256_of(REPO / "deploy" / name)'
+)
 
 # (名字, 说明, 变形, 预期转红的测试函数名)
 MUTANTS: list[tuple[str, str, Callable[[str], str], set[str]]] = [
@@ -175,7 +177,9 @@ MUTANTS: list[tuple[str, str, Callable[[str], str], set[str]]] = [
     (
         "backup-hashes-the-wrong-repo-file",
         "键对、哈希取自 deploy/ 下另一个文件——比对的不再是这三样的正本",
-        sub(FROM_DEPLOY_LOOP, FROM_DEPLOY_LOOP.replace("name)", '"deploy-fastapi.sh")')),
+        sub(
+            FROM_DEPLOY_LOOP, FROM_DEPLOY_LOOP.replace("name)", '"deploy-fastapi.sh")')
+        ),
         # 只有「哈希得等于正本」那条能看见：键没变，三个方向的判词两边同源，照绿。
         {"test_the_backup_pieces_installed_by_263_are_in_the_manifest"},
     ),
