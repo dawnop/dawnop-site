@@ -255,10 +255,12 @@ HTTPS 与证书（含 `storage.` / `cdn.` / `dav.` 子域名的通配符证书�
 
 ## 三、注意事项
 
-- **数据库**：SQLite 在 **`/opt/dawnop/data/dawnop.db`**，两套后端共用同一个文件（WAL 模式）。
+- **数据库**：SQLite 在 **`/opt/dawnop/data/dawnop.db`**，两套后端共用同一个文件。
+  `journal_mode` **实测是 `delete` 不是 WAL**（2026-08-14 读文件头第 18 字节 = 1，
+  且目录里没有 `-wal`/`-shm`）。这里以前写着 WAL，别再照抄。
   - 权威来源：`dawnop-dawn.service` 的 `DAWN_DB_PATH`，与 `nginx-cutover.md` 的前置条件。
-  - **备份的就是这个文件**（连同 `-wal`/`-shm`；热备份用 `sqlite3 <db> ".backup out.db"`，
-    别直接 cp 一个正在写的库）。
+  - **备份的就是这个文件**，每天自动一份，见「五、库备份」。热备份用
+    `sqlite3 <db> ".backup out.db"`，别直接 cp 一个正在写的库。
   - 不在任何 rsync 范围内（`*.db` 已 exclude），更新代码不会动它。
   - 改了模型结构需重建库（本项目无迁移）：删库后重跑 `seed_admin.py`。
   - 裸 `sqlite3` 打开这个库后**改 `articles` 会报 `no such tokenizer: simple`**——
@@ -401,7 +403,9 @@ curl -s -H "X-Rollback-Probe: $(sudo cat /opt/dawnop/backend/.rollback-probe)" \
 
 ### 装
 ```bash
-# 依赖：sqlite3 命令行工具。Ubuntu 22.04 默认没装
+# 依赖：sqlite3 命令行工具。2026-08-14 实测这台机器上没有它（libsqlite3-0 有，CLI 没有），
+# 装它会顺带把 libsqlite3-0 从 3.37.2-2ubuntu0.3 升到 0.7（同一安全序列内的点版本）。
+# 服务器 sqlite 是 3.37.2；本地跑判词的那台是 3.53（linuxbrew），两者行为差异没有对拍过。
 sudo apt-get install -y sqlite3
 
 # 备份目录。/opt/dawnop 不归 dawnop，所以这一步只能 root 做，脚本自己造不出来
@@ -442,11 +446,12 @@ sudo cp /opt/dawnop/backups/dawnop-20260814T000000Z.db.gz .
 gunzip dawnop-20260814T000000Z.db.gz
 sqlite3 dawnop-20260814T000000Z.db 'PRAGMA integrity_check;'   # 必须是 ok
 
-# 2. 停后端。库是 WAL 模式，换文件前必须没有进程连着它
+# 2. 停后端。换文件前必须没有进程连着它
 sudo systemctl stop dawnop-dawn
 
 # 3. 留住现场再覆盖。现在这个坏库仍是唯一记录了「出事之后发生过什么」的东西
 sudo mv /opt/dawnop/data/dawnop.db /opt/dawnop/data/dawnop.db.before-restore
+# 这个库是 delete 模式，正常情况下不会有这两个文件；真有就是上次没停干净，一起清掉
 sudo rm -f /opt/dawnop/data/dawnop.db-wal /opt/dawnop/data/dawnop.db-shm
 sudo install -m 644 -o dawnop -g dawnop \
   /tmp/dawnop-20260814T000000Z.db /opt/dawnop/data/dawnop.db
@@ -456,8 +461,9 @@ sudo systemctl start dawnop-dawn
 curl -s http://127.0.0.1:8001/api/health
 ```
 
-`-wal` / `-shm` 必须一起删。留着旧的 WAL，SQLite 会把它当成新库的一部分回放，
-结果既不是备份也不是原库。
+留下的 `-wal` / `-shm` 必须一起删。SQLite 会把它们当成新库的一部分回放，
+结果既不是备份也不是原库。（这个库 `journal_mode=delete`，2026-08-14 实测，
+所以这一步平时是空转；写在这里是因为模式是可以被改的，而改了以后没人会回来更新这份文档。）
 
 ### 保留策略
 
