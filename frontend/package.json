@@ -15,6 +15,7 @@
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
     "@mdit/plugin-katex": "^0.25.2",
+    "@vue/compiler-sfc": "^3.5.38",
     "axios": "^1.18.0",
     "element-plus": "^2.14.2",
     "highlight.js": "^11.11.1",
