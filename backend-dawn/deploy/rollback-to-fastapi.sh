@@ -409,7 +409,15 @@ systemctl reload nginx
 echo "==> 5/5 切流后复验"
 expect_https_status "$SITE_ORIGIN" GET /api/health 200
 expect_https_status "$SITE_ORIGIN" GET /api/pages/nav 200
-expect_https_status "$DAV_ORIGIN" OPTIONS / 401
+# OPTIONS 是**免鉴权**的，不是漏了鉴权：WebDAV 客户端（macOS Finder、rclone、Mountain Duck）
+# 挂载前先发一个裸 OPTIONS 做能力发现，两个后端都在鉴权之前就把它答掉（FastAPI 侧
+# `dav_entry` 在调 `_dav_user` 之前 return，Dawn 侧同形）。
+# 这里曾经写着期望 401。那条判词在**两个后端上都不成立**，而且它跑在切流之后——真跑一次的
+# 结果是切完流才 fatal，把站点留在 FastAPI 上，而它本该是最后一道确认。
+# 2026-08-14 全档演练前实测：Dawn 与 FastAPI 的 `OPTIONS /` 都是 200、`PROPFIND /` 都是 401。
+# 想验的是「鉴权接上了」，那就得问一个真的要鉴权的方法，于是分成两条。
+expect_https_status "$DAV_ORIGIN" OPTIONS / 200
+expect_https_status "$DAV_ORIGIN" PROPFIND / 401
 # 受守护 = 文件路由是关的，公网也必须这么表现（401 会说明守卫根本没生效）。
 https_status_is "$SITE_ORIGIN" GET '/api/fm?path=qiniu://' 503 ||
   fatal "公网 /api/fm 不是 503——守卫没有生效"

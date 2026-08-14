@@ -463,7 +463,10 @@ probe_suite https "$SITE_ORIGIN" "dawn-public" \
   "GET /api/pages/nav 200" \
   "GET /api/fm?path=qiniu:// 401" ||
   keep_fastapi_and_bail "公网探活没过（/api/fm 若是 503，说明流量还在受守护的 FastAPI 上）"
-expect_https_status "$DAV_ORIGIN" OPTIONS / 401
+# 与 rollback-to-fastapi.sh 结尾同一对判词，理由写在那边：OPTIONS 免鉴权（客户端要靠它做
+# 能力发现），要验鉴权得问 PROPFIND。原来那条期望 401 的在两个后端上都不成立。
+expect_https_status "$DAV_ORIGIN" OPTIONS / 200
+expect_https_status "$DAV_ORIGIN" PROPFIND / 401
 
 echo "==> 5/5 收尾：停掉 uvicorn，撤掉守护哨兵"
 systemctl disable --now "$FASTAPI_UNIT"

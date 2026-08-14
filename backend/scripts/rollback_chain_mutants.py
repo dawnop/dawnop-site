@@ -465,6 +465,16 @@ MUTANTS: list[tuple[str, str, list[Path], Callable[[str], str], set[str]]] = [
         {"test_fastapi_identity_constants_match_the_systemd_unit"},
     ),
     (
+        "dav-probe-asks-a-credential-free-method",
+        "切流后用 OPTIONS 验鉴权（它免鉴权，两个后端都回 200）",
+        BOTH_SCRIPTS,
+        sub(
+            'expect_https_status "$DAV_ORIGIN" PROPFIND / 401',
+            'expect_https_status "$DAV_ORIGIN" OPTIONS / 401',
+        ),
+        {"test_dav_probes_ask_a_method_that_actually_needs_credentials"},
+    ),
+    (
         "uid-check-uses-real-not-effective",
         "身份核验读真实 UID 而不是有效 UID",
         BOTH_SCRIPTS,

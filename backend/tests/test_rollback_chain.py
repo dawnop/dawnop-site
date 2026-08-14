@@ -646,6 +646,27 @@ def dawn_probe_specs() -> list[str]:
     return [line.strip().strip('"') for line in m.group(1).splitlines() if line.strip()]
 
 
+@pytest.mark.parametrize("script", [ROLLBACK_SH, RETURN_SH], ids=lambda p: p.name)
+def test_dav_probes_ask_a_method_that_actually_needs_credentials(script):
+    """切流后的 DAV 探活里，验鉴权的那条必须问 PROPFIND，不能问 OPTIONS。
+
+    OPTIONS 免鉴权是 WebDAV 的常态：客户端挂载前先发一个裸 OPTIONS 做能力发现，
+    两个后端都在鉴权之前答掉它。两个脚本此前都写着 `OPTIONS / 401`，
+    **在两个后端上都不成立**，而它跑在切流之后——真跑的后果是切完流才 fatal。
+    2026-08-14 生产实测：Dawn 与 FastAPI 的 `OPTIONS /` 都是 200、`PROPFIND /` 都是 401。
+    """
+    text = code_text(read(script))
+    assert re.search(r'expect_https_status "\$DAV_ORIGIN" OPTIONS / 200', text), (
+        f"{script.name} 没有把 OPTIONS 的期望定为 200"
+    )
+    assert re.search(r'expect_https_status "\$DAV_ORIGIN" PROPFIND / 401', text), (
+        f"{script.name} 没有用一个需要鉴权的方法验鉴权"
+    )
+    assert not re.search(r'"\$DAV_ORIGIN" OPTIONS / 401', text), (
+        f"{script.name} 仍在期望 OPTIONS 回 401——那在两个后端上都不成立"
+    )
+
+
 def test_dawn_liveness_is_more_than_one_health_call():
     specs = dawn_probe_specs()
     paths = {spec.split()[1].split("?")[0] for spec in specs}
