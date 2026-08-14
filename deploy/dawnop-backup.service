@@ -1,0 +1,49 @@
+# systemd 单元：跑一次 deploy/backup-db.sh，给 /opt/dawnop/data/dawnop.db 存一份快照。
+# 由 dawnop-backup.timer 拉起，本单元不 enable（oneshot 没有常驻进程可 enable）。
+#
+# 安装见 deploy/README.md「五、库备份」。装完自检：
+#   sudo systemctl start dawnop-backup && journalctl -u dawnop-backup -n 20 --no-pager
+
+[Unit]
+Description=dawnop.com SQLite database backup (snapshot + verify + rotate)
+# 备份不需要网络，也不需要后端在跑（.backup 对活库是安全的）。
+Documentation=https://github.com/dawnop/dawnop-site/blob/main/deploy/README.md
+
+[Service]
+Type=oneshot
+
+# 以 dawnop 跑，不是 root。库目录 /opt/dawnop/data 是 0750 dawnop:dawnop，
+# 备份要做的两件事——读库、在 /opt/dawnop/backups 里写文件——dawnop 都够了，
+# root 只是多给了一份删掉整个 /opt 的能力。sqlite3 打开库时会在库目录里建
+# -wal/-shm（WAL 模式下），所以要的是库目录的写权限，而 dawnop 是属主，有。
+# 代价是 /opt/dawnop/backups 必须先由 root 建好并 chown dawnop（README 里那一步），
+# 因为 /opt/dawnop 本身不归 dawnop，脚本的 mkdir -p 在这里造不出目录。
+User=dawnop
+Group=dawnop
+
+Environment=DB=/opt/dawnop/data/dawnop.db
+Environment=DEST=/opt/dawnop/backups
+Environment=KEEP=14
+ExecStart=/opt/dawnop/backup-db.sh
+
+# 备份失败要看得见。oneshot 失败会在 systemctl list-units 和 timer 的
+# LastTriggerResult 里留痕，journalctl 里有脚本打的那行原因。
+# 不设 Restart=：备份重试没有意义，明天那次会再来一遍，而失败信号要留着。
+
+# 加固，与 backend-dawn/deploy/dawnop-dawn.service 同一路子。这个单元的活动
+# 面比后端还窄（读一个文件、写一个目录、调三个命令行工具），所以收得更紧：
+# 除了库目录和备份目录，整个文件系统都是只读的。
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/dawnop/data /opt/dawnop/backups
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# 备份不开监听也不外连。
+PrivateNetwork=true
+# 兜住脚本里的 chmod：新文件默认就是 600、新目录 700。
+UMask=0077

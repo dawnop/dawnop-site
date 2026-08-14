@@ -388,3 +388,97 @@ curl -s -H "X-Rollback-Probe: $(sudo cat /opt/dawnop/backend/.rollback-probe)" \
 `backend/app/core/db_identity.py`，`backend/tests/test_rollback_chain.py` 拿真文件把它和
 脚本里的那个函数钉在一起——否则这一节的命令随时可能变成假的。
 `backend/scripts/rollback_chain_mutants.py` 是这些断言的负控（会临时改生产文件，不进 CI）。
+
+---
+
+## 五、库备份
+
+`/opt/dawnop/data/dawnop.db` 每天存一份压缩快照到 `/opt/dawnop/backups`，保留 14 份。
+脚本 [`backup-db.sh`](./backup-db.sh)，定时器 [`dawnop-backup.timer`](./dawnop-backup.timer)。
+
+判词在 `backend/tests/test_backup_db.py`（跑真脚本、真库），负控在
+`scripts/backup_db_mutants.py`。
+
+### 装
+```bash
+# 依赖：sqlite3 命令行工具。Ubuntu 22.04 默认没装
+sudo apt-get install -y sqlite3
+
+# 备份目录。/opt/dawnop 不归 dawnop，所以这一步只能 root 做，脚本自己造不出来
+sudo mkdir -p /opt/dawnop/backups
+sudo chown dawnop:dawnop /opt/dawnop/backups
+sudo chmod 700 /opt/dawnop/backups
+
+# 脚本（unit 的 ExecStart 指的就是这个路径）
+sudo install -m 755 -o root -g root deploy/backup-db.sh /opt/dawnop/backup-db.sh
+
+sudo cp deploy/dawnop-backup.service deploy/dawnop-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now dawnop-backup.timer
+```
+
+`backup-db.sh` 不在任何 rsync 范围内（`一、日常更新` 只同步 `backend/` 与 `frontend/dist/`），
+改了脚本要重跑上面那条 `install`。
+
+### 验
+```bash
+# 手动跑一次，看它写了什么
+sudo systemctl start dawnop-backup
+journalctl -u dawnop-backup -n 20 --no-pager
+# 期望有一行：backup-db: 写入 /opt/dawnop/backups/dawnop-<时间戳>.db.gz（N 字节），保留 14 份，删除旧备份 M 个
+
+# 下次触发时间
+systemctl list-timers dawnop-backup.timer
+
+# 产物自己校验自己
+cd /opt/dawnop/backups && sudo -u dawnop sha256sum -c ./*.sha256
+```
+
+### 恢复
+```bash
+# 1. 挑一份，解压到临时位置，先验它是好的
+cd /tmp
+sudo cp /opt/dawnop/backups/dawnop-20260814T000000Z.db.gz .
+gunzip dawnop-20260814T000000Z.db.gz
+sqlite3 dawnop-20260814T000000Z.db 'PRAGMA integrity_check;'   # 必须是 ok
+
+# 2. 停后端。库是 WAL 模式，换文件前必须没有进程连着它
+sudo systemctl stop dawnop-dawn
+
+# 3. 留住现场再覆盖。现在这个坏库仍是唯一记录了「出事之后发生过什么」的东西
+sudo mv /opt/dawnop/data/dawnop.db /opt/dawnop/data/dawnop.db.before-restore
+sudo rm -f /opt/dawnop/data/dawnop.db-wal /opt/dawnop/data/dawnop.db-shm
+sudo install -m 644 -o dawnop -g dawnop \
+  /tmp/dawnop-20260814T000000Z.db /opt/dawnop/data/dawnop.db
+
+# 4. 起
+sudo systemctl start dawnop-dawn
+curl -s http://127.0.0.1:8001/api/health
+```
+
+`-wal` / `-shm` 必须一起删。留着旧的 WAL，SQLite 会把它当成新库的一部分回放，
+结果既不是备份也不是原库。
+
+### 保留策略
+
+每天 00:00（本地时区，`RandomizedDelaySec=1800` 内抖动）一份，留最近 14 份。
+文件名里的时间戳是 UTC，字典序即时间序。改份数改 `dawnop-backup.service` 的
+`Environment=KEEP=`。
+
+轮转只删 `dawnop-<UTC 时间戳>.db.gz` 这个模式的文件和它的 `.sha256`，
+目录里放的别的东西不会被动。
+
+### 这个方案没覆盖的
+
+- **只防误删误改，不防机器丢失。** 备份和库在同一块盘上。盘坏了、服务器没了、
+  文件系统烂了，两份一起没。异地或离线副本是待办，不在这一批里。
+- **`.env` 不在备份范围内。** 七牛 AK/SK、`SECRET_KEY`、腾讯云密钥都在
+  `/opt/dawnop/backend/.env`，那份丢了库还原出来也登不上、连不上对象存储。
+  它现在只存在于服务器和本地私有记录里。
+- **七牛上的文件本体不在备份范围内。** 库里存的是 path 到 key 的映射，
+  对象在七牛私有空间。库还原到旧时点后，之后新传的对象会变成没有元数据的孤儿，
+  用 `backend/scripts/sweep_qiniu_orphans.py` 清。
+- **没有恢复演练。** 上面那套恢复步骤是写出来的，没在生产上走过一遍。
+  第一次跑它的时候就是出事的时候，这一点和回滚脚本一样（见「四、回滚安全链」）。
+- **两个 unit 文件本身没有自动化判词覆盖。** `scripts/check_server_drift.py` 只盯
+  `dawnop-backend` 和 `dawnop-dawn` 两个单元，`dawnop-backup` 还没登记进去。

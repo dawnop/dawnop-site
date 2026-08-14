@@ -1,0 +1,24 @@
+# 每天跑一次 dawnop-backup.service。
+#
+#   sudo systemctl enable --now dawnop-backup.timer
+#   systemctl list-timers dawnop-backup.timer
+
+[Unit]
+Description=Daily dawnop.com database backup
+
+[Timer]
+# daily = 每天 00:00（服务器本地时区）。备份文件名里的时间戳是 UTC，
+# 两者不一致是有意的：文件名要能字典序排出时间序，UTC 才没有夏令时回拨。
+OnCalendar=daily
+# 关机/重启错过的那次开机后补跑。这台机器是常开的，但升级重启会跨过 00:00，
+# 少了这条就会静悄悄地漏掉一天，而漏掉的那天正是最可能需要备份的那天。
+Persistent=true
+# 0-30 分钟抖动。单机没有惊群问题，这条是为了别和 00:00 整点的其他定时任务
+# （logrotate、certbot/acme.sh 续期）挤在同一秒抢这台 4 核机器的 I/O。
+RandomizedDelaySec=1800
+# 抖动量对同一台机器是稳定的，日志里的时间不会天天乱跳。
+FixedRandomDelay=true
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target
