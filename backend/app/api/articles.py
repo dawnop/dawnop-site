@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
-from sqlalchemy import func
+from sqlalchemy import func, update
 from sqlalchemy.orm import Session
 
 from app.api.tags import resolve_tags
@@ -267,7 +267,14 @@ def get_published(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "文章不存在")
     # 仅统计匿名访客对已发布文章的访问（排除管理员带 token 的预览）
     if user is None and article.published:
-        article.views = (article.views or 0) + 1
+        # updated_at 显式自赋值：Article.updated_at 的 onupdate 对本表的任何 UPDATE
+        # 都生效，不写这一句浏览计数就会把「最后编辑时间」刷成此刻（与 Dawn 侧
+        # repo_article.bump_views 的 `updated_at = updated_at` 对齐）。
+        db.execute(
+            update(Article)
+            .where(Article.id == article.id)
+            .values(views=Article.views + 1, updated_at=Article.updated_at)
+        )
         db.commit()
         db.refresh(article)
     return article
