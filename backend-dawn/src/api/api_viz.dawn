@@ -2,14 +2,14 @@
 # Components are Vue SFCs compiled in the browser; the backend only stores the
 # source, the compiled output and the style, keyed by a slug.
 use std/str
-use db/sql.{DbConn}
+use db/sql.{DbConn, ColStr, open, exec, query, scalar_int, first_str_or}
 use web/types.{HttpError, Handler, http_error, as_http, as_http_with, opt_param_int, json_ok, json_response, text}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json, JArr}
 use db/db.{with_db}
 use svc/auth.{Auth, guarded}
 use util/jsonread.{body_obj, opt_str, str_or, present_null}
-use repo/repo_viz.{NewViz, valid_slug, slug_free, viz_exists, create_viz, set_viz_str, touch_viz, delete_viz, list_all, by_id}
+use repo/repo_viz.{NewViz, valid_slug, slug_free, viz_exists, create_viz, set_viz_str, touch_viz, viz_sig, delete_viz, list_all, by_id}
 use util/errkind.{KConflict, conflict, split_kind}
 
 ## GET /api/viz — all components (admin).
@@ -106,12 +106,16 @@ fn viz_update_read(c: DbConn, id: Int, m: Map[String, Json]) -> Result[Option[Js
     # PATCH semantics: a present, non-null field is applied; an explicit null is
     # skipped (FastAPI's exclude_unset + `if value is not None`), NOT written as ""
     # — writing "" here was silent data loss.
+    let before = viz_sig(c, id)?
     let _sl = match opt_str(m, "slug") { Some(s) -> update_viz_slug(c, id, s)?, None -> 0 }
     let _na = match opt_str(m, "name") { Some(s) -> set_viz_str(c, id, "name", s)?, None -> 0 }
     let _so = match opt_str(m, "source") { Some(s) -> set_viz_source(c, id, s)?, None -> 0 }
     let _co = match opt_str(m, "compiled") { Some(s) -> set_viz_str(c, id, "compiled", s)?, None -> 0 }
     let _st = match opt_str(m, "style") { Some(s) -> set_viz_str(c, id, "style", s)?, None -> 0 }
-    let _t = touch_viz(c, id)?
+    # a save that changed nothing is not an edit, so updated_at stays put (the
+    # admin list is ordered by it) — see db/sql.row_sig
+    let after = viz_sig(c, id)?
+    let _t = if after != before { touch_viz(c, id)? } else { 0 }
     by_id(c, id)
   }
 }
@@ -155,3 +159,86 @@ pub fn routes(a: Auth) -> List[Route] =
     route_put("/api/viz/{viz_id}", viz_update(a)),
     route_delete("/api/viz/{viz_id}", viz_delete(a)),
   ]
+
+# ---- tests (need --cp lib/sqlite-jdbc-*.jar) ----
+#
+# updated_at only advances for a real edit, so these fix the stored timestamp at
+# a distinctly old value and check whether the update moved it. A wall-clock
+# comparison could not tell "not written" from "rewritten in the same second".
+
+const STALE: String = "2000-01-01 00:00:00"
+
+# a schema or seed typo must fail here, not as a puzzling assertion later
+fn must(r: Result[Int, String]) -> Int =
+  match r {
+    Ok(n) -> n
+    Err(m) -> panic(m)
+  }
+
+fn viz_test_db() -> DbConn !io = {
+  let c = open("jdbc:sqlite::memory:")
+  let _t = must(exec(c, "create table viz_components (id integer primary key, slug text unique, name text, source text, compiled text, style text, created_at text, updated_at text)", []))
+  let _r = must(exec(c, "insert into viz_components values (1, 'chart', 'Chart', 'SRC', 'CMP', 'STY', '2020-01-01 00:00:00', '$STALE')", []))
+  c
+}
+
+fn viz_updated(c: DbConn) -> String !io =
+  match query(c, "select updated_at from viz_components where id = 1", [], [ColStr]) {
+    Ok(rows) -> first_str_or(rows, "")
+    Err(e) -> panic(e)
+  }
+
+# run one PUT body through the update path, failing loudly on anything but 200
+fn put_viz(c: DbConn, body: String) -> Unit !io = {
+  let m = match body_obj(body) {
+    Ok(x) -> x
+    Err(e) -> panic("bad test body: $e")
+  }
+  match viz_update_read(c, 1, m) {
+    Ok(Some(_j)) -> {}
+    Ok(None) -> panic("component vanished")
+    Err(e) -> panic(e)
+  }
+}
+
+const SAME_VIZ: String = "{\"slug\":\"chart\",\"name\":\"Chart\",\"source\":\"SRC\",\"compiled\":\"CMP\",\"style\":\"STY\"}"
+
+test "PUT viz: re-saving every field with the stored value is not an edit" {
+  let c = viz_test_db()
+  put_viz(c, SAME_VIZ)
+  assert viz_updated(c) == STALE
+}
+
+test "PUT viz: an empty body is not an edit" {
+  let c = viz_test_db()
+  put_viz(c, "{}")
+  assert viz_updated(c) == STALE
+}
+
+test "PUT viz: changing one field advances updated_at" {
+  let c = viz_test_db()
+  put_viz(c, "{\"name\":\"Chart 2\"}")
+  assert viz_updated(c) != STALE
+  assert scalar_int(c, "select count(*) from viz_components where name = 'Chart 2'", []) == Ok(1)
+}
+
+test "PUT viz: each field on its own counts as an edit" {
+  for body in [
+    "{\"slug\":\"other\"}",
+    "{\"name\":\"N\"}",
+    "{\"source\":\"S2\"}",
+    "{\"compiled\":\"C2\"}",
+    "{\"style\":\"T2\"}",
+  ] {
+    let c = viz_test_db()
+    put_viz(c, body)
+    assert viz_updated(c) != STALE
+  }
+}
+
+test "PUT viz: an explicit null is skipped so it is not an edit either" {
+  let c = viz_test_db()
+  put_viz(c, "{\"name\":null,\"style\":null}")
+  assert viz_updated(c) == STALE
+  assert scalar_int(c, "select count(*) from viz_components where name = 'Chart' and style = 'STY'", []) == Ok(1)
+}

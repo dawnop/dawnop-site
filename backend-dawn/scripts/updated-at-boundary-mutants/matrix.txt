@@ -1,0 +1,32 @@
+# Hand-owned red sets, measured on 2026-08-14 by running the full matrix.
+# Format: mutant|assertion[,assertion...] — the exact set that must go red,
+# no fewer and no more. Assertion names are the Dawn test titles verbatim, so
+# they cannot contain a comma (run.sh refuses one).
+#
+# Both directions of every guard are here on purpose. "Unconditional touch" is
+# the bug this batch fixed; "never touch" is the way an over-eager fix breaks
+# it, and only the second kind of mutant can tell a working guard from a
+# deleted feature.
+
+# ---- the three guards ----
+article-touch-unconditional|repo/repo_write :: PUT article: an empty patch is not an edit,repo/repo_write :: PUT article: re-saving every field with the stored value is not an edit,repo/repo_write :: PUT article: re-sending the same tag set in another order is not an edit
+article-never-touches|repo/repo_write :: PUT article: changing one field advances updated_at,repo/repo_write :: PUT article: dropping a tag and adding one are both edits,repo/repo_write :: PUT article: each editable field on its own counts as an edit,repo/repo_write :: PUT article: re-sending the same tag set in another order is not an edit,repo/repo_write :: PUT article: retagging is an edit
+page-touch-unconditional|api/api_pages :: PUT page: an empty body is not an edit,api/api_pages :: PUT page: fields a builtin page ignores cannot advance its updated_at,api/api_pages :: PUT page: re-saving every field with the stored value is not an edit
+page-never-touches|api/api_pages :: PUT page: changing one field advances updated_at,api/api_pages :: PUT page: each editable field on its own counts as an edit,api/api_pages :: PUT page: fields a builtin page ignores cannot advance its updated_at
+viz-touch-unconditional|api/api_viz :: PUT viz: an empty body is not an edit,api/api_viz :: PUT viz: an explicit null is skipped so it is not an edit either,api/api_viz :: PUT viz: re-saving every field with the stored value is not an edit
+viz-never-touches|api/api_viz :: PUT viz: changing one field advances updated_at,api/api_viz :: PUT viz: each field on its own counts as an edit
+
+# ---- what the signature is made of ----
+# Retagging is an edit to the article (the user pressed save), so dropping tags
+# from the signature must be caught; and the tag set is a set, so losing the
+# ordering makes [b,a] look like a change from [a,b].
+article-sig-drops-tags|repo/repo_write :: PUT article: dropping a tag and adding one are both edits,repo/repo_write :: PUT article: re-sending the same tag set in another order is not an edit,repo/repo_write :: PUT article: retagging is an edit
+article-tag-sig-unordered|repo/repo_write :: PUT article: re-sending the same tag set in another order is not an edit
+article-sig-includes-views|repo/repo_write :: article_sig ignores the view counter but sees a real edit
+
+# ---- how a signature is spelled ----
+# These two own the same pair of assertions through different faults: one drops
+# the separator (1,23 and 12,3 sign alike), the other drops the quoting (text
+# '1' and integer 1 sign alike). Distinct bugs, so distinct mutants.
+row-sig-drops-separator|db/sql :: row_sig reads through NULLs and never aliases two different rows,db/sql :: sig_expr quotes every column and separates them
+row-sig-unquoted-values|db/sql :: row_sig reads through NULLs and never aliases two different rows,db/sql :: sig_expr quotes every column and separates them

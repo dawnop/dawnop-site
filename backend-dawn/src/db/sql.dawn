@@ -371,6 +371,44 @@ pub fn col_bool(r: Row, name: String) -> Bool = bool_at(r.cells, col_idx(r, name
 pub fn col_opt_str(r: Row, name: String) -> Option[String] = opt_str_at(r.cells, col_idx(r, name))
 pub fn col_opt_int(r: Row, name: String) -> Option[Int] = opt_int_at(r.cells, col_idx(r, name))
 
+# ---- edit detection ----
+# A PUT must advance `updated_at` only when it really changed a column; a save
+# that rewrites every field with the value already stored is not an edit (this
+# is what SQLAlchemy does for free on the FastAPI side: at flush time it diffs
+# the columns and emits no UPDATE at all when none of them moved, so `onupdate`
+# never fires). `changes()` cannot answer this — SQLite counts a row as changed
+# whenever an UPDATE matches it, even when old and new values are identical —
+# so the row is read before and after the writes and the two reads compared.
+#
+# Reading afterwards, rather than checking each incoming field against the
+# stored one, is deliberate: several writes are derived rather than literal
+# (slug goes through unique_slug, created_at through datetime(), title is
+# trimmed), and it is the stored result that decides whether anything moved.
+
+## The `cols` of one row as a single comparable string, for `row_sig`. `quote`
+## renders each value as an unambiguous SQL literal — NULL included, embedded
+## quotes doubled — because plain `||` would collapse the whole string to NULL
+## as soon as one column were NULL. The `'|'` separators keep two unquoted
+## integer columns from aliasing (1,23 vs 12,3).
+pub fn sig_expr(cols: List[String]) -> String =
+  match cols {
+    [] -> "''"
+    _ -> fold(cols, "", (acc, c) => join_sig(acc, quoted(c)))
+  }
+
+fn quoted(col: String) -> String = "quote($col)"
+
+fn join_sig(acc: String, q: String) -> String = if acc == "" { q } else { "$acc || '|' || $q" }
+
+## Snapshot `cols` of the row `id` in `table`. Compare a before- and after-write
+## snapshot to tell an edit from a no-op save. `table`/`cols` are module-owned
+## literals, never request data.
+pub fn row_sig(c: DbConn, table: String, cols: List[String], id: Int) -> Result[String, String] !io = {
+  let expr = sig_expr(cols)
+  let rows = query(c, "select $expr from $table where id = ?", [PInt(id)], [ColStr])?
+  Ok(first_str_or(rows, ""))
+}
+
 # ---- tests (need --cp lib/sqlite-jdbc-*.jar) ----
 
 test "with_connection closes on both paths" {
@@ -532,4 +570,32 @@ test "unique constraint violation is an expected Err" {
     Ok(_) -> { assert false }
     Err(m) -> { assert str.contains(m, "UNIQUE") }
   }
+}
+
+test "sig_expr quotes every column and separates them" {
+  assert sig_expr([]) == "''"
+  assert sig_expr(["a"]) == "quote(a)"
+  assert sig_expr(["a", "b", "c"]) == "quote(a) || '|' || quote(b) || '|' || quote(c)"
+}
+
+test "row_sig reads through NULLs and never aliases two different rows" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table t (id integer primary key, a integer, b integer, s text)", []) == Ok(0)
+  assert exec(c, "insert into t values (1, 1, 23, null)", []) == Ok(1)
+  assert exec(c, "insert into t values (2, 12, 3, null)", []) == Ok(1)
+  # a NULL column does not swallow the signature (plain `||` would have made the
+  # whole string NULL, i.e. every row with a NULL would look identical)
+  assert row_sig(c, "t", ["a", "b", "s"], 1) == Ok("1|23|NULL")
+  # and the separator keeps the two unquoted integers from running together into
+  # the same "123" as row 1
+  assert row_sig(c, "t", ["a", "b", "s"], 2) == Ok("12|3|NULL")
+  # a quote or a separator inside the text stays inside the quoted literal
+  assert exec(c, "insert into t values (3, 0, 0, '|''x')", []) == Ok(1)
+  assert row_sig(c, "t", ["s"], 3) == Ok("'|''x'")
+  # text '1' and integer 1 are not the same value, and do not sign the same
+  assert exec(c, "insert into t values (4, 0, 0, '1')", []) == Ok(1)
+  assert row_sig(c, "t", ["s"], 4) == Ok("'1'")
+  assert row_sig(c, "t", ["a"], 1) == Ok("1")
+  # a row that is not there has no signature
+  assert row_sig(c, "t", ["a"], 99) == Ok("")
 }

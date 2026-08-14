@@ -8,13 +8,20 @@
   - 重排导航（pages.reorder）——改的是 nav_order，不是对页面的编辑；
   - 删页面（pages.delete_page）——把旗下文章的 page_id 置空，不是对文章的编辑。
 
+#266 又添了一条同族的：PUT 没真改动任何字段就别推进（三个资源都算），以及它的
+反面——改标签**要**推进，因为那是用户在编辑这篇文章，只不过落在关联表上。
+
 这类判词平时永远绿，而永远绿的判词和根本没看的判词输出一样。这个脚本把每个 mutant
-打进**生产文件**，跑一遍下面两个测试文件，然后要求：
+打进**生产文件**，跑一遍下面三个测试文件，然后要求：
   1. 至少有一个测试红了，且
   2. 红的恰好是预期的那些（判词指着的是它声称守着的东西，不是被别的连坐）。
 
-两个文件一起跑：mutant 现在跨文件（删模型上的 onupdate 会打到另一个文件里的判词），
-分开跑就看不见这种连坐。期望集写成 `文件名::函数名`，免得两边重名时糊在一起。
+三个文件一起跑：mutant 是跨文件的（删模型上的 onupdate 会打到另外两个文件里的
+判词），分开跑就看不见这种连坐。期望集写成 `文件名::函数名[参数]`——参数化的用例
+不带 `[参数]` 就分不出「哪个资源红了」，两边重名时也会糊在一起。
+
+Dawn 侧的同一族负控在 backend-dawn/scripts/updated-at-boundary-mutants/（那边进 CI，
+因为它改的是临时副本，不是工作树）。
 
 用法：
     python3 backend/scripts/updated_at_mutants.py            # 全部
@@ -38,10 +45,12 @@ REPO = BACKEND.parent
 
 VC = "test_view_counter.py"
 PG = "test_page_updated_at.py"
-TEST_FILES = [f"tests/{VC}", f"tests/{PG}"]
+NP = "test_noop_put_updated_at.py"
+TEST_FILES = [f"tests/{VC}", f"tests/{PG}", f"tests/{NP}"]
 
 ARTICLES_API = BACKEND / "app" / "api" / "articles.py"
 PAGES_API = BACKEND / "app" / "api" / "pages.py"
+VIZ_API = BACKEND / "app" / "api" / "viz.py"
 ARTICLE_MODEL = BACKEND / "app" / "models" / "article.py"
 PAGE_MODEL = BACKEND / "app" / "models" / "page.py"
 
@@ -51,6 +60,17 @@ def sub(old: str, new: str) -> Callable[[str], str]:
         if old not in text:
             raise SystemExit(f"mutant 的锚点没了，请更新脚本：{old!r}")
         return text.replace(old, new, 1)
+
+    return apply
+
+
+def chain(*steps: Callable[[str], str]) -> Callable[[str], str]:
+    """依次施加多个 sub。给需要顺带补一行 import 的变形用。"""
+
+    def apply(text: str) -> str:
+        for step in steps:
+            text = step(text)
+        return text
 
     return apply
 
@@ -89,6 +109,31 @@ FIXED_UNBIND = """    db.query(Article).filter(Article.page_id == page.id).updat
     )
 """
 
+# ---- 改标签要推进 / 原样重存不推进（#266）----
+
+TAGS_CHANGED_COND = (
+    "        if {t.id for t in new_tags} != {t.id for t in article.tags}:"
+)
+
+# 锚在 update_* 的 setattr 循环上：光锚 `db.commit()` 会打到同文件里 create_* 的
+# 那一处（它的收尾三行一模一样）
+VIZ_COMMIT = """    for key, value in data.items():
+        if value is not None:
+            setattr(viz, key, value)
+    db.commit()
+"""
+
+PAGE_COMMIT = """    for key, value in data.items():
+        setattr(page, key, value)
+    db.commit()
+"""
+
+
+def touch_before_commit(block: str, expr: str) -> str:
+    """把一句显式推进插在这个块的 db.commit() 前面。"""
+    return block.replace("    db.commit()\n", f"    {expr}\n    db.commit()\n")
+
+
 # (名字, 说明, 目标文件, 变形, 预期转红的测试)
 MUTANTS: list[tuple[str, str, Path, Callable[[str], str], set[str]]] = [
     (
@@ -116,7 +161,11 @@ MUTANTS: list[tuple[str, str, Path, Callable[[str], str], set[str]]] = [
         "把 Article 上的 onupdate 删掉——这样「读不改 updated_at」也会绿，但那是拆表不是修",
         ARTICLE_MODEL,
         sub(", onupdate=func.now()", ""),
-        {f"{VC}::test_real_edit_still_advances_updated_at"},
+        {
+            f"{VC}::test_real_edit_still_advances_updated_at",
+            # 拆掉 onupdate，「改一个字段要推进」也就守不住了（#266 那批判词）
+            f"{NP}::test_changing_one_field_still_advances_updated_at[article]",
+        },
     ),
     (
         "views-never-increment",
@@ -171,7 +220,10 @@ MUTANTS: list[tuple[str, str, Path, Callable[[str], str], set[str]]] = [
         "把 Page 上的 onupdate 删掉——重排那条也会绿，但那是拆表不是修",
         PAGE_MODEL,
         sub(", onupdate=func.now()", ""),
-        {f"{PG}::test_editing_a_page_still_advances_updated_at"},
+        {
+            f"{PG}::test_editing_a_page_still_advances_updated_at",
+            f"{NP}::test_changing_one_field_still_advances_updated_at[page]",
+        },
     ),
     (
         "delete-page-touches-article-updated-at",
@@ -186,6 +238,72 @@ MUTANTS: list[tuple[str, str, Path, Callable[[str], str], set[str]]] = [
         PAGES_API,
         sub(FIXED_UNBIND, ""),
         {f"{PG}::test_delete_page_unbinds_articles_without_touching_updated_at"},
+    ),
+    # ---- #266：原样重存不推进 / 改标签要推进 ----
+    (
+        "tags-change-doesnt-touch-updated-at",
+        "改标签不再显式推进 updated_at（退回依赖 SQLAlchemy 的涌现行为）",
+        ARTICLES_API,
+        sub(TAGS_CHANGED_COND, "        if False:"),
+        {
+            f"{NP}::test_retagging_advances_updated_at",
+            f"{NP}::test_dropping_or_clearing_tags_advances_updated_at",
+        },
+    ),
+    (
+        "tags-touch-is-unconditional",
+        "只要 PUT 里带了 tags 就推进，不管标签有没有真的变",
+        ARTICLES_API,
+        sub(TAGS_CHANGED_COND, "        if True:"),
+        {
+            f"{NP}::test_reordering_the_same_tags_is_not_an_edit",
+            f"{NP}::test_resaving_the_same_values_is_not_an_edit[article]",
+        },
+    ),
+    (
+        "tags-compared-as-ordered-list",
+        "拿列表比而不是集合比：标签顺序换了就当改过（Tag.name 排序会露馅）",
+        ARTICLES_API,
+        sub(
+            TAGS_CHANGED_COND,
+            "        if [t.id for t in new_tags] != [t.id for t in article.tags]:",
+        ),
+        {f"{NP}::test_reordering_the_same_tags_is_not_an_edit"},
+    ),
+    (
+        "viz-put-always-touches",
+        "viz 的 PUT 无条件推进 updated_at（= 修之前 Dawn 侧的行为）",
+        VIZ_API,
+        chain(
+            sub(
+                "from sqlalchemy.orm import Session",
+                "from sqlalchemy import func\nfrom sqlalchemy.orm import Session",
+            ),
+            sub(
+                VIZ_COMMIT,
+                touch_before_commit(VIZ_COMMIT, "viz.updated_at = func.now()"),
+            ),
+        ),
+        {
+            f"{NP}::test_resaving_the_same_values_is_not_an_edit[viz]",
+            f"{NP}::test_empty_body_is_not_an_edit[viz]",
+        },
+    ),
+    (
+        "page-put-always-touches",
+        "页面的 PUT 无条件推进 updated_at（= 修之前 Dawn 侧的行为）",
+        PAGES_API,
+        chain(
+            sub("from sqlalchemy import update", "from sqlalchemy import func, update"),
+            sub(
+                PAGE_COMMIT,
+                touch_before_commit(PAGE_COMMIT, "page.updated_at = func.now()"),
+            ),
+        ),
+        {
+            f"{NP}::test_resaving_the_same_values_is_not_an_edit[page]",
+            f"{NP}::test_empty_body_is_not_an_edit[page]",
+        },
     ),
 ]
 
@@ -206,10 +324,12 @@ def run_tests() -> set[str]:
         capture_output=True,
         text=True,
     )
+    # 参数化的用例要带上 [param]：test_x[viz] 和 test_x[page] 是两条判词，
+    # 收敛成同一个函数名就分不出「哪个资源红了」
     failed = {
         f"{m.group(1)}::{m.group(2)}"
         for line in proc.stdout.splitlines()
-        if (m := re.match(r"FAILED tests/(\S+?)::([A-Za-z0-9_]+)", line))
+        if (m := re.match(r"FAILED tests/(\S+?)::([A-Za-z0-9_]+(?:\[[^\]]*\])?)", line))
     }
     if proc.returncode not in (0, 1):
         # 收集期错误之类：整个文件红了，这不算「某条判词守住了」

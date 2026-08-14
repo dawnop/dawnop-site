@@ -3,7 +3,7 @@
 # All writes need the connection to have the FTS `simple` extension loaded
 # (the article_fts triggers use it) — db.connect handles that.
 use std/str
-use db/sql.{DbConn, SqlV, PInt, PStr, PNull, ColInt, ColStr, open, query, exec, scalar_int, last_id, int_at, first_bool_or, first_str_or, bool_int}
+use db/sql.{DbConn, SqlV, PInt, PStr, PNull, ColInt, ColStr, open, query, exec, scalar_int, last_id, int_at, first_bool_or, first_str_or, bool_int, row_sig}
 use util/errkind.{invalid}
 use util/slugify.{slugify}
 
@@ -156,6 +156,7 @@ pub fn update_article(c: DbConn, id: Int, p: ArticlePatch) -> Result[Bool, Strin
     Ok(false)
   } else {
     let _v = if p.has_page_id { validate_page_ref(c, p.page_id)? } else { true }
+    let before = article_sig(c, id)?
     let _s = if p.has_title { set_str(c, id, "title", p.title)? } else { 0 }
     let _su = if p.has_summary { set_str(c, id, "summary", p.summary)? } else { 0 }
     let _co = if p.has_content { set_str(c, id, "content", p.content)? } else { 0 }
@@ -170,10 +171,42 @@ pub fn update_article(c: DbConn, id: Int, p: ArticlePatch) -> Result[Bool, Strin
     } else {
       0
     }
-    let _u = exec(c, "update articles set updated_at = datetime('now') where id = ?", [PInt(id)])?
+    # a save that changed nothing is not an edit, so updated_at stays put — see
+    # db/sql.row_sig. Retagging counts as an edit; article_sig covers it.
+    let after = article_sig(c, id)?
+    let _u = if after != before { touch_article(c, id)? } else { 0 }
     Ok(true)
   }
 }
+
+## The editable state of an article, snapshotted for edit detection — see
+## db/sql.row_sig. `views` is out: the view counter bumps it without meaning to
+## edit the article, and this update never writes it.
+##
+## Tags are in, even though they live in another table. Retagging is the user
+## editing this article — they pressed save in the editor — it just happens to
+## land on article_tags. (FastAPI leaves updated_at alone there, but only as a
+## side effect of SQLAlchemy diffing columns; nothing states it, so it is not
+## the contract. app/api/articles.py now advances the stamp explicitly.)
+fn article_sig(c: DbConn, id: Int) -> Result[String, String] !io = {
+  let cols = row_sig(c, "articles",
+    ["title", "slug", "summary", "content", "published", "auto_title", "page_id", "created_at"], id)?
+  let tags = article_tag_sig(c, id)?
+  Ok("$cols|tags=$tags")
+}
+
+## The article's tag set as a canonical string. Tags are a set, so `order by`
+## makes the signature blind to the order they arrived in: re-saving [b, a] over
+## a stored [a, b] is not an edit. Ordering in the outer query is guaranteed;
+## folding here rather than with group_concat over a sorted subquery avoids
+## leaning on SQLite preserving a subquery's order.
+fn article_tag_sig(c: DbConn, id: Int) -> Result[String, String] !io = {
+  let rows = query(c, "select tag_id from article_tags where article_id = ? order by tag_id", [PInt(id)], [ColInt])?
+  Ok(fold(rows, "", (acc, r) => "$acc,${to_string(int_at(r, 0))}"))
+}
+
+fn touch_article(c: DbConn, id: Int) -> Result[Int, String] !io =
+  exec(c, "update articles set updated_at = datetime('now') where id = ?", [PInt(id)])
 
 fn set_str(c: DbConn, id: Int, col: String, v: String) -> Result[Int, String] !io =
   exec(c, "update articles set $col = ? where id = ?", [PStr(v), PInt(id)])
@@ -239,4 +272,170 @@ test "resolve_tags finds or creates, dedups by lowercase" {
     }
     Err(e) -> panic(e)
   }
+}
+
+# ---- update_article: what counts as an edit ----
+#
+# updated_at only advances for a real edit, so these fix the stored timestamp at
+# a distinctly old value and check whether the update moved it. A wall-clock
+# comparison could not tell "not written" from "rewritten in the same second".
+
+const STALE: String = "2000-01-01 00:00:00"
+
+# a schema or seed typo must fail here, not as a puzzling assertion later
+fn must(r: Result[Int, String]) -> Int =
+  match r {
+    Ok(n) -> n
+    Err(m) -> panic(m)
+  }
+
+fn article_test_db() -> DbConn !io = {
+  let c = open("jdbc:sqlite::memory:")
+  let _a = must(exec(c, "create table articles (id integer primary key, title text, slug text unique, summary text, content text, published integer, auto_title integer, page_id integer, views integer, created_at text, updated_at text)", []))
+  let _p = must(exec(c, "create table pages (id integer primary key, type text)", []))
+  let _t = must(exec(c, "create table tags (id integer primary key, name text, slug text, created_at text)", []))
+  let _l = must(exec(c, "create table article_tags (article_id integer, tag_id integer)", []))
+  let _lp = must(exec(c, "insert into pages values (7, 'article_list')", []))
+  let _r = must(exec(c, "insert into articles values (1, 'Title', 'title', 'Sum', 'Body', 1, 0, null, 0, '2020-01-01 00:00:00', '$STALE')", []))
+  # one tag already on the article, so "re-save what is stored" covers tags too
+  let _sd = must(exec(c, "insert into tags values (1, 'seed', 'seed', '2020-01-01 00:00:00')", []))
+  let _sl = must(exec(c, "insert into article_tags values (1, 1)", []))
+  c
+}
+
+fn article_updated(c: DbConn) -> String !io =
+  match query(c, "select updated_at from articles where id = 1", [], [ColStr]) {
+    Ok(rows) -> first_str_or(rows, "")
+    Err(e) -> panic(e)
+  }
+
+# a patch with nothing set — the shape an empty PUT body arrives as
+fn no_patch() -> ArticlePatch =
+  ArticlePatch {
+    has_title: false, title: "",
+    has_slug: false, slug: "",
+    has_summary: false, summary: "",
+    has_content: false, content: "",
+    has_published: false, published: false,
+    has_auto_title: false, auto_title: false,
+    has_page_id: false, page_id: None,
+    has_tags: false, tags: [],
+    created_at: None,
+  }
+
+# every field present, each carrying the value already stored
+fn same_patch() -> ArticlePatch =
+  ArticlePatch {
+    has_title: true, title: "Title",
+    has_slug: true, slug: "title",
+    has_summary: true, summary: "Sum",
+    has_content: true, content: "Body",
+    has_published: true, published: true,
+    has_auto_title: true, auto_title: false,
+    has_page_id: true, page_id: None,
+    has_tags: true, tags: ["seed"],
+    created_at: None,
+  }
+
+fn put_article(c: DbConn, p: ArticlePatch) -> Unit !io =
+  match update_article(c, 1, p) {
+    Ok(true) -> {}
+    Ok(false) -> panic("article vanished")
+    Err(e) -> panic(e)
+  }
+
+test "PUT article: re-saving every field with the stored value is not an edit" {
+  let c = article_test_db()
+  put_article(c, same_patch())
+  assert article_updated(c) == STALE
+  # the slug was regenerated through unique_slug and came back the same, so it
+  # did not count as an edit — and it did not collect a -2 suffix either
+  assert scalar_int(c, "select count(*) from articles where slug = 'title'", []) == Ok(1)
+}
+
+test "PUT article: an empty patch is not an edit" {
+  let c = article_test_db()
+  put_article(c, no_patch())
+  assert article_updated(c) == STALE
+}
+
+test "PUT article: changing one field advances updated_at" {
+  let c = article_test_db()
+  let same = same_patch()
+  put_article(c, ArticlePatch { ..same, title: "Title 2" })
+  assert article_updated(c) != STALE
+  assert scalar_int(c, "select count(*) from articles where title = 'Title 2'", []) == Ok(1)
+}
+
+test "PUT article: each editable field on its own counts as an edit" {
+  let none = no_patch()
+  let edits: List[ArticlePatch] = [
+    ArticlePatch { ..none, has_title: true, title: "T2" },
+    ArticlePatch { ..none, has_slug: true, slug: "other" },
+    ArticlePatch { ..none, has_summary: true, summary: "S2" },
+    ArticlePatch { ..none, has_content: true, content: "B2" },
+    ArticlePatch { ..none, has_published: true, published: false },
+    ArticlePatch { ..none, has_auto_title: true, auto_title: true },
+    ArticlePatch { ..none, has_page_id: true, page_id: Some(7) },
+    ArticlePatch { ..none, created_at: Some("2021-02-03T04:05:06Z") },
+  ]
+  for p in edits {
+    let c = article_test_db()
+    put_article(c, p)
+    assert article_updated(c) != STALE
+  }
+}
+
+test "article_sig ignores the view counter but sees a real edit" {
+  # Asserted on the signature itself, not through a PUT: views can only move a
+  # PUT's verdict when a read lands *between* its two snapshots, and that race
+  # is not reachable from a single-threaded test. Going through update_article
+  # here would pass no matter which columns the signature covers.
+  let c = article_test_db()
+  let quiet = article_sig(c, 1)
+  let _v = must(exec(c, "update articles set views = views + 1 where id = 1", []))
+  assert article_sig(c, 1) == quiet
+  let _t = must(exec(c, "update articles set title = 'Edited' where id = 1", []))
+  assert article_sig(c, 1) != quiet
+}
+
+test "PUT article: retagging is an edit" {
+  let c = article_test_db()
+  let none = no_patch()
+  put_article(c, ArticlePatch { ..none, has_tags: true, tags: ["jvm"] })
+  assert article_updated(c) != STALE
+  assert scalar_int(c, "select count(*) from article_tags where article_id = 1", []) == Ok(1)
+}
+
+test "PUT article: re-sending the same tag set in another order is not an edit" {
+  let c = article_test_db()
+  let none = no_patch()
+  # first save really retags, so it advances
+  put_article(c, ArticlePatch { ..none, has_tags: true, tags: ["jvm", "dawn"] })
+  assert article_updated(c) != STALE
+  # tags are a set: the same two names, swapped, is the same state
+  let _r = must(exec(c, "update articles set updated_at = '$STALE' where id = 1", []))
+  put_article(c, ArticlePatch { ..none, has_tags: true, tags: ["dawn", "jvm"] })
+  assert article_updated(c) == STALE
+  # and the links survived the rewrite intact
+  assert scalar_int(c, "select count(*) from article_tags where article_id = 1", []) == Ok(2)
+}
+
+test "PUT article: dropping a tag and adding one are both edits" {
+  let none = no_patch()
+  let c = article_test_db()
+  put_article(c, ArticlePatch { ..none, has_tags: true, tags: ["jvm", "dawn"] })
+  # drop one
+  let _r = must(exec(c, "update articles set updated_at = '$STALE' where id = 1", []))
+  put_article(c, ArticlePatch { ..none, has_tags: true, tags: ["jvm"] })
+  assert article_updated(c) != STALE
+  # add a different one
+  let _r2 = must(exec(c, "update articles set updated_at = '$STALE' where id = 1", []))
+  put_article(c, ArticlePatch { ..none, has_tags: true, tags: ["jvm", "sqlite"] })
+  assert article_updated(c) != STALE
+  # clearing them all is an edit too
+  let _r3 = must(exec(c, "update articles set updated_at = '$STALE' where id = 1", []))
+  put_article(c, ArticlePatch { ..none, has_tags: true, tags: [] })
+  assert article_updated(c) != STALE
+  assert scalar_int(c, "select count(*) from article_tags where article_id = 1", []) == Ok(0)
 }

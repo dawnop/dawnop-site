@@ -170,7 +170,14 @@ def update_article(
         _validate_page_ref(db, data["page_id"])
 
     if "tags" in data:
-        article.tags = resolve_tags(db, data.pop("tags") or [])
+        new_tags = resolve_tags(db, data.pop("tags") or [])
+        # 改标签是用户在编辑这篇文章（他在编辑器里按了保存），只不过落在关联表上，
+        # 所以要推进 updated_at。SQLAlchemy 只会写 article_tags、不对 articles 发
+        # UPDATE，onupdate 便不触发，故这里显式推进——别再依赖那个涌现行为。
+        # 标签是集合：顺序变了、集合没变不算改（见 #266）。
+        if {t.id for t in new_tags} != {t.id for t in article.tags}:
+            article.updated_at = func.now()
+        article.tags = new_tags
 
     if "slug" in data:
         # 显式传 slug 时重算唯一 slug；以 slug 优先，否则用新/旧标题

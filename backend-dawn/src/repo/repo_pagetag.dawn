@@ -1,7 +1,7 @@
 # Page and tag write model (M6 knife 9): create/update/delete/reorder pages,
 # rename/merge/cleanup/delete tags. Mirrors app/api/pages.py and tags.py.
 use std/str
-use db/sql.{DbConn, SqlV, PInt, PStr, ColInt, ColStr, query, exec, last_id, str_at, first_str, first_str_or, first_bool_or, first_int_or, bool_int, open, scalar_int}
+use db/sql.{DbConn, SqlV, PInt, PStr, ColInt, ColStr, query, exec, last_id, str_at, first_str, first_str_or, first_bool_or, first_int_or, bool_int, open, scalar_int, row_sig}
 use repo/repo_write.{unique_slug, clip}
 
 # ---- pages ----
@@ -45,6 +45,13 @@ pub fn set_page_int(c: DbConn, id: Int, col: String, v: Int) -> Result[Int, Stri
 
 pub fn touch_page(c: DbConn, id: Int) -> Result[Int, String] !io =
   exec(c, "update pages set updated_at = datetime('now') where id = ?", [PInt(id)])
+
+## The editable columns of a page, snapshotted for edit detection — see
+## db/sql.row_sig. nav_order is in the list because the PUT can set it; the
+## reorder endpoint writes it without touching updated_at by its own route.
+pub fn page_sig(c: DbConn, id: Int) -> Result[String, String] !io =
+  row_sig(c, "pages",
+    ["title", "slug", "type", "description", "content", "auto_title", "nav_visible", "nav_order", "created_at"], id)
 
 # set created_at from a client ISO-8601 string, normalized via datetime(?)
 pub fn set_page_created(c: DbConn, id: Int, iso: String) -> Result[Int, String] !io =

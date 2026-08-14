@@ -1,7 +1,7 @@
 # Viz component model (M6 knife 10): CRUD for the embedded Vue components that
 # ```viz fences mount. slug must match ^[a-z0-9]+(-[a-z0-9]+)*$; source required.
 use std/str
-use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Row, query, query_rows, exec, last_id, str_at, first_map, first_named_map, first_bool_or, col_int, col_str}
+use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Row, query, query_rows, exec, last_id, str_at, first_map, first_named_map, first_bool_or, col_int, col_str, row_sig}
 use json/value.{Json}
 use util/jsonx.{obj, jint, jstr, jdatetime}
 
@@ -88,6 +88,11 @@ pub fn set_viz_str(c: DbConn, id: Int, col: String, val: String) -> Result[Int, 
 
 pub fn touch_viz(c: DbConn, id: Int) -> Result[Int, String] !io =
   exec(c, "update viz_components set updated_at = datetime('now') where id = ?", [PInt(id)])
+
+## The editable columns of a component, snapshotted for edit detection —
+## see db/sql.row_sig.
+pub fn viz_sig(c: DbConn, id: Int) -> Result[String, String] !io =
+  row_sig(c, "viz_components", ["slug", "name", "source", "compiled", "style"], id)
 
 pub fn delete_viz(c: DbConn, id: Int) -> Result[Int, String] !io =
   exec(c, "delete from viz_components where id = ?", [PInt(id)])

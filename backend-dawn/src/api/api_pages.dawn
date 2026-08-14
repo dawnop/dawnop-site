@@ -7,12 +7,12 @@ use std/list
 use web/types.{Handler, http_error, as_http, opt_param_int, json_ok, json_response, text}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json, JArr, JInt}
-use db/sql.{DbConn, bool_int}
+use db/sql.{DbConn, ColStr, bool_int, open, exec, query, scalar_int, first_str_or}
 use db/db.{with_db}
 use svc/auth.{Auth, guarded}
 use util/jsonread.{body_obj, has, str_or, opt_str, bool_or, opt_int}
 use repo/repo_page
-use repo/repo_pagetag.{NewPage, create_page, page_kind, delete_page, reorder_pages, set_page_str, set_page_int, set_page_created, touch_page, regen_page_slug, page_title}
+use repo/repo_pagetag.{NewPage, create_page, page_kind, delete_page, reorder_pages, set_page_str, set_page_int, set_page_created, touch_page, page_sig, regen_page_slug, page_title}
 
 ## GET /api/pages/admin — all pages.
 pub fn pages_admin(a: Auth) -> Handler =
@@ -111,6 +111,7 @@ fn page_update_read(c: DbConn, id: Int, m: Map[String, Json]) -> Result[Option[J
     None -> Ok(None)
     Some(kind) -> {
       let builtin = kind == "builtin"
+      let before = page_sig(c, id)?
       # builtin pages accept only title/nav_visible/nav_order (slug/type/description/
       # content/auto_title/created_at are routing/render roots FastAPI's builtin
       # filter strips); non-builtin pages accept the full editable set.
@@ -123,7 +124,10 @@ fn page_update_read(c: DbConn, id: Int, m: Map[String, Json]) -> Result[Option[J
       let _au = if not builtin && has(m, "auto_title") { set_page_int(c, id, "auto_title", bool_int(bool_or(m, "auto_title", false)))? } else { 0 }
       let _ca = if not builtin { match opt_str(m, "created_at") { Some(s) -> set_page_created(c, id, s)?, None -> 0 } } else { 0 }
       let _sl = if not builtin && has(m, "slug") { regen_page_slug(c, id, slug_base(c, id, m)?)? } else { 0 }
-      let _u = touch_page(c, id)?
+      # a save that changed nothing is not an edit, so updated_at stays put —
+      # see db/sql.row_sig
+      let after = page_sig(c, id)?
+      let _u = if after != before { touch_page(c, id)? } else { 0 }
       repo_page.by_id_admin(c, id)
     }
   }
@@ -219,3 +223,98 @@ pub fn routes(a: Auth) -> List[Route] =
     route_put("/api/pages/{page_id}", page_update(a)),
     route_delete("/api/pages/{page_id}", page_delete(a)),
   ]
+
+# ---- tests (need --cp lib/sqlite-jdbc-*.jar) ----
+#
+# updated_at only advances for a real edit, so these fix the stored timestamp at
+# a distinctly old value and check whether the update moved it. A wall-clock
+# comparison could not tell "not written" from "rewritten in the same second".
+
+const STALE: String = "2000-01-01 00:00:00"
+
+# a schema or seed typo must fail here, not as a puzzling assertion later
+fn must(r: Result[Int, String]) -> Int =
+  match r {
+    Ok(n) -> n
+    Err(m) -> panic(m)
+  }
+
+fn page_test_db(kind: String) -> DbConn !io = {
+  let c = open("jdbc:sqlite::memory:")
+  let _t = must(exec(c, "create table pages (id integer primary key, title text, slug text unique, type text, description text, content text, nav_visible integer, nav_order integer, auto_title integer, created_at text, updated_at text)", []))
+  let _r = must(exec(c, "insert into pages values (1, 'Notes', 'notes', '$kind', 'D', 'C', 1, 3, 0, '2020-01-01 00:00:00', '$STALE')", []))
+  c
+}
+
+fn page_updated(c: DbConn) -> String !io =
+  match query(c, "select updated_at from pages where id = 1", [], [ColStr]) {
+    Ok(rows) -> first_str_or(rows, "")
+    Err(e) -> panic(e)
+  }
+
+# run one PUT body through the update path, failing loudly on anything but 200
+fn put_page(c: DbConn, body: String) -> Unit !io = {
+  let m = match body_obj(body) {
+    Ok(x) -> x
+    Err(e) -> panic("bad test body: $e")
+  }
+  match page_update_read(c, 1, m) {
+    Ok(Some(_j)) -> {}
+    Ok(None) -> panic("page vanished")
+    Err(e) -> panic(e)
+  }
+}
+
+const SAME_PAGE: String = "{\"title\":\"Notes\",\"slug\":\"notes\",\"type\":\"content\",\"description\":\"D\",\"content\":\"C\",\"nav_visible\":true,\"nav_order\":3,\"auto_title\":false}"
+
+test "PUT page: re-saving every field with the stored value is not an edit" {
+  let c = page_test_db("content")
+  put_page(c, SAME_PAGE)
+  assert page_updated(c) == STALE
+  # the slug went through unique_slug and came back unchanged, so it did not
+  # count as an edit — the regenerated value is what decides, not its presence
+  assert scalar_int(c, "select count(*) from pages where slug = 'notes'", []) == Ok(1)
+}
+
+test "PUT page: an empty body is not an edit" {
+  let c = page_test_db("content")
+  put_page(c, "{}")
+  assert page_updated(c) == STALE
+}
+
+test "PUT page: changing one field advances updated_at" {
+  let c = page_test_db("content")
+  put_page(c, "{\"title\":\"Notebook\"}")
+  assert page_updated(c) != STALE
+  assert scalar_int(c, "select count(*) from pages where title = 'Notebook'", []) == Ok(1)
+}
+
+test "PUT page: each editable field on its own counts as an edit" {
+  for body in [
+    "{\"title\":\"T2\"}",
+    "{\"slug\":\"other\"}",
+    "{\"type\":\"article_list\"}",
+    "{\"description\":\"D2\"}",
+    "{\"content\":\"C2\"}",
+    "{\"nav_visible\":false}",
+    "{\"nav_order\":9}",
+    "{\"auto_title\":true}",
+    "{\"created_at\":\"2021-02-03T04:05:06Z\"}",
+  ] {
+    let c = page_test_db("content")
+    put_page(c, body)
+    assert page_updated(c) != STALE
+  }
+}
+
+test "PUT page: fields a builtin page ignores cannot advance its updated_at" {
+  let c = page_test_db("builtin")
+  # slug/type/description/content/auto_title/created_at are stripped for builtin
+  # pages, so a PUT carrying only those changes nothing at all
+  put_page(c, "{\"slug\":\"moved\",\"type\":\"content\",\"description\":\"D2\",\"content\":\"C2\",\"auto_title\":true}")
+  assert page_updated(c) == STALE
+  assert scalar_int(c, "select count(*) from pages where slug = 'notes' and type = 'builtin'", []) == Ok(1)
+  # the nav fields it does accept still count
+  put_page(c, "{\"nav_order\":7}")
+  assert page_updated(c) != STALE
+}
