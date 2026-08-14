@@ -285,6 +285,9 @@ npm run lint                            # eslint（配置 eslint.config.js）
 npm run format                          # prettier
 
 # ---- 质量检查（CI 跑的就是这些）----
+# ★ 这两条必须在**仓库根**跑，不是在 backend/ 里。根上的 pyproject.toml 同时管着
+#   backend/、backend-dawn/scripts/、deploy/、scripts/；在 backend/ 里跑会漏掉后三个，
+#   而 CI 是在根上跑的（2026-08-14 因此红过一次：scripts/ 下一个文件没格式化）。
 ruff check . && ruff format --check .   # 配置见 pyproject.toml，target 钉 3.10
 cd frontend && npm run lint && npm run format:check
 
