@@ -18,7 +18,7 @@ use svc/auth.{Auth}
 use tencent/client
 use util/ttl.{TtlCell, cache_get, cache_put, now_s}
 use qiniu/stats.{field, int_of, last_nonzero, kodo_series, flow_series, cdn_domains, cdn_tune, respack_summary}
-use util/http.{fetch}
+use util/http.{HttpCell, fetch}
 use json/value.{Json, JNull, JNum, JInt, JStr, JArr, JObj}
 use json/render.{render}
 use json/parser.{parse}
@@ -195,19 +195,19 @@ fn clip100(x: Float) -> Float = if x > 100.0 { 100.0 } else { x }
 
 # ---- lighthouse: traffic package + instance + cpu trend (each fault-isolated) ----
 
-pub fn lighthouse_block(secret_id: String, secret_key: String, region: String, instance: String) -> Json !io =
+pub fn lighthouse_block(cl: HttpCell, secret_id: String, secret_key: String, region: String, instance: String) -> Json !io =
   if secret_id == "" || secret_key == "" {
     obj([("configured", jbool(false))])
   } else {
-    let traffic = match traffic_fetch(secret_id, secret_key, region, instance) {
+    let traffic = match traffic_fetch(cl, secret_id, secret_key, region, instance) {
       Ok(t) -> [("traffic", t)]
       Err(m) -> [("traffic_error", jstr(m))]
     }
-    let inst = match instance_fetch(secret_id, secret_key, region, instance) {
+    let inst = match instance_fetch(cl, secret_id, secret_key, region, instance) {
       Ok(v) -> [("instance", v)]
       Err(m) -> [("instance_error", jstr(m))]
     }
-    let trend = match cpu_trend_fetch(secret_id, secret_key, region, instance) {
+    let trend = match cpu_trend_fetch(cl, secret_id, secret_key, region, instance) {
       Ok(v) -> [("cpu_trend", v)]
       Err(m) -> [("cpu_trend_error", jstr(m))]
     }
@@ -232,8 +232,8 @@ fn jstr_plain(j: Json) -> String =
     _ -> "",
   }
 
-fn traffic_fetch(id: String, key: String, region: String, instance: String) -> Result[Json, String] !io = {
-  let j = client.call(id, key, "lighthouse", "DescribeInstancesTrafficPackages", "2020-03-24", region, "{\"InstanceIds\":[\"$instance\"]}")?
+fn traffic_fetch(cl: HttpCell, id: String, key: String, region: String, instance: String) -> Result[Json, String] !io = {
+  let j = client.call(cl, id, key, "lighthouse", "DescribeInstancesTrafficPackages", "2020-03-24", region, "{\"InstanceIds\":[\"$instance\"]}")?
   let resp = tc_resp("DescribeInstancesTrafficPackages", j)?
   match arr0(field(resp, "InstanceTrafficPackageSet")) {
     Some(inst) ->
@@ -253,8 +253,8 @@ fn traffic_fetch(id: String, key: String, region: String, instance: String) -> R
   }
 }
 
-fn instance_fetch(id: String, key: String, region: String, instance: String) -> Result[Json, String] !io = {
-  let j = client.call(id, key, "lighthouse", "DescribeInstances", "2020-03-24", region, "{\"InstanceIds\":[\"$instance\"]}")?
+fn instance_fetch(cl: HttpCell, id: String, key: String, region: String, instance: String) -> Result[Json, String] !io = {
+  let j = client.call(cl, id, key, "lighthouse", "DescribeInstances", "2020-03-24", region, "{\"InstanceIds\":[\"$instance\"]}")?
   let resp = tc_resp("DescribeInstances", j)?
   match arr0(field(resp, "InstanceSet")) {
     Some(s) -> {
@@ -278,13 +278,13 @@ fn instance_fetch(id: String, key: String, region: String, instance: String) -> 
 }
 
 # QCE/LIGHTHOUSE CpuUsage, daily points over 30 days, via the monitor service
-fn cpu_trend_fetch(id: String, key: String, region: String, instance: String) -> Result[Json, String] !io = {
+fn cpu_trend_fetch(cl: HttpCell, id: String, key: String, region: String, instance: String) -> Result[Json, String] !io = {
   let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")!
   let zone = ZoneOffset.ofHours(0)!
   let now = LocalDateTime.ofInstant(Instant.now()!, zone)!
   let start = now.minusDays(30)!
   let payload = "{\"Namespace\":\"QCE/LIGHTHOUSE\",\"MetricName\":\"CpuUsage\",\"Period\":86400,\"StartTime\":\"${start.format(fmt)!}+00:00\",\"EndTime\":\"${now.format(fmt)!}+00:00\",\"Instances\":[{\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"$instance\"}]}]}"
-  let j = client.call(id, key, "monitor", "GetMonitorData", "2018-07-24", region, payload)?
+  let j = client.call(cl, id, key, "monitor", "GetMonitorData", "2018-07-24", region, payload)?
   let resp = tc_resp("GetMonitorData", j)?
   match arr0(field(resp, "DataPoints")) {
     Some(dp) -> {
@@ -337,10 +337,10 @@ pub fn qiniu_block(a: Auth, respack_cell: TtlCell) -> Json !io =
   }
 
 fn kodo_stats(a: Auth) -> Result[List[(String, Json)], String] !io = {
-  let (stimes, sdatas) = kodo_series(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "space", 30)?
-  let (_ctimes, cdatas) = kodo_series(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "count", 30)?
-  let flow = flow_series(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "flow", 30)?
-  let hits = flow_series(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "hits", 30)?
+  let (stimes, sdatas) = kodo_series(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "space", 30)?
+  let (_ctimes, cdatas) = kodo_series(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "count", 30)?
+  let flow = flow_series(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "flow", 30)?
+  let hits = flow_series(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "hits", 30)?
   Ok([
     ("space", jint(last_nonzero(sdatas))),
     ("count", jint(last_nonzero(cdatas))),
@@ -361,9 +361,9 @@ fn sum_snd(xs: List[(String, Int)]) -> Int =
   })
 
 fn cdn_stats(a: Auth) -> Result[List[(String, Json)], String] !io = {
-  let domains = cdn_domains(a.qiniu.ak, a.qiniu.sk)?
-  let (ftimes, fvalues) = cdn_tune(a.qiniu.ak, a.qiniu.sk, "flux", 30, domains)?
-  let (_btimes, bvalues) = cdn_tune(a.qiniu.ak, a.qiniu.sk, "bandwidth", 30, domains)?
+  let domains = cdn_domains(a.http, a.qiniu.ak, a.qiniu.sk)?
+  let (ftimes, fvalues) = cdn_tune(a.http, a.qiniu.ak, a.qiniu.sk, "flux", 30, domains)?
+  let (_btimes, bvalues) = cdn_tune(a.http, a.qiniu.ak, a.qiniu.sk, "bandwidth", 30, domains)?
   let peak = fold(bvalues, 0, (acc, v) => if v > acc { v } else { acc })
   Ok([
     ("cdn_flow_30d", jint(fold(fvalues, 0, (acc, v) => acc + v))),
@@ -384,7 +384,7 @@ pub fn respack_cached(a: Auth, cell: TtlCell) -> Result[Json, String] !io =
   match cache_get(cell, 300) {
     Some(s) -> parse_text(s)
     None -> {
-      let j = respack_summary(a.qiniu.ak, a.qiniu.sk)?
+      let j = respack_summary(a.http, a.qiniu.ak, a.qiniu.sk)?
       cache_put(cell, render(j))
       Ok(j)
     }
@@ -392,7 +392,7 @@ pub fn respack_cached(a: Auth, cell: TtlCell) -> Result[Json, String] !io =
 
 # ---- vault: alive probe + version ----
 
-pub fn vault_block(alive_url: String, public_url: String) -> Json !io = {
+pub fn vault_block(cl: HttpCell, alive_url: String, public_url: String) -> Json !io = {
   let base = if str.ends_with(alive_url, "/alive") {
     str.slice(alive_url, 0, str.len(alive_url) - 6)
   } else {
@@ -400,14 +400,14 @@ pub fn vault_block(alive_url: String, public_url: String) -> Json !io = {
   }
   let head = [("url", jstr(base)), ("public_url", jstr(public_url))]
   let t0 = System.currentTimeMillis()
-  match fetch(alive_url, []) {
+  match fetch(cl, alive_url, []) {
     Ok(r) -> {
       let probe = [
         ("alive", jbool(r.status == 200)),
         ("latency_ms", jint(System.currentTimeMillis() - t0)),
       ]
       let no_version: List[(String, Json)] = []
-      let version = match fetch("$base/api/config", []) {
+      let version = match fetch(cl, "$base/api/config", []) {
         Ok(c) ->
           match parse(c.body) {
             Ok(cfg) -> [("version", field(cfg, "version"))]

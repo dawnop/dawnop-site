@@ -22,6 +22,7 @@ pub type Kind =
   | KPrecondition
   | KInvalid
   | KUpstream
+  | KTimeout
 
 # U+0001 (SOH) separates the kind from the text. No message this backend writes
 # contains it, and it is not legal unescaped inside a JSON string either, so a
@@ -42,12 +43,18 @@ pub fn invalid(text: String) -> String = tag("invalid", text)
 ## Mark a message as "the object store refused or could not be reached".
 pub fn upstream(text: String) -> String = tag("upstream", text)
 
-## upstream() over a Result: tag the Err, leave the Ok alone.
-pub fn as_upstream[T](r: Result[T, String]) -> Result[T, String] =
-  match r {
-    Ok(v) -> Ok(v)
-    Err(m) -> Err(upstream(m))
-  }
+## Mark a message as "the peer did not answer inside the budget we gave it".
+##
+## Separate from `upstream` because the two say different things to whoever is
+## looking at the response. A 502 reads as "that endpoint answered and the answer
+## was a refusal" — wrong credentials, wrong bucket, wrong host. A 504 reads as
+## "the endpoint went quiet and we stopped waiting", which is not a
+## configuration problem and may well work on the next try. Collapsing the two
+## sends an admin looking for a broken key when the network is what broke.
+##
+## `http.as_outbound` is the only producer: it is the one place that knows a
+## failure came from an expired deadline rather than from the peer.
+pub fn timeout(text: String) -> String = tag("timeout", text)
 
 ## Split a message into its kind and the text that goes on the wire. An
 ## untagged message comes back as (KPlain, itself), unchanged.
@@ -70,6 +77,8 @@ fn named(s: String) -> Option[Kind] =
     Some(KInvalid)
   } else if s == "upstream" {
     Some(KUpstream)
+  } else if s == "timeout" {
+    Some(KTimeout)
   } else {
     None
   }
@@ -103,19 +112,13 @@ test "an untagged message passes through unchanged" {
   assert t2 == "已存在"
 }
 
-test "as_upstream tags only the failure" {
-  let good: Result[Int, String] = Ok(3)
-  match as_upstream(good) {
-    Ok(v) -> { assert v == 3 }
-    Err(_) -> { assert false }
-  }
-  let bad: Result[Int, String] = Err("copy: qiniu 599")
-  match as_upstream(bad) {
-    Ok(_) -> { assert false }
-    Err(m) -> {
-      let (k, t) = split_kind(m)
-      assert k == KUpstream
-      assert t == "copy: qiniu 599"
-    }
-  }
+test "a timeout is its own kind, not another upstream failure" {
+  # The whole point of the tag: these two travel the same Result[T, String] and
+  # used to arrive at the edge indistinguishable, so both answered 502.
+  let (k, t) = split_kind(timeout("outbound HTTP timed out after 10s: ..."))
+  assert k == KTimeout
+  assert t == "outbound HTTP timed out after 10s: ..."
+  let (k2, _t2) = split_kind(upstream("stat: qiniu 401 {}"))
+  assert k2 == KUpstream
+  assert k != k2
 }

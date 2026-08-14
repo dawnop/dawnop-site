@@ -7,7 +7,7 @@ use std/map
 use db/sql.{DbConn}
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, query, redirect, header}
 use util/multipart.{Part, boundary_of, parse_multipart, part_named}
-use util/http.{fetch_stream, ok_stream, stream_response, close_stream}
+use util/http.{fetch_stream, ok_stream, stream_response, close_stream, as_outbound}
 use web/router.{Route, route_get, route_post, tagged}
 use util/jsonx.{obj, jstr, jint}
 use db/db.{with_db}
@@ -18,7 +18,7 @@ use repo/repo_fm.{fs_data, get_row, ledger_insert, search_files, entry_json, sta
 use svc/files.{signed_url, gc_unreferenced, mk_folder, do_rename, do_move, do_copy, do_delete,
   item_paths, merge_deleted, do_create_file, do_save, run_upload, sanitize_name, token_rel }
 use repo/repo_settings.{setting_int}
-use util/errkind.{KConflict, KUpstream, conflict, upstream, split_kind}
+use util/errkind.{KConflict, KUpstream, KTimeout, conflict, upstream, timeout, split_kind}
 use util/crypto.{uuid_hex}
 use svc/export.{pct_encode}
 use qiniu/sign.{upload_token}
@@ -178,7 +178,7 @@ fn remote_space(a: Auth, cell: TtlCell) -> Json !io =
         Err(_m) -> JNull
       }
     None -> {
-      let j = match kodo_series(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "space", 7) {
+      let j = match kodo_series(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "space", 7) {
         Ok(pair) -> {
           let (_times, datas) = pair
           let v = last_nonzero(datas)
@@ -219,7 +219,7 @@ pub fn content(a: Auth) -> Handler =
         match o.key {
           Some(k) -> {
             let url = signed_url(a.qiniu, k, "")
-            let r = as_http(fetch_stream(url, []), 502)?
+            let r = as_http_with(as_outbound(fetch_stream(a.http, url, [])), mutation_failure)?
             # a non-2xx body is qiniu's error, not the file — serving it would
             # hand the browser a JSON error under the file's content type. Close
             # the stream (don't leak the connection) and map to an error.
@@ -257,6 +257,11 @@ fn mutation_status(msg: String) -> Int = {
   match k {
     KConflict -> 409
     KUpstream -> 502
+    # A peer that never answered is not a peer that refused us. 502 reads as "our
+    # credentials or that endpoint are wrong" and sends an admin to check keys;
+    # 504 reads as "it went quiet and we gave up", which is a network condition
+    # and worth retrying. See util/http.as_outbound, which is what tags these.
+    KTimeout -> 504
     _ -> 500
   }
 }
@@ -407,7 +412,7 @@ pub fn delete(a: Auth) -> Handler =
         let m = as_http(body_obj(req.body), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let items = item_paths(m)
-        let deleted = as_http_with(with_db(a.db.path, a.db.ext, c => do_delete(a.qiniu, c, items, 0, [])), mutation_failure)?
+        let deleted = as_http_with(with_db(a.db.path, a.db.ext, c => do_delete(a.qiniu, a.http, c, items, 0, [])), mutation_failure)?
         let base = as_http(with_db(a.db.path, a.db.ext, c => fs_data(c, cur)), 500)?
         Ok(json_ok(merge_deleted(base, deleted)))
       })
@@ -461,7 +466,7 @@ pub fn copy(a: Auth) -> Handler =
         let dest = fm_split(str_or(m, "destination", ""))
         let sources = str_list(m, "sources")
         let _n = check_relocation_targets(dest, sources, 0)?
-        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), mutation_failure)?))
+        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, a.http, c, sources, dest, cur, 0)), mutation_failure)?))
       })
 
 ## POST /api/fm/register — {path, key, size?, content_type?}. Confirms the
@@ -479,7 +484,7 @@ pub fn register(a: Auth) -> Handler =
         } else {
           let _n = require_admissible_names(rel)?
           let _preflight = as_http_with(register_preflight(a, rel, key), conflict_or(500))?
-          let r = as_http(stat(a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key), 502)?
+          let r = as_http_with(as_outbound(stat(a.http, a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key)), mutation_failure)?
           if r.status == 200 {
             Ok(json_ok(as_http_with(register_row(a, rel, key, r.body, opt_int(m, "size"), str_or(m, "content_type", "")), conflict_or(500))?))
           } else {
@@ -677,6 +682,10 @@ test "rename asks for one segment; storing a subpath is create's business" {
 test "FM mutation errors keep DB failures distinct from upstream failures" {
   assert mutation_status(conflict("collision")) == 409
   assert mutation_status(upstream("qiniu unavailable")) == 502
+  # a deadline that expired is a 504, not another 502: the two answer different
+  # questions about what went wrong upstream
+  assert mutation_status(timeout("outbound HTTP timed out after 10s: ...")) == 504
+  assert mutation_status(upstream("qiniu unavailable")) != mutation_status(timeout("x"))
   assert mutation_status("database is locked") == 500
 }
 

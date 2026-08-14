@@ -236,6 +236,22 @@ def spend_upload_token(fake_base, upload_token, key, content):
         return TRANSPORT_STATUS, transport_error(e)
 
 
+# The backend's half of a timeout message is ours to pin; the JDK's half is not.
+# `outbound HTTP timed out after 10s: ` is written by util/http and is the part
+# that carries meaning (which budget expired); what follows is whatever
+# java.net.http's exception says on the JDK of the day, and pinning that would
+# make this golden a report on the runtime rather than on this backend.
+_JDK_TIMEOUT_TEXT = re.compile(r"(timed out after \d+s: ).*")
+
+
+def normalize_timeout(value):
+    if isinstance(value, dict):
+        return {k: normalize_timeout(v) for k, v in value.items()}
+    if isinstance(value, str):
+        return _JDK_TIMEOUT_TEXT.sub(r"\1<jdk timeout text>", value)
+    return value
+
+
 def body_value(raw: bytes):
     try:
         return json.loads(raw.decode("utf-8"))
@@ -298,6 +314,12 @@ class Fake:
 
     def pause(self, op):
         self._post("/__fake/pause", {"op": op})
+
+    def stall(self, op, seconds):
+        self._post("/__fake/stall", {"op": op, "seconds": seconds})
+
+    def unstall(self, op):
+        self._post("/__fake/stall", {"op": op, "seconds": 0})
 
     def release(self, op):
         self._post("/__fake/release", {"op": op})
@@ -1078,6 +1100,69 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
             "spend_echoes_key": isinstance(spend_body, dict)
             and spend_body.get("key") == window_key,
             "object_stored": window_key != "" and window_key in fake.keys(),
+        },
+    )
+    fake.clear_calls()
+
+    print("\n== fm: an object store that goes quiet, not one that refuses ==")
+
+    # Last on purpose: it mints a key, and scrub() numbers keys in order of
+    # first appearance, so putting it anywhere earlier renumbers every later
+    # case's <keyN> aliases for no reason.
+    #
+    # A peer that accepts the connection and then says nothing is a different
+    # failure from a peer that refuses us, and until #252 both left here as 502.
+    # This is the one place the distinction can be watched end to end: the fake
+    # goes quiet past the management budget, so the backend gives up on its own
+    # deadline and the status on the wire is the whole assertion.
+    #
+    # The stall is longer than the budget rather than endless, so a lost
+    # deadline is a late 200 (a red) instead of a wedged run. The case costs the
+    # budget in wall clock and nothing else -- the request returns the moment
+    # the backend stops waiting.
+    st, raw = api(
+        B, "POST", "/api/fm/upload-token", token, {"path": SANDBOX, "name": "quiet.bin"}
+    )
+    quiet_key = (
+        json.loads(raw).get("key", "missing-key") if st == 200 else "missing-key"
+    )
+    fake.stall("stat", 15)
+    st, raw = api(
+        B,
+        "POST",
+        "/api/fm/register",
+        token,
+        {"path": f"{SANDBOX}/quiet.bin", "key": quiet_key},
+        timeout=60,
+    )
+    fake.unstall("stat")
+    g.case(
+        "fm.register.quiet_peer",
+        {
+            "method": "POST",
+            "path": "/api/fm/register",
+            "status": st,
+            "note": "the object store accepted the connection and never answered",
+            "body": normalize_timeout(scrub(body_value(raw))),
+        },
+    )
+    # The key is normalized here rather than through scrub(), for the reason
+    # spelled out at fm.upload-token.deadline-window: scrub() numbers keys in
+    # order of first appearance across the whole run, so a scrubbed alias in
+    # this case would move whenever anything earlier minted one more key. That
+    # is not hypothetical -- the accept-file-parent mutant in
+    # scripts/webdav-destination-mutants/ makes exactly one extra object call,
+    # and it turned this case red as collateral before the alias came out.
+    # Which key it was is not the assertion anyway; that a stat was made is.
+    quiet_calls = [
+        {**call, "key": "<quiet key>"} if call.get("key") == quiet_key else call
+        for call in fake.calls()
+    ]
+    g.case(
+        "fm.register.quiet_peer.calls",
+        {
+            "note": "the stat was really made; the answer is what never came",
+            "calls": quiet_calls,
         },
     )
     fake.clear_calls()

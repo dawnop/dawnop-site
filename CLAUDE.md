@@ -319,12 +319,12 @@ python3 backend-dawn/scripts/mutants_coverage.py --self-test
 
 - **CI**（`.github/workflows/ci.yml`，push main + PR 触发）：`secrets`（三道守卫 + shellcheck）、
   `backend`（Dawn 测试 + 打 jar 传 artifact + 四套 golden）、`mutants`（**16 个并行分片**，
-  跑六个变异体 harness 共 125 个变异体）、`mutants-complete`（断言各分片并集覆盖全矩阵）、
+  跑七个变异体 harness 共 150 个变异体）、`mutants-complete`（断言各分片并集覆盖全矩阵）、
   `python-backend`（**钉 Python 3.10**，对齐生产 + ruff）、`frontend`（lint/format/build）。
   任一红都别合。
   > **变异体矩阵是分片跑的，加变异体要顺手看一眼 job 数**。单个变异体约 52s（实测
-  > 2026-08-14：`dawn build` 5.9s 吃 236% CPU、`dawn test` 38.4s 只吃 41%），串行 125 个 =
-  > 108 分钟，曾把 `backend` job 顶到 62 分钟上限被取消。分片规格写在 ci.yml 的
+  > 2026-08-14：`dawn build` 5.9s 吃 236% CPU、`dawn test` 38.4s 只吃 41%），串行 150 个 =
+  > 130 分钟，曾把 `backend` job 顶到 62 分钟上限被取消。分片规格写在 ci.yml 的
   > `mutants.strategy.matrix`，harness 侧的 `--shard I/N` 在 `backend-dawn/scripts/mutant-shard.sh`。
   > 并发上限是 20 个 job，现在正好用满——再加分片不会失败，但会排队，也就不再省墙钟时间。
 - **本地 hook（每台开发机装一次）**：`git config core.hooksPath .githooks`（`.githooks/` 已入库）。

@@ -11,7 +11,7 @@ use java "java.io.FileOutputStream"
 use java "java.io.ByteArrayOutputStream"
 use java "com.sun.net.httpserver.HttpServer"
 use java "java.net.InetSocketAddress"
-use util/http.{HttpResp, RequestBody, post, post_bytes, file_body, post_body, fetch}
+use util/http.{HttpResp, HttpCell, RequestBody, post, post_bytes, file_body, post_body, fetch, new_client}
 use util/paths.{FALLBACK_MIME, safe_persisted_mime}
 use qiniu/sign.{entry_uri, entry_token, management_token, upload_token}
 
@@ -26,18 +26,18 @@ const BOUNDARY: String = "----DawnFmBoundary7MA4YWxkTrZu0gW"
 
 ## Upload TEXT content to a key via qiniu's multipart form API (save/create-file).
 ## `deadline` is the upload-token expiry (unix seconds).
-pub fn upload_text(up_host: String, ak: String, sk: String, bucket: String, key: String, content: String, mime: String, deadline: Int) -> Result[Unit, String] !io =
-  upload_bytes(up_host, ak, sk, bucket, key, bytes.utf8(content), mime, deadline)
+pub fn upload_text(cl: HttpCell, up_host: String, ak: String, sk: String, bucket: String, key: String, content: String, mime: String, deadline: Int) -> Result[Unit, String] !io =
+  upload_bytes(cl, up_host, ak, sk, bucket, key, bytes.utf8(content), mime, deadline)
 
 ## Upload BINARY content to a key via qiniu's multipart form API. `content` is the
 ## exact file Bytes; the multipart body is assembled as Bytes (ASCII framing +
 ## content ++ ASCII tail) and POSTed verbatim. The byte-exact path for
 ## /api/fm/upload (proxy upload) and for text uploads (which utf8 their content).
-pub fn upload_bytes(up_host: String, ak: String, sk: String, bucket: String, key: String, content: Bytes, mime: String, deadline: Int) -> Result[Unit, String] !io = {
+pub fn upload_bytes(cl: HttpCell, up_host: String, ak: String, sk: String, bucket: String, key: String, content: Bytes, mime: String, deadline: Int) -> Result[Unit, String] !io = {
   let token = upload_token(ak, sk, bucket, key, deadline)
   let body = multipart(token, key, content, mime)
   let ct = "multipart/form-data; boundary=$BOUNDARY"
-  let r = post_bytes("$up_host/", [("Content-Type", ct)], body)?
+  let r = post_bytes(cl, "$up_host/", [("Content-Type", ct)], body)?
   ok_status(r, "upload")
 }
 
@@ -88,11 +88,11 @@ fn mp_tail() -> String = {
 ## heap — that is what lets WebDAV PUT take a big file, where upload_bytes spikes
 ## to ~3x the file size (raw body + assembled body + publisher copy). concat sums
 ## its parts' lengths, giving the exact contentLength qiniu's form API requires.
-pub fn upload_file(up_host: String, ak: String, sk: String, bucket: String, key: String, path: String, mime: String, deadline: Int) -> Result[Unit, String] !io = {
+pub fn upload_file(cl: HttpCell, up_host: String, ak: String, sk: String, bucket: String, key: String, path: String, mime: String, deadline: Int) -> Result[Unit, String] !io = {
   let token = upload_token(ak, sk, bucket, key, deadline)
   let body = upload_body(bytes.utf8(mp_head(token, key, mime)), path, bytes.utf8(mp_tail()))?
   let ct = "multipart/form-data; boundary=$BOUNDARY"
-  let r = post_body("$up_host/", [("Content-Type", ct)], body)?
+  let r = post_body(cl, "$up_host/", [("Content-Type", ct)], body)?
   ok_status(r, "upload_file")
 }
 
@@ -107,26 +107,26 @@ fn hdr(ak: String, sk: String, op: String, entry: String) -> List[(String, Strin
 
 ## stat an object; Ok(HttpResp) — status 200 with a JSON body when it exists,
 ## 612 when it does not. Transport failure is Err.
-pub fn stat(rs_host: String, ak: String, sk: String, bucket: String, key: String) -> Result[HttpResp, String] !io = {
+pub fn stat(cl: HttpCell, rs_host: String, ak: String, sk: String, bucket: String, key: String) -> Result[HttpResp, String] !io = {
   let entry = entry_uri(bucket, key)
-  fetch("$rs_host/stat/$entry", hdr(ak, sk, "stat", entry))
+  fetch(cl, "$rs_host/stat/$entry", hdr(ak, sk, "stat", entry))
 }
 
 ## delete an object. Ok on 200; a missing object (612) is also Ok (idempotent).
-pub fn delete_obj(rs_host: String, ak: String, sk: String, bucket: String, key: String) -> Result[Unit, String] !io = {
+pub fn delete_obj(cl: HttpCell, rs_host: String, ak: String, sk: String, bucket: String, key: String) -> Result[Unit, String] !io = {
   let entry = entry_uri(bucket, key)
-  let r = post("$rs_host/delete/$entry", hdr(ak, sk, "delete", entry), "")?
+  let r = post(cl, "$rs_host/delete/$entry", hdr(ak, sk, "delete", entry), "")?
   if r.status == 612 { Ok(()) } else { ok_status(r, "delete") }
 }
 
 ## copy src→dst within a bucket (force overwrite). The signed path spans both
 ## entries plus /force/true.
-pub fn copy_obj(rs_host: String, ak: String, sk: String, bucket: String, src_key: String, dst_key: String) -> Result[Unit, String] !io = {
+pub fn copy_obj(cl: HttpCell, rs_host: String, ak: String, sk: String, bucket: String, src_key: String, dst_key: String) -> Result[Unit, String] !io = {
   let src = entry_uri(bucket, src_key)
   let dst = entry_uri(bucket, dst_key)
   let path = "/copy/$src/$dst/force/true"
   let auth = management_token(ak, sk, "$path\n")
-  let r = post("$rs_host$path", [("Authorization", auth)], "")?
+  let r = post(cl, "$rs_host$path", [("Authorization", auth)], "")?
   ok_status(r, "copy")
 }
 
@@ -198,7 +198,7 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
   server.start()
   let port = server.getAddress()!.getPort()
 
-  match upload_file("http://127.0.0.1:$port", ak, sk, bucket, key, src_path, mime, deadline) {
+  match upload_file(new_client(), "http://127.0.0.1:$port", ak, sk, bucket, key, src_path, mime, deadline) {
     Err(m) -> panic("byte-exact upload failed: $m")
     Ok(_) -> ()
   }
@@ -206,7 +206,7 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
 
   # A transport error passes through post_body unchanged. upload_file must not
   # add its operation label to a failure that occurs after body construction.
-  match upload_file("http://127.0.0.1:$port", ak, sk, bucket, key, src_path, mime, deadline) {
+  match upload_file(new_client(), "http://127.0.0.1:$port", ak, sk, bucket, key, src_path, mime, deadline) {
     Ok(_) -> panic("a stopped server must refuse the upload")
     Err(m) -> {
       assert not str.starts_with(m, "upload_file: ")
@@ -221,7 +221,7 @@ test "a missing upload file keeps the upload_file error prefix" {
   let src = File.createTempFile("dawn-test-missing-", ".bin")!
   let path = src.getPath()!
   let _deleted = src.delete()
-  match upload_file("http://127.0.0.1:1", "ak", "sk", "bucket", "key", path,
+  match upload_file(new_client(), "http://127.0.0.1:1", "ak", "sk", "bucket", "key", path,
     "application/octet-stream", 1234567890) {
     Ok(_) -> panic("a missing file must not produce a request body")
     Err(m) -> {

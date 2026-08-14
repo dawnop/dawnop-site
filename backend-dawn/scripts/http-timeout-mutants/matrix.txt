@@ -1,14 +1,22 @@
-# Hand-owned red sets for the outbound-HTTP deadline assertions.
+# Hand-owned red sets for src/util/http.dawn's outbound contract: the request
+# deadlines, how a timeout is classified apart from a refusal, and whether the
+# client is really shared.
 #
 # `mutant|owner;;owner` -- the runner rejects a mutant that reddens anything
 # other than exactly this set, and has no record mode.
 #
-# Timing assertions fail in two directions, so each mutant is chosen to move
-# only one of them. `inflate-deadline` is the important one: it leaves
+# Timing assertions fail in two directions, so each deadline mutant is chosen to
+# move only one of them. `inflate-deadline` is the important one: it leaves
 # `.timeout(` in the source and only a timed request against a stalled peer can
-# tell it from the real thing.
+# tell it from the real thing. `client-per-call` is its sibling for the shared
+# client: the source still has one builder expression, and only the peer's view
+# of the source port says whether the connection was reused.
+client-per-call|one cell is one connection; a client built per call is not
 collapse-transfer-tier|the two deadlines say what they are for
 drop-deadline|a quiet peer hits the management deadline instead of blocking forever;;every request shape carries its deadline, whichever body handler it uses
+edge-times-out-as-502|FM mutation errors keep DB failures distinct from upstream failures;;a WebDAV client is told to retry a timeout, not to check its credentials
 inflate-deadline|a quiet peer hits the management deadline instead of blocking forever;;every request shape carries its deadline, whichever body handler it uses
-mute-timeout-text|a quiet peer hits the management deadline instead of blocking forever;;only a timeout is reworded; every other fault keeps its text
+mute-timeout-text|a quiet peer hits the management deadline instead of blocking forever;;only a timeout is reworded; every other fault keeps its text;;a timeout is classified apart from a refusal, and keeps its wire text
+timeout-reads-as-upstream|a WebDAV client is told to retry a timeout, not to check its credentials;;a timeout is classified apart from a refusal, and keeps its wire text;;the timeout text and the timeout tag are one judgement, not two
+timeout-tag-second-opinion|a WebDAV client is told to retry a timeout, not to check its credentials;;the timeout text and the timeout tag are one judgement, not two
 transfer-tier-on-management|a quiet peer hits the management deadline instead of blocking forever

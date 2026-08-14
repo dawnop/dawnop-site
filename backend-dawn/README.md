@@ -98,9 +98,21 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   照样在期限处被切断，POST 请求体上传到一半也一样，而且期限还覆盖 connect 阶段。于是管理档要短
   （`svc/files.dawn` 的 gc 刻意把 `delete_obj` 关在 `BEGIN IMMEDIATE` 里防 TOCTOU，这个值就是
   SQLite 全局写锁被占的上界），传输档必须远高于任何合法传输，因为它是时长上限而不是延迟上限。
-  超时的错误文本写明超的是哪一档（`outbound HTTP timed out after Ns: ...`），**其余传输错误逐字节不变**。
-  负控在 `scripts/http-timeout-mutants/`：假服务器接受连接后先停住再迟迟作答（有限停顿，所以变异体
-  是转红而不是把门禁挂死），`inflate-deadline` 保留 `.timeout(` 只把值改荒谬——只有真计时的断言能判红它。
+  超时的错误文本写明超的是哪一档（`outbound HTTP timed out after Ns: ...`），**其余传输错误逐字节不变**，
+  并且**只判一次**：`deadline_text` 是唯一认定「这是超时」的地方，`timed_out` 读的是它写下的
+  `TIMEOUT_PREFIX`，所以文案说超时、状态码说别的这种分歧无处产生。分类由 `as_outbound` /
+  `tag_outbound` 落成 errkind 标签：超时是 `KTimeout` → **504**，其余出站失败（含七牛的拒绝）
+  仍是 `KUpstream` → 502。这条分界对着屏幕的人有意义：502 读作「凭据或端点不对」，504 读作
+  「对端没响应，可以重试」。落到 wire 上的证据在 qiniu golden 的 `fm.register.quiet_peer`
+  （假七牛接受连接后不作答，`/register` 的 stat 走完管理档预算后回 504）。
+  **出站客户端是全进程一个**（`HttpCell`，main 建一次、随 `Auth` 穿到各处，和 `util/ttl` 的
+  cell 同一套办法）：连接池长在实例上，每次调用新建一个等于每次出站重握手（对七牛还要重做 TLS）。
+  判词不是「源码里只有一处 new」——那句话在旧的 `shared_client` 每次调用都 build 时也成立——
+  而是假服务器把**客户端自己的源端口**回给测试：同一个 cell 的两次请求端口相同，另起一个客户端不同。
+  负控在 `scripts/http-timeout-mutants/`（9 个变异体，覆盖期限 / 超时分类 / 共享客户端三组规则）：
+  假服务器接受连接后先停住再迟迟作答（有限停顿，所以变异体是转红而不是把门禁挂死），
+  `inflate-deadline` 保留 `.timeout(` 只把值改荒谬，`client-per-call` 保留唯一那处 builder 只让它
+  每次调用跑一遍，`timeout-tag-second-opinion` 给标签另开一套判据——三个都只有真跑才判得出来。
   `RequestBody` 不透明边界封装流式文件请求体，调用方不传播 Java publisher 类型；
   `ResponseStream` 不透明边界封装实时响应流，业务模块只经 owner adapter 进入 web3 streaming。
   FFI 门禁只约束显式 `InputStream` 源码名，不阻止 Java 返回类型由推断得到；响应侧另以

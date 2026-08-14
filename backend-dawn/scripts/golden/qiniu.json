@@ -1541,6 +1541,24 @@
    "spend_status": 200,
    "spend_echoes_key": true,
    "object_stored": true
+  },
+  "fm.register.quiet_peer": {
+   "method": "POST",
+   "path": "/api/fm/register",
+   "status": 504,
+   "note": "the object store accepted the connection and never answered",
+   "body": {
+    "detail": "outbound HTTP timed out after 10s: <jdk timeout text>"
+   }
+  },
+  "fm.register.quiet_peer.calls": {
+   "note": "the stat was really made; the answer is what never came",
+   "calls": [
+    {
+     "op": "stat",
+     "key": "<quiet key>"
+    }
+   ]
   }
  }
 }

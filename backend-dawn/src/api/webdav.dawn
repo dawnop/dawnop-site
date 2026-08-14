@@ -37,9 +37,9 @@ use util/paths.{basename, parent_rel, ext, ts, guess_mime, safe_persisted_mime, 
 use qiniu/rs.{upload_file}
 use java "java.io.File"
 use util/crypto.{sha256_hex, uuid, uuid_hex}
-use util/http.{fetch_stream, ok_stream, stream_response, close_stream}
+use util/http.{fetch_stream, ok_stream, stream_response, close_stream, as_outbound, tag_outbound}
 use util/ttl.{TtlCell, cache_get, cache_put, now_s}
-use util/errkind.{KConflict, KPrecondition, KUpstream, precondition, split_kind}
+use util/errkind.{KConflict, KPrecondition, KUpstream, KTimeout, precondition, upstream, timeout, split_kind}
 use svc/export.{url_encode}
 
 const AUTH_TTL: Int = 300
@@ -277,7 +277,7 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
       Some(pair) -> {
         let (start, end) = pair
         {
-          let r = as_http(fetch_stream(signed_url(a.qiniu, key, ""), [("Accept-Encoding", "identity"), ("Range", "bytes=$start-$end")]), 502)?
+          let r = as_http_with(as_outbound(fetch_stream(a.http, signed_url(a.qiniu, key, ""), [("Accept-Encoding", "identity"), ("Range", "bytes=$start-$end")])), mutation_error)?
           # a ranged hit is 206, a server that ignored the Range answers 200 —
           # anything else is an upstream error whose body is not the file. Streaming
           # can't measure the returned length, so decide 206-vs-200 by the upstream
@@ -294,7 +294,7 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
       }
       None ->
         {
-          let r = as_http(fetch_stream(signed_url(a.qiniu, key, ""), [("Accept-Encoding", "identity")]), 502)?
+          let r = as_http_with(as_outbound(fetch_stream(a.http, signed_url(a.qiniu, key, ""), [("Accept-Encoding", "identity")])), mutation_error)?
           if not ok_stream(r) {
             close_stream(r.stream)
             Err(http_error(502, "qiniu ${r.status}"))
@@ -405,6 +405,10 @@ fn mutation_error(msg: String) -> HttpError = {
     KConflict -> http_error(409, t)
     KPrecondition -> http_error(412, t)
     KUpstream -> http_error(502, t)
+    # same split as api_fm's: a refusal from qiniu is 502, a deadline we gave up
+    # on is 504. A mounted client showing 504 is being told to retry, not to go
+    # looking for a broken credential.
+    KTimeout -> http_error(504, t)
     _ -> http_error(500, t)
   }
 }
@@ -456,11 +460,12 @@ fn put_do(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io
         None -> Err(http_error(500, "请求体未落盘"))
         Some(path) -> {
           let size = as_http(file_size(path), 500)?
-          match upload_file(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, path, mime, now_s() + a.qiniu.expires) {
+          match upload_file(a.http, a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, path, mime, now_s() + a.qiniu.expires) {
             Ok(_) -> put_commit(a, rel, key, mime, size)
             Err(m) -> {
               let _gc = gc_unreferenced(a, Some(key))
-              Err(http_error(502, m))
+              # 502 unless the upload ran out of its budget, in which case 504
+              Err(mutation_error(tag_outbound(m)))
             }
           }
         }
@@ -986,7 +991,7 @@ fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -
 # COPY: recreate dirs, and for each file copy the qiniu object to a fresh key.
 fn copy_subtree(a: Auth, rel: String, dst: String, overwrite: Bool) -> Result[SubtreeWriteOutcome, String] !io = {
   let planned = with_db(a.db.path, a.db.ext, c => prepare_webdav_copy(c, rel, dst, overwrite))?
-  let copied = copy_tree_objects(a.qiniu, planned)?
+  let copied = copy_tree_objects(a.qiniu, a.http, planned)?
   match with_db(a.db.path, a.db.ext, c => commit_webdav_copy(c, copied, overwrite)) {
     Ok(outcome) -> Ok(outcome)
     Err(m) -> {
@@ -1374,6 +1379,17 @@ test "WebDAV precondition errors map to 412 at preflight and final edges" {
   let preflight = conflict_or(500)
   assert preflight(precondition("目标已出现")).status == 412
   assert mutation_error(precondition("目标已出现")).status == 412
+}
+
+test "a WebDAV client is told to retry a timeout, not to check its credentials" {
+  # Both of these used to be 502, which reads to whoever mounted the share as
+  # "the object store rejected us". A deadline we gave up on is 504: nothing is
+  # misconfigured and the same PUT may well work on the next try.
+  assert mutation_error(upstream("upload_file: qiniu 401 {}")).status == 502
+  assert mutation_error(timeout("outbound HTTP timed out after 3600s: ...")).status == 504
+  # and it is the classifier, not the wording, that decides which one
+  assert mutation_error(tag_outbound("outbound HTTP timed out after 3600s: ...")).status == 504
+  assert mutation_error(tag_outbound("upload_file: qiniu 401 {}")).status == 502
 }
 
 # PROPFIND with the given Depth values, none at all for an empty list.

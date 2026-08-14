@@ -42,7 +42,7 @@ pub fn get_monitor(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell) -
       ("server", server_block()),
       ("lighthouse", field(third, "lighthouse")),
       ("qiniu", qn),
-      ("vault", vault_block(cfg.vault_alive, cfg.vault_public)),
+      ("vault", vault_block(a.http, cfg.vault_alive, cfg.vault_public)),
       ("cached_at", field(third, "cached_at")),
     ])))
   }
@@ -62,7 +62,7 @@ fn third_party(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell, refre
 
 fn refill(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell) -> Json !io = {
   let j = obj([
-    ("lighthouse", lighthouse_block(cfg.tencent_id, cfg.tencent_key, cfg.region, cfg.instance)),
+    ("lighthouse", lighthouse_block(a.http, cfg.tencent_id, cfg.tencent_key, cfg.region, cfg.instance)),
     ("qiniu", qiniu_block(a, respack_cell)),
     ("cached_at", jint(now_s())),
   ])

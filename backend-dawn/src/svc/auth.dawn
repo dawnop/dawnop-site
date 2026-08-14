@@ -14,16 +14,26 @@ use util/jsonx.{obj, jint, jstr, jdatetime}
 use db/db.{Db, with_db}
 use db/sql.{DbConn, PStr, ColInt, ColStr, query, int_at, str_at, first_str, first_map}
 use util/jwt.{sign, verify}
+use util/http.{HttpCell}
 
 ## App context passed to protected handlers: the db, the JWT secret and token
-## lifetime, the storage quota default (for settings), and the qiniu credentials
-## and bucket/domain (for fm). Named Auth for the authentication it carries.
+## lifetime, the storage quota default (for settings), the qiniu credentials and
+## bucket/domain (for fm), and the process's outbound HTTP client. Named Auth for
+## the authentication it carries.
+##
+## `http` is the one thing here that is not configuration: it is a live client
+## main builds at startup, carried on this record because a shared connection
+## pool has to be shared by someone and every outbound caller already holds an
+## Auth. See util/http.HttpCell. It stays out of `Qiniu` on purpose — that record
+## is .env values and nothing else, which is what lets the contract harness swap
+## its hosts for a fake without touching anything live.
 pub type Auth = {
   db: Db,
   secret: String,
   expire_min: Int,
   storage_quota: Int,
   qiniu: Qiniu,
+  http: HttpCell,
 }
 
 ## Qiniu Kodo config for fm signing.

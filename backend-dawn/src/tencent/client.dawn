@@ -10,13 +10,13 @@ use java "java.time.format.DateTimeFormatter"
 use util/crypto.{sha256_hex}
 use util/ttl.{now_s}
 use tencent/sign.{tc3_signature}
-use util/http.{post}
+use util/http.{HttpCell, post}
 use json/value.{Json}
 use util/jsonread.{parse_text}
 
 ## Call a Tencent Cloud v3 action. `payload` is a compact JSON body string.
 ## Returns the parsed Response JSON, or Err on transport / non-200.
-pub fn call(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[Json, String] !io = {
+pub fn call(cl: HttpCell, secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[Json, String] !io = {
   let host = "$service.tencentcloudapi.com"
   let ts = now_s()
   let date = utc_date(ts)
@@ -42,7 +42,7 @@ pub fn call(secret_id: String, secret_key: String, service: String, action: Stri
     ("X-TC-Timestamp", to_string(ts)),
     ("X-TC-Region", region),
   ]
-  let r = post("https://$host", headers, payload)?
+  let r = post(cl, "https://$host", headers, payload)?
   if r.status == 200 {
     parse_text(r.body)
   } else {

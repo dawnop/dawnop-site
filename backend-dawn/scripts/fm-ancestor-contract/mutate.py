@@ -493,8 +493,8 @@ def main() -> int:
     elif args.mutant == "fm-copy-plain-error-as-502":
         replace_once(
             fm_api,
-            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), mutation_failure)?))\n",
-            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), conflict_or(502))?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, a.http, c, sources, dest, cur, 0)), mutation_failure)?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, a.http, c, sources, dest, cur, 0)), conflict_or(502))?))\n",
         )
     elif args.mutant == "fm-skip-directory-target-preflight":
         replace_once(
@@ -531,9 +531,9 @@ def main() -> int:
         )
         replace_once(
             fm_api,
-            "          let r = as_http(stat(a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key), 502)?\n"
+            "          let r = as_http_with(as_outbound(stat(a.http, a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key)), mutation_failure)?\n"
             "          if r.status == 200 {\n",
-            "          let r = as_http(stat(a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key), 502)?\n"
+            "          let r = as_http_with(as_outbound(stat(a.http, a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key)), mutation_failure)?\n"
             "          let _ancestors = as_http_with(with_db(a.db.path, a.db.ext, c => validate_fm_ancestors(c, rel)), conflict_or(500))?\n"
             "          if r.status == 200 {\n",
         )
@@ -721,7 +721,7 @@ def main() -> int:
     elif args.mutant == "object-gc-release-lock-before-delete":
         replace_once(
             service,
-            "fn gc_unreferenced_on(q: Qiniu, c: DbConn, candidate: Option[String]) -> Result[Unit, String] !io =\n"
+            "fn gc_unreferenced_on(q: Qiniu, cl: HttpCell, c: DbConn, candidate: Option[String]) -> Result[Unit, String] !io =\n"
             "  match candidate {\n"
             "    Some(key) ->\n"
             '      if str.trim(key) == "" {\n'
@@ -733,14 +733,14 @@ def main() -> int:
             "          if referenced || pending {\n"
             "            Ok(())\n"
             "          } else {\n"
-            "            let _d: Result[Unit, String] = delete_obj(q.rs_host, q.ak, q.sk, q.bucket, key)\n"
+            "            let _d: Result[Unit, String] = delete_obj(cl, q.rs_host, q.ak, q.sk, q.bucket, key)\n"
             "            Ok(())\n"
             "          }\n"
             "        })\n"
             "      }\n"
             "    None -> Ok(())\n"
             "  }\n",
-            "fn gc_unreferenced_on(q: Qiniu, c: DbConn, candidate: Option[String]) -> Result[Unit, String] !io =\n"
+            "fn gc_unreferenced_on(q: Qiniu, cl: HttpCell, c: DbConn, candidate: Option[String]) -> Result[Unit, String] !io =\n"
             "  match candidate {\n"
             "    Some(key) ->\n"
             '      if str.trim(key) == "" {\n'
@@ -753,7 +753,7 @@ def main() -> int:
             "        })\n"
             "        let deletable = checked?\n"
             "        if deletable {\n"
-            "          let _d: Result[Unit, String] = delete_obj(q.rs_host, q.ak, q.sk, q.bucket, key)\n"
+            "          let _d: Result[Unit, String] = delete_obj(cl, q.rs_host, q.ak, q.sk, q.bucket, key)\n"
             "          Ok(())\n"
             "        } else {\n"
             "          Ok(())\n"
@@ -839,7 +839,7 @@ def main() -> int:
             "    ()\n"
             "  } else {\n"
             "    let _d: Result[Unit, String] = match rows[i].key {\n"
-            "      Some(key) -> delete_obj(a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key)\n"
+            "      Some(key) -> delete_obj(a.http, a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key)\n"
             "      None -> Ok(())\n"
             "    }\n"
             "    mutant_delete_objects(a, rows, i + 1)\n"
@@ -923,8 +923,8 @@ def main() -> int:
         )
         replace_once(
             webdav,
-            "  let copied = copy_tree_objects(a.qiniu, planned)?\n",
-            "  let copied_result: Result[CopyTree, String] = match copy_tree_objects(a.qiniu, planned) {\n"
+            "  let copied = copy_tree_objects(a.qiniu, a.http, planned)?\n",
+            "  let copied_result: Result[CopyTree, String] = match copy_tree_objects(a.qiniu, a.http, planned) {\n"
             "    Ok(tree) -> Ok(tree)\n"
             "    Err(m) -> {\n"
             "      let removed = with_db(a.db.path, a.db.ext, c => delete_subtree(c, dst))?\n"
@@ -1104,6 +1104,10 @@ def main() -> int:
             "    KConflict -> http_error(409, t)\n"
             "    KPrecondition -> http_error(412, t)\n"
             "    KUpstream -> http_error(502, t)\n"
+            "    # same split as api_fm's: a refusal from qiniu is 502, a deadline we gave up\n"
+            "    # on is 504. A mounted client showing 504 is being told to retry, not to go\n"
+            "    # looking for a broken credential.\n"
+            "    KTimeout -> http_error(504, t)\n"
             "    _ -> http_error(500, t)\n"
             "  }\n"
             "}\n",
@@ -1113,6 +1117,10 @@ def main() -> int:
             "    KConflict -> http_error(409, t)\n"
             "    KPrecondition -> http_error(409, t)\n"
             "    KUpstream -> http_error(502, t)\n"
+            "    # same split as api_fm's: a refusal from qiniu is 502, a deadline we gave up\n"
+            "    # on is 504. A mounted client showing 504 is being told to retry, not to go\n"
+            "    # looking for a broken credential.\n"
+            "    KTimeout -> http_error(504, t)\n"
             "    _ -> http_error(500, t)\n"
             "  }\n"
             "}\n",
@@ -1247,8 +1255,8 @@ def main() -> int:
         replace_once(
             fm_api,
             "        let _n = check_relocation_targets(dest, sources, 0)?\n"
-            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), mutation_failure)?))\n",
-            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), mutation_failure)?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, a.http, c, sources, dest, cur, 0)), mutation_failure)?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, a.http, c, sources, dest, cur, 0)), mutation_failure)?))\n",
         )
     elif args.mutant == "name-guard-fm-create-file-fail-open":
         replace_once(

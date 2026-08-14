@@ -18,6 +18,7 @@ use api/api_monitor.{MonCfg, mon_routes}
 use svc/auth.{Auth, Qiniu, routes}
 use api/webdav.{dav_routes}
 use util/ttl.{new_cell}
+use util/http.{new_client}
 
 pub fn main() -> Unit !io = {
   let cfg = load(env_or("DAWNOP_ENV", "backend/.env"))
@@ -46,9 +47,14 @@ pub fn main() -> Unit !io = {
     rs_host: get_or(cfg, "QINIU_RS_HOST", "https://rs.qiniu.com"),
     up_host: get_or(cfg, "QINIU_UP_HOST", "https://upload.qiniup.com"),
   }
+  # One outbound HTTP client for the process. Built here because this is the
+  # only place with a lifetime longer than a request: it owns the connection
+  # pool, so building one per call (which is what this used to do) meant a fresh
+  # TCP connection, and against qiniu a fresh TLS handshake, on every outbound
+  # call. See util/http.HttpCell.
   let a = Auth {
     db: db, secret: secret, expire_min: expire_min,
-    storage_quota: storage_quota, qiniu: qiniu,
+    storage_quota: storage_quota, qiniu: qiniu, http: new_client(),
   }
   # defaults mirror app/config.py (Settings field defaults)
   let moncfg = MonCfg {

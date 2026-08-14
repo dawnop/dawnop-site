@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Negative control for the outbound-HTTP deadlines.
+# Negative control for src/util/http.dawn's outbound contract: the request
+# deadlines, the timeout-vs-refusal classification, and the shared client.
 #
-# The assertions under test are timing assertions, and timing assertions have a
-# specific way of going wrong: "the source contains .timeout(" is satisfied by a
-# deadline of one day. So every mutant here is checked by actually running the
-# suite against a peer that accepts the connection and then stalls, and the
-# mutant set deliberately includes one that keeps `.timeout(` and only changes
-# its value.
+# Every rule here has the same way of going wrong -- the source reads as though
+# it already holds. "the source contains .timeout(" is satisfied by a deadline
+# of one day; "the message says timed out" is satisfied by a status code that
+# says something else; "there is one HttpClient.newBuilder() in the file" is
+# satisfied by a builder that runs per call. So every mutant is checked by
+# running the suite against a real loopback peer, and the set deliberately
+# includes the ones that leave the giveaway in the source untouched.
 #
 # Every dawn invocation is wrapped in `timeout`. A deadline assertion that
 # regressed into a hang must come back as a red, not as a wedged pipeline.
@@ -77,10 +79,14 @@ while IFS='|' read -r mutant owners; do
 done <"$MATRIX"
 
 expected_mutants=(
+  client-per-call
   collapse-transfer-tier
   drop-deadline
+  edge-times-out-as-502
   inflate-deadline
   mute-timeout-text
+  timeout-reads-as-upstream
+  timeout-tag-second-opinion
   transfer-tier-on-management
 )
 if [[ "${mutants[*]}" != "${expected_mutants[*]}" ]]; then

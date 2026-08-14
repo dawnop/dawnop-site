@@ -195,7 +195,7 @@ jobs:
   #
   # Why they are sharded rather than steps in `backend`: measured on 2026-08-14,
   # a mutant costs ~52s (5.9s `dawn build` at 236% CPU, 38.4s `dawn test` at
-  # 41%) and there are 136 of them, so serial they are ~2 hours and they blew
+  # 41%) and there are 150 of them, so serial they are ~2 hours and they blew
   # the job's ceiling. Each mutant is an independent copy of the project on its
   # own port, so they parallelise with no interference; and since the dominant
   # `dawn test` barely uses a core, splitting them across runners buys nearly

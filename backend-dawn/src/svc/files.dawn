@@ -24,7 +24,8 @@ use repo/repo_fm.{FileRow, ReplaceOutcome, MovePlan, CopiedRow, CopyTree, fs_dat
 use util/crypto.{uuid_hex}
 use qiniu/sign.{private_url}
 use qiniu/rs.{delete_obj, copy_obj, upload_text, upload_bytes}
-use util/errkind.{conflict, as_upstream}
+use util/errkind.{conflict}
+use util/http.{HttpCell, as_outbound}
 use util/jsonx.{obj, jstr}
 use util/ttl.{now_s}
 use json/value.{Json, JArr, JObj, JStr}
@@ -51,9 +52,9 @@ fn best_effort_gc(body: fn() -> Result[Unit, String] !io) -> Unit !io = {
 
 pub fn gc_unreferenced(a: Auth, candidate: Option[String]) -> Unit !io =
   best_effort_gc(() =>
-      with_db(a.db.path, a.db.ext, c => gc_unreferenced_on(a.qiniu, c, candidate)))
+      with_db(a.db.path, a.db.ext, c => gc_unreferenced_on(a.qiniu, a.http, c, candidate)))
 
-fn gc_unreferenced_on(q: Qiniu, c: DbConn, candidate: Option[String]) -> Result[Unit, String] !io =
+fn gc_unreferenced_on(q: Qiniu, cl: HttpCell, c: DbConn, candidate: Option[String]) -> Result[Unit, String] !io =
   match candidate {
     Some(key) ->
       if str.trim(key) == "" {
@@ -65,7 +66,7 @@ fn gc_unreferenced_on(q: Qiniu, c: DbConn, candidate: Option[String]) -> Result[
           if referenced || pending {
             Ok(())
           } else {
-            let _d: Result[Unit, String] = delete_obj(q.rs_host, q.ak, q.sk, q.bucket, key)
+            let _d: Result[Unit, String] = delete_obj(cl, q.rs_host, q.ak, q.sk, q.bucket, key)
             Ok(())
           }
         })
@@ -97,9 +98,9 @@ fn gc_copied_rows_unreferenced(a: Auth, rows: List[CopiedRow], i: Int) -> Unit !
 
 ## Duplicate an object under a fresh uuid key; Ok carries the new key. This is
 ## what makes copy (unlike rename/move) a real object-store operation.
-pub fn copy_object(q: Qiniu, src_key: String) -> Result[String, String] !io = {
+pub fn copy_object(q: Qiniu, cl: HttpCell, src_key: String) -> Result[String, String] !io = {
   let new_key = uuid_hex()
-  let _c = as_upstream(copy_obj(q.rs_host, q.ak, q.sk, q.bucket, src_key, new_key))?
+  let _c = as_outbound(copy_obj(cl, q.rs_host, q.ak, q.sk, q.bucket, src_key, new_key))?
   Ok(new_key)
 }
 
@@ -172,15 +173,15 @@ fn plan_fm_moves(c: DbConn, sources: List[String], dest: String, i: Int, acc: Li
 
 # ---- copy (dirs are recreated, files get a fresh qiniu object) ----
 
-pub fn do_copy(q: Qiniu, c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
+pub fn do_copy(q: Qiniu, cl: HttpCell, c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
   {
     let planned = plan_fm_copies(c, sources, dest, i, [])?
     let _u = validate_copy_plan_targets(planned)?
-    let copied = copy_tree_list_objects(q, planned, 0, [])?
+    let copied = copy_tree_list_objects(q, cl, planned, 0, [])?
     match commit_fm_copies(c, copied) {
       Ok(_) -> fs_data(c, cur)
       Err(m) -> {
-        let _gc = gc_copy_trees_on(q, c, copied, 0)
+        let _gc = gc_copy_trees_on(q, cl, c, copied, 0)
         Err(m)
       }
     }
@@ -209,17 +210,17 @@ fn plan_fm_copies(c: DbConn, sources: List[String], dest: String, i: Int, acc: L
     }
   }
 
-fn copy_tree_list_objects(q: Qiniu, trees: List[CopyTree], i: Int, acc: List[CopyTree]) -> Result[List[CopyTree], String] !io =
+fn copy_tree_list_objects(q: Qiniu, cl: HttpCell, trees: List[CopyTree], i: Int, acc: List[CopyTree]) -> Result[List[CopyTree], String] !io =
   if i >= len(trees) {
     Ok(acc)
   } else {
-    match copy_tree_objects(q, trees[i]) {
+    match copy_tree_objects(q, cl, trees[i]) {
       Err(m) -> Err(m)
       Ok(copied) ->
-        match copy_tree_list_objects(q, trees, i + 1, acc ++ [copied]) {
+        match copy_tree_list_objects(q, cl, trees, i + 1, acc ++ [copied]) {
           Ok(done) -> Ok(done)
           Err(m) -> {
-            let _gc = cleanup_copy_tree_direct(q, copied)
+            let _gc = cleanup_copy_tree_direct(q, cl, copied)
             Err(m)
           }
         }
@@ -228,8 +229,8 @@ fn copy_tree_list_objects(q: Qiniu, trees: List[CopyTree], i: Int, acc: List[Cop
 
 ## Copy every keyed file in a prepared tree to a fresh object key. Metadata is
 ## not touched here; the caller commits the returned plan as one transaction.
-pub fn copy_tree_objects(q: Qiniu, tree: CopyTree) -> Result[CopyTree, String] !io = {
-  let rows = copy_tree_object_rows(q, tree.rows, 0, [])?
+pub fn copy_tree_objects(q: Qiniu, cl: HttpCell, tree: CopyTree) -> Result[CopyTree, String] !io = {
+  let rows = copy_tree_object_rows(q, cl, tree.rows, 0, [])?
   Ok(CopyTree {
     source_root: tree.source_root,
     destination_root: tree.destination_root,
@@ -237,7 +238,7 @@ pub fn copy_tree_objects(q: Qiniu, tree: CopyTree) -> Result[CopyTree, String] !
   })
 }
 
-fn copy_tree_object_rows(q: Qiniu, rows: List[CopiedRow], i: Int, acc: List[CopiedRow]) -> Result[List[CopiedRow], String] !io =
+fn copy_tree_object_rows(q: Qiniu, cl: HttpCell, rows: List[CopiedRow], i: Int, acc: List[CopiedRow]) -> Result[List[CopiedRow], String] !io =
   if i >= len(rows) {
     Ok(acc)
   } else {
@@ -253,7 +254,7 @@ fn copy_tree_object_rows(q: Qiniu, rows: List[CopiedRow], i: Int, acc: List[Copi
           if str.trim(key) == "" {
             Err(conflict("复制源文件的对象 key 为空：${full(row.source.path)}"))
           } else {
-            Ok(Some(copy_object(q, key)?))
+            Ok(Some(copy_object(q, cl, key)?))
           }
         None -> Err(conflict("复制源文件缺少对象 key：${full(row.source.path)}"))
       }
@@ -262,10 +263,10 @@ fn copy_tree_object_rows(q: Qiniu, rows: List[CopiedRow], i: Int, acc: List[Copi
       Err(m) -> Err(m)
       Ok(copied_key) -> {
         let copied = CopiedRow { source: row.source, copied_key: copied_key }
-        match copy_tree_object_rows(q, rows, i + 1, acc ++ [copied]) {
+        match copy_tree_object_rows(q, cl, rows, i + 1, acc ++ [copied]) {
           Ok(done) -> Ok(done)
           Err(m) -> {
-            let _gc = cleanup_fresh_key(q, copied_key)
+            let _gc = cleanup_fresh_key(q, cl, copied_key)
             Err(m)
           }
         }
@@ -273,39 +274,39 @@ fn copy_tree_object_rows(q: Qiniu, rows: List[CopiedRow], i: Int, acc: List[Copi
     }
   }
 
-fn cleanup_fresh_key(q: Qiniu, candidate: Option[String]) -> Unit !io = {
+fn cleanup_fresh_key(q: Qiniu, cl: HttpCell, candidate: Option[String]) -> Unit !io = {
   let _d: Result[Unit, String] = match candidate {
-    Some(key) -> delete_obj(q.rs_host, q.ak, q.sk, q.bucket, key)
+    Some(key) -> delete_obj(cl, q.rs_host, q.ak, q.sk, q.bucket, key)
     None -> Ok(())
   }
   ()
 }
 
-fn cleanup_copy_tree_direct(q: Qiniu, tree: CopyTree) -> Unit !io =
-  cleanup_copied_rows_direct(q, tree.rows, 0)
+fn cleanup_copy_tree_direct(q: Qiniu, cl: HttpCell, tree: CopyTree) -> Unit !io =
+  cleanup_copied_rows_direct(q, cl, tree.rows, 0)
 
-fn cleanup_copied_rows_direct(q: Qiniu, rows: List[CopiedRow], i: Int) -> Unit !io =
+fn cleanup_copied_rows_direct(q: Qiniu, cl: HttpCell, rows: List[CopiedRow], i: Int) -> Unit !io =
   if i >= len(rows) {
     ()
   } else {
-    let _d = cleanup_fresh_key(q, rows[i].copied_key)
-    cleanup_copied_rows_direct(q, rows, i + 1)
+    let _d = cleanup_fresh_key(q, cl, rows[i].copied_key)
+    cleanup_copied_rows_direct(q, cl, rows, i + 1)
   }
 
-fn gc_copy_trees_on(q: Qiniu, c: DbConn, trees: List[CopyTree], i: Int) -> Unit !io =
+fn gc_copy_trees_on(q: Qiniu, cl: HttpCell, c: DbConn, trees: List[CopyTree], i: Int) -> Unit !io =
   if i >= len(trees) {
     ()
   } else {
-    let _g = gc_copied_rows_on(q, c, trees[i].rows, 0)
-    gc_copy_trees_on(q, c, trees, i + 1)
+    let _g = gc_copied_rows_on(q, cl, c, trees[i].rows, 0)
+    gc_copy_trees_on(q, cl, c, trees, i + 1)
   }
 
-fn gc_copied_rows_on(q: Qiniu, c: DbConn, rows: List[CopiedRow], i: Int) -> Unit !io =
+fn gc_copied_rows_on(q: Qiniu, cl: HttpCell, c: DbConn, rows: List[CopiedRow], i: Int) -> Unit !io =
   if i >= len(rows) {
     ()
   } else {
-    let _g: Result[Unit, String] = gc_unreferenced_on(q, c, rows[i].copied_key)
-    gc_copied_rows_on(q, c, rows, i + 1)
+    let _g: Result[Unit, String] = gc_unreferenced_on(q, cl, c, rows[i].copied_key)
+    gc_copied_rows_on(q, cl, c, rows, i + 1)
   }
 
 # ---- delete ----
@@ -325,12 +326,12 @@ pub fn item_paths(m: Map[String, Json]) -> List[String] =
     _ -> []
   }
 
-pub fn do_delete(q: Qiniu, c: DbConn, items: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
+pub fn do_delete(q: Qiniu, cl: HttpCell, c: DbConn, items: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
   {
     let rels = delete_paths(items, i, [])
     let rows = delete_subtrees(c, rels)?
     let deleted = deleted_entries(rows, 0, [])?
-    let _gc = gc_deleted_rows(q, c, rows, 0)
+    let _gc = gc_deleted_rows(q, cl, c, rows, 0)
     Ok(acc ++ deleted)
   }
 
@@ -351,12 +352,12 @@ fn deleted_entries(rows: List[FileRow], i: Int, acc: List[Json]) -> Result[List[
     deleted_entries(rows, i + 1, acc ++ [e])
   }
 
-fn gc_deleted_rows(q: Qiniu, c: DbConn, rows: List[FileRow], i: Int) -> Unit !io =
+fn gc_deleted_rows(q: Qiniu, cl: HttpCell, c: DbConn, rows: List[FileRow], i: Int) -> Unit !io =
   if i >= len(rows) {
     ()
   } else {
-    let _g: Result[Unit, String] = gc_unreferenced_on(q, c, rows[i].key)
-    gc_deleted_rows(q, c, rows, i + 1)
+    let _g: Result[Unit, String] = gc_unreferenced_on(q, cl, c, rows[i].key)
+    gc_deleted_rows(q, cl, c, rows, i + 1)
   }
 
 pub fn merge_deleted(base: Json, deleted: List[Json]) -> Json =
@@ -378,7 +379,7 @@ pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json],
   } else {
     let mime = guess_mime(rel)
     let key = uuid_hex()
-    let _up = as_upstream(upload_text(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, "", mime, now_s() + a.qiniu.expires))?
+    let _up = as_outbound(upload_text(a.http, a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, "", mime, now_s() + a.qiniu.expires))?
     match with_db(a.db.path, a.db.ext, c => create_file_db(c, rel, key, mime, cur)) {
       Ok(d) -> Ok(Some(d))
       Err(m) -> {
@@ -404,7 +405,7 @@ pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !i
   let existing = checked?
   let mime = save_mime(existing, rel)
   let new_key = save_key(rel)
-  let _up = as_upstream(upload_text(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, new_key, content, mime, now_s() + a.qiniu.expires))?
+  let _up = as_outbound(upload_text(a.http, a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, new_key, content, mime, now_s() + a.qiniu.expires))?
   match with_db(a.db.path, a.db.ext, c => save_db(c, rel, new_key, mime, text_byte_size(content))) {
     Ok(outcome) -> {
       let _gc = gc_unreferenced(a, outcome.superseded_key)
@@ -445,7 +446,7 @@ pub fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int)
   let checked: Result[Unit, String] = with_db(a.db.path, a.db.ext, c => validate_effect_path(c, rel))
   let _v = checked?
   let key = upload_key()
-  let _up = as_upstream(upload_bytes(a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_s() + a.qiniu.expires))?
+  let _up = as_outbound(upload_bytes(a.http, a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_s() + a.qiniu.expires))?
   match with_db(a.db.path, a.db.ext, c => replace_upload(c, rel, key, mime, size)) {
     Ok(result) -> {
       let (uploaded, outcome) = result

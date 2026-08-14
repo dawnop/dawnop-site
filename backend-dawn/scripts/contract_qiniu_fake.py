@@ -38,6 +38,7 @@ Control plane (not qiniu; only the contract script calls it):
     POST /__fake/refuse         -> {"op","status","body"}; status 0 disarms
     POST /__fake/put            -> {"key","content","mime"}; plant an object
     POST /__fake/pause          -> {"op"}; pause matching object requests
+    POST /__fake/stall          -> {"op","seconds"}; go quiet for that long
     POST /__fake/release        -> {"op"}; release and disarm that pause
     GET  /__fake/pauses         -> entered request counts for armed pauses
 
@@ -119,10 +120,29 @@ class Bucket:
             self.refuse = {}
             self.pauses = {}
             self.pause_entered = {}
+            self.stalls = {}
 
     def log(self, **kw):
         with self.lock:
             self.calls.append(kw)
+
+    def arm_stall(self, op: str, seconds: float):
+        """Go quiet on `op` for `seconds` -- an endpoint that accepts and then
+        says nothing, which is what the backend's request deadline exists for.
+        Distinct from arm_pause: a pause waits to be released by the test, a
+        stall runs out on its own so nothing can wedge if the deadline is gone.
+        """
+        with self.lock:
+            if seconds > 0:
+                self.stalls[op] = seconds
+            else:
+                self.stalls.pop(op, None)
+
+    def stall_if_armed(self, op: str):
+        with self.lock:
+            seconds = self.stalls.get(op)
+        if seconds:
+            time.sleep(seconds)
 
     def arm_pause(self, op: str):
         with self.lock:
@@ -237,6 +257,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._qiniu_error(401, "bad token")
         bucket, key = _entry(encoded)
         self.bucket.log(op="stat", key=key)
+        # logged before stalling, so the call log is the same whether or not the
+        # caller waited around for an answer
+        self.bucket.stall_if_armed("stat")
         if bucket != FAKE_BUCKET:
             return self._qiniu_error(631, "no such bucket")
         obj = self.bucket.objects.get(key)
@@ -374,6 +397,9 @@ class Handler(BaseHTTPRequestHandler):
                 "content": payload.get("content", "").encode(),
                 "mime": payload.get("mime", "application/octet-stream"),
             }
+            return self._json(200, {"ok": True})
+        if segs[1:] == ["stall"]:
+            self.bucket.arm_stall(payload["op"], float(payload.get("seconds", 0)))
             return self._json(200, {"ok": True})
         if segs[1:] == ["pause"]:
             self.bucket.arm_pause(payload["op"])
