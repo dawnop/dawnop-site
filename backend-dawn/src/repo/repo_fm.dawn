@@ -2,7 +2,7 @@
 # FsData serialization, ancestor-dir backfill, and reparent — all pure metadata
 # on the `files` table (rename/move only rewrite paths, never touch qiniu).
 use std/str
-use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Cell, open, query, exec, with_immediate_tx, scalar_int, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
+use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Cell, open, query, exec, with_immediate_tx, require_tx, scalar_int, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
 use json/value.{Json, JNull, JInt, JStr, JArr}
 use util/jsonx.{obj, jstr, jbool}
 use util/paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts, safe_persisted_mime}
@@ -293,6 +293,41 @@ fn delete_subtree_tx(c: DbConn, rel: String) -> Result[List[FileRow], String] !i
 pub fn replace_file(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[ReplaceOutcome, String] !io =
   with_immediate_tx(c, () => replace_file_tx(c, rel, key, content_type, size, AllowMissingAncestors))
 
+## Proxy upload's final write: replace the row and answer with the row that was
+## written. The read shares the write's transaction, which is the whole point of
+## having this instead of a replace_file call followed by a get_row. Reading
+## after the commit answers with whatever row is there by then, so a second
+## writer on the same path gets to describe this response, and a delete gets to
+## turn an already-committed write into a failure.
+pub fn replace_file_receipt(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[(FileRow, ReplaceOutcome), String] !io =
+  with_immediate_tx(c, () => {
+    let outcome = replace_file_tx(c, rel, key, content_type, size, AllowMissingAncestors)?
+    match receipt_row(c, rel)? {
+      Some(o) -> Ok((o, outcome))
+      None -> Err("uploaded file vanished: ${full(rel)}")
+    }
+  })
+
+## The read behind an upload receipt, for both endpoints that answer with one.
+## They report a row read back from the database rather than what the client
+## sent, so the read has to observe the write it describes, which is what
+## require_tx says out loud.
+##
+## Its None is unreachable at both call sites, and their guards are kept rather
+## than dropped so this is where a reader learns why: the write that precedes
+## each one rejects an upsert that changed no row (pinned by "insert_file fails
+## closed when an ignored upsert removes its target"), and the enclosing
+## `begin immediate` holds the write reservation across both statements, so no
+## other connection can remove the row in between. Those guards stay Err rather
+## than panic for the reason every other impossible-state guard in this file is
+## an Err: the 500 an Err already produces is the right answer for a database
+## that contradicts itself, and a panic would buy nothing on a branch that
+## cannot be taken.
+fn receipt_row(c: DbConn, rel: String) -> Result[Option[FileRow], String] !io = {
+  let _t = require_tx(c, "upload receipt read ${full(rel)}")?
+  get_row(c, rel)
+}
+
 pub fn replace_file_strict(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[ReplaceOutcome, String] !io =
   with_immediate_tx(c, () => replace_file_tx(c, rel, key, content_type, size, RequireExistingAncestors))
 
@@ -436,7 +471,7 @@ pub fn finalize_register(c: DbConn, rel: String, key: String, content_type: Stri
       if consumed != 1 {
         Err("register ledger consume count changed: $key")
       } else {
-        match get_row(c, rel)? {
+        match receipt_row(c, rel)? {
           Some(o) -> Ok((o, outcome))
           None -> Err("registered file vanished: ${full(rel)}")
         }
@@ -1107,6 +1142,54 @@ test "replace_file returns the key superseded inside its transaction" {
     Ok(Some(o)) -> { assert o.key == Some("moved-key") }
     _ -> { assert false }
   }
+}
+
+## The receipt describes the row this call wrote, and it says so by reading it
+## where no other writer can have replaced it yet: inside the write transaction.
+## Read after the commit, the same statement answers with whichever row is
+## committed by then, so a second upload to the same path would get to describe
+## this one's 200, and a concurrent delete would turn an already-committed write
+## into "uploaded file vanished". require_tx is what makes the difference a
+## failure here rather than a plausible wrong answer in production.
+test "the upload receipt is read inside the transaction that wrote it" {
+  let c = fm_test_db()
+  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('receipt.txt', 0, 'old-key', 'text/plain', 1, datetime('now'), datetime('now'))", [])
+  match replace_file_receipt(c, "receipt.txt", "receipt-key", "image/png", 42) {
+    Ok(written) -> {
+      let (row, outcome) = written
+      assert row.path == "receipt.txt"
+      assert row.key == Some("receipt-key")
+      assert row.content_type == "image/png"
+      assert row.size == 42
+      assert not row.is_dir
+      assert outcome.target_existed
+      assert outcome.superseded_key == Some("old-key")
+    }
+    Err(_) -> { assert false }
+  }
+  # ancestors are backfilled by the same transaction, and the receipt is the
+  # file's own row rather than anything the backfill created
+  match replace_file_receipt(c, "deep/dir/new.bin", "deep-key", "application/octet-stream", 7) {
+    Ok(written) -> {
+      let (row, outcome) = written
+      assert row.path == "deep/dir/new.bin"
+      assert row.key == Some("deep-key")
+      assert row.size == 7
+      assert not outcome.target_existed
+      assert outcome.superseded_key == None
+    }
+    Err(_) -> { assert false }
+  }
+  assert scalar_int(c, "select count(*) from files", []) == Ok(4)
+  # and the read that produced those receipts refuses to run anywhere else, so
+  # deleting the guard is a red test rather than a silent return to the old
+  # shape: outside a transaction it answers with a refusal, not with the row it
+  # can still perfectly well see
+  match receipt_row(c, "receipt.txt") {
+    Ok(_) -> { assert false }
+    Err(m) -> { assert str.contains(m, "ran outside a transaction") }
+  }
+  assert get_row(c, "receipt.txt") != Ok(None)
 }
 
 test "replace_file_strict returns its actual superseded key" {

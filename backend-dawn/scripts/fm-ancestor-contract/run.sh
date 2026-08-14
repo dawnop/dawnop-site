@@ -10,8 +10,8 @@ MATRIX_CHECK="$HERE/matrix_check.py"
 CONTRACT="$HERE/run.py"
 QINIU_CONTRACT="$BACKEND/scripts/contract_run.py"
 QINIU_SOURCE="$BACKEND/scripts/contract_qiniu.py"
-EXPECTED_MUTANTS=84
-EXPECTED_TEST_MUTANTS=30
+EXPECTED_MUTANTS=85
+EXPECTED_TEST_MUTANTS=31
 EXPECTED_CONTRACT_MUTANTS=51
 EXPECTED_QINIU_MUTANTS=3
 EXPECTED_CONTRACT_TOTAL=51
@@ -219,6 +219,26 @@ if python3 "$MUTATOR" unknown-mutant "$BACKEND" >"$work/unknown.log" 2>&1; then
   exit 1
 fi
 printf 'PASS  mutate.py rejects unknown mutants\n'
+
+# Every mutant must still find its anchors in today's source. A rename anywhere
+# they quote rots one silently, and the loop below would discover it only after
+# rebuilding and retesting every mutant ahead of it — an hour in, on the run
+# that was supposed to be the check. Applying all of them to a throwaway copy
+# costs seconds and fails here instead.
+mapfile -t all_mutants < <(python3 "$MUTATOR" --list)
+anchor_probe="$work/anchor-probe"
+for mutant in "${all_mutants[@]}"; do
+  rm -rf "$anchor_probe"
+  mkdir -p "$anchor_probe"
+  cp -R "$BACKEND/src" "$anchor_probe/src"
+  if ! python3 "$MUTATOR" "$mutant" "$anchor_probe" >"$work/$mutant.anchor.log" 2>&1; then
+    printf 'FAIL  %s no longer finds its anchors\n' "$mutant" >&2
+    cat "$work/$mutant.anchor.log" >&2
+    exit 1
+  fi
+done
+rm -rf "$anchor_probe"
+printf 'PASS  all %s mutants still find their anchors\n' "${#all_mutants[@]}"
 
 base_test_log="$work/base.test.log"
 if ! "$DAWN" test "$BACKEND" >"$base_test_log" 2>&1; then

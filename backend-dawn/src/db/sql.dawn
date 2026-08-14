@@ -196,6 +196,36 @@ pub fn with_immediate_tx[T](c: DbConn, body: fn() -> Result[T, String] !io) -> R
   bracket(c, h => rollback_immediate(h), _h => finish_immediate_tx(c, body))
 }
 
+## Confirm the caller is inside an open transaction. A read that has to observe
+## the write it describes calls this, so that moving it after the commit becomes
+## a loud failure instead of a plausible-looking wrong answer.
+##
+## `getAutoCommit()` cannot answer the question: sqlite-jdbc keeps its own
+## JDBC-level flag, and the transactions here are opened with a raw
+## `begin immediate`, which never touches that flag (measured: it still reads
+## true inside with_immediate_tx's body). SQLite does answer, because a nested
+## `begin` is an error, so this asks SQLite. Inside a transaction the probe fails
+## and changes nothing; outside one it opens a deferred transaction, which takes
+## no lock, and rolls it straight back.
+##
+## What it pins is "a transaction is open on this connection", not "the one that
+## wrote the row": nothing SQLite exposes names a transaction. The two readings
+## come apart only for a caller that opens a second transaction for the read, not
+## for a read that leaves the transaction altogether.
+pub fn require_tx(c: DbConn, what: String) -> Result[Unit, String] !io =
+  match exec(c, "begin", []) {
+    Ok(_) -> {
+      let _r = exec(c, "rollback", [])
+      Err("$what ran outside a transaction")
+    }
+    Err(m) ->
+      if str.contains(m, "within a transaction") {
+        Ok(())
+      } else {
+        Err("$what could not confirm its transaction: $m")
+      }
+  }
+
 fn rollback_immediate(c: DbConn) -> Unit !io = {
   let _r = exec(c, "rollback", [])
   ()
@@ -472,6 +502,26 @@ test "with_immediate_tx rolls back when its body panics" {
   assert scalar_int(c, "select count(*) from panic_items", []) == Ok(0)
   assert with_immediate_tx(c, () => exec(c, "insert into panic_items values (2)", [])) == Ok(1)
   assert scalar_int(c, "select sum(v) from panic_items", []) == Ok(2)
+}
+
+test "require_tx tells a transaction from no transaction" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table tx_probe (v integer)", []) == Ok(0)
+  match require_tx(c, "probe") {
+    Ok(_) -> { assert false }
+    Err(m) -> { assert str.contains(m, "ran outside a transaction") }
+  }
+  # the refusal leaves nothing open: the next statement still autocommits
+  assert exec(c, "insert into tx_probe values (1)", []) == Ok(1)
+  assert scalar_int(c, "select sum(v) from tx_probe", []) == Ok(1)
+  let inside: Result[Bool, String] = with_immediate_tx(c, () => {
+    let _t = require_tx(c, "probe")?
+    let _i = exec(c, "insert into tx_probe values (2)", [])?
+    Ok(true)
+  })
+  assert inside == Ok(true)
+  # and the probe did not disturb the transaction it confirmed
+  assert scalar_int(c, "select sum(v) from tx_probe", []) == Ok(3)
 }
 
 test "unique constraint violation is an expected Err" {

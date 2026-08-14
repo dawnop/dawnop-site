@@ -4,7 +4,7 @@
 import argparse
 from pathlib import Path
 
-VERSION = "19"
+VERSION = "20"
 VALID_ROLES = {"test", "contract", "qiniu"}
 EXPECTED_ROWS = [
     "immediate-tx-as-deferred|test|with_immediate_tx reserves the writer before its body",
@@ -91,6 +91,7 @@ EXPECTED_ROWS = [
     "name-guard-webdav-destination-fail-open|contract|name-guard.webdav.destination",
     "entry-json-mime-passthrough|contract|persisted-mime.fm.listing",
     "copy-mime-passthrough|contract|persisted-mime.fm.copy",
+    "receipt-read-after-commit|test|the upload receipt is read inside the transaction that wrote it",
 ]
 EXPECTED_MUTANTS = [row.split("|", 1)[0] for row in EXPECTED_ROWS]
 EXPECTED_CONTRACT_OWNERS = [
@@ -99,7 +100,7 @@ EXPECTED_CONTRACT_OWNERS = [
 EXPECTED_QINIU_OWNERS = [
     row.split("|", 2)[2] for row in EXPECTED_ROWS if row.split("|", 2)[1] == "qiniu"
 ]
-EXPECTED_ROLE_COUNTS = {"test": 30, "contract": 51, "qiniu": 3}
+EXPECTED_ROLE_COUNTS = {"test": 31, "contract": 51, "qiniu": 3}
 
 
 def validate(lines, listed_mutants, listed_assertions, listed_qiniu_assertions):
