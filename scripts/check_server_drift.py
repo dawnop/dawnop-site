@@ -39,8 +39,19 @@ REPO = Path(__file__).resolve().parents[1]
 GROUPS = {
     "unit:dawnop-backend": "FastAPI 单元（回滚目标）",
     "unit:dawnop-dawn": "Dawn 单元（生产）",
+    "unit:dawnop-backup": "库备份的 service + timer（#263）",
     "fastapi-app": "FastAPI 应用代码（回滚目标跑的就是它）",
+    "opt-scripts": "/opt/dawnop 下装机的脚本（正本在 deploy/）",
     "stale-scripts": "/opt/dawnop-dawn 下不该有任何 .sh",
+}
+
+# 服务器上的名字 → 仓库里的正本，正本一律是 `deploy/<同名文件>`。装机时这些文件被
+# 摊平到各自的位置（`deploy/backup-db.sh` → `/opt/dawnop/backup-db.sh`，
+# `deploy/dawnop-backup.timer` → `/etc/systemd/system/dawnop-backup.timer`），
+# 所以键上**不能**留 `deploy/`：留着就两边一个都对不上，报成「全缺 + 全多」。
+FROM_DEPLOY_DIR = {
+    "unit:dawnop-backup": ["dawnop-backup.service", "dawnop-backup.timer"],
+    "opt-scripts": ["backup-db.sh"],
 }
 
 # 服务器侧只做一件事：把「有什么、各自的 sha256 是多少」打出来。判断全在本地做，
@@ -56,6 +67,17 @@ sha() { sha256sum <"$1" | cut -d' ' -f1; }
 for u in dawnop-backend dawnop-dawn; do
   f="/etc/systemd/system/$u.service"
   [ -f "$f" ] && emit "unit:$u" "$u.service" "$(sha "$f")"
+done
+
+# 备份是一个 service 加一个 timer，两个都要盯：只装了 service 而 timer 没 enable，
+# 备份就永远不会自己跑，而这正是「看起来装好了」的那种失败。
+for f in /etc/systemd/system/dawnop-backup.service /etc/systemd/system/dawnop-backup.timer; do
+  [ -f "$f" ] && emit unit:dawnop-backup "${f#/etc/systemd/system/}" "$(sha "$f")"
+done
+
+for f in /opt/dawnop/*.sh; do
+  [ -e "$f" ] || continue
+  emit opt-scripts "${f#/opt/dawnop/}" "$(sha "$f")"
 done
 
 if [ -d /opt/dawnop/backend/app ]; then
@@ -99,6 +121,10 @@ def repo_side() -> dict[str, dict[str, str]]:
     expected["unit:dawnop-dawn"]["dawnop-dawn.service"] = sha256_of(
         REPO / "backend-dawn" / "deploy" / "dawnop-dawn.service"
     )
+    for group, names in FROM_DEPLOY_DIR.items():
+        for name in names:
+            expected[group][name] = sha256_of(REPO / "deploy" / name)
+
     for rel in tracked_files("backend/app"):
         # 服务器上 /opt/dawnop/backend/app/... 对应仓库 backend/app/...
         expected["fastapi-app"][rel[len("backend/") :]] = sha256_of(REPO / rel)

@@ -48,13 +48,30 @@ CONTENT_LOOP = """        for name in sorted(set(exp) & set(act)):
             if exp[name] != act[name]:
 """
 
+BACKUP_UNITS_EMIT = """for f in /etc/systemd/system/dawnop-backup.service /etc/systemd/system/dawnop-backup.timer; do
+  [ -f "$f" ] && emit unit:dawnop-backup "${f#/etc/systemd/system/}" "$(sha "$f")"
+done
+"""
+
+OPT_SCRIPTS_EMIT = """for f in /opt/dawnop/*.sh; do
+  [ -e "$f" ] || continue
+  emit opt-scripts "${f#/opt/dawnop/}" "$(sha "$f")"
+done
+"""
+
+FROM_DEPLOY_LOOP = '            expected[group][name] = sha256_of(REPO / "deploy" / name)'
+
 # (名字, 说明, 变形, 预期转红的测试函数名)
 MUTANTS: list[tuple[str, str, Callable[[str], str], set[str]]] = [
     (
         "drift-ignores-missing-on-server",
         "不再报「仓库有、服务器没有」（#236 那三个文件走的就是这条）",
         sub(MISSING_LOOP, ""),
-        {"test_missing_on_server_is_reported"},
+        # 备份那条也红：timer 没装上去走的正是这个方向。
+        {
+            "test_missing_on_server_is_reported",
+            "test_backup_timer_missing_on_server_is_reported",
+        },
     ),
     (
         "drift-ignores-extra-on-server",
@@ -65,6 +82,7 @@ MUTANTS: list[tuple[str, str, Callable[[str], str], set[str]]] = [
         {
             "test_extra_on_server_is_reported",
             "test_a_group_only_the_server_knows_about_still_gets_compared",
+            "test_an_unknown_script_under_opt_dawnop_is_reported",
         },
     ),
     (
@@ -77,7 +95,11 @@ MUTANTS: list[tuple[str, str, Callable[[str], str], set[str]]] = [
         "drift-compares-names-not-content",
         "只比名字不比内容（User=dawn vs User=dawnop 就这样溜过去）",
         sub(CONTENT_LOOP, "        for name in []:\n            if False:\n"),
-        {"test_same_name_different_content_is_reported"},
+        # 服务器上被就地改过的 backup-db.sh 也只能靠这个方向被发现。
+        {
+            "test_same_name_different_content_is_reported",
+            "test_backup_script_edited_on_the_server_is_reported",
+        },
     ),
     (
         "drift-always-complains",
@@ -86,8 +108,8 @@ MUTANTS: list[tuple[str, str, Callable[[str], str], set[str]]] = [
             "    problems: list[str] = []\n",
             '    problems: list[str] = ["something"]\n',
         ),
-        # 五条一起红，而这正是想要的：三个方向的判词都写着 `len(problems) == 1`，
-        # 凭空多一条就把它们全打破。想让这个 mutant「只红一条」，只能把那三条的
+        # 八条一起红，而这正是想要的：每个方向的判词都钉死了「恰好一条差异」，
+        # 凭空多一条就把它们全打破。想让这个 mutant「只红一条」，只能把它们的
         # 计数断言松成「消息在列表里」，那等于放行「顺带多报几条」，得不偿失。
         {
             "test_identical_sides_report_nothing",
@@ -95,6 +117,9 @@ MUTANTS: list[tuple[str, str, Callable[[str], str], set[str]]] = [
             "test_extra_on_server_is_reported",
             "test_same_name_different_content_is_reported",
             "test_a_group_only_the_server_knows_about_still_gets_compared",
+            "test_backup_timer_missing_on_server_is_reported",
+            "test_an_unknown_script_under_opt_dawnop_is_reported",
+            "test_backup_script_edited_on_the_server_is_reported",
         },
     ),
     (
@@ -117,10 +142,64 @@ MUTANTS: list[tuple[str, str, Callable[[str], str], set[str]]] = [
             "test_the_three_files_that_were_missing_in_production_are_in_the_manifest",
         },
     ),
+    (
+        "backup-group-not-registered",
+        "manifest 里没有 unit:dawnop-backup 这一组（= #263 装的东西没人盯）",
+        sub('    "unit:dawnop-backup": "库备份的 service + timer（#263）",\n', ""),
+        # repo_side 往一个不存在的组里写，KeyError 当场炸——凡是取 manifest 的判词
+        # 全红。这一片红是对的：一组没登记，它的每一条结论都不再成立。
+        # 丢 opt-scripts 是同一形状（对称），不另设变异体。
+        {
+            "test_the_backup_pieces_installed_by_263_are_in_the_manifest",
+            "test_repo_side_strips_the_deploy_prefix_for_installed_files",
+            "test_backup_timer_missing_on_server_is_reported",
+            "test_an_unknown_script_under_opt_dawnop_is_reported",
+            "test_backup_script_edited_on_the_server_is_reported",
+            "test_repo_side_maps_backend_app_onto_the_server_layout",
+            "test_the_three_files_that_were_missing_in_production_are_in_the_manifest",
+        },
+    ),
+    (
+        "backup-keys-keep-the-deploy-prefix",
+        "装机文件的键留着 deploy/ 前缀，与服务器上的基名对不上（全缺 + 全多）",
+        sub("expected[group][name] =", 'expected[group]["deploy/" + name] ='),
+        # 「服务器上多出」那条不红，而且不该红：它加的是一个仓库两边都没有的名字，
+        # 前缀怎么削都照报。它守的是别的东西。
+        {
+            "test_the_backup_pieces_installed_by_263_are_in_the_manifest",
+            "test_repo_side_strips_the_deploy_prefix_for_installed_files",
+            "test_backup_timer_missing_on_server_is_reported",
+            "test_backup_script_edited_on_the_server_is_reported",
+        },
+    ),
+    (
+        "backup-hashes-the-wrong-repo-file",
+        "键对、哈希取自 deploy/ 下另一个文件——比对的不再是这三样的正本",
+        sub(FROM_DEPLOY_LOOP, FROM_DEPLOY_LOOP.replace("name)", '"deploy-fastapi.sh")')),
+        # 只有「哈希得等于正本」那条能看见：键没变，三个方向的判词两边同源，照绿。
+        {"test_the_backup_pieces_installed_by_263_are_in_the_manifest"},
+    ),
+    (
+        "remote-forgets-the-backup-units",
+        "远端不 emit dawnop-backup 的 service/timer，那一组恒等于「服务器上什么都没有」",
+        sub(BACKUP_UNITS_EMIT, ""),
+        {"test_every_manifest_group_is_emitted_by_the_remote_script"},
+    ),
+    (
+        "remote-forgets-opt-scripts",
+        "远端不 emit /opt/dawnop/*.sh，装机脚本被改了也看不见",
+        sub(OPT_SCRIPTS_EMIT, ""),
+        {"test_every_manifest_group_is_emitted_by_the_remote_script"},
+    ),
 ]
 
 
-def run_tests() -> set[str]:
+def run_tests() -> tuple[set[str], int]:
+    """返回 (红了的测试名, 绿了的条数)。
+
+    第二个数不是装饰：pytest 压根没跑起来（比如没 source 那个 venv）时，stdout 是空的，
+    「一条都没红」和「全绿」长得一模一样——这个脚本自己就差点这么骗过去。
+    """
     proc = subprocess.run(
         [
             sys.executable,
@@ -143,8 +222,10 @@ def run_tests() -> set[str]:
     }
     if proc.returncode not in (0, 1):
         print(proc.stdout[-3000:])
+        print(proc.stderr[-2000:])
         raise SystemExit("pytest 以非 0/1 退出，mutant 打坏了别的东西")
-    return failed
+    m = re.search(r"(\d+) passed", proc.stdout)
+    return failed, int(m.group(1)) if m else 0
 
 
 def main() -> int:
@@ -163,16 +244,22 @@ def main() -> int:
         raise SystemExit(f"--only 里有不存在的名字：{args.only}")
 
     print("== 基线（未变异）==")
-    if run_tests():
+    failed, passed = run_tests()
+    if failed:
         raise SystemExit("   基线就是红的，先修好再跑变异体")
-    print("   全绿\n")
+    if not passed:
+        raise SystemExit(
+            "   一条都没跑起来（pytest 在这个解释器里吗？"
+            "先 source backend/.venv/bin/activate）"
+        )
+    print(f"   全绿（{passed} 条）\n")
 
     original = DRIFT.read_text(encoding="utf-8")
     bad = 0
     try:
         for name, why, mutate, want in chosen:
             DRIFT.write_text(mutate(original), encoding="utf-8")
-            got = run_tests()
+            got, _ = run_tests()
             DRIFT.write_text(original, encoding="utf-8")
             ok = got == want
             bad += 0 if ok else 1

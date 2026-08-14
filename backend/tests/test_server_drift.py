@@ -127,6 +127,79 @@ def test_the_three_files_that_were_missing_in_production_are_in_the_manifest():
         assert f in keys, f
 
 
+# --------------------------------------------------------------------------
+# #263 的库备份：脚本 + service + timer
+# --------------------------------------------------------------------------
+
+
+def _server_view() -> dict[str, dict[str, str]]:
+    """一台「和仓库完全一致」的假服务器：照抄仓库侧的期望表。
+
+    下面三条各自只动它一处，于是被报出来的那一条差异就是被动的那一处，
+    不掺别的噪声。用真的 `repo_side()` 当底子是有意的：这样「备份那几样根本没进
+    manifest」会让这三条一起红，而不是让它们对着一张手写的假表自说自话地绿。
+    """
+    return {group: dict(files) for group, files in drift.repo_side().items()}
+
+
+def test_the_backup_pieces_installed_by_263_are_in_the_manifest():
+    """#263 往服务器上装了三样东西，三样都要被比对，且比的是仓库里那份正本。
+
+    键对了但哈希取自别的文件，检查器一样是瞎的——它会拿一个永远对不上的值去比，
+    或者更糟，拿一个碰巧不变的值去比。
+    """
+    expected = drift.repo_side()
+    for group, name, repo_rel in (
+        ("unit:dawnop-backup", "dawnop-backup.service", "deploy/dawnop-backup.service"),
+        ("unit:dawnop-backup", "dawnop-backup.timer", "deploy/dawnop-backup.timer"),
+        ("opt-scripts", "backup-db.sh", "deploy/backup-db.sh"),
+    ):
+        assert name in expected[group], f"{group} 里没有 {name}"
+        assert expected[group][name] == drift.sha256_of(REPO / repo_rel), repo_rel
+
+
+def test_repo_side_strips_the_deploy_prefix_for_installed_files():
+    """仓库 `deploy/backup-db.sh` 装到服务器上是 `/opt/dawnop/backup-db.sh`，
+
+    `deploy/dawnop-backup.timer` 装成 `/etc/systemd/system/dawnop-backup.timer`。
+    两边都只剩基名，所以键上不许留 `deploy/`——留着就是「全缺 + 全多」的噪声。
+    """
+    expected = drift.repo_side()
+    assert set(expected["unit:dawnop-backup"]) == {
+        "dawnop-backup.service",
+        "dawnop-backup.timer",
+    }
+    assert set(expected["opt-scripts"]) == {"backup-db.sh"}
+
+
+def test_backup_timer_missing_on_server_is_reported():
+    """只装了 service、timer 没上去：备份永远不会自己跑，而表面上「装好了」。"""
+    actual = _server_view()
+    del actual["unit:dawnop-backup"]["dawnop-backup.timer"]
+    problems = drift.compare(drift.repo_side(), actual)
+    assert problems == ["unit:dawnop-backup: 服务器上缺 dawnop-backup.timer"]
+
+
+def test_an_unknown_script_under_opt_dawnop_is_reported():
+    """服务器上冒出来一个仓库里没有的脚本——手改留下的东西走的就是这条。"""
+    actual = _server_view()
+    actual["opt-scripts"]["restore-db.sh"] = "aa"
+    problems = drift.compare(drift.repo_side(), actual)
+    assert problems == ["opt-scripts: 服务器上多出 restore-db.sh（仓库里没有）"]
+
+
+def test_backup_script_edited_on_the_server_is_reported():
+    """两边都有 `backup-db.sh`，但服务器上那份被就地改过。
+
+    这是备份最可能的坏法：有人上去调了 KEEP 或者改了路径，仓库那份纹丝不动。
+    """
+    actual = _server_view()
+    actual["opt-scripts"]["backup-db.sh"] = "0" * 64
+    problems = drift.compare(drift.repo_side(), actual)
+    assert len(problems) == 1
+    assert problems[0].startswith("opt-scripts: backup-db.sh 内容不同")
+
+
 def test_unit_files_compared_are_the_ones_the_rollback_chain_reads():
     """比对的必须是回滚脚本常量所对齐的那两个单元文件。"""
     src = SCRIPT.read_text(encoding="utf-8")
