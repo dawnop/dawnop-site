@@ -31,7 +31,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import settings  # noqa: E402
-from app.core import qiniu_client  # noqa: E402
+
+# Imported by name rather than reached for as `qiniu_client._bucket_manager`:
+# it lives in the kodo submodule and the package __init__ does not re-export it,
+# so the attribute form raised AttributeError at the moment of use, after the
+# script had already opened the database. Named here, a rename fails the import
+# and the script dies before it does anything. See tests/test_scripts_symbols.py.
+from app.core.qiniu_client.kodo import _bucket_manager  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models.file_object import FileObject  # noqa: E402
 from app.models.pending_upload import PendingUpload  # noqa: E402
@@ -172,7 +178,7 @@ def main() -> None:
     args = ap.parse_args()
 
     bucket = settings.qiniu_bucket
-    mgr = qiniu_client._bucket_manager()
+    mgr = _bucket_manager()
     if args.full:
         sweep_full(bucket, mgr, args.delete)
     else:
