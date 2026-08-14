@@ -34,6 +34,16 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 4 条（`get.file`/`put.new`/`copy.file`/`delete.file`）——它跑在没有凭据的后端上，同样的路径
 由 `contract_qiniu.py` 在假桶上钉住，所以是移交而不是漏掉。
 
+**变异体只写带哨兵的一次性目录。** 七个 harness 的 `mutate.py` 都是就地改写源码、没有撤销，
+所以它们在动任何文件之前先过 `scripts/mutant_workdir.py`：目标既不能是 mutator 自己所在的仓库
+（这条没有逃生阀），又必须带一个 `.mutant-workdir` 文件。`run.sh` 在 `cp` 出临时副本之后立刻
+建这个哨兵；手工调单个变异体时，自己在临时目录里 `touch` 一次。**哨兵本身就是逃生阀**，所以没有
+`--force` 也没有环境变量：把一个目录标成可牺牲，应当是留在那个目录里、看得见的一次性动作，
+而不是能 export 进 shell 配置然后忘掉的习惯。拒绝时退出码是 3（区别于 argparse 的 2 与锚点找不到
+的 1）。这道守卫自己也有负控，`mutant_workdir.py --self-test`，七个 run.sh 各调一次。
+起因是 2026-08-15 真出过两次：一次把活工作树里的 `repo_fm`/`repo_tag` 改了（提交前的
+`git status` 才发现），一次指错成仓库根、后续步骤跑在未变异的源码上报了 PASS。
+
 ## 依赖与构建
 
 - 依赖：在 [`dawn.toml`](dawn.toml) 的 `[java-deps]` 里声明（`sqlite-jdbc`、`jbcrypt`——零传递依赖
