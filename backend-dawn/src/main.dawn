@@ -21,6 +21,13 @@ use util/ttl.{new_cell}
 use util/http.{new_client}
 
 pub fn main() -> Unit !io = {
+  # Every default below mirrors app/config.py (Settings field defaults) for the
+  # keys both backends read, because both read the same .env and so must agree
+  # on what an absent key means. That used to be this sentence and nothing else,
+  # and it was wrong: LIGHTHOUSE_INSTANCE_ID defaulted to "" here and to a real
+  # instance id there for a month. scripts/check_config_defaults.py now compares
+  # the two tables key by key, with a named reason for each key only one side
+  # has, and CI runs it.
   let cfg = load(env_or("DAWNOP_ENV", "backend/.env"))
   let db_path = get_or(cfg, "DAWN_DB_PATH", "backend/dawnop.db")
   let db_ext = get_or(cfg, "DAWN_SIMPLE_EXT", "backend/extensions/libsimple")
@@ -56,7 +63,6 @@ pub fn main() -> Unit !io = {
     db: db, secret: secret, expire_min: expire_min,
     storage_quota: storage_quota, qiniu: qiniu, http: new_client(),
   }
-  # defaults mirror app/config.py (Settings field defaults)
   let moncfg = MonCfg {
     tencent_id: get_or(cfg, "TENCENT_SECRET_ID", ""),
     tencent_key: get_or(cfg, "TENCENT_SECRET_KEY", ""),

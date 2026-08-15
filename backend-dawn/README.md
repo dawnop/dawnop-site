@@ -65,7 +65,10 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 ## 关键环境变量
 
 与 FastAPI 共享的（`SECRET_KEY`、`QINIU_*`、`TENCENT_*`、`LIGHTHOUSE_INSTANCE_ID`、
-`VAULT_ALIVE_URL` 等）逐字取同一 .env；Dawn 专属：
+`VAULT_ALIVE_URL` 等）逐字取同一 .env，**两边的默认值也必须一样**（同一个 .env 里没写的键，
+两套后端得理解成同一件事）：`scripts/check_config_defaults.py` 把 `main.dawn` 的
+`get_or(cfg, ...)` 表与 `app/config.py` 的 `Settings` 字段表逐键比对，只在一边有的键要在脚本里
+具名豁免并写明理由，CI 的 `python-backend` job 每次跑。Dawn 专属：
 
 - `DAWN_PORT`（默认 8001）、`DAWN_CORS_ORIGIN`（默认 `https://dawnop.com`）。
 - `DAWN_DB_PATH`（默认 `backend/dawnop.db`；生产 `/opt/dawnop/data/dawnop.db`，与 FastAPI 同文件，WAL 共享）。

@@ -368,6 +368,28 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements*.txt
 
+      # Both backends read the same .env, so they must also agree on what an
+      # absent key means. main.dawn has said `# defaults mirror app/config.py`
+      # since M6; on 2026-08-15 the line five below it read
+      # LIGHTHOUSE_INSTANCE_ID with a default of "" while config.py defaulted it
+      # to a real instance id. A mirror nothing compares is a sentence.
+      #
+      # It lives in this job because this job is why the FastAPI tree still
+      # exists: it is the rollback target, and a rollback target that resolves
+      # config differently from production is a rollback that changes behaviour.
+      # Stdlib only, so it runs before the install and fails in a second.
+      #
+      # Self-test first, for the usual reason: a drift checker's normal output
+      # is "OK", which is also what a broken one prints. --self-test feeds the
+      # comparison synthetic tables and requires each verdict to go red,
+      # including the one that matters most — an unparseable call site is an
+      # error, not a silently smaller table.
+      - name: the config-defaults checker still catches drift
+        run: python scripts/check_config_defaults.py --self-test
+
+      - name: Dawn and FastAPI agree on config defaults
+        run: python scripts/check_config_defaults.py
+
       - name: install
         run: pip install -r requirements-dev.txt
         working-directory: backend
