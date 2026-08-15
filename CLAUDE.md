@@ -309,7 +309,7 @@ python3 backend-dawn/scripts/contract_run.py --only read
 # 同样的路径由 contract_qiniu.py 在假桶上钉住）。理由逐条写在 golden 的 skipped 里。
 # 不再需要 FastAPI 陪跑（脚本仍可 --base 指向它，golden 就是契约）。
 
-# ---- 变异体 harness（七个共 150 个变异体，CI 里分 17 个并行 job 跑）----
+# ---- 变异体 harness（八个共 154 个变异体，CI 里分 18 个并行 job 跑）----
 backend-dawn/scripts/fm-ancestor-contract/run.sh              # 全量，本地约 70 分钟
 backend-dawn/scripts/fm-ancestor-contract/run.sh --shard 0/9  # CI 跑的那一片，约 10 分钟
 backend-dawn/scripts/fm-ancestor-contract/run.sh --preflight-only  # 只验锚点，约 1 分钟
@@ -328,16 +328,18 @@ python3 backend-dawn/scripts/mutants_coverage.py --self-test
 规范尽量落在 CI 与配置里，而不是文档里——文档会过期，CI 不会。
 
 - **CI**（`.github/workflows/ci.yml`，push main + PR 触发）：`secrets`（三道守卫 + shellcheck）、
-  `backend`（Dawn 测试 + 打 jar 传 artifact + 四套 golden）、`mutants`（**17 个并行分片**，
-  跑七个变异体 harness 共 150 个变异体）、`mutants-complete`（断言各分片并集覆盖全矩阵）、
+  `backend`（Dawn 测试 + 打 jar 传 artifact + 四套 golden）、`mutants`（**18 个并行分片**，
+  跑八个变异体 harness 共 154 个变异体）、`mutants-complete`（断言各分片并集覆盖全矩阵）、
   `python-backend`（**钉 Python 3.10**，对齐生产 + ruff）、`frontend`（lint/format/build）。
   任一红都别合。
   > **变异体矩阵是分片跑的，加变异体要顺手看一眼 job 数**。单个变异体约 52s（实测
-  > 2026-08-14：`dawn build` 5.9s 吃 236% CPU、`dawn test` 38.4s 只吃 41%），串行 150 个 =
-  > 130 分钟，曾把 `backend` job 顶到 62 分钟上限被取消。分片规格写在 ci.yml 的
+  > 2026-08-14：`dawn build` 5.9s 吃 236% CPU、`dawn test` 38.4s 只吃 41%），串行 154 个 =
+  > 130 分钟出头，曾把 `backend` job 顶到 62 分钟上限被取消。分片规格写在 ci.yml 的
   > `mutants.strategy.matrix`，harness 侧的 `--shard I/N` 在 `backend-dawn/scripts/mutant-shard.sh`。
-  > 17 个分片加上另外四个 job 是 21，已经比本账号的并发上限多一个——再加分片不会失败，但会排队，
+  > 18 个分片加上另外四个 job 是 22，已经比本账号的并发上限多两个。再加不会失败，但会排队，
   > 也就不再省墙钟时间。上限的具体数字与这笔账记在 ci.yml 里，改分片数以那儿为准。
+  > **新增 harness 不必改覆盖检查器**：`mutants_coverage.py` 的期望集合是从
+  > `scripts/*/matrix.txt` 问树要的，但 ci.yml 的矩阵要手加一行，漏加会被它点名报红。
 - **本地 hook（每台开发机装一次）**：`git config core.hooksPath .githooks`（`.githooks/` 已入库）。
   三个 hook 都是把 CI 的红灯提前、省一次往返，临时跳过 `git commit/push --no-verify`：
   `pre-commit`（身份守卫，`--allow-offline` 容离线）、`commit-msg`（Claude 署名守卫）、`pre-push`（身份守卫，严格在线）。

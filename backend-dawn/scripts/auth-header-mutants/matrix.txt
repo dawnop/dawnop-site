@@ -1,0 +1,10 @@
+# Hand-owned red set. The runner has no record mode and rejects every extra red.
+#
+# One mutant per rule in svc/auth.scheme_param, and each must turn exactly one
+# assertion red. That is the whole point: the four rules were written together,
+# and a mutant that reddens two of them would mean one rule is riding on
+# another's test rather than being checked itself.
+case-sensitive-scheme|the auth scheme is matched case-insensitively
+accept-schemeless|a credential with no scheme is not a credential
+any-scheme-passes|a different scheme yields no credential
+trim-credential|the credential after the scheme is taken verbatim

@@ -175,9 +175,36 @@ pub fn guarded_flexible(a: Auth, req: Request, body: fn() -> Result[Response, Ht
   body()
 }
 
+## The credential an `Authorization: <scheme> <credential>` header carries, or ""
+## if it is not the wanted scheme. `want` must be lowercase; the scheme on the
+## wire is compared case-insensitively (RFC 7235 §2.1 makes it case-insensitive,
+## and RFC 6750 §2.1 repeats it for Bearer).
+##
+## This is FastAPI's get_authorization_scheme_param plus the `scheme.lower() !=
+## ...` its OAuth2PasswordBearer and HTTPBasic both do: split at the *first*
+## space, and take everything after it verbatim. Two deliberate consequences,
+## both matching FastAPI:
+##
+##   - a header with no space is all scheme and no credential, so a bare token
+##     (`Authorization: eyJ...`) does not authenticate. It used to, here: the old
+##     code fell back to treating the whole header value as the token, which
+##     accepted a shape FastAPI rejects.
+##   - the credential is not trimmed. `Bearer  x` yields " x", which then fails
+##     to verify. Trimming would accept a header FastAPI does not.
+pub fn scheme_param(h: String, want: String) -> String =
+  match str.index_of(h, " ") {
+    None -> ""
+    Some(i) ->
+      if str.to_lower(str.slice(h, 0, i)) == want {
+        str.slice(h, i + 1, str.len(h))
+      } else {
+        ""
+      }
+  }
+
 fn header_token(req: Request) -> String =
   match header(req, "authorization") {
-    Some(h) -> if str.starts_with(h, "Bearer ") { str.slice(h, 7, str.len(h)) } else { h }
+    Some(h) -> scheme_param(h, "bearer")
     None -> ""
   }
 
@@ -232,4 +259,44 @@ test "verify_password accepts the \$2b hashes the shared users table holds" {
   # a malformed hash reads as "wrong password", never as a crash (401, not 500)
   assert not verify_password("hunter2", "not-a-bcrypt-hash")
   assert not verify_password("hunter2", "")
+}
+
+# ---- Authorization header shape (four rules, one test each) ----
+#
+# Split into one test per rule on purpose: each is owned by exactly one mutant in
+# scripts/auth-header-mutants, and a test covering two rules would let a mutant
+# that breaks one of them hide behind the other's failure.
+
+test "the auth scheme is matched case-insensitively" {
+  # The wire spelling varies by client; RFC 7235 says it must not matter, and
+  # FastAPI compares scheme.lower(). Dawn used to require exactly "Bearer ",
+  # so a client sending "bearer" got a 401 where FastAPI let it in.
+  assert scheme_param("Bearer abc", "bearer") == "abc"
+  assert scheme_param("BEARER abc", "bearer") == "abc"
+  assert scheme_param("BeArEr abc", "bearer") == "abc"
+  assert scheme_param("Basic dXNlcg==", "basic") == "dXNlcg=="
+}
+
+test "a credential with no scheme is not a credential" {
+  # `Authorization: <jwt>` used to authenticate here and 401 in FastAPI. It is
+  # not a well-formed Authorization header: with no space there is only a
+  # scheme, and that scheme is not "bearer".
+  assert scheme_param("eyJhbGciOiJIUzI1NiJ9.e30.sig", "bearer") == ""
+  assert scheme_param("", "bearer") == ""
+  assert scheme_param("bearer", "bearer") == ""
+}
+
+test "a different scheme yields no credential" {
+  assert scheme_param("basic dXNlcjpwdw==", "bearer") == ""
+  assert scheme_param("digest username=x", "bearer") == ""
+  assert scheme_param("bearer abc", "basic") == ""
+}
+
+test "the credential after the scheme is taken verbatim" {
+  # No trimming: the second space belongs to the credential, which then fails to
+  # verify. FastAPI's partition(" ") does the same, so both backends 401 here.
+  # Trimming would silently accept a header FastAPI rejects.
+  assert scheme_param("bearer  abc", "bearer") == " abc"
+  assert scheme_param("bearer abc ", "bearer") == "abc "
+  assert scheme_param("bearer a b", "bearer") == "a b"
 }

@@ -542,6 +542,58 @@
     "created_at": "2026-01-01T00:00:00"
    }
   },
+  "me.schemeless": {
+   "method": "GET",
+   "path": "/api/auth/me",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "me.lowerScheme": {
+   "method": "GET",
+   "path": "/api/auth/me",
+   "status": 200,
+   "body": {
+    "id": 1,
+    "username": "contract-admin",
+    "created_at": "2026-01-01T00:00:00"
+   }
+  },
+  "me.upperScheme": {
+   "method": "GET",
+   "path": "/api/auth/me",
+   "status": 200,
+   "body": {
+    "id": 1,
+    "username": "contract-admin",
+    "created_at": "2026-01-01T00:00:00"
+   }
+  },
+  "me.wrongScheme": {
+   "method": "GET",
+   "path": "/api/auth/me",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "me.twoSpaces": {
+   "method": "GET",
+   "path": "/api/auth/me",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
+  "me.emptyScheme": {
+   "method": "GET",
+   "path": "/api/auth/me",
+   "status": 401,
+   "body": {
+    "detail": "无效或过期的凭证"
+   }
+  },
   "settings.noTok": {
    "method": "GET",
    "path": "/api/settings",

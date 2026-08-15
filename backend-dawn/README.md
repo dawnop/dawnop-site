@@ -34,7 +34,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 4 条（`get.file`/`put.new`/`copy.file`/`delete.file`）——它跑在没有凭据的后端上，同样的路径
 由 `contract_qiniu.py` 在假桶上钉住，所以是移交而不是漏掉。
 
-**变异体只写带哨兵的一次性目录。** 七个 harness 的 `mutate.py` 都是就地改写源码、没有撤销，
+**变异体只写带哨兵的一次性目录。** 八个 harness 的 `mutate.py` 都是就地改写源码、没有撤销，
 所以它们在动任何文件之前先过 `scripts/mutant_workdir.py`：目标既不能是 mutator 自己所在的仓库
 （这条没有逃生阀），又必须带一个 `.mutant-workdir` 文件。`run.sh` 在 `cp` 出临时副本之后立刻
 建这个哨兵；手工调单个变异体时，自己在临时目录里 `touch` 一次。**哨兵本身就是逃生阀**，所以没有
@@ -55,8 +55,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   **jar 与 `lib/` 都是构建产物，不入库**——jar 曾经入库，结果是它悄悄落后于 `src/`（要靠手动
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
-- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、202 个本仓单测，连 web/json/sha2 三个包
-  共 270 个；`use java` import 共 63 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
+- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、206 个本仓单测，连 web/json/sha2 三个包
+  共 274 个；`use java` import 共 63 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
   libsimple / 网络，CI 每次 push 都跑）。用到 SQLite 的几个跑内存库（`jdbc:sqlite::memory:`），
   自带建表，不碰 fixture。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
@@ -202,6 +202,16 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 **鉴权（刀 7）**
 - `svc/auth.dawn` — `Auth`/`Qiniu` 配置类型、`current_user`（Bearer + `?token=`）、login/me；jBCrypt 校验（`$2b$→$2a$` 归一）。
+  **Authorization 头的形状由 `scheme_param` 一处说了算**（Bearer 与 WebDAV 的 Basic 共用它）：
+  在**第一个空格**处切开，scheme 大小写不敏感地比，其余部分**原样**取走。三条推论都与 FastAPI
+  的 `get_authorization_scheme_param` 一致：没有空格就是「全是 scheme、没有凭据」，所以裸 token
+  （`Authorization: eyJ...`）不认证；`bearer` 与 `BEARER` 都认证；`Bearer  x` 的凭据是 " x"，
+  于是验签失败。**前两条以前是反的**（#270，2026-08-15 修）：旧代码精确匹配 `"Bearer "`，
+  不匹配就把整个头当 token，于是 Dawn 收下 FastAPI 拒绝的形状、又拒绝 FastAPI 收下的形状。
+  负控在 `scripts/auth-header-mutants/`（4 个变异体，一条规则一个，各自唯一转红），
+  wire 侧在 edge golden 的 `me.schemeless` / `me.lowerScheme` / `me.upperScheme` 等六条——
+  其中只有这三条能分辨新旧，另外三条（`me.wrongScheme` / `me.twoSpaces` / `me.emptyScheme`）
+  新旧都回 401、只是理由不同，钉住它们的是单测和变异体。
 - `util/jwt.dawn` — HS256 签发/校验，与 PyJWT 双向互认。
 
 **公开只读（刀 6/8）**

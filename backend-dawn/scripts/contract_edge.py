@@ -386,6 +386,16 @@ def build_cases(token, content_page_id):
     add("me.garbage", "GET", "/api/auth/me", GARBAGE)
     add("me.badsig", "GET", "/api/auth/me", BADSIG)
     add("me.ok", "GET", "/api/auth/me", AUTH)
+    # ---- Authorization header shape (#270) ----
+    # The rule is FastAPI's: split at the first space, compare scheme.lower() to
+    # "bearer", take the rest verbatim. Pinned at the wire because the unit tests
+    # in svc/auth only see the parser, not what the route does with its answer.
+    add("me.schemeless", "GET", "/api/auth/me", {"Authorization": token})
+    add("me.lowerScheme", "GET", "/api/auth/me", {"Authorization": f"bearer {token}"})
+    add("me.upperScheme", "GET", "/api/auth/me", {"Authorization": f"BEARER {token}"})
+    add("me.wrongScheme", "GET", "/api/auth/me", {"Authorization": f"Basic {token}"})
+    add("me.twoSpaces", "GET", "/api/auth/me", {"Authorization": f"Bearer  {token}"})
+    add("me.emptyScheme", "GET", "/api/auth/me", {"Authorization": "Bearer"})
     # (login is form-encoded, not JSON; the happy path is covered by contract_run
     #  logging in before any of this runs.)
     add("settings.noTok", "GET", "/api/settings")

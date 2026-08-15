@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HERE="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
+ROOT="$(CDPATH='' cd -- "$HERE/../../.." && pwd)"
+BACKEND="$ROOT/backend-dawn"
+MUTATOR="$HERE/mutate.py"
+MATRIX="$HERE/matrix.txt"
+DAWN="${DAWN_BIN:-}"
+
+# shellcheck source=backend-dawn/scripts/mutant-shard.sh
+source "$BACKEND/scripts/mutant-shard.sh"
+shard_parse "$@"
+if [[ ${#shard_rest[@]} -ne 0 ]]; then
+  printf 'usage: %s [--shard I/N]\n' "$0" >&2
+  exit 2
+fi
+shard_begin auth-header-mutants
+
+# The mutators only write into a directory carrying a .mutant-workdir sentinel,
+# and this proves that gate can still go red -- for every harness, not just this
+# one. Without it a mutate.py that lost the guard would look exactly like one
+# that has it, right up until somebody aimed it at a checkout.
+python3 "$BACKEND/scripts/mutant_workdir.py" --self-test
+
+if [[ -z "$DAWN" ]]; then
+  DAWN="$("$ROOT/scripts/fetch-dawn.sh")"
+fi
+
+work="$(mktemp -d "${TMPDIR:-/tmp}/dawnop-auth-header-mutants.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+
+base_test="$work/base.test.log"
+if ! "$DAWN" test "$BACKEND" >"$base_test" 2>&1; then
+  cat "$base_test" >&2
+  exit 1
+fi
+printf 'PASS  base Authorization header assertions\n'
+
+declare -a mutants=()
+declare -a owners=()
+while IFS='|' read -r mutant owner; do
+  [[ -z "$mutant" || "$mutant" == \#* ]] && continue
+  if [[ -z "$owner" ]]; then
+    printf 'FAIL  matrix entry has no owner: %s\n' "$mutant" >&2
+    exit 1
+  fi
+  mutants+=("$mutant")
+  owners+=("$owner")
+done <"$MATRIX"
+
+expected_mutants=(case-sensitive-scheme accept-schemeless any-scheme-passes trim-credential)
+if [[ "${mutants[*]}" != "${expected_mutants[*]}" ]]; then
+  printf 'FAIL  matrix mutant order or membership changed\n' >&2
+  exit 1
+fi
+
+for index in "${!mutants[@]}"; do
+  if shard_skips "$index"; then continue; fi
+  mutant="${mutants[$index]}"
+  shard_record "$mutant"
+  owner="${owners[$index]}"
+  project="$work/$mutant/backend-dawn"
+  mkdir -p "$project"
+  cp "$BACKEND/dawn.toml" "$project/dawn.toml"
+  cp -R "$BACKEND/src" "$project/src"
+  # mutate.py refuses a directory without this; see scripts/mutant_workdir.py
+  : >"$project/.mutant-workdir"
+  python3 "$MUTATOR" "$mutant" "$project"
+
+  build_log="$work/$mutant.build.log"
+  if ! "$DAWN" build "$project" -o "$work/$mutant.jar" >"$build_log" 2>&1; then
+    cat "$build_log" >&2
+    exit 1
+  fi
+  printf 'PASS  %s fully builds\n' "$mutant"
+
+  test_log="$work/$mutant.test.log"
+  set +e
+  "$DAWN" test "$project" >"$test_log" 2>&1
+  test_status=$?
+  set -e
+
+  mapfile -t failures < <(sed -n 's/^FAIL  //p' "$test_log")
+
+  if [[ $test_status -eq 0 ]]; then
+    printf 'FAIL  %s did not turn its owner red\n' "$mutant" >&2
+    exit 1
+  fi
+  if [[ ${#failures[@]} -ne 1 ]]; then
+    printf 'FAIL  %s produced %s red assertions, expected one\n' \
+      "$mutant" "${#failures[@]}" >&2
+    cat "$test_log" >&2
+    exit 1
+  fi
+
+  actual="${failures[0]}"
+  if [[ "$actual" != "$owner" && "$actual" != *" :: $owner" ]]; then
+    printf 'FAIL  %s turned the wrong assertion red: %s\n' "$mutant" "$actual" >&2
+    cat "$test_log" >&2
+    exit 1
+  fi
+  printf 'PASS  %s uniquely turns red: %s\n' "$mutant" "$owner"
+done
+
+shard_report "${#mutants[@]}"
