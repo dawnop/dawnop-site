@@ -15,16 +15,30 @@
 这个脚本把那句注释变成一次比对：从 `main.dawn` 里机械抽出 `get_or(cfg, "KEY", "默认值")`
 的表，从 `config.py` 的 `Settings` 里抽出字段默认值的表，逐键比。
 
+**第三张表是模板。** `backend/.env.example` 是人唯一会照抄的那份，可它既不是代码也没被
+任何东西检查过：模板缺一个键，操作员就不知道有这个开关；模板多一个没人读的键，改了它
+不会有任何效果，而人会以为改了；模板里的值和代码默认值不同，那「不写这一行」和
+「照抄这一行」就是两种行为。三张表逐键对齐，这三种谎话才都说不出口。
+
+模板还有一条只有它才有的约束：两个后端用**两个不同的解析器**读同一个 .env。
+`backend-dawn/src/config.dawn` 的 `parse_env` 会 trim 键值、剥成对引号，但不处理行内注释、
+不认 `export`、不认 `${VAR}` 插值；python-dotenv（pydantic-settings 用的那个）四样都做。
+于是 `SECRET_KEY=abc#def` 在 FastAPI 读作 `abc`、在 Dawn 读作 `abc#def`。模板是给人抄的，
+所以它必须整份落在两个解析器读法相同的子集里，越界就报 Unreadable 并点名到行号。
+
 **抽不出来就报错，不静默跳过。** 遇到自己解析不了的写法（换个函数、默认值是个表达式、
 Dawn 字符串里带 `$` 插值）一律 exit 1 并点名到 file:line。一个「看不懂就当没有」的检查器，
 和一个什么都不查的检查器，输出一模一样。
 
-**豁免名单不是垃圾桶。** 只在一边有的键写在下面 `DAWN_ONLY` / `PY_ONLY` 里，每条都得写清
-为什么。名单本身也被检查：某条豁免所指的键已经两边都有了、或者已经两边都没了，都会报错，
-免得它变成下一个藏东西的地方。
+**豁免名单不是垃圾桶。** 只在一边有的键写在下面 `DAWN_ONLY` / `PY_ONLY` 里，模板不提供的
+键写在 `TEMPLATE_OMIT` 里，模板值故意不等于代码默认值的写在 `TEMPLATE_DIFFERS` 里，每条
+都得写清为什么。四张名单本身也被检查：某条豁免所指的情形已经不成立了就报错，免得它变成
+下一个藏东西的地方。「模板里有个没人读的键」这一条**没有豁免名单**，模板里一个没人读的
+键就是谎话，没有说得通的版本。
 
     scripts/check_config_defaults.py              # 比对，有分歧就 exit 1
     scripts/check_config_defaults.py --self-test  # 负控：喂它假表，确认它真会红
+    scripts/check_config_defaults.py --mutants    # 负控：改真实输入，确认每条判词真会红
 """
 
 from __future__ import annotations
@@ -37,6 +51,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 DAWN_SRC = REPO / "backend-dawn" / "src"
 PY_CONFIG = REPO / "backend" / "app" / "config.py"
+TEMPLATE = REPO / "backend" / ".env.example"
 
 # config.dawn 是 get_or 的定义处，它自己的内联 test 里有 `get_or(c, "X", "def")`
 # 这种示例调用——那不是配置读取点。除它以外的每个 .dawn 都扫，所以哪天读配置的代码
@@ -70,6 +85,27 @@ PY_ONLY = {
     "它就是回滚目标，探针是回滚脚本用来确认「现在连的是哪个库」的。",
     "ADMIN_USERNAME": "只有 backend/scripts/seed_admin.py 读它建管理员，Dawn 不建用户。",
     "ADMIN_PASSWORD": "同 ADMIN_USERNAME。",
+}
+
+
+# 后端读、但**故意不写进模板**的键。模板是一份邀请：写进去的每一行都在说「这个你可以改」。
+# 所以这张名单的每条理由都得答同一个问题——为什么不该邀请人去改它。
+TEMPLATE_OMIT = {
+    "ALGORITHM": "Dawn 侧 HS256 是 util/jwt.dawn 里的常量，写死的。在 .env 里改这个键"
+    "只动 FastAPI 一半，结果是两个后端签发的 token 互不认。模板不提供它，"
+    "就是不邀请人去改。",
+    "QINIU_RS_HOST": "它存在只是为了让契约假桶"
+    "（backend-dawn/scripts/contract_qiniu_fake.py）把 Dawn 指到 127.0.0.1。"
+    "真实部署永远不该设，写进模板等于邀请人去设。",
+    "QINIU_UP_HOST": "同 QINIU_RS_HOST，上传域名那一半。",
+}
+
+# 模板里的值**故意**不等于代码默认值的键。默认情况下两者必须逐字相等，否则
+# 「不写这一行」与「照抄这一行」是两种行为，而模板不会告诉你是哪两种。
+TEMPLATE_DIFFERS = {
+    "SECRET_KEY": "故意不同，两个值是给两个不同的人看的：模板里那句是对准备部署的人喊"
+    "「换掉我」，代码默认值是本地开发跑得起来的兜底。两者相等反而糟糕，"
+    "那样模板就成了一个可用的生产密钥。",
 }
 
 
@@ -212,6 +248,85 @@ def python_defaults(
 
 
 # --------------------------------------------------------------------------
+# 模板侧：backend/.env.example
+# --------------------------------------------------------------------------
+#
+# 这里不实现「.env 语法」，只实现两个解析器**读法相同**的那个子集。凡是两边会读出
+# 不同结果的写法，一律拒绝：模板是给人抄的，抄一行出来两个值是最难查的那种分歧，
+# 因为两个后端都不会报错，只是各跑各的。
+#
+# 逐条对应到实测的分歧：
+#   `export K=v`     python-dotenv 剥掉 export，Dawn 的键会变成 "export K"
+#   值里有 `#`       python-dotenv 当行内注释截断，Dawn 原样保留
+#   值里有 `$`       python-dotenv 做 ${VAR} 插值，Dawn 原样保留
+#   值里有 `\`       双引号里 python-dotenv 认 \n 等转义，Dawn 不认
+#   值被引号包起来   两边都剥，但只有引号内的 # $ \ 才走上面三条，形状太容易看错，不许用
+#   `=` 两侧有空白   Dawn trim，python-dotenv 也 trim 键、但值的处理与引号纠缠
+# 剩下的三条（重复键、没有 `=`、键名不是 A-Z 形状）不是分歧而是笔误，一样拒绝：
+# 一份模板里没有哪一条值得靠猜。
+
+_TEMPLATE_KEY = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def template_defaults(
+    text: str, filename: str = ".env.example"
+) -> dict[str, tuple[str, str]]:
+    """{KEY: (值, "文件:行号")}。合法行只有三种：空行、`#` 注释、`KEY=value`。"""
+    found: dict[str, tuple[str, str]] = {}
+    for lineno, line in enumerate(text.split("\n"), start=1):
+        where = f"{filename}:{lineno}"
+        if line == "":
+            continue
+        if line != line.strip():
+            raise Unreadable(f"{where}: 行首或行尾有空白，去掉它。")
+        if line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            raise Unreadable(
+                f"{where}: `export ` 前缀。python-dotenv 会剥掉它，config.dawn 不会"
+                "（Dawn 那边的键会变成 `export ...`），两个后端读出两件事。"
+            )
+        if "=" not in line:
+            raise Unreadable(
+                f"{where}: 既不是空行也不是注释，却没有 `=`：{line!r}。"
+                "模板里的每一行都得是 `KEY=value`。"
+            )
+        key, value = line.split("=", 1)
+        if key != key.strip() or value != value.strip():
+            raise Unreadable(
+                f"{where}: `=` 两侧有空白。两个解析器对空白的处理与引号纠缠在一起，"
+                "写成 `KEY=value` 就没这个问题。"
+            )
+        if not _TEMPLATE_KEY.match(key):
+            raise Unreadable(
+                f"{where}: 键名 {key!r} 不匹配 ^[A-Z][A-Z0-9_]*$。"
+                "两个后端都按这个形状找键。"
+            )
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            raise Unreadable(
+                f"{where}: 键 {key} 的值被引号包起来了。两边都会剥这对引号，但引号内的"
+                "转义与插值两边不一样，形状太容易看错。去掉引号直接写值。"
+            )
+        for bad, why in (
+            ("#", "python-dotenv 会把它当行内注释、就地截断，Dawn 原样保留"),
+            ("$", "python-dotenv 会做 ${VAR} 插值，Dawn 原样保留"),
+            ("\\", "双引号里 python-dotenv 认 \\n 这类转义，Dawn 不认"),
+        ):
+            if bad in value:
+                raise Unreadable(
+                    f"{where}: 键 {key} 的值里有 {bad!r}：{why}。"
+                    "同一行两个后端读出两个值。"
+                )
+        if key in found:
+            raise Unreadable(
+                f"{where}: 键 {key} 出现了两次（上一处在 {found[key][1]}）。"
+                "两个解析器都取最后一个，但读模板的人取的是先看见的那个。"
+            )
+        found[key] = (value, where)
+    return found
+
+
+# --------------------------------------------------------------------------
 # 比对
 # --------------------------------------------------------------------------
 
@@ -263,6 +378,78 @@ def compare(
             problems.append(f"{key}: PY_ONLY 里有它，但 FastAPI 已经没有这个字段了")
 
     return problems
+
+
+def compare_template(
+    template: dict[str, tuple[str, str]],
+    dawn: dict[str, tuple[str, str]],
+    py: dict[str, tuple[str, str]],
+    template_omit: dict[str, str],
+    template_differs: dict[str, str],
+) -> list[str]:
+    """模板与两个后端的比对。返回问题清单，空列表 = 一致。
+
+    四类问题：
+      * 后端读它、模板里没有 → 操作员不知道有这个开关（无 DAWN_PORT 那三个键就是这样）；
+      * 模板里有、没人读 → 改了它不会有任何效果，而模板让人以为会；
+      * 两边都有、值不同 → 「不写这一行」与「照抄这一行」是两种行为；
+      * 豁免过期 → 名单在替模板撒谎。
+    """
+    problems: list[str] = []
+
+    # 两边都读的键，取哪份都行：compare() 已经保证它们相等，不等的话那边先红。
+    read = {**py, **dawn}
+
+    for key in sorted(read):
+        if key not in template and key not in template_omit:
+            problems.append(
+                f"{key}: 后端读它（{read[key][1]}），模板里没有它。"
+                "补进 backend/.env.example，或写进 TEMPLATE_OMIT 并说明理由。"
+            )
+    # 这一条没有豁免名单，也不该有：模板里一个没人读的键就是谎话。
+    for key in sorted(template):
+        if key not in read:
+            problems.append(
+                f"{key}: 模板里有它（{template[key][1]}），但两个后端都没有读这个键。"
+                "删掉它，或补上读它的代码。"
+            )
+    for key in sorted(set(template) & set(read)):
+        if template[key][0] != read[key][0] and key not in template_differs:
+            problems.append(
+                f"{key}: 模板里的值 {template[key][0]!r}（{template[key][1]}）"
+                f"与代码默认值 {read[key][0]!r}（{read[key][1]}）不同。"
+                "改成一致，或写进 TEMPLATE_DIFFERS 并说明理由。"
+            )
+
+    for key in sorted(template_omit):
+        if key in template:
+            problems.append(
+                f"{key}: TEMPLATE_OMIT 说模板不该提供它，"
+                f"但模板现在有了（{template[key][1]}）"
+            )
+        elif key not in read:
+            problems.append(f"{key}: TEMPLATE_OMIT 里有它，但已经没有后端读这个键了")
+    for key in sorted(template_differs):
+        if key not in template:
+            problems.append(f"{key}: TEMPLATE_DIFFERS 里有它，但模板里已经没有这个键了")
+        elif key in read and template[key][0] == read[key][0]:
+            problems.append(
+                f"{key}: TEMPLATE_DIFFERS 说它与代码默认值不同，但两者现在相等"
+            )
+
+    return problems
+
+
+def check_all(
+    dawn_sources_text: dict[str, str], py_text: str, template_text: str
+) -> list[str]:
+    """三份文本进，问题清单出。纯函数，不碰文件系统——`--mutants` 靠它在内存里改输入。"""
+    dawn = dawn_defaults(dawn_sources_text)
+    py = python_defaults(py_text, "app/config.py")
+    template = template_defaults(template_text)
+    return compare(dawn, py, DAWN_ONLY, PY_ONLY) + compare_template(
+        template, dawn, py, TEMPLATE_OMIT, TEMPLATE_DIFFERS
+    )
 
 
 # --------------------------------------------------------------------------
@@ -351,25 +538,215 @@ def self_test() -> int:
         else:
             raise AssertionError(f"这处应当被拒绝却没有：{bad!r}")
 
+    # 模板抽取：三种合法行都要读对，行号要跟得上。
+    tpl = template_defaults("# 注释\nA=1\n\nB=\nC=a b c\nD=sqlite:///./x.db\n", "t.env")
+    assert tpl["A"] == ("1", "t.env:2")
+    assert tpl["B"] == ("", "t.env:4")
+    assert tpl["C"] == ("a b c", "t.env:5")
+    assert tpl["D"] == ("sqlite:///./x.db", "t.env:6")
+
+    # 模板抽取：越出「两个解析器读法相同」的子集就得炸，一条都不许静默通过。
+    for bad in (
+        "export A=1\n",  # python-dotenv 剥 export，Dawn 不剥
+        "A=a#b\n",  # python-dotenv 当行内注释截断
+        "A=${B}\n",  # python-dotenv 插值
+        "A=a\\nb\n",  # 转义
+        'A="1"\n',  # 引号
+        "A='1'\n",
+        "A = 1\n",  # `=` 两侧空白
+        "A=1 \n",  # 行尾空白
+        " A=1\n",  # 行首空白
+        "A\n",  # 非空非注释又没有 `=`
+        "a=1\n",  # 键名形状
+        "1A=1\n",
+        "A=1\nA=2\n",  # 重复键
+    ):
+        try:
+            template_defaults(bad, "t.env")
+        except Unreadable:
+            pass
+        else:
+            raise AssertionError(f"这行模板应当被拒绝却没有：{bad!r}")
+
+    # 模板比对。t() 造模板表，d()/p() 复用上面的。
+    def t(**kv):
+        return {k: (v, "t.env:1") for k, v in kv.items()}
+
+    # 阳性对照：三张表一致就必须是空列表。
+    assert compare_template(t(A="1"), d(A="1"), p(A="1"), {}, {}) == []
+    assert compare_template(t(A="1"), d(A="1"), p(), {}, {}) == []
+    assert compare_template(t(A="1"), d(), p(A="1"), {}, {}) == []
+
+    # 覆盖：后端读、模板没有。有豁免才闭嘴。
+    got = compare_template(t(), d(A="1"), p(), {}, {})
+    assert len(got) == 1 and "模板里没有它" in got[0], got
+    assert compare_template(t(), d(A="1"), p(), {"A": "理由"}, {}) == []
+
+    # 无孤儿：模板有、没人读。**没有**豁免名单可用。
+    got = compare_template(t(A="1"), d(), p(), {}, {})
+    assert len(got) == 1 and "两个后端都没有读这个键" in got[0], got
+
+    # 值一致：不同就报，除非具名。
+    got = compare_template(t(A="1"), d(A="2"), p(), {}, {})
+    assert len(got) == 1 and "改成一致，或写进 TEMPLATE_DIFFERS" in got[0], got
+    assert compare_template(t(A="1"), d(A="2"), p(), {}, {"A": "理由"}) == []
+
+    # 过期豁免：TEMPLATE_OMIT 的键回到模板里了、或者已经没人读了。
+    got = compare_template(t(A="1"), d(A="1"), p(), {"A": "理由"}, {})
+    assert len(got) == 1 and "TEMPLATE_OMIT 说模板不该提供它" in got[0], got
+    got = compare_template(t(), d(), p(), {"A": "理由"}, {})
+    assert len(got) == 1 and "已经没有后端读这个键了" in got[0], got
+
+    # 过期豁免：TEMPLATE_DIFFERS 的键值已经相等了、或者已经不在模板里了。
+    got = compare_template(t(A="1"), d(A="1"), p(), {}, {"A": "理由"})
+    assert len(got) == 1 and "但两者现在相等" in got[0], got
+    got = compare_template(t(), d(A="1"), p(), {"A": "理由"}, {"A": "理由"})
+    assert any("模板里已经没有这个键了" in g for g in got), got
+
     print("self-test: 每条判词都能转红。")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# 负控之二：改真实输入，确认每条判词在真实代码路径下也真会红
+# --------------------------------------------------------------------------
+#
+# self-test 喂的是合成表，证明的是判词函数本身会红；这里喂的是仓库里真正的三份文本，
+# 证明的是「抽取 → 比对」整条路在真实形状上也会红。两者不能互相替代：合成表全绿的
+# 检查器可能连真实文件都没打开，而只跑真实文件的检查器分不清「没抓到」和「没有」。
+#
+# **一个字节都不写进文件系统。** 读文本、在内存里改字符串、跑纯函数。#269 的教训是
+# 一个变异脚本被指向活检出，就地改写了生产源码；这个脚本没有那种可能，因为它没有写。
+#
+# 每处变异都**锚定**：`text.count(old) == 1`，否则抛异常。锚点失配要炸——一个悄悄变成
+# 空操作的变异，和一个通过了的变异，输出一模一样。
+
+
+def _mutate(text: str, old: str, new: str) -> str:
+    n = text.count(old)
+    if n != 1:
+        raise AssertionError(f"锚点在文本里出现 {n} 次，要求恰好 1 次：{old!r}")
+    return text.replace(old, new)
+
+
+def mutants() -> int:
+    srcs = dawn_sources()
+    py_text = PY_CONFIG.read_text(encoding="utf-8")
+    tpl_text = TEMPLATE.read_text(encoding="utf-8")
+
+    def expect(problems: list[str], *needles: str) -> None:
+        hit = [p for p in problems if all(n in p for n in needles)]
+        if not hit:
+            raise AssertionError(
+                f"期望的判词没出现（要含 {needles}），实际：{problems}"
+            )
+
+    def expect_unreadable(fn, *needles: str) -> None:
+        try:
+            fn()
+        except Unreadable as e:
+            for n in needles:
+                if n not in str(e):
+                    raise AssertionError(f"Unreadable 消息里没有 {n!r}：{e}") from None
+        else:
+            raise AssertionError(f"期望 Unreadable（含 {needles}），却通过了")
+
+    def with_template(old: str, new: str) -> list[str]:
+        return check_all(srcs, py_text, _mutate(tpl_text, old, new))
+
+    # 8. 阳性对照放在最前：真实的三份输入必须是绿的。少了这条，下面七条全红也
+    #    可能只是因为这个检查器对任何输入都报错。
+    clean = check_all(srcs, py_text, tpl_text)
+    if clean != []:
+        raise AssertionError(f"未变异的真实输入应当是绿的，却报了：{clean}")
+
+    # 1. 模板少一个后端确实会读的键。
+    expect(with_template("DAWN_PORT=8001\n", ""), "模板里没有它", "DAWN_PORT")
+
+    # 2. 模板多一个没人读的键。
+    expect(
+        with_template("ADMIN_PASSWORD=change-me", "ADMIN_PASSWORD=change-me\nNOPE=1"),
+        "两个后端都没有读这个键",
+        "NOPE",
+    )
+
+    # 3. 模板的值与代码默认值分家。
+    expect(
+        with_template("QINIU_TOKEN_EXPIRES=3600", "QINIU_TOKEN_EXPIRES=3601"),
+        "改成一致，或写进 TEMPLATE_DIFFERS",
+        "QINIU_TOKEN_EXPIRES",
+    )
+
+    # 4. TEMPLATE_OMIT 里的键回到了模板里，豁免过期。
+    expect(
+        with_template(
+            "ACCESS_TOKEN_EXPIRE_MINUTES=1440",
+            "ACCESS_TOKEN_EXPIRE_MINUTES=1440\nALGORITHM=HS256",
+        ),
+        "TEMPLATE_OMIT 说模板不该提供它",
+        "ALGORITHM",
+    )
+
+    # 5. 模板越出两个解析器的公共子集：export 前缀。行号要点到那一行。
+    lineno = tpl_text.split("\n").index("APP_NAME=dawnop-site") + 1
+    expect_unreadable(
+        lambda: with_template("APP_NAME=dawnop-site", "export APP_NAME=dawnop-site"),
+        f".env.example:{lineno}",
+        "export",
+    )
+
+    # 6. 同上：值里的 `#`，FastAPI 读作 `a`、Dawn 读作 `a#b` 的那一枚。
+    expect_unreadable(
+        lambda: with_template(
+            "SECRET_KEY=change-me-to-a-long-random-string", "SECRET_KEY=a#b"
+        ),
+        "SECRET_KEY",
+        "'#'",
+    )
+
+    # 7. 不是模板的判词：把 Dawn 侧读 LIGHTHOUSE_INSTANCE_ID 那一行删掉，#272 那批规则
+    #    必须照样红。新加的三张表不能把老判词挤下去。
+    mutated = dict(srcs)
+    mutated["main.dawn"] = _mutate(
+        srcs["main.dawn"],
+        '    instance: get_or(cfg, "LIGHTHOUSE_INSTANCE_ID", ""),\n',
+        "",
+    )
+    expect(
+        check_all(mutated, py_text, tpl_text),
+        "只有 FastAPI 有",
+        "LIGHTHOUSE_INSTANCE_ID",
+    )
+
+    print("mutants: 7 个变异全部按预期转红，干净输入为绿。")
     return 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--self-test", action="store_true", help="只跑负控，不看真实的树")
+    ap.add_argument(
+        "--mutants",
+        action="store_true",
+        help="负控之二：在内存里改真实的三份输入，确认每条判词都会红",
+    )
     args = ap.parse_args()
     if args.self_test:
         return self_test()
+    if args.mutants:
+        return mutants()
 
     try:
         dawn = dawn_defaults(dawn_sources())
         py = python_defaults(PY_CONFIG.read_text(encoding="utf-8"), "app/config.py")
+        template = template_defaults(TEMPLATE.read_text(encoding="utf-8"))
     except Unreadable as e:
         print(f"读不懂：{e}")
         return 1
 
-    problems = compare(dawn, py, DAWN_ONLY, PY_ONLY)
+    problems = compare(dawn, py, DAWN_ONLY, PY_ONLY) + compare_template(
+        template, dawn, py, TEMPLATE_OMIT, TEMPLATE_DIFFERS
+    )
     shared = sorted(set(dawn) & set(py))
 
     # 豁免逐条打出来，每次都打。否则「CI 跑过了」会悄悄变成「CI 什么都没比」。
@@ -377,12 +754,17 @@ def main() -> int:
         print(f"SKIP  {key:<24} 只在 Dawn 侧：{DAWN_ONLY[key]}")
     for key in sorted(PY_ONLY):
         print(f"SKIP  {key:<24} 只在 FastAPI 侧：{PY_ONLY[key]}")
+    for key in sorted(TEMPLATE_OMIT):
+        print(f"SKIP  {key:<24} 不进模板：{TEMPLATE_OMIT[key]}")
+    for key in sorted(TEMPLATE_DIFFERS):
+        print(f"SKIP  {key:<24} 模板值与代码默认值具名不同：{TEMPLATE_DIFFERS[key]}")
 
     if problems:
         for p in problems:
             print(f"DRIFT {p}")
         print(
-            f"\n共 {len(problems)} 处分歧。两个后端读同一个 .env，默认值必须是同一套。"
+            f"\n共 {len(problems)} 处分歧。两个后端读同一个 .env，"
+            "默认值必须是同一套，模板必须说的是同一件事。"
         )
         return 1
 
@@ -390,6 +772,10 @@ def main() -> int:
         print(f"OK    {key:<24} {dawn[key][0]!r}")
     print(
         f"\n{len(shared)} 个共享键的默认值两边一致（另有 {len(DAWN_ONLY) + len(PY_ONLY)} 个具名豁免）。"
+    )
+    print(
+        f"{len(template)} 个模板键都有后端读，值与代码默认值一致"
+        f"（另有 {len(TEMPLATE_OMIT)} 个不进模板、{len(TEMPLATE_DIFFERS)} 个具名不同）。"
     )
     return 0
 

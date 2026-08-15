@@ -387,8 +387,23 @@ jobs:
       - name: the config-defaults checker still catches drift
         run: python scripts/check_config_defaults.py --self-test
 
+      # Since #276 it compares a third table: backend/.env.example, the one a
+      # human copies. A key the backends read but the template omits is a switch
+      # nobody knows about; a key the template has but nothing reads is a lie; a
+      # template value that differs from the code default makes "omit this line"
+      # and "copy this line" two different behaviours.
       - name: Dawn and FastAPI agree on config defaults
         run: python scripts/check_config_defaults.py
+
+      # --self-test proves the verdict functions go red on synthetic tables; it
+      # cannot prove the extractors ever opened the real files, and the run above
+      # prints OK either way. --mutants edits the three real inputs in memory
+      # (never on disk — #269's mutation script was pointed at a live checkout
+      # and rewrote production source), requires each verdict to fire on the
+      # actual shapes, and requires the unmutated inputs to come back empty.
+      # ~0.1s, stdlib only.
+      - name: each config-defaults verdict fires on the real files
+        run: python scripts/check_config_defaults.py --mutants
 
       - name: install
         run: pip install -r requirements-dev.txt

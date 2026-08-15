@@ -144,6 +144,19 @@ chmod 600 .env
 见「[四、回滚安全链](#四回滚安全链)」的前置条件。**这一步跳过的代价要到回滚当天才付**：
 回滚脚本会停在核验那一步，不切流。
 
+> ⚠️ **这份 `.env` 被两个不同的解析器读**：Dawn 的 `backend-dawn/src/config.dawn` 与
+> python-dotenv（pydantic-settings 用的那个）。两边只有 trim 和剥成对引号是一致的；
+> 行内注释 `#`、`${VAR}` 插值、`\n` 转义、`export ` 前缀，python-dotenv 都处理，Dawn 都不处理。
+> 所以**值里不要出现 `#`、`$`、`\`、引号、`export `，`=` 两侧也不要留空白**。
+> 越界不会报错，只会让同一行在两个后端读出两个值：`SECRET_KEY=abc#def` 在 FastAPI 是 `abc`、
+> 在 Dawn 是 `abc#def`，于是 Dawn 签发的 token 回滚到 FastAPI 后全部失效。
+> 现状已量清、都安全：`SECRET_KEY` 与 `ROLLBACK_PROBE_HEADER` 是 `token_urlsafe`（只有
+> `A-Za-z0-9_-`），七牛 AK/SK 是 base64url，都不含危险字符；唯一可能含 `#` 的 `ADMIN_PASSWORD`
+> 只被 `backend/scripts/seed_admin.py` 读，Dawn 侧根本不读它，没有分歧的余地。
+> **两个解析器都不改**：让 Dawn 剥行内注释，会把一把恰好含 `#` 的真密钥当场截断；让它遇到
+> 歧义就拒绝启动，等于给生产加一个新的宕机方式。约束落在模板上更便宜，
+> `scripts/check_config_defaults.py` 已经在 CI 里逐行守着 `.env.example`。
+
 > ⚠️ **`DATABASE_URL` 必须写绝对路径指向共用库**：
 > ```
 > DATABASE_URL=sqlite:////opt/dawnop/data/dawnop.db     # 四个斜杠 = 绝对路径

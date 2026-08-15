@@ -295,6 +295,13 @@ npm run format                          # prettier
 ruff check . && ruff format --check .   # 配置见 pyproject.toml，target 钉 3.10
 cd frontend && npm run lint && npm run format:check
 
+# 配置默认值三张表（Dawn 的 get_or / config.py 的 Settings / backend/.env.example），
+# 逐键比：值必须一致，只在一边有的键必须写进具名豁免并说明理由。模板还额外被逐行
+# 校验只用两个解析器读法相同的写法（值里不许有 # $ \ 引号 export，= 两侧不许有空白）。
+python3 scripts/check_config_defaults.py              # 比对，有分歧就 exit 1
+python3 scripts/check_config_defaults.py --self-test   # 负控：合成表，每条判词都要能红
+python3 scripts/check_config_defaults.py --mutants     # 负控：改真实输入(纯内存)，含干净输入必绿的阳性对照
+
 # ---- 契约 golden（CI 每次 push 都跑，只需 Dawn 后端的 jar）----
 python3 backend-dawn/scripts/contract_run.py            # 播种 fixture→起后端→跑四套
 python3 backend-dawn/scripts/contract_run.py --record   # 改了行为后重录，diff 进 review
