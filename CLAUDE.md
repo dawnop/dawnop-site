@@ -336,8 +336,11 @@ python3 backend-dawn/scripts/mutants_coverage.py --self-test
   > 2026-08-14：`dawn build` 5.9s 吃 236% CPU、`dawn test` 38.4s 只吃 41%），串行 154 个 =
   > 130 分钟出头，曾把 `backend` job 顶到 62 分钟上限被取消。分片规格写在 ci.yml 的
   > `mutants.strategy.matrix`，harness 侧的 `--shard I/N` 在 `backend-dawn/scripts/mutant-shard.sh`。
-  > 18 个分片加上另外四个 job 是 22，已经比本账号的并发上限多两个。再加不会失败，但会排队，
+  > 18 个分片加上另外**五个** job（secrets / backend / python-backend / frontend /
+  > **mutants-complete**）是 23，比本账号的并发上限多三个。再加不会失败，但会排队，
   > 也就不再省墙钟时间。上限的具体数字与这笔账记在 ci.yml 里，改分片数以那儿为准。
+  > **这个数以前一直少算一个**（`mutants-complete` 没被数进去，两处都写「另外四个」），
+  > 2026-08-15 按 GitHub API 逐次核实后改正：`30c7e79` 21、`52879b2` 22、`8c0046b` 23。
   > **新增 harness 不必改覆盖检查器**：`mutants_coverage.py` 的期望集合是从
   > `scripts/*/matrix.txt` 问树要的，但 ci.yml 的矩阵要手加一行，漏加会被它点名报红。
 - **本地 hook（每台开发机装一次）**：`git config core.hooksPath .githooks`（`.githooks/` 已入库）。

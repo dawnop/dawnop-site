@@ -205,9 +205,16 @@ jobs:
   # job on top of ~2-3 minutes of per-shard fixed cost (checkout, toolchain,
   # each harness's own base build and preflight, which every shard repeats
   # because they are what makes its slice trustworthy). Total here is 18 jobs;
-  # with the four above that is 22, two past the concurrent-job ceiling for this
-  # account. Adding a shard past that does not fail, it queues — but it also
+  # with the five others that is 23, three past the concurrent-job ceiling for
+  # this account. Adding a shard past that does not fail, it queues — but it also
   # stops buying wall clock, so re-measure before growing this list.
+  #
+  # The five are secrets, backend, python-backend, frontend, and mutants-complete.
+  # This comment said "the four above" from 2026-08-14 until 2026-08-15 and left
+  # mutants-complete out, so every total it stated was one low (the 2026-08-14 run
+  # it called 21 jobs was 21 because there were 16 shards then, not 17 — two errors
+  # that happened to cancel). Counted from the API rather than from the file:
+  # 30c7e79 ran 21, 52879b2 ran 22, 8c0046b runs 23.
   #
   # auth-header-mutants is the one added over the ceiling knowingly (2026-08-15,
   # #270): 4 mutants at ~52s is about 6 minutes including fixed cost, so it fits
