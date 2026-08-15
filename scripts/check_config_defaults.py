@@ -6,7 +6,8 @@
     # defaults mirror app/config.py (Settings field defaults)
 
 它下面第五行是 `instance: get_or(cfg, "LIGHTHOUSE_INSTANCE_ID", "")`，
-而 `backend/app/config.py` 对应那行是 `lighthouse_instance_id: str = "lhins-8clkew6k"`。
+而 `backend/app/config.py` 对应那行是 `lighthouse_instance_id: str = "lhins-xxxxxxxx"`
+（真实的实例 ID 已抹去，它是这台机器的身份，不该躺在公开仓库里）。
 两边不一致，就在那句「mirror」正下方，躺了一个多月没人发现——因为「mirror」只是一句话，
 没有任何东西比对过它。生产 .env 里恰好写了这个键，两个后端都读得到值，所以这一枚是哑弹；
 下一枚不一定是。默认值分歧的形状恰恰是「平时看不出来」：只有在某个键**没被写进 .env**
