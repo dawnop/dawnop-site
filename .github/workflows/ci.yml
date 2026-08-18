@@ -204,8 +204,8 @@ jobs:
   # Shard counts are sized from that 52s, targeting ~10 minutes of mutants per
   # job on top of ~2-3 minutes of per-shard fixed cost (checkout, toolchain,
   # each harness's own base build and preflight, which every shard repeats
-  # because they are what makes its slice trustworthy). Total here is 18 jobs;
-  # with the five others that is 23, three past the concurrent-job ceiling for
+  # because they are what makes its slice trustworthy). Total here is 19 jobs;
+  # with the five others that is 24, four past the concurrent-job ceiling for
   # this account. Adding a shard past that does not fail, it queues — but it also
   # stops buying wall clock, so re-measure before growing this list.
   #
@@ -221,6 +221,13 @@ jobs:
   # in a slot freed by any earlier finisher and does not extend the critical
   # path. The alternative was folding it into a harness named for a different
   # boundary, which costs a true name to save a queued job.
+  #
+  # cpu-sampling-mutants (2026-08-18, #310) is the second one added over the
+  # ceiling on that same reasoning, and it is the last one that gets to lean on
+  # it: 4 mutants, measured at 5m03s locally the same day (base suite plus four
+  # build+test rounds), which again fits a slot freed by an earlier finisher
+  # rather than extending the run. The next harness after this wants to share a
+  # shard with an existing one instead of taking a job of its own.
   #
   # updated-at-boundary-mutants is deliberately unsharded: its 13 mutants
   # measured 10m24s locally on 2026-08-14 (11 measured 8m47s the same day,
@@ -252,6 +259,7 @@ jobs:
       matrix:
         include:
           - {harness: auth-header-mutants, shard: 0, shards: 1}
+          - {harness: cpu-sampling-mutants, shard: 0, shards: 1}
           - {harness: db-connection-boundary-mutants, shard: 0, shards: 1}
           - {harness: http-body-boundary-mutants, shard: 0, shards: 1}
           - {harness: http-timeout-mutants, shard: 0, shards: 1}

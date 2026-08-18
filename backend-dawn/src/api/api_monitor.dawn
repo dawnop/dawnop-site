@@ -40,14 +40,20 @@ pub type MonCfg = {
 ##      inside the shared HttpClient, which is what it is for.
 ##   2. local — the vault probe (whose reported latency must stay the latency of
 ##      that exchange, not of the wait until we got round to reading it) and the
-##      server snapshot, whose 300ms CPU sampling window is now spent while the
-##      requests above are travelling rather than before they leave.
+##      server snapshot.
 ##   3. read — collect the replies and shape the response.
 ##
 ## Nothing about failure isolation moves: the blocks still turn each sub-call's
 ## failure into its own *_error field, and each of those sub-calls is still read
 ## on this thread by the same code.
-pub fn get_monitor(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell) -> Handler =
+##
+## `cpu_cell` carries the previous call's /proc/stat snapshot, which is what
+## `server_block` differences this call's sample against instead of sleeping
+## through a window of its own. It is read and rewritten on EVERY request,
+## including the cache hits: `server_block` sits outside the 120s cell above,
+## so the interval a reading covers is the interval between requests rather
+## than whatever the cache TTL happens to be.
+pub fn get_monitor(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell, cpu_cell: TtlCell) -> Handler =
   req => {
     let _u = current_user(a, req)?
     let refresh = match query(req, "refresh") {
@@ -56,7 +62,7 @@ pub fn get_monitor(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell) -
     }
     let work = third_start(a, cfg, cell, respack_cell, refresh)
     let vault = vault_block(a.http, cfg.vault_alive, cfg.vault_public)
-    let server = server_block()
+    let server = server_block(cpu_cell)
     let third = third_collect(a, cell, respack_cell, work)
     let qn = with_quota(a, field(third, "qiniu"))
     Ok(json_ok(obj([
@@ -127,5 +133,5 @@ fn with_quota(a: Auth, qn: Json) -> Json !io =
     _ -> qn,
   }
 
-pub fn mon_routes(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell) -> List[Route] =
-  [route_get("/api/monitor", get_monitor(a, cfg, cell, respack_cell))]
+pub fn mon_routes(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell, cpu_cell: TtlCell) -> List[Route] =
+  [route_get("/api/monitor", get_monitor(a, cfg, cell, respack_cell, cpu_cell))]

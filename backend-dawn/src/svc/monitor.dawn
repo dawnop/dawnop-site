@@ -34,7 +34,7 @@ use util/jsonx.{obj, jint, jstr, jbool}
 
 # ---- server: the local machine, /proc first (production is Linux), JMX fallback ----
 
-pub fn server_block() -> Json !io = {
+pub fn server_block(cpu_cell: TtlCell) -> Json !io = {
   let rt = Runtime.getRuntime()!
   let procs = rt.availableProcessors()
   let root = File.new("/")
@@ -47,7 +47,7 @@ pub fn server_block() -> Json !io = {
   ])
   match io.read_file("/proc/stat") {
     Ok(_probe) -> obj([
-      ("cpu_percent", JNum(cpu_percent())),
+      ("cpu_percent", JNum(cpu_percent(cpu_cell, CPU_SNAPSHOT_MAX_AGE_S))),
       ("cpu_count", jint(procs)),
       ("load", loadavg()),
       ("mem", meminfo()),
@@ -81,15 +81,120 @@ pub fn server_block() -> Json !io = {
   }
 }
 
-# psutil cpu_percent(interval=0.3): busy/total delta over a 300ms window
-fn cpu_percent() -> Float !io = {
-  let (b1, t1) = cpu_sample()
-  Thread.sleep(300)
-  let (b2, t2) = cpu_sample()
-  if t2 - t1 <= 0 {
-    0.0
+# How long a window a call opens when it has nothing to difference against, and
+# how old a snapshot may be before it stops describing "now". The window is
+# psutil's cpu_percent(interval=0.3), which this endpoint used to pay on every
+# call; the age bound is what keeps a delta a current reading rather than the
+# average since whenever the dashboard was last opened.
+const CPU_WINDOW_MS: Int = 300
+const CPU_SNAPSHOT_MAX_AGE_S: Int = 300
+
+## Host CPU usage as a percentage: one /proc/stat sample, differenced against
+## the snapshot the previous call left in `cell`. This is psutil's
+## cpu_percent(interval=None), not its interval=0.3 form.
+##
+## Every call used to open a 300ms window of its own. Once the endpoint's
+## third-party requests went out concurrently, that window stopped being an
+## idle wait and started overlapping the endpoint's own work, so the number
+## reported was biased by the act of reporting it. It was also a hard 300ms
+## floor on the cache-hit path, where there is nothing else to wait for.
+## Differencing against the previous call removes both in one move: the window
+## is the interval between calls, which is time this process was not spending
+## on the measurement.
+##
+## `max_age_s` is a parameter rather than the constant read directly so a test
+## can ask for the stale path without waiting it out. Production passes
+## CPU_SNAPSHOT_MAX_AGE_S.
+##
+## Ordering here is load-bearing, not incidental: the previous snapshot is read
+## BEFORE this call takes its sample. /proc/stat counters only move forward, so
+## a snapshot read first was necessarily taken before the sample differenced
+## against it, and the delta cannot come out negative however many virtual
+## threads are inside this function at once. The cell is an AtomicReference, so
+## the read and the write are each atomic and neither can be seen half done;
+## two concurrent calls may read the same snapshot and both report a legitimate
+## (if short) window, and the later write wins, which only means the next call's
+## window starts a little earlier than it otherwise would. The cases that
+## ordering rules out are still checked rather than assumed, in cpu_delta_pct.
+fn cpu_percent(cell: TtlCell, max_age_s: Int) -> Float !io = {
+  let prev = cpu_prev(cell, max_age_s)
+  let cur = cpu_sample()
+  let reading = match prev {
+    Some(p) -> cpu_delta_pct(p, cur)
+    None -> None
+  }
+  match reading {
+    Some(x) -> {
+      cpu_put(cell, cur)
+      x
+    }
+    # first call after start, a snapshot too old to describe now, or a pair too
+    # close together to divide by: open a window of our own, this once
+    None -> cpu_window(cell, cur)
+  }
+}
+
+# The old behaviour, kept for the calls that have nothing to difference
+# against. `first` is the sample the caller already took, so this costs one
+# sleep and one extra read of /proc/stat, which is what the previous
+# implementation cost. The SECOND sample is the one that goes in the cell: it is
+# the fresher of the two, and the next call's window should start at the end of
+# this one rather than before it.
+fn cpu_window(cell: TtlCell, first: (Int, Int)) -> Float !io = {
+  Thread.sleep(CPU_WINDOW_MS)
+  let second = cpu_sample()
+  cpu_put(cell, second)
+  match cpu_delta_pct(first, second) {
+    Some(x) -> x
+    None -> 0.0
+  }
+}
+
+## The busy share of the window between two /proc/stat samples, or None when the
+## pair cannot yield one: no window at all (equal totals, two calls inside the
+## same jiffy), or a counter that moved backwards. The backwards cases are not
+## reachable -- these counters are monotonic and `prev` is always read before
+## `cur` -- which is the reason to pin that the answer to one is the fallback
+## rather than a negative or above-100 percentage on the dashboard.
+fn cpu_delta_pct(prev: (Int, Int), cur: (Int, Int)) -> Option[Float] = {
+  let (pbusy, ptotal) = prev
+  let (busy, total) = cur
+  let dtotal = total - ptotal
+  let dbusy = busy - pbusy
+  if dtotal <= 0 || dbusy < 0 || dbusy > dtotal {
+    None
   } else {
-    round1(to_float(b2 - b1) * 100.0 / to_float(t2 - t1))
+    Some(round1(to_float(dbusy) * 100.0 / to_float(dtotal)))
+  }
+}
+
+# The snapshot rides in a TtlCell because a TtlCell is exactly a value with an
+# age bound on it: cache_get hands back nothing once the entry is older than the
+# bound asked for, which is the staleness rule already written down once.
+fn cpu_put(cell: TtlCell, s: (Int, Int)) -> Unit !io = {
+  let (busy, total) = s
+  cache_put(cell, "$busy $total")
+}
+
+fn cpu_prev(cell: TtlCell, max_age_s: Int) -> Option[(Int, Int)] !io =
+  match cache_get(cell, max_age_s) {
+    Some(s) -> cpu_prev_of(s)
+    None -> None
+  }
+
+fn cpu_prev_of(s: String) -> Option[(Int, Int)] = {
+  let fs = fields_of(s)
+  if len(fs) != 2 {
+    None
+  } else {
+    match parse_int(fs[0]) {
+      Some(busy) ->
+        match parse_int(fs[1]) {
+          Some(total) -> Some((busy, total))
+          None -> None
+        }
+      None -> None
+    }
   }
 }
 
@@ -595,6 +700,100 @@ test "net_totals_of sums every interface (recv = field 0, sent = field 8)" {
 test "uptime_of takes the first float, truncated to whole seconds" {
   assert uptime_of("123456.78 987654.32\n") == 123456
   assert uptime_of("bad\n") == 0
+}
+
+# ---- tests: CPU sampling as a delta between calls ----
+#
+# The reading is the difference between this call's /proc/stat sample and the
+# snapshot the previous call left behind. Two things can go wrong here without
+# changing a single byte of the response: the delta path can quietly stop being
+# taken (the fallback still answers, just slowly and biased by whatever else the
+# request is doing), and the snapshot can quietly stop being refreshed (the
+# window then drifts out to whatever the cache TTL happens to impose). Neither
+# is visible in the shape or in the value, so both are asserted by timing the
+# call and by reading the cell back.
+
+test "cpu_delta_pct is the busy share of the window it spans" {
+  # 50 busy jiffies out of a 200-jiffy window
+  assert cpu_delta_pct((100, 400), (150, 600)) == Some(25.0)
+  assert cpu_delta_pct((100, 400), (100, 600)) == Some(0.0)
+  assert cpu_delta_pct((100, 400), (300, 600)) == Some(100.0)
+  # no window at all: two samples inside the same jiffy cannot be divided by
+  assert cpu_delta_pct((100, 400), (100, 400)) == None
+  # counters that moved backwards. /proc/stat's do not, and the previous
+  # snapshot is always read before the current sample, so none of these three is
+  # reachable; what is pinned is that an unreachable input answers "no reading"
+  # rather than a negative or above-100 percentage
+  assert cpu_delta_pct((100, 400), (100, 399)) == None
+  assert cpu_delta_pct((100, 400), (99, 600)) == None
+  assert cpu_delta_pct((100, 400), (900, 600)) == None
+}
+
+test "a snapshot survives the cell verbatim, and ages out of it" {
+  let cell = new_cell()
+  assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) == None
+  cpu_put(cell, (1234, 5678))
+  assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) == Some((1234, 5678))
+  # older than the bound asked for is not a current reading, and is not offered
+  assert cpu_prev(cell, 0) == None
+  # anything else in the cell reads as no snapshot, never as (0, 0) -- which
+  # would be a delta against the boot of the machine
+  assert cpu_prev_of("") == None
+  assert cpu_prev_of("12") == None
+  assert cpu_prev_of("12 34 56") == None
+  assert cpu_prev_of("busy total") == None
+}
+
+test "a reading with a snapshot to difference against opens no window of its own" {
+  let cell = new_cell()
+
+  # the genuine first call: nothing recorded yet, so this one has to sample a
+  # window and pays for it
+  let t0 = System.currentTimeMillis()
+  let first = cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S)
+  let first_ms = System.currentTimeMillis() - t0
+  assert first >= 0.0
+  assert first_ms >= CPU_WINDOW_MS
+
+  # let the jiffy counters move, so the next call has a window to report on
+  Thread.sleep(120)
+
+  let t1 = System.currentTimeMillis()
+  let second = cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S)
+  let second_ms = System.currentTimeMillis() - t1
+  assert second >= 0.0
+  # the whole point of the change: the second call reports the 120ms above
+  # instead of sleeping through 300ms of its own. This is the assertion the
+  # cache-hit path's old 300ms floor failed.
+  assert second_ms < CPU_WINDOW_MS
+}
+
+test "every reading leaves its own snapshot behind" {
+  let cell = new_cell()
+  # a plausible snapshot, young enough that this call takes the delta path
+  cpu_put(cell, (0, 0))
+  let _x = cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S)
+  # the next call's window has to start here. A reading that differenced and
+  # left the cell alone would keep widening its window until the snapshot aged
+  # out, which is the drift this design exists to remove -- and it would look
+  # exactly like this one from the outside.
+  assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) != Some((0, 0))
+  assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) != None
+}
+
+test "a snapshot too old to describe now sends the call back to sampling" {
+  let cell = new_cell()
+  # present, and usable at the production bound
+  cpu_put(cell, (0, 0))
+  assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) != None
+  # ... but a call that accepts nothing older than 0s has to refuse it and open
+  # its own window. Differencing against a snapshot from an hour ago would put
+  # the hour's average on the dashboard and call it live.
+  let t0 = System.currentTimeMillis()
+  let stale = cpu_percent(cell, 0)
+  let stale_ms = System.currentTimeMillis() - t0
+  assert stale >= 0.0
+  assert stale_ms >= CPU_WINDOW_MS
 }
 
 # ---- fault isolation across the collect phase ----

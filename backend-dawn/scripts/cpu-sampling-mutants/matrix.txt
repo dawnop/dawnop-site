@@ -1,0 +1,27 @@
+# Hand-owned red sets for the monitor's CPU reading in src/svc/monitor.dawn:
+# whether the delta against the previous call's /proc/stat snapshot is really
+# taken, whether that snapshot really moves forward, whether its age bound is
+# really consulted, and whether an impossible sample pair is really refused.
+#
+# `mutant|owner;;owner` -- the runner rejects a mutant that reddens anything
+# other than exactly this set, and has no record mode.
+#
+# The reading is a Float between 0 and 100 whichever path produced it, so the
+# response cannot tell these apart and neither can the contract goldens, which
+# assert the monitor's shape rather than its values. What separates them is the
+# clock and the cell: a call that fell back to sampling spends CPU_WINDOW_MS
+# doing it, and a call that differenced without writing back leaves the cell
+# where it found it. Both mutants below that matter are chosen to leave the
+# source reading exactly as it does now -- `always-sample-a-window` still calls
+# cpu_delta_pct with the previous snapshot in hand, and `unbounded-snapshot-age`
+# still passes an age bound to cache_get.
+#
+# What is NOT pinned here, and cannot be by anything that finishes in seconds:
+# the VALUE of CPU_SNAPSHOT_MAX_AGE_S. `unbounded-snapshot-age` is caught
+# because the tests ask cpu_prev for a bound of their own and watch it be
+# honoured; a mutant that changed 300 to 3000 would be caught by nothing here
+# and would need a test willing to wait out the difference.
+accept-backwards-counters|cpu_delta_pct is the busy share of the window it spans
+always-sample-a-window|a reading with a snapshot to difference against opens no window of its own
+never-refresh-snapshot|every reading leaves its own snapshot behind
+unbounded-snapshot-age|a snapshot survives the cell verbatim, and ages out of it;;a snapshot too old to describe now sends the call back to sampling

@@ -34,13 +34,13 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 4 条（`get.file`/`put.new`/`copy.file`/`delete.file`）——它跑在没有凭据的后端上，同样的路径
 由 `contract_qiniu.py` 在假桶上钉住，所以是移交而不是漏掉。
 
-**变异体只写带哨兵的一次性目录。** 八个 harness 的 `mutate.py` 都是就地改写源码、没有撤销，
+**变异体只写带哨兵的一次性目录。** 九个 harness 的 `mutate.py` 都是就地改写源码、没有撤销，
 所以它们在动任何文件之前先过 `scripts/mutant_workdir.py`：目标既不能是 mutator 自己所在的仓库
 （这条没有逃生阀），又必须带一个 `.mutant-workdir` 文件。`run.sh` 在 `cp` 出临时副本之后立刻
 建这个哨兵；手工调单个变异体时，自己在临时目录里 `touch` 一次。**哨兵本身就是逃生阀**，所以没有
 `--force` 也没有环境变量：把一个目录标成可牺牲，应当是留在那个目录里、看得见的一次性动作，
 而不是能 export 进 shell 配置然后忘掉的习惯。拒绝时退出码是 3（区别于 argparse 的 2 与锚点找不到
-的 1）。这道守卫自己也有负控，`mutant_workdir.py --self-test`，七个 run.sh 各调一次。
+的 1）。这道守卫自己也有负控，`mutant_workdir.py --self-test`，九个 run.sh 各调一次。
 起因是 2026-08-15 真出过两次：一次把活工作树里的 `repo_fm`/`repo_tag` 改了（提交前的
 `git status` 才发现），一次指错成仓库根、后续步骤跑在未变异的源码上报了 PASS。
 
@@ -307,9 +307,21 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 **监控（刀 12）**
 - `api/api_monitor.dawn` — `/api/monitor`，120s TTL + `?refresh`，配额从 settings 表实时注入。
 - `svc/monitor.dawn` — 四块容错聚合：server（/proc，回落 JMX）、lighthouse（TC3）、qiniu（kodo+CDN+respack）、vault 探活。
+  **CPU 占用是「本次 /proc/stat 采样 − 上次调用留下的快照」**（psutil 的 `cpu_percent(interval=None)`），
+  不再每次自己睡 300ms 采窗口：三个第三方请求改成并发之后，那个窗口和本端点自己的活儿重叠了，
+  报出来的数被「测它」这个动作本身污染；它同时还是缓存命中路径上一道 300ms 硬地板（实测
+  307ms → 7.4ms）。**先读上次快照、再采本次**，而 /proc/stat 计数器单调不减，所以无论多少虚拟线程
+  同时进来，差值都不可能为负；快照存在一个 `TtlCell`（`AtomicReference`，读写各自原子）里、
+  **每次请求都刷新**（`server_block` 在 120s 缓存之外，缓存命中也照刷，否则窗口会漂成缓存 TTL）。
+  三种情况回落到 300ms 窗口：进程起来后的第一次、快照超过 `CPU_SNAPSHOT_MAX_AGE_S`（300s，
+  再老就成了「上次开页面至今的平均值」）、以及采样对本身算不出读数（同一 jiffy 内、或计数器倒退）。
+  负控在 `scripts/cpu-sampling-mutants/`（4 个变异体）：差值路径改成永远算不出读数、
+  差值算完不回写快照、年龄上限换成一天、去掉单调性判据。四个都保留了源码「看起来已经对了」的样子，
+  只有真跑（看时钟、看 cell）才判得出来。
 - `tencent/client.dawn` / `tencent/sign.dawn` — 腾讯云 v3 请求装配 / TC3-HMAC-SHA256 签名（vs SDK 逐字节）。
 - `qiniu/stats.dawn` — kodo v6 序列 / fusion CDN tune / billing respack。
-- `util/ttl.dawn` — `AtomicReference` TTL cache cell（monitor 120s、respack 300s 共享、fm space 600s）。
+- `util/ttl.dawn` — `AtomicReference` TTL cache cell（monitor 120s、respack 300s 共享、fm space 600s；
+  另有一个不是缓存的用法：monitor 的 CPU 快照，借的是它「值 + 年龄上限」这一半）。
 
 **入口**
 - `main.dawn` — 读配置、建 `Auth`/`MonCfg`、拼装全部路由 + 中间件、绑定端口。
