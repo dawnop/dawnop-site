@@ -5,6 +5,8 @@
 use std/str
 use std/io
 use std/list
+use std/bytes
+use java "java.lang.String"
 use java "java.lang.System"
 use java "java.lang.Runtime"
 use java "java.lang.Thread"
@@ -14,11 +16,16 @@ use java "java.time.Instant"
 use java "java.time.LocalDateTime"
 use java "java.time.ZoneOffset"
 use java "java.time.format.DateTimeFormatter"
-use svc/auth.{Auth}
+use svc/auth.{Auth, Qiniu}
 use tencent/client
-use util/ttl.{TtlCell, cache_get, cache_put, now_s}
-use qiniu/stats.{field, int_of, last_nonzero, kodo_series, flow_series, cdn_domains, cdn_tune, respack_summary}
-use util/http.{HttpCell, fetch}
+use util/ttl.{TtlCell, cache_get, cache_put, new_cell, now_s}
+use qiniu/stats.{field, int_of, last_nonzero, PendingQ, PendingRespack, kodo_series_start, kodo_series_finish, flow_series_start, flow_series_finish, cdn_domains_start, cdn_domains_finish, cdn_tune_start, cdn_tune_finish, respack_start, respack_finish, respack_summary}
+use tencent/client.{PendingTc}
+use util/http.{HttpCell, Pending, fetch, new_client, fetch_start, await_resp}
+use db/db.{Db}
+use java "com.sun.net.httpserver.HttpServer"
+use java "java.net.InetSocketAddress"
+use java "java.net.URI"
 use json/value.{Json, JNull, JNum, JInt, JStr, JArr, JObj}
 use json/render.{render}
 use json/parser.{parse}
@@ -194,25 +201,56 @@ fn round1(x: Float) -> Float = to_float(to_int(x * 10.0)) / 10.0
 fn clip100(x: Float) -> Float = if x > 100.0 { 100.0 } else { x }
 
 # ---- lighthouse: traffic package + instance + cpu trend (each fault-isolated) ----
+#
+# The three calls do not depend on each other, so the block is a start phase
+# that puts all three on the wire and a collect phase that reads them. Fault
+# isolation is unchanged and is still per call: each request is carried as its
+# own Result, so a start that fails lands in the same *_error field a transport
+# failure or an API-level Error would, and the other two still answer.
+
+## The three lighthouse requests in flight.
+pub type LighthousePending = {
+  traffic: Result[PendingTc, String],
+  instance: Result[PendingTc, String],
+  trend: Result[PendingTc, String],
+}
+
+## Issue lighthouse's three requests. None when it is not configured -- that
+## block is a constant and asks nothing of the network.
+pub fn lighthouse_start(cl: HttpCell, secret_id: String, secret_key: String, region: String, instance: String) -> Option[LighthousePending] !io =
+  if secret_id == "" || secret_key == "" {
+    None
+  } else {
+    Some(LighthousePending {
+      traffic: traffic_start(cl, secret_id, secret_key, region, instance),
+      instance: instance_start(cl, secret_id, secret_key, region, instance),
+      trend: cpu_trend_start(cl, secret_id, secret_key, region, instance),
+    })
+  }
+
+## Read what `lighthouse_start` issued.
+pub fn lighthouse_collect(started: Option[LighthousePending]) -> Json !io =
+  match started {
+    None -> obj([("configured", jbool(false))])
+    Some(s) -> {
+      let traffic = match traffic_finish(s.traffic) {
+        Ok(t) -> [("traffic", t)]
+        Err(m) -> [("traffic_error", jstr(m))]
+      }
+      let inst = match instance_finish(s.instance) {
+        Ok(v) -> [("instance", v)]
+        Err(m) -> [("instance_error", jstr(m))]
+      }
+      let trend = match cpu_trend_finish(s.trend) {
+        Ok(v) -> [("cpu_trend", v)]
+        Err(m) -> [("cpu_trend_error", jstr(m))]
+      }
+      obj([("configured", jbool(true))] ++ traffic ++ inst ++ trend)
+    }
+  }
 
 pub fn lighthouse_block(cl: HttpCell, secret_id: String, secret_key: String, region: String, instance: String) -> Json !io =
-  if secret_id == "" || secret_key == "" {
-    obj([("configured", jbool(false))])
-  } else {
-    let traffic = match traffic_fetch(cl, secret_id, secret_key, region, instance) {
-      Ok(t) -> [("traffic", t)]
-      Err(m) -> [("traffic_error", jstr(m))]
-    }
-    let inst = match instance_fetch(cl, secret_id, secret_key, region, instance) {
-      Ok(v) -> [("instance", v)]
-      Err(m) -> [("instance_error", jstr(m))]
-    }
-    let trend = match cpu_trend_fetch(cl, secret_id, secret_key, region, instance) {
-      Ok(v) -> [("cpu_trend", v)]
-      Err(m) -> [("cpu_trend_error", jstr(m))]
-    }
-    obj([("configured", jbool(true))] ++ traffic ++ inst ++ trend)
-  }
+  lighthouse_collect(lighthouse_start(cl, secret_id, secret_key, region, instance))
 
 # the Response body, or Err on an API-level Error (Code + Message)
 fn tc_resp(action: String, j: Json) -> Result[Json, String] = {
@@ -232,8 +270,11 @@ fn jstr_plain(j: Json) -> String =
     _ -> "",
   }
 
-fn traffic_fetch(cl: HttpCell, id: String, key: String, region: String, instance: String) -> Result[Json, String] !io = {
-  let j = client.call(cl, id, key, "lighthouse", "DescribeInstancesTrafficPackages", "2020-03-24", region, "{\"InstanceIds\":[\"$instance\"]}")?
+fn traffic_start(cl: HttpCell, id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !io =
+  client.call_start(cl, id, key, "lighthouse", "DescribeInstancesTrafficPackages", "2020-03-24", region, "{\"InstanceIds\":[\"$instance\"]}")
+
+fn traffic_finish(started: Result[PendingTc, String]) -> Result[Json, String] !io = {
+  let j = client.call_finish(started?)?
   let resp = tc_resp("DescribeInstancesTrafficPackages", j)?
   match arr0(field(resp, "InstanceTrafficPackageSet")) {
     Some(inst) ->
@@ -253,8 +294,11 @@ fn traffic_fetch(cl: HttpCell, id: String, key: String, region: String, instance
   }
 }
 
-fn instance_fetch(cl: HttpCell, id: String, key: String, region: String, instance: String) -> Result[Json, String] !io = {
-  let j = client.call(cl, id, key, "lighthouse", "DescribeInstances", "2020-03-24", region, "{\"InstanceIds\":[\"$instance\"]}")?
+fn instance_start(cl: HttpCell, id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !io =
+  client.call_start(cl, id, key, "lighthouse", "DescribeInstances", "2020-03-24", region, "{\"InstanceIds\":[\"$instance\"]}")
+
+fn instance_finish(started: Result[PendingTc, String]) -> Result[Json, String] !io = {
+  let j = client.call_finish(started?)?
   let resp = tc_resp("DescribeInstances", j)?
   match arr0(field(resp, "InstanceSet")) {
     Some(s) -> {
@@ -278,13 +322,17 @@ fn instance_fetch(cl: HttpCell, id: String, key: String, region: String, instanc
 }
 
 # QCE/LIGHTHOUSE CpuUsage, daily points over 30 days, via the monitor service
-fn cpu_trend_fetch(cl: HttpCell, id: String, key: String, region: String, instance: String) -> Result[Json, String] !io = {
+fn cpu_trend_start(cl: HttpCell, id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !io = {
   let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")!
   let zone = ZoneOffset.ofHours(0)!
   let now = LocalDateTime.ofInstant(Instant.now()!, zone)!
   let start = now.minusDays(30)!
   let payload = "{\"Namespace\":\"QCE/LIGHTHOUSE\",\"MetricName\":\"CpuUsage\",\"Period\":86400,\"StartTime\":\"${start.format(fmt)!}+00:00\",\"EndTime\":\"${now.format(fmt)!}+00:00\",\"Instances\":[{\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"$instance\"}]}]}"
-  let j = client.call(cl, id, key, "monitor", "GetMonitorData", "2018-07-24", region, payload)?
+  client.call_start(cl, id, key, "monitor", "GetMonitorData", "2018-07-24", region, payload)
+}
+
+fn cpu_trend_finish(started: Result[PendingTc, String]) -> Result[Json, String] !io = {
+  let j = client.call_finish(started?)?
   let resp = tc_resp("GetMonitorData", j)?
   match arr0(field(resp, "DataPoints")) {
     Some(dp) -> {
@@ -314,33 +362,77 @@ fn arr_of(j: Json) -> List[Json] =
 
 # ---- qiniu: kodo series + CDN + respack (three fault-isolated groups) ----
 
-## The qiniu block WITHOUT quota — the caller injects quota from the settings
-## table after the cache, exactly like the FastAPI handler.
-pub fn qiniu_block(a: Auth, respack_cell: TtlCell) -> Json !io =
+## The qiniu requests in flight, one field per fault-isolated group, so a group
+## that fails to start fails exactly where it would have failed in transport.
+##
+## `respack` is None when the 300s cell already held the answer: the billing API
+## is rate-limited, and a start phase that asked it anyway would defeat the cell
+## it shares with fm stats.
+pub type QiniuPending = {
+  kodo: Result[KodoPending, String],
+  domains: Result[PendingQ, String],
+  respack: Option[Result[PendingRespack, String]],
+}
+
+## The four kodo series requests. They are one Result because they are one
+## fault-isolation group: any of them failing is the block's single `error`.
+pub type KodoPending = { space: PendingQ, count: PendingQ, flow: PendingQ, hits: PendingQ }
+
+## Issue every qiniu request the block needs. None when it is not configured.
+pub fn qiniu_start(a: Auth, respack_cell: TtlCell) -> Option[QiniuPending] !io =
   if a.qiniu.ak == "" {
-    obj([("configured", jbool(false))])
+    None
   } else {
-    let base = [("configured", jbool(true)), ("bucket", jstr(a.qiniu.bucket))]
-    let main = match kodo_stats(a) {
-      Ok(entries) -> entries
-      Err(m) -> [("error", jstr(m))]
-    }
-    let cdn = match cdn_stats(a) {
-      Ok(entries) -> entries
-      Err(m) -> [("cdn_error", jstr(m))]
-    }
-    let packs = match respack_cached(a, respack_cell) {
-      Ok(j) -> [("cdn_pack", field(j, "cdn")), ("storage_pack", field(j, "storage"))]
-      Err(m) -> [("respack_error", jstr(m))]
-    }
-    obj(base ++ main ++ cdn ++ packs)
+    Some(QiniuPending {
+      kodo: kodo_start(a),
+      domains: cdn_domains_start(a.http, a.qiniu.ak, a.qiniu.sk),
+      respack: match cache_get(respack_cell, 300) {
+        Some(_s) -> None
+        None -> Some(respack_start(a.http, a.qiniu.ak, a.qiniu.sk))
+      },
+    })
   }
 
-fn kodo_stats(a: Auth) -> Result[List[(String, Json)], String] !io = {
-  let (stimes, sdatas) = kodo_series(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "space", 30)?
-  let (_ctimes, cdatas) = kodo_series(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "count", 30)?
-  let flow = flow_series(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "flow", 30)?
-  let hits = flow_series(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "hits", 30)?
+## The qiniu block WITHOUT quota — the caller injects quota from the settings
+## table after the cache, exactly like the FastAPI handler.
+pub fn qiniu_collect(a: Auth, respack_cell: TtlCell, started: Option[QiniuPending]) -> Json !io =
+  match started {
+    None -> obj([("configured", jbool(false))])
+    Some(s) -> {
+      let base = [("configured", jbool(true)), ("bucket", jstr(a.qiniu.bucket))]
+      let main = match kodo_stats(s.kodo) {
+        Ok(entries) -> entries
+        Err(m) -> [("error", jstr(m))]
+      }
+      let cdn = match cdn_stats(a, s.domains) {
+        Ok(entries) -> entries
+        Err(m) -> [("cdn_error", jstr(m))]
+      }
+      let packs = match respack_collect(a, respack_cell, s.respack) {
+        Ok(j) -> [("cdn_pack", field(j, "cdn")), ("storage_pack", field(j, "storage"))]
+        Err(m) -> [("respack_error", jstr(m))]
+      }
+      obj(base ++ main ++ cdn ++ packs)
+    }
+  }
+
+pub fn qiniu_block(a: Auth, respack_cell: TtlCell) -> Json !io =
+  qiniu_collect(a, respack_cell, qiniu_start(a, respack_cell))
+
+fn kodo_start(a: Auth) -> Result[KodoPending, String] !io = {
+  let space = kodo_series_start(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "space", 30)?
+  let count = kodo_series_start(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "count", 30)?
+  let flow = flow_series_start(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "flow", 30)?
+  let hits = flow_series_start(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "hits", 30)?
+  Ok(KodoPending { space: space, count: count, flow: flow, hits: hits })
+}
+
+fn kodo_stats(started: Result[KodoPending, String]) -> Result[List[(String, Json)], String] !io = {
+  let s = started?
+  let (stimes, sdatas) = kodo_series_finish(s.space)?
+  let (_ctimes, cdatas) = kodo_series_finish(s.count)?
+  let flow = flow_series_finish(s.flow, "flow")?
+  let hits = flow_series_finish(s.hits, "hits")?
   Ok([
     ("space", jint(last_nonzero(sdatas))),
     ("count", jint(last_nonzero(cdatas))),
@@ -360,10 +452,15 @@ fn sum_snd(xs: List[(String, Int)]) -> Int =
     acc + v
   })
 
-fn cdn_stats(a: Auth) -> Result[List[(String, Json)], String] !io = {
-  let domains = cdn_domains(a.http, a.qiniu.ak, a.qiniu.sk)?
-  let (ftimes, fvalues) = cdn_tune(a.http, a.qiniu.ak, a.qiniu.sk, "flux", 30, domains)?
-  let (_btimes, bvalues) = cdn_tune(a.http, a.qiniu.ak, a.qiniu.sk, "bandwidth", 30, domains)?
+fn cdn_stats(a: Auth, started: Result[PendingQ, String]) -> Result[List[(String, Json)], String] !io = {
+  let domains = cdn_domains_finish(started?)?
+  # The tune queries name the domains, so these two cannot go out until the
+  # listing lands. Issuing them together is what holds this group to two round
+  # trips instead of three.
+  let flux = cdn_tune_start(a.http, a.qiniu.ak, a.qiniu.sk, "flux", 30, domains)?
+  let bandwidth = cdn_tune_start(a.http, a.qiniu.ak, a.qiniu.sk, "bandwidth", 30, domains)?
+  let (ftimes, fvalues) = cdn_tune_finish(flux)?
+  let (_btimes, bvalues) = cdn_tune_finish(bandwidth)?
   let peak = fold(bvalues, 0, (acc, v) => if v > acc { v } else { acc })
   Ok([
     ("cdn_flow_30d", jint(fold(fvalues, 0, (acc, v) => acc + v))),
@@ -379,12 +476,30 @@ fn trend_int(times: List[Int], values: List[Int]) -> Json = {
 }
 
 ## respack balances through a 300s TTL cell (the billing API is rate-limited;
-## fm stats shares this cell so directory listings stay cheap).
-pub fn respack_cached(a: Auth, cell: TtlCell) -> Result[Json, String] !io =
-  match cache_get(cell, 300) {
-    Some(s) -> parse_text(s)
-    None -> {
-      let j = respack_summary(a.http, a.qiniu.ak, a.qiniu.sk)?
+## fm stats shares this cell so directory listings stay cheap). For fm stats,
+## which has one call and nothing to overlap it with.
+pub fn respack_cached(a: Auth, cell: TtlCell) -> Result[Json, String] !io = {
+  let started = match cache_get(cell, 300) {
+    Some(_s) -> None
+    None -> Some(respack_start(a.http, a.qiniu.ak, a.qiniu.sk))
+  }
+  respack_collect(a, cell, started)
+}
+
+# `respack_cached` split across the start/collect phases: None means the start
+# phase found the cell warm and asked the billing API nothing.
+fn respack_collect(a: Auth, cell: TtlCell, started: Option[Result[PendingRespack, String]]) -> Result[Json, String] !io =
+  match started {
+    # Warm a moment ago, so all but certainly warm now. The fallback covers the
+    # sliver where the entry aged out between the two phases; it costs a
+    # blocking call on a request that was going to make one anyway.
+    None ->
+      match cache_get(cell, 300) {
+        Some(s) -> parse_text(s)
+        None -> respack_summary(a.http, a.qiniu.ak, a.qiniu.sk)
+      }
+    Some(r) -> {
+      let j = respack_finish(r?)?
       cache_put(cell, render(j))
       Ok(j)
     }
@@ -399,6 +514,14 @@ pub fn vault_block(cl: HttpCell, alive_url: String, public_url: String) -> Json 
     alive_url
   }
   let head = [("url", jstr(base)), ("public_url", jstr(public_url))]
+  # The version request does not depend on the probe's answer, so it goes out
+  # first and is read after the probe. The probe itself stays a blocking call:
+  # `latency_ms` has to be the duration of that exchange, and a started request
+  # can only report how long it was until somebody got round to reading it.
+  # (One consequence, and it is deliberate: a vault that is down is now asked
+  # twice rather than once. Both requests fail on the same deadline, in
+  # parallel, and the block reads exactly as it did before.)
+  let version_started = fetch_start(cl, "$base/api/config", [])
   let t0 = System.currentTimeMillis()
   match fetch(cl, alive_url, []) {
     Ok(r) -> {
@@ -407,7 +530,11 @@ pub fn vault_block(cl: HttpCell, alive_url: String, public_url: String) -> Json 
         ("latency_ms", jint(System.currentTimeMillis() - t0)),
       ]
       let no_version: List[(String, Json)] = []
-      let version = match fetch(cl, "$base/api/config", []) {
+      let version_reply = match version_started {
+        Ok(p) -> await_resp(p)
+        Err(m) -> Err(m)
+      }
+      let version = match version_reply {
         Ok(c) ->
           match parse(c.body) {
             Ok(cfg) -> [("version", field(cfg, "version"))]
@@ -468,4 +595,241 @@ test "net_totals_of sums every interface (recv = field 0, sent = field 8)" {
 test "uptime_of takes the first float, truncated to whole seconds" {
   assert uptime_of("123456.78 987654.32\n") == 123456
   assert uptime_of("bad\n") == 0
+}
+
+# ---- fault isolation across the collect phase ----
+#
+# The blocks make their calls concurrently now: every request goes on the wire
+# before any reply is read. The property that must survive that is the one this
+# endpoint has always had -- a sub-call that fails lands in its own *_error
+# field and the others still answer -- because a version where one failure takes
+# the whole response with it is strictly worse than the serial code it replaced.
+#
+# These drive the collect phase directly, with hand-built pending requests
+# aimed at a loopback peer. That is deliberate: the start functions sign for the
+# real qiniu and Tencent hosts, so a test that went through them would either
+# reach the internet or test nothing. What is under test here is the collecting,
+# which is where the isolation lives and where a rewrite would break it.
+
+## A loopback peer answering a fixed (status, body) per path. Anything not
+## listed answers 500, which is how a test fails exactly one sub-call.
+fn stub_server(routes: List[(String, String)]) -> (HttpServer, Int) !io = {
+  let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
+  server.createContext("/", ex => {
+    let path = String.valueOf(ex.getRequestURI()!.getPath()!)!
+    let nothing: Option[String] = None
+    let hit = fold(routes, nothing, (acc: Option[String], r) => {
+      let (p, body) = r
+      if p == path { Some(body) } else { acc }
+    })
+    let (status, text) = match hit {
+      Some(body) -> (200, body)
+      None -> (500, "{\"error\":\"no such stub route\"}")
+    }
+    let payload = bytes.utf8(text)
+    ex.sendResponseHeaders(status, bytes.len(payload))
+    let os = ex.getResponseBody()!
+    os.write(payload)
+    os.close()
+  })
+  server.start()
+  (server, server.getAddress()!.getPort())
+}
+
+fn stub_q(cl: HttpCell, port: Int, path: String, fail: String) -> PendingQ !io =
+  match fetch_start(cl, "http://127.0.0.1:$port$path", []) {
+    Ok(p) -> PendingQ { p: p, fail: fail }
+    Err(m) -> panic("stub start failed: $m")
+  }
+
+fn stub_tc(cl: HttpCell, port: Int, path: String, action: String) -> Result[PendingTc, String] !io =
+  match fetch_start(cl, "http://127.0.0.1:$port$path", []) {
+    Ok(p) -> Ok(PendingTc { p: p, action: action })
+    Err(m) -> panic("stub start failed: $m")
+  }
+
+fn test_auth_with(cl: HttpCell, ak: String) -> Auth =
+  Auth {
+    db: Db { path: "", ext: "" },
+    secret: "test",
+    expire_min: 1,
+    storage_quota: 10,
+    qiniu: Qiniu {
+      ak: ak,
+      sk: "test-sk",
+      bucket: "test-bucket",
+      domain: "",
+      expires: 3600,
+      rs_host: "",
+      up_host: "",
+    },
+    http: cl,
+  }
+
+fn test_auth(cl: HttpCell) -> Auth = test_auth_with(cl, "test-ak")
+
+fn key_present(j: Json, key: String) -> Bool = field(j, key) != JNull
+
+test "a failing qiniu sub-fetch reports itself and leaves the other groups whole" {
+  let (server, port) = stub_server([
+    ("/series", "{\"times\":[1000,2000],\"datas\":[10,20]}"),
+    ("/flow", "[{\"time\":\"2026-08-01\",\"values\":{\"flow\":5,\"hits\":7}}]"),
+    # no domains means the two tune queries are never issued, so this test
+    # needs no stand-in for fusion and stays hermetic
+    ("/domains", "{\"domains\":[]}"),
+    ("/respack-list", "{\"data\":[{\"status\":2,\"respack_name\":\"流量包\",\"used_amount\":1,\"total_amount\":4,\"effective_end\":\"2026-12-01\"}]}"),
+    ("/respack-overview", "{\"data\":[{\"item_name\":\"存储包\",\"total_surplus\":3}]}"),
+  ])
+  let cl = new_client()
+  let a = test_auth(cl)
+  let cell = new_cell()
+
+  # one of the four kodo requests points at a path the stub refuses
+  let started = QiniuPending {
+    kodo: Ok(KodoPending {
+      space: stub_q(cl, port, "/series", "七牛统计失败 /v6/space"),
+      count: stub_q(cl, port, "/missing", "七牛统计失败 /v6/count"),
+      flow: stub_q(cl, port, "/flow", "七牛统计失败 /v6/blob_io"),
+      hits: stub_q(cl, port, "/flow", "七牛统计失败 /v6/blob_io"),
+    }),
+    domains: Ok(stub_q(cl, port, "/domains", "七牛 CDN 接口失败 /domain")),
+    respack: Some(Ok(PendingRespack {
+      listing: stub_q(cl, port, "/respack-list", "七牛 CDN 接口失败 /billing-api/v1/respack/list"),
+      overview: stub_q(cl, port, "/respack-overview", "七牛 CDN 接口失败 /billing-api/v1/respack/month-overview"),
+    })),
+  }
+  let j = qiniu_collect(a, cell, Some(started))
+  server.stop(0)
+
+  # the kodo group failed, and said so in its own field, naming the request
+  assert field(j, "error") == JStr("七牛统计失败 /v6/count: 500")
+  # ... it did not become the whole answer: the block is still a block
+  assert field(j, "configured") == jbool(true)
+  assert field(j, "bucket") == JStr("test-bucket")
+  # ... the failing group contributed nothing else
+  assert not key_present(j, "space")
+  assert not key_present(j, "flow_30d")
+  # ... and both other groups answered in full
+  assert field(j, "cdn_domains") == JArr([])
+  assert field(j, "cdn_flow_30d") == JInt(0)
+  assert not key_present(j, "cdn_error")
+  assert key_present(j, "cdn_pack")
+  assert key_present(j, "storage_pack")
+  assert not key_present(j, "respack_error")
+  # the respack answer really was read, not defaulted away
+  assert field(field(j, "cdn_pack"), "total") == JInt(4 * 1073741824)
+  # and a success refills the shared cell, as the serial version did
+  assert cache_get(cell, 300) != None
+}
+
+test "each qiniu group fails alone, whichever one it is" {
+  # The negative control for the test above: with the failure moved to another
+  # group, the fields that survived there are the ones that now fail, and the
+  # kodo numbers come back. A collect phase that let any one failure escape
+  # would fail both tests; one that special-cased kodo would fail this one.
+  let (server, port) = stub_server([
+    ("/series", "{\"times\":[1000,2000],\"datas\":[10,20]}"),
+    ("/flow", "[{\"time\":\"2026-08-01\",\"values\":{\"flow\":5,\"hits\":7}}]"),
+    ("/domains", "{\"domains\":[]}"),
+  ])
+  let cl = new_client()
+  let a = test_auth(cl)
+  let cell = new_cell()
+  let started = QiniuPending {
+    kodo: Ok(KodoPending {
+      space: stub_q(cl, port, "/series", "七牛统计失败 /v6/space"),
+      count: stub_q(cl, port, "/series", "七牛统计失败 /v6/count"),
+      flow: stub_q(cl, port, "/flow", "七牛统计失败 /v6/blob_io"),
+      hits: stub_q(cl, port, "/flow", "七牛统计失败 /v6/blob_io"),
+    }),
+    domains: Ok(stub_q(cl, port, "/domains", "七牛 CDN 接口失败 /domain")),
+    # this time it is respack that cannot be reached
+    respack: Some(Ok(PendingRespack {
+      listing: stub_q(cl, port, "/missing", "七牛 CDN 接口失败 /billing-api/v1/respack/list"),
+      overview: stub_q(cl, port, "/missing", "七牛 CDN 接口失败 /billing-api/v1/respack/month-overview"),
+    })),
+  }
+  let j = qiniu_collect(a, cell, Some(started))
+  server.stop(0)
+
+  assert field(j, "respack_error") == JStr("七牛 CDN 接口失败 /billing-api/v1/respack/list: 500")
+  assert not key_present(j, "cdn_pack")
+  assert not key_present(j, "storage_pack")
+  # the groups that did answer are all there
+  assert not key_present(j, "error")
+  assert field(j, "space") == JInt(20)
+  assert field(j, "count") == JInt(20)
+  assert field(j, "flow_30d") == JInt(5)
+  assert field(j, "hits_30d") == JInt(7)
+  assert field(j, "cdn_domains") == JArr([])
+  # a failed respack must NOT poison the cell it shares with fm stats
+  assert cache_get(cell, 300) == None
+}
+
+test "a lighthouse call that fails to start is isolated like one that fails in flight" {
+  # A start can fail too (a malformed URL, a client that refuses the request),
+  # and it happens before any thread is involved. It has to land in the same
+  # per-call *_error field, or the concurrent version would have a failure mode
+  # the serial one did not.
+  let (server, port) = stub_server([
+    ("/instances", "{\"Response\":{\"InstanceSet\":[{\"InstanceName\":\"box\",\"CPU\":4,\"Memory\":4,\"InstanceState\":\"RUNNING\",\"PublicAddresses\":[\"203.0.113.9\"],\"SystemDisk\":{\"DiskSize\":60},\"ExpiredTime\":\"2027-01-01T00:00:00Z\",\"CreatedTime\":\"2026-01-01T00:00:00Z\"}]}}"),
+    ("/trend", "{\"Response\":{\"DataPoints\":[{\"Timestamps\":[1000,2000],\"Values\":[1.5,2.5]}]}}"),
+  ])
+  let cl = new_client()
+  let started = Some(LighthousePending {
+    # never started at all
+    traffic: Err("流量包请求未发出"),
+    instance: stub_tc(cl, port, "/instances", "DescribeInstances"),
+    trend: stub_tc(cl, port, "/trend", "GetMonitorData"),
+  })
+  let j = lighthouse_collect(started)
+  server.stop(0)
+
+  assert field(j, "configured") == jbool(true)
+  assert field(j, "traffic_error") == JStr("流量包请求未发出")
+  assert not key_present(j, "traffic")
+  # the other two are untouched by it
+  assert not key_present(j, "instance_error")
+  assert field(field(j, "instance"), "name") == JStr("box")
+  assert field(field(j, "instance"), "cpu") == JInt(4)
+  assert not key_present(j, "cpu_trend_error")
+  assert field(j, "cpu_trend") == JArr([
+    obj([("t", JInt(1000)), ("v", JNum(1.5))]),
+    obj([("t", JInt(2000)), ("v", JNum(2.5))]),
+  ])
+}
+
+test "an API-level Error is still one call's failure, not the block's" {
+  # Tencent answers 200 with an Error object in the body; tc_resp turns that
+  # into an Err. It must isolate exactly like a transport failure does.
+  let (server, port) = stub_server([
+    ("/denied", "{\"Response\":{\"Error\":{\"Code\":\"AuthFailure\",\"Message\":\"签名过期\"},\"RequestId\":\"x\"}}"),
+    ("/trend", "{\"Response\":{\"DataPoints\":[]}}"),
+    ("/instances", "{\"Response\":{\"InstanceSet\":[{\"InstanceName\":\"box\",\"CPU\":4,\"Memory\":4,\"InstanceState\":\"RUNNING\",\"PublicAddresses\":[],\"SystemDisk\":{\"DiskSize\":60},\"ExpiredTime\":\"\",\"CreatedTime\":\"\"}]}}"),
+  ])
+  let cl = new_client()
+  let j = lighthouse_collect(Some(LighthousePending {
+    traffic: stub_tc(cl, port, "/denied", "DescribeInstancesTrafficPackages"),
+    instance: stub_tc(cl, port, "/instances", "DescribeInstances"),
+    trend: stub_tc(cl, port, "/trend", "GetMonitorData"),
+  }))
+  server.stop(0)
+
+  assert field(j, "traffic_error") == JStr("DescribeInstancesTrafficPackages 失败: AuthFailure 签名过期")
+  assert field(field(j, "instance"), "name") == JStr("box")
+  assert field(j, "cpu_trend") == JArr([])
+}
+
+test "an unconfigured block asks nothing and answers the constant" {
+  let cl = new_client()
+  let cell = new_cell()
+  # no credentials means no request is started at all -- the start phase is
+  # where that decision is made, so it is the start phase that must make it
+  assert lighthouse_start(cl, "", "key", "ap-guangzhou", "lhins-x") == None
+  assert lighthouse_start(cl, "id", "", "ap-guangzhou", "lhins-x") == None
+  assert lighthouse_collect(None) == obj([("configured", jbool(false))])
+
+  let blank = test_auth_with(cl, "")
+  assert qiniu_start(blank, cell) == None
+  assert qiniu_collect(blank, cell, None) == obj([("configured", jbool(false))])
 }

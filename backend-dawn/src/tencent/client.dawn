@@ -10,13 +10,23 @@ use java "java.time.format.DateTimeFormatter"
 use util/crypto.{sha256_hex}
 use util/ttl.{now_s}
 use tencent/sign.{tc3_signature}
-use util/http.{HttpCell, post}
+use util/http.{HttpCell, Pending, post_start, await_resp}
 use json/value.{Json}
 use util/jsonread.{parse_text}
 
 ## Call a Tencent Cloud v3 action. `payload` is a compact JSON body string.
 ## Returns the parsed Response JSON, or Err on transport / non-200.
-pub fn call(cl: HttpCell, secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[Json, String] !io = {
+pub fn call(cl: HttpCell, secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[Json, String] !io =
+  call_finish(call_start(cl, secret_id, secret_key, service, action, version, region, payload)?)
+
+## A Tencent action on the wire. The action name rides along because the
+## non-200 message names it and the call is off the stack by then.
+pub type PendingTc = { p: Pending, action: String }
+
+## Issue a Tencent Cloud v3 action without waiting. The monitor page makes three
+## independent ones; the signature is stamped with the current second, so a
+## started call must be read through the PendingTc it returned.
+pub fn call_start(cl: HttpCell, secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[PendingTc, String] !io = {
   let host = "$service.tencentcloudapi.com"
   let ts = now_s()
   let date = utc_date(ts)
@@ -42,11 +52,18 @@ pub fn call(cl: HttpCell, secret_id: String, secret_key: String, service: String
     ("X-TC-Timestamp", to_string(ts)),
     ("X-TC-Region", region),
   ]
-  let r = post(cl, "https://$host", headers, payload)?
+  let p = post_start(cl, "https://$host", headers, payload)?
+  Ok(PendingTc { p: p, action: action })
+}
+
+## Read a started Tencent action: the parsed Response JSON, or Err on transport
+## / non-200.
+pub fn call_finish(t: PendingTc) -> Result[Json, String] !io = {
+  let r = await_resp(t.p)?
   if r.status == 200 {
     parse_text(r.body)
   } else {
-    Err("tencent $action HTTP ${to_string(r.status)}: ${r.body}")
+    Err("tencent ${t.action} HTTP ${to_string(r.status)}: ${r.body}")
   }
 }
 

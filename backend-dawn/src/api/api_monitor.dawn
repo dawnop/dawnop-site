@@ -8,7 +8,7 @@ use svc/auth.{Auth, current_user}
 use db/db.{with_db}
 use repo/repo_settings.{setting_int}
 use util/ttl.{TtlCell, cache_get, cache_put, now_s}
-use svc/monitor.{server_block, lighthouse_block, qiniu_block, vault_block}
+use svc/monitor.{LighthousePending, QiniuPending, server_block, lighthouse_start, lighthouse_collect, qiniu_start, qiniu_collect, vault_block}
 use qiniu/stats.{field}
 use json/value.{Json, JBool, JInt, JObj}
 use json/render.{render}
@@ -29,6 +29,24 @@ pub type MonCfg = {
 ## GET /api/monitor — live resource snapshot {server, lighthouse, qiniu, vault,
 ## cached_at}. Quota is read from the settings table on every request (editing
 ## the setting takes effect immediately, unaffected by the cache).
+##
+## The handler runs in three phases, which is the whole reason this endpoint is
+## no longer the slowest thing on the site. On a cold cell it makes a dozen
+## third-party calls, and made them one at a time: every latency was paid in
+## series, and the CPU sampling window was paid on top.
+##
+##   1. issue — every third-party request goes on the wire and none is waited
+##      for. Nothing runs on another thread of ours; the exchanges are in flight
+##      inside the shared HttpClient, which is what it is for.
+##   2. local — the vault probe (whose reported latency must stay the latency of
+##      that exchange, not of the wait until we got round to reading it) and the
+##      server snapshot, whose 300ms CPU sampling window is now spent while the
+##      requests above are travelling rather than before they leave.
+##   3. read — collect the replies and shape the response.
+##
+## Nothing about failure isolation moves: the blocks still turn each sub-call's
+## failure into its own *_error field, and each of those sub-calls is still read
+## on this thread by the same code.
 pub fn get_monitor(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell) -> Handler =
   req => {
     let _u = current_user(a, req)?
@@ -36,39 +54,59 @@ pub fn get_monitor(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell) -
       Some(v) -> v == "1" || v == "true"
       None -> false
     }
-    let third = third_party(a, cfg, cell, respack_cell, refresh)
+    let work = third_start(a, cfg, cell, respack_cell, refresh)
+    let vault = vault_block(a.http, cfg.vault_alive, cfg.vault_public)
+    let server = server_block()
+    let third = third_collect(a, cell, respack_cell, work)
     let qn = with_quota(a, field(third, "qiniu"))
     Ok(json_ok(obj([
-      ("server", server_block()),
+      ("server", server),
       ("lighthouse", field(third, "lighthouse")),
       ("qiniu", qn),
-      ("vault", vault_block(a.http, cfg.vault_alive, cfg.vault_public)),
+      ("vault", vault),
       ("cached_at", field(third, "cached_at")),
     ])))
   }
 
-# the cached pair {lighthouse, qiniu, cached_at}; refilled past 120s or on refresh
-fn third_party(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell, refresh: Bool) -> Json !io = {
+# Where the cached {lighthouse, qiniu, cached_at} pair will come from: the
+# cell, or the requests the issue phase just put on the wire.
+type ThirdWork =
+  | TCached(j: Json)
+  | TStarted(lighthouse: Option[LighthousePending], qiniu: Option[QiniuPending])
+
+# phase 1: read the 120s cell, and on a miss put the third-party calls on the
+# wire without waiting for any of them
+fn third_start(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell, refresh: Bool) -> ThirdWork !io = {
   let cached: Option[String] = if refresh { None } else { cache_get(cell, 120) }
   match cached {
     Some(s) ->
       match parse(s) {
-        Ok(j) -> j
-        Err(_m) -> refill(a, cfg, cell, respack_cell)
+        Ok(j) -> TCached(j)
+        Err(_m) -> start_fresh(a, cfg, respack_cell)
       }
-    None -> refill(a, cfg, cell, respack_cell)
+    None -> start_fresh(a, cfg, respack_cell)
   }
 }
 
-fn refill(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell) -> Json !io = {
-  let j = obj([
-    ("lighthouse", lighthouse_block(a.http, cfg.tencent_id, cfg.tencent_key, cfg.region, cfg.instance)),
-    ("qiniu", qiniu_block(a, respack_cell)),
-    ("cached_at", jint(now_s())),
-  ])
-  cache_put(cell, render(j))
-  j
-}
+fn start_fresh(a: Auth, cfg: MonCfg, respack_cell: TtlCell) -> ThirdWork !io =
+  TStarted(
+    lighthouse_start(a.http, cfg.tencent_id, cfg.tencent_key, cfg.region, cfg.instance),
+    qiniu_start(a, respack_cell))
+
+# phase 3: read the replies and refill the cell (a cache hit has nothing to do)
+fn third_collect(a: Auth, cell: TtlCell, respack_cell: TtlCell, work: ThirdWork) -> Json !io =
+  match work {
+    TCached(j) -> j
+    TStarted(lh, qn) -> {
+      let j = obj([
+        ("lighthouse", lighthouse_collect(lh)),
+        ("qiniu", qiniu_collect(a, respack_cell, qn)),
+        ("cached_at", jint(now_s())),
+      ])
+      cache_put(cell, render(j))
+      j
+    }
+  }
 
 # inject quota (settings table over the .env default) when qiniu is configured
 fn with_quota(a: Auth, qn: Json) -> Json !io =

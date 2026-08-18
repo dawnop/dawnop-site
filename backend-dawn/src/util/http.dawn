@@ -20,6 +20,8 @@ use java "java.time.Duration"
 use java "java.lang.String"
 use java "java.lang.System"
 use java "java.lang.Thread"
+use java "java.net.http.HttpResponse"
+use java "java.util.concurrent.CompletableFuture"
 use java "com.sun.net.httpserver.HttpServer"
 use java "java.net.InetSocketAddress"
 
@@ -290,6 +292,104 @@ pub fn fetch(cl: HttpCell, url: String, headers: List[(String, String)]) -> Resu
 
 pub fn post(cl: HttpCell, url: String, headers: List[(String, String)], body: String) -> Result[HttpResp, String] !io =
   send(cl, "POST", url, headers, Some(body))
+
+# ---- requests that do not block the caller ----
+#
+# `send` occupies the calling thread for the whole exchange, so a handler making
+# several independent outbound calls pays their latencies end to end. The
+# monitor endpoint makes a dozen, which is why it was the slowest thing on the
+# site by an order of magnitude.
+#
+# `sendAsync` hands the exchange to the client's own executor and returns at
+# once. Three properties are worth stating, because they are what make this a
+# small change rather than a concurrency project:
+#
+#   - No Dawn code runs off the request thread. The concurrency lives entirely
+#     inside the JDK's HTTP machinery; `await_resp` is where the calling thread
+#     rejoins it, and every value a caller sees is still produced on its own
+#     thread. Callers' fault handling is therefore the same code it always was,
+#     and nothing this backend holds gets shared across threads by using these.
+#   - Nothing here creates an executor, so there is none to shut down and none
+#     to leak. The client's executor is the one it has always had, owned by the
+#     process-wide HttpCell.
+#   - Concurrency is bounded by construction. A caller can only have as many
+#     exchanges in flight as it has started, and every start is a fixed call in
+#     the source; there is no queue that grows with load.
+
+## An exchange already on the wire. Await it with `await_resp`; one that is
+## never awaited still completes and is then discarded.
+pub opaque type Pending = PendingReq
+
+# The deadline travels with the request because `await_resp` has to name it,
+# and by then the builder that applied it is long gone.
+type PendingReq = { future: CompletableFuture, budget_s: Int }
+
+## Start a GET without waiting for it. Management deadline, like `fetch`.
+pub fn fetch_start(cl: HttpCell, url: String, headers: List[(String, String)]) -> Result[Pending, String] !io =
+  send_start(cl, "GET", url, headers, None)
+
+## Start a POST without waiting for it. Management deadline, like `post`.
+pub fn post_start(cl: HttpCell, url: String, headers: List[(String, String)], body: String) -> Result[Pending, String] !io =
+  send_start(cl, "POST", url, headers, Some(body))
+
+# Only the management budget is offered asynchronously: every caller of these is
+# a probe or a management/statistics call. A transfer has one exchange and
+# nothing to overlap it with, and handing it a non-blocking start would only
+# invite a body to be buffered where today it streams.
+fn send_start(cl: HttpCell, method: String, url: String, headers: List[(String, String)], body: Option[String]) -> Result[Pending, String] !io =
+  catch_within(MANAGEMENT_TIMEOUT_S, () => {
+    let publisher: BodyPublisher = match body {
+      Some(s) -> BodyPublishers.ofString(s)!
+      None -> BodyPublishers.noBody()!
+    }
+    let req = request_for(url, headers, method, publisher, MANAGEMENT_TIMEOUT_S)
+    let f: CompletableFuture = client_of(cl).sendAsync(req, BodyHandlers.ofString()!)!
+    let p: Pending = PendingReq { future: f, budget_s: MANAGEMENT_TIMEOUT_S }
+    p
+  })
+
+## Wait for a started exchange. Identical contract to `fetch`/`post`: a
+## transport failure is Err, a non-2xx status is Ok and the caller inspects it.
+pub fn await_resp(p: Pending) -> Result[HttpResp, String] !io = {
+  let box: PendingReq = p
+  match catch_fault(() => {
+    let got: Result[HttpResponse, ForeignError] = cast(box.future.get()!)
+    got
+  }) {
+    Ok(inner) ->
+      match inner {
+        Ok(resp) -> Ok(HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! })
+        Err(e) -> Err(fe_text(e))
+      }
+    Err(e) -> Err(deadline_text(box.budget_s, unwrap_execution(e)))
+  }
+}
+
+# `Future.get` reports every failure as an ExecutionException wrapping the real
+# one, so the fault arriving here is not the fault a blocking `send` would have
+# seen: asking "is this a timeout" of the wrapper answers no for every timeout
+# there is. Rebuilding the cause puts the SAME exception in front of
+# `deadline_text` -- the one predicate on ForeignError this file allows itself
+# -- so an async failure is reworded, classified and rendered exactly as a
+# blocking one, and `timed_out`/`as_outbound` keep agreeing with the text.
+#
+# `cause` is already `fe_text`-shaped ("<class>: <message>", or "<class>" when
+# the exception carried no message), so splitting at the first ": " recovers the
+# two halves and `fe_text` of the result is that string back, byte for byte.
+fn unwrap_execution(e: ForeignError) -> ForeignError =
+  match e.cause {
+    None -> e
+    Some(c) ->
+      match str.index_of(c, ": ") {
+        None -> ForeignError { kind: c, message: "", cause: None }
+        Some(i) ->
+          ForeignError {
+            kind: str.slice(c, 0, i),
+            message: str.slice(c, i + 2, str.len(c)),
+            cause: None,
+          }
+      }
+  }
 
 ## POST a raw Bytes body, sent verbatim via ofByteArray. For binary proxy upload:
 ## the assembled multipart body carries the file bytes exactly.
@@ -646,6 +746,107 @@ test "the timeout text and the timeout tag are one judgement, not two" {
   assert text_and_tag_agree(connect_timeout)
   assert text_and_tag_agree(refused)
   assert text_and_tag_agree(eof)
+}
+
+# Tests only: unwrap or fail loudly. `expect` is Option-shaped, and these want
+# the message when a setup step fails rather than a pattern match at every use.
+fn must[T](r: Result[T, String]) -> T !io =
+  match r {
+    Ok(v) -> v
+    Err(m) -> panic(m)
+  }
+
+test "started requests travel together, not one after another" {
+  # The point of the pair, and the only thing that can tell a real overlap from
+  # a start that secretly blocks: three peers that each stall for the same
+  # second. Serial, that is three seconds; together, one. Asserting only "the
+  # bodies came back" passes for both, which is why the bound is on the clock.
+  let stall_ms = 1000
+  let (s1, p1) = stall_server(stall_ms, 200, "one")
+  let (s2, p2) = stall_server(stall_ms, 200, "two")
+  let (s3, p3) = stall_server(stall_ms, 200, "three")
+  let cl = new_client()
+
+  let t0 = System.currentTimeMillis()
+  let f1 = must(fetch_start(cl, "http://127.0.0.1:$p1/", []))
+  let f2 = must(fetch_start(cl, "http://127.0.0.1:$p2/", []))
+  let f3 = must(fetch_start(cl, "http://127.0.0.1:$p3/", []))
+  # starting must not be waiting: this is before any body has landed
+  let started_at = System.currentTimeMillis() - t0
+  let r1 = must(await_resp(f1))
+  let r2 = must(await_resp(f2))
+  let r3 = must(await_resp(f3))
+  let elapsed = System.currentTimeMillis() - t0
+  s1.stop(0)
+  s2.stop(0)
+  s3.stop(0)
+
+  assert r1.body == "one"
+  assert r2.body == "two"
+  assert r3.body == "three"
+  assert started_at < stall_ms
+  # one stall plus slack, and well under the two stalls the serial version
+  # cannot beat however fast the machine is
+  assert elapsed >= stall_ms
+  assert elapsed < stall_ms * 2
+}
+
+test "an async timeout reads exactly like a blocking one" {
+  # `Future.get` reports failures as ExecutionException, so without unwrapping
+  # the cause every async timeout would be classified as a plain upstream error
+  # and lose the budget from its text -- a 502 where the blocking path says 504.
+  let stall_ms = (MANAGEMENT_TIMEOUT_S + 5) * 1000
+  let (server, port) = stall_server(stall_ms, 200, "late")
+  let started = must(fetch_start(new_client(), "http://127.0.0.1:$port/", []))
+  let outcome = await_resp(started)
+  server.stop(0)
+  match outcome {
+    Ok(r) -> panic("a quiet peer must not answer: got ${to_string(r.status)}")
+    Err(m) -> {
+      assert m == "outbound HTTP timed out after ${to_string(MANAGEMENT_TIMEOUT_S)}s: java.net.http.HttpTimeoutException: request timed out"
+      # and the text and the tag are still one judgement, as for `fetch`
+      assert timed_out(m)
+      let tagged: Result[Unit, String] = as_outbound(Err(m))
+      match tagged {
+        Ok(_) -> { assert false }
+        Err(t) -> {
+          let (k, _text) = split_kind(t)
+          assert k == KTimeout
+        }
+      }
+    }
+  }
+}
+
+test "unwrap_execution recovers the fault the blocking path would have seen" {
+  # cause is fe_text-shaped, so the rebuild must render back to it byte for byte
+  let wrapped = ForeignError {
+    kind: "java.util.concurrent.ExecutionException",
+    message: "java.net.ConnectException: Connection refused",
+    cause: Some("java.net.ConnectException: Connection refused"),
+  }
+  assert fe_text(unwrap_execution(wrapped)) == "java.net.ConnectException: Connection refused"
+  assert deadline_text(10, unwrap_execution(wrapped)) == "java.net.ConnectException: Connection refused"
+
+  # a cause with no message of its own is all class name
+  let bare = ForeignError {
+    kind: "java.util.concurrent.ExecutionException",
+    message: "java.io.EOFException",
+    cause: Some("java.io.EOFException"),
+  }
+  assert fe_text(unwrap_execution(bare)) == "java.io.EOFException"
+
+  # a message containing ": " keeps every colon after the first
+  let chatty = ForeignError {
+    kind: "java.util.concurrent.ExecutionException",
+    message: "x",
+    cause: Some("java.io.IOException: read: connection reset"),
+  }
+  assert fe_text(unwrap_execution(chatty)) == "java.io.IOException: read: connection reset"
+
+  # nothing to unwrap (an interrupt, say) leaves the fault alone
+  let direct = ForeignError { kind: "java.lang.InterruptedException", message: "", cause: None }
+  assert fe_text(unwrap_execution(direct)) == "java.lang.InterruptedException"
 }
 
 test "fetch_stream carries a non-2xx status; ok_stream is false" {
