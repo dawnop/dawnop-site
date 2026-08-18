@@ -316,7 +316,7 @@ python3 backend-dawn/scripts/contract_run.py --only read
 # 同样的路径由 contract_qiniu.py 在假桶上钉住）。理由逐条写在 golden 的 skipped 里。
 # 不再需要 FastAPI 陪跑（脚本仍可 --base 指向它，golden 就是契约）。
 
-# ---- 变异体 harness（八个共 154 个变异体，CI 里分 18 个并行 job 跑）----
+# ---- 变异体 harness（八个共 155 个变异体，CI 里分 18 个并行 job 跑）----
 backend-dawn/scripts/fm-ancestor-contract/run.sh              # 全量，本地约 70 分钟
 backend-dawn/scripts/fm-ancestor-contract/run.sh --shard 0/9  # CI 跑的那一片，约 10 分钟
 backend-dawn/scripts/fm-ancestor-contract/run.sh --preflight-only  # 只验锚点，约 1 分钟
@@ -336,7 +336,7 @@ python3 backend-dawn/scripts/mutants_coverage.py --self-test
 
 - **CI**（`.github/workflows/ci.yml`，push main + PR 触发）：`secrets`（三道守卫 + shellcheck）、
   `backend`（Dawn 测试 + 打 jar 传 artifact + 四套 golden）、`mutants`（**18 个并行分片**，
-  跑八个变异体 harness 共 154 个变异体）、`mutants-complete`（断言各分片并集覆盖全矩阵）、
+  跑八个变异体 harness 共 155 个变异体）、`mutants-complete`（断言各分片并集覆盖全矩阵）、
   `python-backend`（**钉 Python 3.10**，对齐生产 + ruff）、`frontend`（lint/format/build）。
   任一红都别合。
   > **变异体矩阵是分片跑的，加变异体要顺手看一眼 job 数**。单个变异体约 52s（实测

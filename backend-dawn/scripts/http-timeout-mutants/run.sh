@@ -85,6 +85,7 @@ while IFS='|' read -r mutant owners; do
 done <"$MATRIX"
 
 expected_mutants=(
+  async-timeout-not-unwrapped
   client-per-call
   collapse-transfer-tier
   drop-deadline

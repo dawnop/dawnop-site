@@ -11,12 +11,24 @@
 # tell it from the real thing. `client-per-call` is its sibling for the shared
 # client: the source still has one builder expression, and only the peer's view
 # of the source port says whether the connection was reused.
+#
+# The started/awaited pair rides on the same two functions the blocking calls
+# do -- `request_for` puts the deadline on, `deadline_text` reads the fault back
+# -- so it is held by these same mutants rather than by rules of its own. That
+# is why "an async timeout reads exactly like a blocking one" is an owner of
+# every mutant that moves the deadline or the wording: it asserts that whole
+# chain end to end on the started path, which is what its name claims.
+# `async-timeout-not-unwrapped` is the one question the blocking path cannot be
+# asked. `Future.get` reports the fault wrapped in an ExecutionException, so the
+# started path can lose the timeout on the way out with the deadline, the
+# wording and the classifier all intact.
+async-timeout-not-unwrapped|an async timeout reads exactly like a blocking one
 client-per-call|one cell is one connection; a client built per call is not
 collapse-transfer-tier|the two deadlines say what they are for
-drop-deadline|a quiet peer hits the management deadline instead of blocking forever;;every request shape carries its deadline, whichever body handler it uses
+drop-deadline|a quiet peer hits the management deadline instead of blocking forever;;every request shape carries its deadline, whichever body handler it uses;;an async timeout reads exactly like a blocking one
 edge-times-out-as-502|FM mutation errors keep DB failures distinct from upstream failures;;a WebDAV client is told to retry a timeout, not to check its credentials
-inflate-deadline|a quiet peer hits the management deadline instead of blocking forever;;every request shape carries its deadline, whichever body handler it uses
-mute-timeout-text|a quiet peer hits the management deadline instead of blocking forever;;only a timeout is reworded; every other fault keeps its text;;a timeout is classified apart from a refusal, and keeps its wire text
-timeout-reads-as-upstream|a WebDAV client is told to retry a timeout, not to check its credentials;;a timeout is classified apart from a refusal, and keeps its wire text;;the timeout text and the timeout tag are one judgement, not two
+inflate-deadline|a quiet peer hits the management deadline instead of blocking forever;;every request shape carries its deadline, whichever body handler it uses;;an async timeout reads exactly like a blocking one
+mute-timeout-text|a quiet peer hits the management deadline instead of blocking forever;;only a timeout is reworded; every other fault keeps its text;;a timeout is classified apart from a refusal, and keeps its wire text;;an async timeout reads exactly like a blocking one
+timeout-reads-as-upstream|a WebDAV client is told to retry a timeout, not to check its credentials;;a timeout is classified apart from a refusal, and keeps its wire text;;the timeout text and the timeout tag are one judgement, not two;;an async timeout reads exactly like a blocking one
 timeout-tag-second-opinion|a WebDAV client is told to retry a timeout, not to check its credentials;;the timeout text and the timeout tag are one judgement, not two
 transfer-tier-on-management|a quiet peer hits the management deadline instead of blocking forever

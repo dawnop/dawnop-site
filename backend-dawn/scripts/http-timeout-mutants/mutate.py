@@ -3,9 +3,11 @@
 
 The harness started as the outbound-deadline negative control and now covers the
 rest of that module's outbound contract too: how a timeout is classified apart
-from a refusal, and whether the client is really shared. All three are things
-the source reads as already true -- there is a `.timeout(`, the message says
-"timed out", the function is called shared -- and only running proves.
+from a refusal, whether the client is really shared, and whether a request
+started with `sendAsync` is held to any of it. All four are things the source
+reads as already true -- there is a `.timeout(`, the message says "timed out",
+the function is called shared, the started path calls the same classifier --
+and only running proves.
 """
 
 import argparse
@@ -16,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutant_workdir import require_workdir  # noqa: E402
 
 MUTANTS = (
+    "async-timeout-not-unwrapped",
     "client-per-call",
     "collapse-transfer-tier",
     "drop-deadline",
@@ -76,6 +79,21 @@ def main() -> int:
             http,
             "pub fn timed_out(m: String) -> Bool = str.starts_with(m, TIMEOUT_PREFIX)\n",
             'pub fn timed_out(m: String) -> Bool = str.contains(m, "HttpTimeoutException")\n',
+        )
+    elif args.mutant == "async-timeout-not-unwrapped":
+        # The started path's own way of losing a timeout, and the only one the
+        # blocking path cannot have: `Future.get` reports every failure as an
+        # ExecutionException wrapping the real one, so handing the caught fault
+        # straight to `deadline_text` asks "is this a timeout" of the wrapper
+        # and is answered no for every timeout there is. Nothing in the source
+        # gives it away -- the request still carries its deadline, the wording
+        # and the classifier are the same ones the blocking path uses, and the
+        # only symptom is on the wire: a 502 whose text has lost the budget
+        # where the blocking path answers 504.
+        replace_once(
+            http,
+            "    Err(e) -> Err(deadline_text(box.budget_s, unwrap_execution(e)))\n",
+            "    Err(e) -> Err(deadline_text(box.budget_s, e))\n",
         )
     elif args.mutant == "edge-times-out-as-502":
         # One rule, both edges: a timeout collapses back into 502 on the wire.

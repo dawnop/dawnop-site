@@ -230,6 +230,14 @@ jobs:
   # nobody is waiting on. Growing it further does eventually cross that line —
   # re-measure before adding more.
   #
+  # http-timeout-mutants is unsharded too, with less headroom than that. Its 10
+  # mutants measured 10m01s locally on 2026-08-18, above the ~52s per mutant the
+  # sizing above assumes, and for a reason that will not improve: every mutant
+  # runs the whole suite, and this module's suite waits on peers that stall on
+  # purpose, so each run spends tens of seconds off-CPU proving a deadline fires
+  # at all. That is at the ~10 minute target rather than under it, so the next
+  # mutant added here wants a shard with it.
+  #
   # fail-fast is off on purpose: one red harness should not cancel the others,
   # or a run tells you about the first failure only and hides the rest.
   mutants:
