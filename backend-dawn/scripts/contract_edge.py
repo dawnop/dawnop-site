@@ -54,8 +54,14 @@ def req(base, method, path, headers=None, body=None, timeout=30):
     data = None
     hdrs = dict(headers or {})
     if body is not None:
-        data = json.dumps(body).encode()
-        hdrs["Content-Type"] = "application/json"
+        if isinstance(body, (bytes, bytearray)):
+            # raw wire bytes, exactly as given — the invalid-UTF-8 cases need a
+            # body that json.dumps could never produce
+            data = bytes(body)
+            hdrs.setdefault("Content-Type", "application/x-www-form-urlencoded")
+        else:
+            data = json.dumps(body).encode()
+            hdrs["Content-Type"] = "application/json"
     r = urllib.request.Request(url, data=data, method=method, headers=hdrs)
     try:
         with OPENER.open(r, timeout=timeout) as resp:
@@ -398,6 +404,18 @@ def build_cases(token, content_page_id):
     add("me.emptyScheme", "GET", "/api/auth/me", {"Authorization": "Bearer"})
     # (login is form-encoded, not JSON; the happy path is covered by contract_run
     #  logging in before any of this runs.)
+    # web4: Request.body is wire Bytes and the UTF-8 view is body_text, so a
+    # malformed body is a 400 naming the offset of the broken byte — never a
+    # silent U+FFFD rewrite (the old lossy decode read this exact request as a
+    # wrong password and answered 401).
+    add(
+        "login.badUtf8Body",
+        "POST",
+        "/api/auth/login",
+        None,
+        b"username=admin&password=\xff\xfe",
+        "reject",
+    )
     add("settings.noTok", "GET", "/api/settings")
     add("monitor.noTok", "GET", "/api/monitor")
     add("articles.admin.noTok", "GET", "/api/articles/admin")

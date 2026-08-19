@@ -594,6 +594,14 @@
     "detail": "无效或过期的凭证"
    }
   },
+  "login.badUtf8Body": {
+   "method": "POST",
+   "path": "/api/auth/login",
+   "status": 400,
+   "body": {
+    "detail": "request body is not valid UTF-8 (offset 24)"
+   }
+  },
   "settings.noTok": {
    "method": "GET",
    "path": "/api/settings",
