@@ -116,7 +116,8 @@ fn strip_trailing_crlf(b: Bytes) -> Bytes = {
 
 ## Parse one chunk (the bytes between two `--boundary` delimiters) into a Part.
 ## The preamble and the closing epilogue ("--" + CRLF) do not start with CRLF /
-## lack a name and return None. Headers are ASCII (decoded); content stays Bytes.
+## lack a name and return None. Headers must decode as UTF-8 (in practice
+## ASCII) or the part is refused; content stays Bytes.
 fn parse_part(chunk: Bytes) -> Option[Part] =
   if bytes.len(chunk) < 2 || bytes.slice(chunk, 0, 2) != crlf_b() {
     None
@@ -125,16 +126,23 @@ fn parse_part(chunk: Bytes) -> Option[Part] =
     match bytes.index_of(body, crlf2_b(), 0) { # headers | content on CRLFCRLF
       None -> None
       Some(hi) -> {
-        let headers = bytes.decode_utf8(bytes.slice(body, 0, hi))
-        let content = strip_trailing_crlf(bytes.slice(body, hi + 4, bytes.len(body)))
-        match disp_name(headers) {
-          None -> None
-          Some(name) -> Some(Part {
-            name: name,
-            filename: disp_filename(headers),
-            content_type: part_ctype(headers),
-            content: content,
-          })
+        # A header block that is not UTF-8 is refused like any other malformed
+        # part: a lossy decode would manufacture a name/filename the client
+        # never sent, and those strings end up in rows and qiniu requests.
+        match bytes.decode_utf8_checked(bytes.slice(body, 0, hi)) {
+          Err(_) -> None
+          Ok(headers) -> {
+            let content = strip_trailing_crlf(bytes.slice(body, hi + 4, bytes.len(body)))
+            match disp_name(headers) {
+              None -> None
+              Some(name) -> Some(Part {
+                name: name,
+                filename: disp_filename(headers),
+                content_type: part_ctype(headers),
+                content: content,
+              })
+            }
+          }
         }
       }
     }
@@ -171,7 +179,7 @@ test "parse a two-field multipart body (a text field and a file)" {
   assert len(parts) == 2
   match part_named(parts, "path") {
     Some(p) -> {
-      assert bytes.decode_utf8(p.content) == "qiniu://pics"
+      assert bytes.decode_utf8_lossy(p.content) == "qiniu://pics"
       assert p.filename == ""
     }
     None -> { assert false }
@@ -179,7 +187,7 @@ test "parse a two-field multipart body (a text field and a file)" {
   match part_named(parts, "file") {
     Some(p) -> {
       assert p.filename == "a.txt"
-      assert bytes.decode_utf8(p.content) == "hello"
+      assert bytes.decode_utf8_lossy(p.content) == "hello"
     }
     None -> { assert false }
   }
@@ -246,6 +254,16 @@ test "Content-Disposition is read case-insensitively too" {
   }
 }
 
+test "a part whose header block is not UTF-8 is refused, not decoded lossily" {
+  let nl = crlf()
+  let b = "BB"
+  let head = "--$b${nl}Content-Disposition: form-data; name=\"f"
+  let tail = "\"${nl}${nl}payload${nl}--$b--$nl"
+  # a lone 0xFF spliced into the header block (inside the field name)
+  let buf = bytes.put_bytes(bytes.put(bytes.put_bytes(bytes.buf(), bytes.utf8(head)), 0xFF), bytes.utf8(tail))
+  assert len(parse_multipart(bytes.freeze(buf), b)) == 0
+}
+
 test "boundary_of parses and unquotes" {
   assert boundary_of("multipart/form-data; boundary=----X") == Some("----X")
   assert boundary_of("multipart/form-data; boundary=\"a b\"") == Some("a b")
@@ -261,7 +279,7 @@ test "file content with embedded CRLF is preserved, only the trailing one droppe
     "Content-Disposition: form-data; name=\"file\"; filename=\"f\"${nl}${nl}$payload$nl" ++
     "--$b--$nl"
   match part_named(parse_multipart(bytes.utf8(body), b), "file") {
-    Some(p) -> { assert bytes.decode_utf8(p.content) == payload }
+    Some(p) -> { assert bytes.decode_utf8_lossy(p.content) == payload }
     None -> { assert false }
   }
 }

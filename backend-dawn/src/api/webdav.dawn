@@ -1072,12 +1072,18 @@ fn dav_auth(a: Auth, cell: TtlCell, req: Request) -> Option[Response] !io =
     }
   }
 
-fn b64_decode(s: String) -> String !io =
-  bytes.decode_utf8(Base64.getDecoder()!.decode(s)!)
-
-# base64-decode that turns malformed input into an Err instead of a panic
+# base64-decode to UTF-8 text; malformed base64 and non-UTF-8 payload bytes are
+# both an Err instead of a panic. The caller answers 401 either way: credentials
+# the admin could not have typed are refused, not patched up with U+FFFD.
 fn b64_decode_try(s: String) -> Result[String, String] !io =
-  catch_text(() => b64_decode(s))
+  match catch_text(() => Base64.getDecoder()!.decode(s)!) {
+    Err(e) -> Err(e)
+    Ok(raw) ->
+      match bytes.decode_utf8_checked(raw) {
+        Ok(t) -> Ok(t)
+        Err(u) -> Err("credentials are not UTF-8 (byte ${u.offset})")
+      }
+  }
 
 fn verify_cache(a: Auth, cell: TtlCell, user: String, pass: String, key: String) -> Option[Response] !io =
   match with_db(a.db.path, a.db.ext, c => check_basic(c, user, pass)) {

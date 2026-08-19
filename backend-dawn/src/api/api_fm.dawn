@@ -581,17 +581,24 @@ pub fn upload(a: Auth) -> Handler =
               let parts = parse_multipart(req.raw, b)
               match part_named(parts, "file") {
                 None -> Err(http_error(422, "missing file part"))
-                Some(fp) -> do_upload(a, upload_path_field(parts), fp)
+                Some(fp) -> do_upload(a, upload_path_field(parts)?, fp)
               }
             }
           }
       })
 
-# the `path` form field (target directory), decoded from the part's Bytes as UTF-8
-fn upload_path_field(parts: List[Part]) -> String !io =
+# The `path` form field (target directory), decoded from the part's Bytes as
+# UTF-8. Bytes that are not UTF-8 cannot name a directory the client meant, so
+# they are a 422 like the endpoint's other malformed-form errors, not a U+FFFD
+# path silently created under a mangled name.
+fn upload_path_field(parts: List[Part]) -> Result[String, HttpError] !io =
   match part_named(parts, "path") {
-    Some(pp) -> bytes.decode_utf8(pp.content)
-    None -> ""
+    Some(pp) ->
+      match bytes.decode_utf8_checked(pp.content) {
+        Ok(s) -> Ok(s)
+        Err(_) -> Err(http_error(422, "path field is not valid UTF-8"))
+      }
+    None -> Ok("")
   }
 
 fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpError] !io = {

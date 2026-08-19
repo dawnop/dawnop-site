@@ -491,7 +491,7 @@ test "fetch_stream hands back a readable upstream stream" {
       # the body is a live stream, not materialized up front; drain it here
       let raw = raw_response_stream(r.stream).readAllBytes()!
       close_stream(r.stream)
-      assert bytes.decode_utf8(raw) == "streamed:s"
+      assert bytes.decode_utf8_lossy(raw) == "streamed:s"
     }
     Err(m) -> panic("fetch_stream failed: $m")
   }

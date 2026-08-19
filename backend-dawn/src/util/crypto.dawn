@@ -47,13 +47,19 @@ pub fn b64url_encode(s: String) -> String !io =
 pub fn b64url_encode_nopad(s: String) -> String !io =
   bytes.to_base64_url(bytes.utf8(s))
 
-## Decode URL-safe base64 (padding optional) back to a UTF-8 string.
+## Decode URL-safe base64 (padding optional) back to a UTF-8 string. Both bad
+## base64 and payload bytes that are not UTF-8 refuse: the callers are JWT
+## segments, which must arrive intact or not at all, never patched with U+FFFD.
 pub fn b64url_decode(s: String) -> Result[String, String] !io =
-  catch_text(() => {
-    # Normalize optional padding before the JDK URL decoder.
-    let raw = Base64.getUrlDecoder()!.decode(pad4(s))!
-    bytes.decode_utf8(raw)
-  })
+  # Normalize optional padding before the JDK URL decoder.
+  match catch_text(() => Base64.getUrlDecoder()!.decode(pad4(s))!) {
+    Err(e) -> Err(e)
+    Ok(raw) ->
+      match bytes.decode_utf8_checked(raw) {
+        Ok(t) -> Ok(t)
+        Err(u) -> Err("payload is not UTF-8 (byte ${u.offset})")
+      }
+  }
 
 fn pad4(s: String) -> String =
   match str.len(s) - str.len(s) / 4 * 4 {
@@ -100,6 +106,11 @@ test "base64url round-trips, unpadded and multibyte" {
   match b64url_decode("!!!!") {
     Ok(_) -> { assert false }
     Err(m) -> { assert str.contains(m, "Exception") }
+  }
+  # valid base64 whose payload is not UTF-8 (a lone 0xFF) refuses too
+  match b64url_decode("_w") {
+    Ok(_) -> { assert false }
+    Err(m) -> { assert str.contains(m, "not UTF-8") }
   }
 }
 
