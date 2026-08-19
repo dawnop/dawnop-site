@@ -110,10 +110,10 @@ def main() -> int:
         replace_once(
             api_fm,
             "use web/types.{Request, Response, HttpError, Handler, http_error, "
-            "as_http, as_http_with, json_ok, query, redirect, header}\n",
+            "as_http, as_http_with, json_ok, query, redirect, header, body_text}\n",
             "use web/types.{Request, Response, HttpError, Handler, http_error, "
             "as_http, as_http_with, json_ok, query, redirect,\n"
-            "  streaming, header}\n",
+            "  streaming, header, body_text}\n",
         )
         append_once(
             api_fm,
