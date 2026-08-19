@@ -4,7 +4,7 @@
 use std/str
 use std/map
 use db/sql.{DbConn}
-use web/types.{Request, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text, raw, with_header, param_segs, query, query_int_bounded_with}
+use web/types.{Request, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text, raw, with_header, param_segs, query, query_int_bounded_with, body_text}
 use svc/export.{export_markdown, url_encode}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json}
@@ -73,7 +73,7 @@ pub fn create(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
       {
-        let m = as_http(body_obj(req.body), 422)?
+        let m = as_http(body_obj(body_text(req)?), 422)?
         if not has(m, "title") || str.trim(str_or(m, "title", "")) == "" {
           Err(http_error(422, "标题不能为空"))
         } else if over_len(str_or(m, "title", "")) || over_len(str_or(m, "slug", "")) {
@@ -112,7 +112,7 @@ pub fn update(a: Auth) -> Handler =
       match parse_int(param(req, "article_id")) {
         Some(id) ->
           {
-            let m = as_http(body_obj(req.body), 422)?
+            let m = as_http(body_obj(body_text(req)?), 422)?
             # PATCH validation mirrors ArticleUpdate: a present title must be
             # non-blank (min_length=1 + _clean_title), title/slug ≤255.
             if has(m, "title") && str.trim(str_or(m, "title", "")) == "" {

@@ -4,7 +4,7 @@
 use std/str
 use std/map
 use java "org.mindrot.jbcrypt.BCrypt"
-use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, header}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, header, body_text}
 # db/sql exports a `query` too, so web's is reached through the module name.
 use web/types as wtypes
 use web/router.{Route, route_get, route_post}
@@ -100,7 +100,7 @@ fn user_json(c: DbConn, username: String) -> Result[Option[Json], String] !io = 
 ## POST /api/auth/login — OAuth2 password form (username, password) → JWT.
 pub fn login(a: Auth) -> Handler =
   req => {
-    let form = parse_form(req.body)
+    let form = parse_form(body_text(req)?)
     # OAuth2PasswordRequestForm requires both fields: an absent username/password
     # is a 422 (a present-but-empty value proceeds to the 401 auth check).
     if not has_field(form, "username") || not has_field(form, "password") {

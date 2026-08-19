@@ -1,5 +1,5 @@
 # Inbound multipart/form-data parsing (M6.5 knife 1; M7 序4: over Bytes). The
-# request body arrives as first-class Bytes (Request.raw). Structure is located
+# request body arrives as first-class Bytes (Request.body). Structure is located
 # at the byte level (byte_index_of / byte_slice), each part's content is kept as
 # raw Bytes, and only the ASCII header block is decoded to a string for field
 # extraction.

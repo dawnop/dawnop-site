@@ -4,7 +4,7 @@
 use std/str
 use std/map
 use std/list
-use web/types.{Handler, http_error, as_http, opt_param_int, json_ok, json_response, text}
+use web/types.{Handler, http_error, as_http, opt_param_int, json_ok, json_response, text, body_text}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json, JArr, JInt}
 use db/sql.{DbConn, ColStr, bool_int, open, exec, query, scalar_int, first_str_or}
@@ -39,7 +39,7 @@ pub fn page_create(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
       {
-        let m = as_http(body_obj(req.body), 422)?
+        let m = as_http(body_obj(body_text(req)?), 422)?
         if str.trim(str_or(m, "title", "")) == "" {
           Err(http_error(422, "标题不能为空"))
         } else if page_over_len(str_or(m, "title", "")) || page_over_len(str_or(m, "slug", "")) {
@@ -87,7 +87,7 @@ pub fn page_update(a: Auth) -> Handler =
       match opt_param_int(req, "page_id") {
         Some(id) ->
           {
-            let m = as_http(body_obj(req.body), 422)?
+            let m = as_http(body_obj(body_text(req)?), 422)?
             # PageUpdate validation: present title non-blank, title/slug ≤255,
             # present type must be a valid Literal (checked before the builtin filter)
             if has(m, "title") && str.trim(str_or(m, "title", "")) == "" {
@@ -181,7 +181,7 @@ pub fn page_reorder(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
       {
-        let m = as_http(body_obj(req.body), 422)?
+        let m = as_http(body_obj(body_text(req)?), 422)?
         # ReorderRequest.ids is a required list[int]: absent / non-array / any
         # non-integer element is a 422 in FastAPI (not a silently-empty reorder).
         match strict_int_list(m, "ids") {

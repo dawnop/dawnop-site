@@ -845,7 +845,7 @@ fn dest_rel(req: Request) -> Result[Option[String], HttpError] !io =
 # while mutating the tree makes a request appear accepted when part of it was
 # discarded, so fail closed before any write.
 fn reject_move_copy_body(req: Request) -> Result[Unit, HttpError] =
-  if bytes.len(req.raw) == 0 {
+  if bytes.len(req.body) == 0 {
     Ok(())
   } else {
     Err(http_error(415, "MOVE/COPY 不支持请求体"))
@@ -1129,7 +1129,9 @@ pub fn dav_routes(a: Auth, cell: TtlCell) -> List[Route] = {
   # no-cors: WebDAV is not browser traffic — skip the CORS middleware entirely.
   # stream-body: PUT only — the server spills the body to a temp file instead of
   # reading it into memory, and put() uploads straight from that path. The other
-  # verbs carry small XML bodies (PROPFIND/LOCK) that handlers read from `body`.
+  # verbs carry at most small XML bodies (PROPFIND/LOCK) that no handler reads:
+  # PROPFIND answers the allprop set regardless and LOCK always grants its fake
+  # lock, so those bodies are accepted and ignored.
   map(verbs, v => tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, cell, v)),
     if v == "PUT" { ["raw-body", "no-cors", "stream-body"] } else { ["raw-body", "no-cors"] }))
 }
@@ -1140,7 +1142,7 @@ fn rest_req(segs: List[String]) -> Request =
     method: "GET", path: "/dav", raw_path: "/dav",
     params: map.from([("rest", segs)]),
     query: map.empty(), headers: map.empty(),
-    body: "", raw: bytes.utf8(""), body_file: None, route: None,
+    body: bytes.utf8(""), body_file: None, route: None,
   }
 
 test "dav_rel joins the tail segments and refuses one holding a slash" {
@@ -1169,7 +1171,7 @@ fn dest_req_at(dest: String, host: String, prefix: String) -> Request =
       ("host", [host]),
       ("x-dav-prefix", [prefix]),
     ]),
-    body: "", raw: bytes.utf8(""), body_file: None, route: None,
+    body: bytes.utf8(""), body_file: None, route: None,
   }
 
 fn dest_req(dest: String) -> Request = dest_req_at(dest, "dav.example", "/dav")
@@ -1185,7 +1187,7 @@ fn dest_req_hosts(dest: String, hosts: List[String]) -> Request =
       ("host", hosts),
       ("x-dav-prefix", ["/dav"]),
     ]),
-    body: "", raw: bytes.utf8(""), body_file: None, route: None,
+    body: bytes.utf8(""), body_file: None, route: None,
   }
 
 fn protocol_req(method: String, header_name: String, header_value: String, body: String) -> Request =
@@ -1194,7 +1196,7 @@ fn protocol_req(method: String, header_name: String, header_value: String, body:
     params: map.from([("rest", ["source"])]),
     query: map.empty(),
     headers: if header_name == "" { map.empty() } else { map.from([(header_name, [header_value])]) },
-    body: body, raw: bytes.utf8(body), body_file: None, route: None,
+    body: bytes.utf8(body), body_file: None, route: None,
   }
 
 fn dest_error(r: Result[Option[String], HttpError], message: String) -> Bool =
@@ -1410,7 +1412,7 @@ fn depth_req(values: List[String]) -> Request =
     params: map.from([("rest", ["source"])]),
     query: map.empty(),
     headers: if len(values) == 0 { map.empty() } else { map.from([("depth", values)]) },
-    body: "", raw: bytes.utf8(""), body_file: None, route: None,
+    body: bytes.utf8(""), body_file: None, route: None,
   }
 
 fn depth_error_status(r: Result[String, HttpError], status: Int) -> Bool =

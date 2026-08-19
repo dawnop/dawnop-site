@@ -1,7 +1,7 @@
 # Tag admin (M6 knife 9, split out of api_admin2 2026-07-19): admin listing with
 # draft counts, rename (slug follows the name), merge, cleanup, delete.
 use db/sql.{DbConn}
-use web/types.{Handler, http_error, as_http, opt_param_int, json_ok, text}
+use web/types.{Handler, http_error, as_http, opt_param_int, json_ok, text, body_text}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json, JArr}
 use util/jsonx.{obj, jint}
@@ -24,7 +24,7 @@ pub fn tag_rename(a: Auth) -> Handler =
       match opt_param_int(req, "tag_id") {
         Some(id) ->
           {
-            let m = as_http(body_obj(req.body), 422)?
+            let m = as_http(body_obj(body_text(req)?), 422)?
             # TagUpdate.name is a required str: absent or explicit null → 422
             # (a present blank string is the handler's own 400, below).
             match opt_str(m, "name") {
@@ -54,7 +54,7 @@ pub fn tag_merge(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
       {
-        let m = as_http(body_obj(req.body), 422)?
+        let m = as_http(body_obj(body_text(req)?), 422)?
         let sid = opt_int(m, "source_id")
         let tid = opt_int(m, "target_id")
         match (sid, tid) {

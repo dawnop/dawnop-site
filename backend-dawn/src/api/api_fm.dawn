@@ -5,7 +5,7 @@ use std/str
 use std/bytes
 use std/map
 use db/sql.{DbConn}
-use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, query, redirect, header}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, query, redirect, header, body_text}
 use util/multipart.{Part, boundary_of, parse_multipart, part_named}
 use util/http.{fetch_stream, ok_stream, stream_response, close_stream, as_outbound}
 use web/router.{Route, route_get, route_post, tagged}
@@ -46,7 +46,7 @@ pub fn create_folder(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
       {
-        let m = as_http(body_obj(req.body), 422)?
+        let m = as_http(body_obj(body_text(req)?), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let name = fm_split(str_or(m, "name", ""))
         if name == "" {
@@ -66,7 +66,7 @@ pub fn rename(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
       {
-        let m = as_http(body_obj(req.body), 422)?
+        let m = as_http(body_obj(body_text(req)?), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let old = fm_split(str_or(m, "item", ""))
         let new_name = str_or(m, "name", "")
@@ -107,7 +107,7 @@ pub fn move(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
       {
-        let m = as_http(body_obj(req.body), 422)?
+        let m = as_http(body_obj(body_text(req)?), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let dest = fm_split(str_or(m, "destination", ""))
         let sources = str_list(m, "sources")
@@ -363,7 +363,7 @@ fn url_q(s: String) -> String = pct_encode(s)
 pub fn upload_token_ep(a: Auth) -> Handler =
   req =>
   guarded(a, req, () => {
-    let m = as_http(body_obj(req.body), 422)?
+    let m = as_http(body_obj(body_text(req)?), 422)?
     let raw_name = str_or(m, "name", "")
     let rel = token_rel(str_or(m, "path", ""), raw_name)
     # the token is minted for a path /register will later be handed back, so the
@@ -409,7 +409,7 @@ pub fn delete(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
       {
-        let m = as_http(body_obj(req.body), 422)?
+        let m = as_http(body_obj(body_text(req)?), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let items = item_paths(m)
         let deleted = as_http_with(with_db(a.db.path, a.db.ext, c => do_delete(a.qiniu, a.http, c, items, 0, [])), mutation_failure)?
@@ -422,7 +422,7 @@ pub fn create_file(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
       {
-        let m = as_http(body_obj(req.body), 422)?
+        let m = as_http(body_obj(body_text(req)?), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let name = fm_split(str_or(m, "name", ""))
         if name == "" {
@@ -444,7 +444,7 @@ pub fn save(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
       {
-        let m = as_http(body_obj(req.body), 422)?
+        let m = as_http(body_obj(body_text(req)?), 422)?
         let rel = fm_split(str_or(m, "path", ""))
         let content = str_or(m, "content", "")
         if rel == "" {
@@ -461,7 +461,7 @@ pub fn copy(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
       {
-        let m = as_http(body_obj(req.body), 422)?
+        let m = as_http(body_obj(body_text(req)?), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let dest = fm_split(str_or(m, "destination", ""))
         let sources = str_list(m, "sources")
@@ -476,7 +476,7 @@ pub fn register(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
       {
-        let m = as_http(body_obj(req.body), 422)?
+        let m = as_http(body_obj(body_text(req)?), 422)?
         let rel = fm_split(str_or(m, "path", ""))
         let key = str_or(m, "key", "")
         if rel == "" || key == "" {
@@ -567,7 +567,7 @@ pub fn fm_search(a: Auth) -> Handler =
 ## POST /api/fm/upload — multipart proxy upload (M6.5). Backup path for non-browser
 ## clients; the web app direct-uploads (upload-token + register). The file bytes
 ## ride through the backend (qiniu won't accept a client PUT), recovered byte-exact
-## from the raw request Bytes (Request.raw) via the multipart parser, then
+## from the raw request Bytes (Request.body) via the multipart parser, then
 ## re-POSTed to qiniu. Matches FastAPI: form field `path` (target dir) + file part.
 pub fn upload(a: Auth) -> Handler =
   req =>
@@ -578,7 +578,7 @@ pub fn upload(a: Auth) -> Handler =
           match boundary_of(ct) {
             None -> Err(http_error(422, "missing multipart boundary"))
             Some(b) -> {
-              let parts = parse_multipart(req.raw, b)
+              let parts = parse_multipart(req.body, b)
               match part_named(parts, "file") {
                 None -> Err(http_error(422, "missing file part"))
                 Some(fp) -> do_upload(a, upload_path_field(parts)?, fp)

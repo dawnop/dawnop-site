@@ -3,7 +3,7 @@
 # source, the compiled output and the style, keyed by a slug.
 use std/str
 use db/sql.{DbConn, ColStr, open, exec, query, scalar_int, first_str_or}
-use web/types.{HttpError, Handler, http_error, as_http, as_http_with, opt_param_int, json_ok, json_response, text}
+use web/types.{HttpError, Handler, http_error, as_http, as_http_with, opt_param_int, json_ok, json_response, text, body_text}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json, JArr}
 use db/db.{with_db}
@@ -37,7 +37,7 @@ pub fn viz_create(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
       {
-        let m = as_http(body_obj(req.body), 422)?
+        let m = as_http(body_obj(body_text(req)?), 422)?
         {
           # _clean_slug lowercases+trims before the regex; slug carries max_length=255.
           let slug = str.to_lower(str.trim(str_or(m, "slug", "")))
@@ -80,7 +80,7 @@ pub fn viz_update(a: Auth) -> Handler =
       match opt_param_int(req, "viz_id") {
         Some(id) ->
           {
-            let m = as_http(body_obj(req.body), 422)?
+            let m = as_http(body_obj(body_text(req)?), 422)?
             match as_http_with(with_db(a.db.path, a.db.ext, c => viz_update_read(c, id, m)), classify_viz)? {
               Some(j) -> Ok(json_ok(j))
               None -> Err(http_error(404, "组件不存在"))

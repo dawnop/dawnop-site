@@ -3,7 +3,7 @@
 # any of them, so an invalid key persists nothing.
 use std/map
 use db/sql.{DbConn}
-use web/types.{Handler, as_http, json_ok}
+use web/types.{Handler, as_http, json_ok, body_text}
 use web/router.{Route, route_get, route_put}
 use json/value.{Json, JInt}
 use db/db.{with_db}
@@ -22,7 +22,7 @@ pub fn put_settings(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
       {
-        let m = as_http(body_obj(req.body), 422)?
+        let m = as_http(body_obj(body_text(req)?), 422)?
         Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, c => write_settings(c, m, a.storage_quota)), 400)?))
       })
 
