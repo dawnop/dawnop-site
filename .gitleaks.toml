@@ -18,3 +18,9 @@ paths = [
   '''.*/\.venv/.*''',
   '''frontend/dist/.*''',
 ]
+# util/jwt.dawn 测试里逐字节钉住的 HS256 期望 token：签名密钥就是写在断言旁边的
+# 字面量 "s3cret"，claims 是 {sub: admin, exp: 1551116665}（2019 年的定格时钟），
+# 不是任何真实凭证。只豁免这一个字面量、不豁免文件——换一个 token 贴进来照样红。
+regexes = [
+  '''eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiJhZG1pbiIsImV4cCI6MTU1MTExNjY2NX0\.IPjHcjqGI7K-Bs98EqK9q7-oD29AjBX2ulMcyn051NA''',
+]
