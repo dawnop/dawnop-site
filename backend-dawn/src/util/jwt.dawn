@@ -5,14 +5,14 @@
 use std/str
 use std/map
 use util/crypto.{hmac_sha256_b64url_nopad, b64url_encode_nopad, b64url_decode, eq_const}
-use util/ttl.{now_s}
+use util/clock.{Clock, now_s}
 use json/value.{JObj, JNum, JInt, JStr}
 use util/jsonread.{parse_text}
 
 const HEADER_JSON: String = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}"
 
 ## Sign a token for `sub` valid for `exp_minutes`.
-pub fn sign(secret: String, sub: String, exp_minutes: Int) -> String !io = {
+pub fn sign(secret: String, sub: String, exp_minutes: Int) -> String !Clock !io = {
   let head = b64url_encode_nopad(HEADER_JSON)
   let exp = now_s() + exp_minutes * 60
   let payload = b64url_encode_nopad("{\"sub\":\"$sub\",\"exp\":$exp}")
@@ -22,7 +22,7 @@ pub fn sign(secret: String, sub: String, exp_minutes: Int) -> String !io = {
 }
 
 ## Verify a token's signature and expiry; Ok carries the subject.
-pub fn verify(secret: String, token: String) -> Result[String, String] !io = {
+pub fn verify(secret: String, token: String) -> Result[String, String] !Clock !io = {
   let parts = str.split(token, ".")
   if len(parts) != 3 {
     Err("malformed token")
@@ -38,7 +38,7 @@ pub fn verify(secret: String, token: String) -> Result[String, String] !io = {
   }
 }
 
-fn claims_of(payload_json: String) -> Result[String, String] !io = {
+fn claims_of(payload_json: String) -> Result[String, String] !Clock !io = {
   let j = parse_text(payload_json)?
   match j {
     JObj(m) -> {
@@ -60,21 +60,65 @@ fn claims_of(payload_json: String) -> Result[String, String] !io = {
   }
 }
 
+# These run against a frozen Clock (util/clock): the production handler is
+# installed in svc/auth, so the tests are free to install a different one. The
+# expiry tests below could not be written at all against the machine clock —
+# "-1 minutes" was the only reachable way to make a token expire.
+
+# 1551113065000ms is 2019-02-25T02:04:25Z.
+const FROZEN_MS: Int = 1551113065000
+
+test "the issued token is byte-for-byte the RFC 7515 construction" {
+  # Not recorded from this code: computed by an independent Python
+  # implementation of HS256 JWS, first checked against RFC 7515 A.1's worked
+  # example. exp = 1551113065 + 60*60 = 1551116665. The whole point of pinning
+  # the bytes is that PyJWT and the frozen FastAPI backend must accept them.
+  with handle Clock { now_ms() => FROZEN_MS }
+  assert sign("s3cret", "admin", 60) ==
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbiIsImV4cCI6MTU1MTExNjY2NX0.IPjHcjqGI7K-Bs98EqK9q7-oD29AjBX2ulMcyn051NA"
+}
+
 test "sign then verify round-trips the subject" {
+  with handle Clock { now_ms() => FROZEN_MS }
   let tok = sign("secret", "admin", 60)
   assert verify("secret", tok) == Ok("admin")
 }
 
 test "a tampered signature is rejected" {
+  with handle Clock { now_ms() => FROZEN_MS }
   let tok = sign("secret", "admin", 60)
   assert verify("wrong-secret", tok) == Err("bad signature")
 }
 
+test "expiry is decided by the verifier's clock, not the issuer's" {
+  # Two handlers, one token: issue at the frozen instant, then verify from an
+  # hour and a second later. This is the check that actually protects the
+  # backend, and without a Clock effect there was no way to run it.
+  let tok = {
+    with handle Clock { now_ms() => FROZEN_MS }
+    sign("secret", "admin", 60)
+  }
+  let at = (ms: Int) => {
+    with handle Clock { now_ms() => ms }
+    verify("secret", tok)
+  }
+  assert at(FROZEN_MS) == Ok("admin")
+  # exp is FROZEN + 3600s; the comparison is `now < exp`, so the last good
+  # second is exp-1 and exp itself is already expired
+  assert at(FROZEN_MS + 3599000) == Ok("admin")
+  assert at(FROZEN_MS + 3600000) == Err("token expired")
+  assert at(FROZEN_MS + 86400000) == Err("token expired")
+  # a clock behind the issuer's still accepts: only `now < exp` is checked
+  assert at(FROZEN_MS - 86400000) == Ok("admin")
+}
+
 test "an expired token is rejected" {
+  with handle Clock { now_ms() => FROZEN_MS }
   let tok = sign("secret", "admin", -1)
   assert verify("secret", tok) == Err("token expired")
 }
 
 test "malformed tokens are rejected" {
+  with handle Clock { now_ms() => FROZEN_MS }
   assert verify("secret", "not-a-jwt") == Err("malformed token")
 }

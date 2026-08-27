@@ -14,6 +14,7 @@ use util/jsonx.{obj, jint, jstr, jdatetime}
 use db/db.{Db, with_db}
 use db/sql.{DbConn, PStr, ColInt, ColStr, query, int_at, str_at, first_str, first_map}
 use util/jwt.{sign, verify}
+use util/clock.{Clock, system_ms}
 use util/http.{HttpCell}
 
 ## App context passed to protected handlers: the db, the JWT secret and token
@@ -100,6 +101,11 @@ fn user_json(c: DbConn, username: String) -> Result[Option[Json], String] !io = 
 ## POST /api/auth/login — OAuth2 password form (username, password) → JWT.
 pub fn login(a: Auth) -> Handler =
   req => {
+    # the real clock for the `exp` this issues. It is installed here rather than
+    # anywhere further out because a Handler is a closure and closures do not
+    # carry handlers (util/clock explains); `with handle` inline rather than
+    # clock.with_system_clock so the `?`s below stay transparent.
+    with handle Clock { now_ms() => system_ms() }
     let form = parse_form(body_text(req)?)
     # OAuth2PasswordRequestForm requires both fields: an absent username/password
     # is a 422 (a present-but-empty value proceeds to the 401 auth check).
@@ -208,7 +214,11 @@ fn header_token(req: Request) -> String =
     None -> ""
   }
 
-fn auth_with(a: Auth, tok: String) -> Result[String, HttpError] !io =
+# The real clock for the `exp` check, installed here so that `current_user` and
+# everything above it keeps its row: this is the single place token expiry is
+# decided, and every protected route reaches it through a closure.
+fn auth_with(a: Auth, tok: String) -> Result[String, HttpError] !io = {
+  with handle Clock { now_ms() => system_ms() }
   if tok == "" {
     Err(http_error(401, "无效或过期的凭证"))
   } else {
@@ -217,6 +227,7 @@ fn auth_with(a: Auth, tok: String) -> Result[String, HttpError] !io =
       Err(_e) -> Err(http_error(401, "无效或过期的凭证"))
     }
   }
+}
 
 fn query_token(req: Request) -> Option[String] = wtypes.query(req, "token")
 
