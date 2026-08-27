@@ -1,0 +1,15 @@
+# The qiniu Kodo credentials and endpoints every call in this directory signs
+# with. It lives here rather than next to the Auth record that carries it
+# because it is this module's configuration: qiniu/sign, qiniu/rs and
+# qiniu/stats all take one, and none of them needs anything else from svc.
+
+## Qiniu Kodo config for fm signing.
+##
+## `rs_host` / `up_host` are the management and upload endpoints qiniu/rs talks
+## to. They are configuration rather than constants for one reason: it is the
+## only seam at which a contract run can hold the object-store paths (COPY of a
+## subtree, PUT, DELETE of an object) to a golden without a live bucket — point
+## them, and QINIU_DOMAIN, at a local fake. main.dawn defaults them to the real
+## qiniu hosts, so an unconfigured deployment is byte-identical to before; no
+## code below this line knows whether it is talking to a fake.
+pub type Qiniu = { ak: String, sk: String, bucket: String, domain: String, expires: Int, rs_host: String, up_host: String }

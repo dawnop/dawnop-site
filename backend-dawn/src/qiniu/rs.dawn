@@ -13,31 +13,32 @@ use java "com.sun.net.httpserver.HttpServer"
 use java "java.net.InetSocketAddress"
 use util/http.{HttpResp, HttpCell, RequestBody, post, post_bytes, file_body, post_body, fetch, new_client}
 use util/paths.{FALLBACK_MIME, safe_persisted_mime}
+use qiniu/creds.{Qiniu}
 use qiniu/sign.{entry_uri, entry_token, management_token, upload_token}
 
 const BOUNDARY: String = "----DawnFmBoundary7MA4YWxkTrZu0gW"
 
-# The endpoints arrive as a parameter (`Qiniu.rs_host` / `Qiniu.up_host`, from
-# main.dawn's config with the real qiniu hosts as defaults) rather than as the
-# constants they used to be. Signing does not depend on the host — the QBox
-# signature covers the path only — so redirecting these at a local fake exercises
-# this file's real request shaping, which is the whole point: the contract
-# harness holds copy/upload/delete to a golden without a live bucket.
+# The endpoints are read off the credentials record (`Qiniu.rs_host` /
+# `Qiniu.up_host`, from main.dawn's config with the real qiniu hosts as defaults)
+# rather than being the constants they used to be. Signing does not depend on the
+# host — the QBox signature covers the path only — so redirecting these at a local
+# fake exercises this file's real request shaping, which is the whole point: the
+# contract harness holds copy/upload/delete to a golden without a live bucket.
 
 ## Upload TEXT content to a key via qiniu's multipart form API (save/create-file).
 ## `deadline` is the upload-token expiry (unix seconds).
-pub fn upload_text(cl: HttpCell, up_host: String, ak: String, sk: String, bucket: String, key: String, content: String, mime: String, deadline: Int) -> Result[Unit, String] !io =
-  upload_bytes(cl, up_host, ak, sk, bucket, key, bytes.utf8(content), mime, deadline)
+pub fn upload_text(cl: HttpCell, q: Qiniu, key: String, content: String, mime: String, deadline: Int) -> Result[Unit, String] !io =
+  upload_bytes(cl, q, key, bytes.utf8(content), mime, deadline)
 
 ## Upload BINARY content to a key via qiniu's multipart form API. `content` is the
 ## exact file Bytes; the multipart body is assembled as Bytes (ASCII framing +
 ## content ++ ASCII tail) and POSTed verbatim. The byte-exact path for
 ## /api/fm/upload (proxy upload) and for text uploads (which utf8 their content).
-pub fn upload_bytes(cl: HttpCell, up_host: String, ak: String, sk: String, bucket: String, key: String, content: Bytes, mime: String, deadline: Int) -> Result[Unit, String] !io = {
-  let token = upload_token(ak, sk, bucket, key, deadline)
+pub fn upload_bytes(cl: HttpCell, q: Qiniu, key: String, content: Bytes, mime: String, deadline: Int) -> Result[Unit, String] !io = {
+  let token = upload_token(q, key, deadline)
   let body = multipart(token, key, content, mime)
   let ct = "multipart/form-data; boundary=$BOUNDARY"
-  let r = post_bytes(cl, "$up_host/", [("Content-Type", ct)], body)?
+  let r = post_bytes(cl, "${q.up_host}/", [("Content-Type", ct)], body)?
   ok_status(r, "upload")
 }
 
@@ -88,11 +89,11 @@ fn mp_tail() -> String = {
 ## heap — that is what lets WebDAV PUT take a big file, where upload_bytes spikes
 ## to ~3x the file size (raw body + assembled body + publisher copy). concat sums
 ## its parts' lengths, giving the exact contentLength qiniu's form API requires.
-pub fn upload_file(cl: HttpCell, up_host: String, ak: String, sk: String, bucket: String, key: String, path: String, mime: String, deadline: Int) -> Result[Unit, String] !io = {
-  let token = upload_token(ak, sk, bucket, key, deadline)
+pub fn upload_file(cl: HttpCell, q: Qiniu, key: String, path: String, mime: String, deadline: Int) -> Result[Unit, String] !io = {
+  let token = upload_token(q, key, deadline)
   let body = upload_body(bytes.utf8(mp_head(token, key, mime)), path, bytes.utf8(mp_tail()))?
   let ct = "multipart/form-data; boundary=$BOUNDARY"
-  let r = post_body(cl, "$up_host/", [("Content-Type", ct)], body)?
+  let r = post_body(cl, "${q.up_host}/", [("Content-Type", ct)], body)?
   ok_status(r, "upload_file")
 }
 
@@ -102,31 +103,31 @@ fn upload_body(head: Bytes, src: String, tail: Bytes) -> Result[RequestBody, Str
     Ok(body) -> Ok(body)
   }
 
-fn hdr(ak: String, sk: String, op: String, entry: String) -> List[(String, String)] !io =
-  [("Authorization", entry_token(ak, sk, op, entry))]
+fn hdr(q: Qiniu, op: String, entry: String) -> List[(String, String)] !io =
+  [("Authorization", entry_token(q, op, entry))]
 
 ## stat an object; Ok(HttpResp) — status 200 with a JSON body when it exists,
 ## 612 when it does not. Transport failure is Err.
-pub fn stat(cl: HttpCell, rs_host: String, ak: String, sk: String, bucket: String, key: String) -> Result[HttpResp, String] !io = {
-  let entry = entry_uri(bucket, key)
-  fetch(cl, "$rs_host/stat/$entry", hdr(ak, sk, "stat", entry))
+pub fn stat(cl: HttpCell, q: Qiniu, key: String) -> Result[HttpResp, String] !io = {
+  let entry = entry_uri(q, key)
+  fetch(cl, "${q.rs_host}/stat/$entry", hdr(q, "stat", entry))
 }
 
 ## delete an object. Ok on 200; a missing object (612) is also Ok (idempotent).
-pub fn delete_obj(cl: HttpCell, rs_host: String, ak: String, sk: String, bucket: String, key: String) -> Result[Unit, String] !io = {
-  let entry = entry_uri(bucket, key)
-  let r = post(cl, "$rs_host/delete/$entry", hdr(ak, sk, "delete", entry), "")?
+pub fn delete_obj(cl: HttpCell, q: Qiniu, key: String) -> Result[Unit, String] !io = {
+  let entry = entry_uri(q, key)
+  let r = post(cl, "${q.rs_host}/delete/$entry", hdr(q, "delete", entry), "")?
   if r.status == 612 { Ok(()) } else { ok_status(r, "delete") }
 }
 
 ## copy src→dst within a bucket (force overwrite). The signed path spans both
 ## entries plus /force/true.
-pub fn copy_obj(cl: HttpCell, rs_host: String, ak: String, sk: String, bucket: String, src_key: String, dst_key: String) -> Result[Unit, String] !io = {
-  let src = entry_uri(bucket, src_key)
-  let dst = entry_uri(bucket, dst_key)
+pub fn copy_obj(cl: HttpCell, q: Qiniu, src_key: String, dst_key: String) -> Result[Unit, String] !io = {
+  let src = entry_uri(q, src_key)
+  let dst = entry_uri(q, dst_key)
   let path = "/copy/$src/$dst/force/true"
-  let auth = management_token(ak, sk, "$path\n")
-  let r = post(cl, "$rs_host$path", [("Authorization", auth)], "")?
+  let auth = management_token(q, "$path\n")
+  let r = post(cl, "${q.rs_host}$path", [("Authorization", auth)], "")?
   ok_status(r, "copy")
 }
 
@@ -171,13 +172,21 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
   out.close()
   let src_path = src.getPath()!
 
-  let ak = "test-ak"
-  let sk = "test-sk"
-  let bucket = "test-bucket"
+  # up_host is filled in once the stub server has a port; the upload token does
+  # not cover the host, so the expected body can be built before that.
+  let creds = Qiniu {
+    ak: "test-ak",
+    sk: "test-sk",
+    bucket: "test-bucket",
+    domain: "",
+    expires: 3600,
+    rs_host: "",
+    up_host: "",
+  }
   let key = "many-chunks.bin"
   let mime = "application/octet-stream"
   let deadline = 1234567890
-  let expected = multipart(upload_token(ak, sk, bucket, key, deadline), key, bytes.utf8(payload), mime)
+  let expected = multipart(upload_token(creds, key, deadline), key, bytes.utf8(payload), mime)
 
   # The server accepts only an exact body and exact Content-Length. A successful
   # upload therefore proves the public upload_file path kept both contracts.
@@ -197,8 +206,9 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
   })
   server.start()
   let port = server.getAddress()!.getPort()
+  let q = Qiniu { ..creds, up_host: "http://127.0.0.1:$port" }
 
-  match upload_file(new_client(), "http://127.0.0.1:$port", ak, sk, bucket, key, src_path, mime, deadline) {
+  match upload_file(new_client(), q, key, src_path, mime, deadline) {
     Err(m) -> panic("byte-exact upload failed: $m")
     Ok(_) -> ()
   }
@@ -206,7 +216,7 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
 
   # A transport error passes through post_body unchanged. upload_file must not
   # add its operation label to a failure that occurs after body construction.
-  match upload_file(new_client(), "http://127.0.0.1:$port", ak, sk, bucket, key, src_path, mime, deadline) {
+  match upload_file(new_client(), q, key, src_path, mime, deadline) {
     Ok(_) -> panic("a stopped server must refuse the upload")
     Err(m) -> {
       assert not str.starts_with(m, "upload_file: ")
@@ -221,8 +231,16 @@ test "a missing upload file keeps the upload_file error prefix" {
   let src = File.createTempFile("dawn-test-missing-", ".bin")!
   let path = src.getPath()!
   let _deleted = src.delete()
-  match upload_file(new_client(), "http://127.0.0.1:1", "ak", "sk", "bucket", "key", path,
-    "application/octet-stream", 1234567890) {
+  let q = Qiniu {
+    ak: "ak",
+    sk: "sk",
+    bucket: "bucket",
+    domain: "",
+    expires: 3600,
+    rs_host: "",
+    up_host: "http://127.0.0.1:1",
+  }
+  match upload_file(new_client(), q, "key", path, "application/octet-stream", 1234567890) {
     Ok(_) -> panic("a missing file must not produce a request body")
     Err(m) -> {
       assert str.starts_with(m, "upload_file: ")

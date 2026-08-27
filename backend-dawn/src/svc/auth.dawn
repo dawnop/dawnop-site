@@ -16,6 +16,7 @@ use db/sql.{DbConn, PStr, ColInt, ColStr, query, int_at, str_at, first_str, firs
 use util/jwt.{sign, verify}
 use util/clock.{Clock, system_ms}
 use util/http.{HttpCell}
+use qiniu/creds.{Qiniu}
 
 ## App context passed to protected handlers: the db, the JWT secret and token
 ## lifetime, the storage quota default (for settings), the qiniu credentials and
@@ -25,9 +26,9 @@ use util/http.{HttpCell}
 ## `http` is the one thing here that is not configuration: it is a live client
 ## main builds at startup, carried on this record because a shared connection
 ## pool has to be shared by someone and every outbound caller already holds an
-## Auth. See util/http.HttpCell. It stays out of `Qiniu` on purpose — that record
-## is .env values and nothing else, which is what lets the contract harness swap
-## its hosts for a fake without touching anything live.
+## Auth. See util/http.HttpCell. It stays out of `qiniu/creds.Qiniu` on purpose:
+## that record is .env values and nothing else, which is what lets the contract
+## harness swap its hosts for a fake without touching anything live.
 pub type Auth = {
   db: Db,
   secret: String,
@@ -36,17 +37,6 @@ pub type Auth = {
   qiniu: Qiniu,
   http: HttpCell,
 }
-
-## Qiniu Kodo config for fm signing.
-##
-## `rs_host` / `up_host` are the management and upload endpoints qiniu/rs talks
-## to. They are configuration rather than constants for one reason: it is the
-## only seam at which a contract run can hold the object-store paths (COPY of a
-## subtree, PUT, DELETE of an object) to a golden without a live bucket — point
-## them, and QINIU_DOMAIN, at a local fake. main.dawn defaults them to the real
-## qiniu hosts, so an unconfigured deployment is byte-identical to before; no
-## code below this line knows whether it is talking to a fake.
-pub type Qiniu = { ak: String, sk: String, bucket: String, domain: String, expires: Int, rs_host: String, up_host: String }
 
 # ---- user lookup ----
 

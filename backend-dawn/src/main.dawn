@@ -15,7 +15,8 @@ use api/api_pages
 use api/api_viz
 use api/api_fm
 use api/api_monitor.{MonCfg, mon_routes}
-use svc/auth.{Auth, Qiniu, routes}
+use svc/auth.{Auth, routes}
+use qiniu/creds.{Qiniu}
 use api/webdav.{dav_routes}
 use util/ttl.{new_cell}
 use util/http.{new_client}

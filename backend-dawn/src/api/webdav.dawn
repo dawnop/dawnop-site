@@ -460,7 +460,7 @@ fn put_do(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io
         None -> Err(http_error(500, "请求体未落盘"))
         Some(path) -> {
           let size = as_http(file_size(path), 500)?
-          match upload_file(a.http, a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, path, mime, now_s() + a.qiniu.expires) {
+          match upload_file(a.http, a.qiniu, key, path, mime, now_s() + a.qiniu.expires) {
             Ok(_) -> put_commit(a, rel, key, mime, size)
             Err(m) -> {
               let _gc = gc_unreferenced(a, Some(key))

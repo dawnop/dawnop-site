@@ -17,7 +17,8 @@ use std/str
 use std/map
 use std/bytes
 use db/sql.{DbConn, with_immediate_tx}
-use svc/auth.{Auth, Qiniu}
+use svc/auth.{Auth}
+use qiniu/creds.{Qiniu}
 use db/db.{with_db}
 use util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime, safe_persisted_mime, strip_slashes, strip_trailing_slash}
 use repo/repo_fm.{FileRow, ReplaceOutcome, MovePlan, CopiedRow, CopyTree, fs_data, taken, insert_folder, replace_file, replace_file_receipt, create_file_once, reparent_allow_missing, prepare_fm_move, commit_fm_moves, get_row, delete_subtrees, entry_json, key_referenced, key_pending, validate_fm_ancestors, validate_fm_file_target, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}
@@ -37,7 +38,7 @@ use json/value.{Json, JArr, JObj, JStr}
 ## fop, an `attname`); WebDAV passes "".
 pub fn signed_url(q: Qiniu, key: String, suffix: String) -> String !io = {
   let domain = strip_trailing_slash(q.domain)
-  private_url(q.ak, q.sk, "$domain/$key$suffix", now_s() + q.expires)
+  private_url(q, "$domain/$key$suffix", now_s() + q.expires)
 }
 
 ## Move `path` from under `src_root` to under `dst_root`, keeping the tail. Both
@@ -66,7 +67,7 @@ fn gc_unreferenced_on(q: Qiniu, cl: HttpCell, c: DbConn, candidate: Option[Strin
           if referenced || pending {
             Ok(())
           } else {
-            let _d: Result[Unit, String] = delete_obj(cl, q.rs_host, q.ak, q.sk, q.bucket, key)
+            let _d: Result[Unit, String] = delete_obj(cl, q, key)
             Ok(())
           }
         })
@@ -100,7 +101,7 @@ fn gc_copied_rows_unreferenced(a: Auth, rows: List[CopiedRow], i: Int) -> Unit !
 ## what makes copy (unlike rename/move) a real object-store operation.
 pub fn copy_object(q: Qiniu, cl: HttpCell, src_key: String) -> Result[String, String] !io = {
   let new_key = uuid_hex()
-  let _c = as_outbound(copy_obj(cl, q.rs_host, q.ak, q.sk, q.bucket, src_key, new_key))?
+  let _c = as_outbound(copy_obj(cl, q, src_key, new_key))?
   Ok(new_key)
 }
 
@@ -276,7 +277,7 @@ fn copy_tree_object_rows(q: Qiniu, cl: HttpCell, rows: List[CopiedRow], i: Int, 
 
 fn cleanup_fresh_key(q: Qiniu, cl: HttpCell, candidate: Option[String]) -> Unit !io = {
   let _d: Result[Unit, String] = match candidate {
-    Some(key) -> delete_obj(cl, q.rs_host, q.ak, q.sk, q.bucket, key)
+    Some(key) -> delete_obj(cl, q, key)
     None -> Ok(())
   }
   ()
@@ -379,7 +380,7 @@ pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json],
   } else {
     let mime = guess_mime(rel)
     let key = uuid_hex()
-    let _up = as_outbound(upload_text(a.http, a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, "", mime, now_s() + a.qiniu.expires))?
+    let _up = as_outbound(upload_text(a.http, a.qiniu, key, "", mime, now_s() + a.qiniu.expires))?
     match with_db(a.db.path, a.db.ext, c => create_file_db(c, rel, key, mime, cur)) {
       Ok(d) -> Ok(Some(d))
       Err(m) -> {
@@ -405,7 +406,7 @@ pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !i
   let existing = checked?
   let mime = save_mime(existing, rel)
   let new_key = save_key(rel)
-  let _up = as_outbound(upload_text(a.http, a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, new_key, content, mime, now_s() + a.qiniu.expires))?
+  let _up = as_outbound(upload_text(a.http, a.qiniu, new_key, content, mime, now_s() + a.qiniu.expires))?
   match with_db(a.db.path, a.db.ext, c => save_db(c, rel, new_key, mime, text_byte_size(content))) {
     Ok(outcome) -> {
       let _gc = gc_unreferenced(a, outcome.superseded_key)
@@ -446,7 +447,7 @@ pub fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int)
   let checked: Result[Unit, String] = with_db(a.db.path, a.db.ext, c => validate_effect_path(c, rel))
   let _v = checked?
   let key = upload_key()
-  let _up = as_outbound(upload_bytes(a.http, a.qiniu.up_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, content, mime, now_s() + a.qiniu.expires))?
+  let _up = as_outbound(upload_bytes(a.http, a.qiniu, key, content, mime, now_s() + a.qiniu.expires))?
   match with_db(a.db.path, a.db.ext, c => replace_upload(c, rel, key, mime, size)) {
     Ok(result) -> {
       let (uploaded, outcome) = result

@@ -10,6 +10,7 @@ use java "java.time.LocalDateTime"
 use java "java.time.ZoneId"
 use java "java.time.format.DateTimeFormatter"
 use util/http.{HttpCell, Pending, fetch_start, post_start, await_resp}
+use qiniu/creds.{Qiniu}
 use qiniu/sign.{qiniu_mac}
 use json/value.{Json, JNull, JNum, JInt, JStr, JArr, JObj}
 use json/render.{render}
@@ -34,16 +35,16 @@ const GB: Float = 1073741824.0
 ## the stack by the time the status comes back.
 pub type PendingQ = { p: Pending, fail: String }
 
-fn stat_start(cl: HttpCell, ak: String, sk: String, path_query: String) -> Result[PendingQ, String] !io = {
+fn stat_start(cl: HttpCell, q: Qiniu, path_query: String) -> Result[PendingQ, String] !io = {
   let ct = "application/x-www-form-urlencoded"
-  let auth = qiniu_mac(ak, sk, "GET", path_query, STAT_HOST, ct, "")
+  let auth = qiniu_mac(q, "GET", path_query, STAT_HOST, ct, "")
   let p = fetch_start(cl, "http://$STAT_HOST$path_query", [("Authorization", auth), ("Content-Type", ct)])?
   Ok(PendingQ { p: p, fail: "七牛统计失败 $path_query" })
 }
 
-fn mac_json_start(cl: HttpCell, ak: String, sk: String, method: String, host: String, path_query: String, body: String) -> Result[PendingQ, String] !io = {
+fn mac_json_start(cl: HttpCell, q: Qiniu, method: String, host: String, path_query: String, body: String) -> Result[PendingQ, String] !io = {
   let ct = "application/json"
-  let auth = qiniu_mac(ak, sk, method, path_query, host, ct, body)
+  let auth = qiniu_mac(q, method, path_query, host, ct, body)
   let headers = [("Authorization", auth), ("Content-Type", ct)]
   let url = "http://$host$path_query"
   let p = if method == "POST" { post_start(cl, url, headers, body)? } else { fetch_start(cl, url, headers)? }
@@ -69,9 +70,9 @@ fn day_range(days: Int) -> (String, String) !io = {
 ## Issue the `kodo_series` request. The day range is stamped here, so the reply
 ## must be read through the PendingQ this returns rather than by rebuilding the
 ## query later (a second `day_range` would name a different second).
-pub fn kodo_series_start(cl: HttpCell, ak: String, sk: String, bucket: String, what: String, days: Int) -> Result[PendingQ, String] !io = {
+pub fn kodo_series_start(cl: HttpCell, q: Qiniu, what: String, days: Int) -> Result[PendingQ, String] !io = {
   let (begin, end) = day_range(days)
-  stat_start(cl, ak, sk, "/v6/$what?bucket=$bucket&begin=$begin&end=$end&g=day")
+  stat_start(cl, q, "/v6/$what?bucket=${q.bucket}&begin=$begin&end=$end&g=day")
 }
 
 ## Read a started `kodo_series`: (times, datas).
@@ -81,22 +82,22 @@ pub fn kodo_series_finish(q: PendingQ) -> Result[(List[Int], List[Int]), String]
 }
 
 ## Storage bytes (space) or object count (count) by day. Returns (times, datas).
-pub fn kodo_series(cl: HttpCell, ak: String, sk: String, bucket: String, what: String, days: Int) -> Result[(List[Int], List[Int]), String] !io =
-  kodo_series_finish(kodo_series_start(cl, ak, sk, bucket, what, days)?)
+pub fn kodo_series(cl: HttpCell, q: Qiniu, what: String, days: Int) -> Result[(List[Int], List[Int]), String] !io =
+  kodo_series_finish(kodo_series_start(cl, q, what, days)?)
 
 ## Origin traffic (select=flow, bytes) or requests (select=hits) by day.
 ## blob_io answers a list [{time, values:{<select>: n}}], unlike space/count.
 ##
-## The query really does name its parameter `$bucket` — hence `\$bucket=$bucket`
-## below: an escaped literal `$`, then the interpolated value. The other
-## endpoints above spell the same parameter plain `bucket`.
-pub fn flow_series(cl: HttpCell, ak: String, sk: String, bucket: String, select: String, days: Int) -> Result[List[(String, Int)], String] !io =
-  flow_series_finish(flow_series_start(cl, ak, sk, bucket, select, days)?, select)
+## The query really does name its parameter `$bucket` — hence
+## `\$bucket=${q.bucket}` below: an escaped literal `$`, then the interpolated
+## value. The other endpoints above spell the same parameter plain `bucket`.
+pub fn flow_series(cl: HttpCell, q: Qiniu, select: String, days: Int) -> Result[List[(String, Int)], String] !io =
+  flow_series_finish(flow_series_start(cl, q, select, days)?, select)
 
 ## Issue the `flow_series` request.
-pub fn flow_series_start(cl: HttpCell, ak: String, sk: String, bucket: String, select: String, days: Int) -> Result[PendingQ, String] !io = {
+pub fn flow_series_start(cl: HttpCell, q: Qiniu, select: String, days: Int) -> Result[PendingQ, String] !io = {
   let (begin, end) = day_range(days)
-  stat_start(cl, ak, sk, "/v6/blob_io?\$bucket=$bucket&select=$select&begin=$begin&end=$end&g=day")
+  stat_start(cl, q, "/v6/blob_io?\$bucket=${q.bucket}&select=$select&begin=$begin&end=$end&g=day")
 }
 
 ## Read a started `flow_series`. `select` must be the one it was started with:
@@ -118,12 +119,12 @@ pub fn last_nonzero(datas: List[Int]) -> Int =
 # ---- CDN (fusion) ----
 
 ## All CDN domains on the account (the custom storage domain rides fusion CDN).
-pub fn cdn_domains(cl: HttpCell, ak: String, sk: String) -> Result[List[String], String] !io =
-  cdn_domains_finish(cdn_domains_start(cl, ak, sk)?)
+pub fn cdn_domains(cl: HttpCell, q: Qiniu) -> Result[List[String], String] !io =
+  cdn_domains_finish(cdn_domains_start(cl, q)?)
 
 ## Issue the CDN domain listing.
-pub fn cdn_domains_start(cl: HttpCell, ak: String, sk: String) -> Result[PendingQ, String] !io =
-  mac_json_start(cl, ak, sk, "GET", API_HOST, "/domain?limit=100", "")
+pub fn cdn_domains_start(cl: HttpCell, q: Qiniu) -> Result[PendingQ, String] !io =
+  mac_json_start(cl, q, "GET", API_HOST, "/domain?limit=100", "")
 
 ## Read a started CDN domain listing.
 pub fn cdn_domains_finish(q: PendingQ) -> Result[List[String], String] !io = {
@@ -140,12 +141,12 @@ pub fn cdn_domains_finish(q: PendingQ) -> Result[List[String], String] !io = {
 
 ## flux (bytes) or bandwidth (bps) by day, summed across domains and regions.
 ## Returns (times as unix seconds, totals). CDN buckets days in Beijing time.
-pub fn cdn_tune(cl: HttpCell, ak: String, sk: String, kind: String, days: Int, domains: List[String]) -> Result[(List[Int], List[Int]), String] !io =
-  cdn_tune_finish(cdn_tune_start(cl, ak, sk, kind, days, domains)?)
+pub fn cdn_tune(cl: HttpCell, q: Qiniu, kind: String, days: Int, domains: List[String]) -> Result[(List[Int], List[Int]), String] !io =
+  cdn_tune_finish(cdn_tune_start(cl, q, kind, days, domains)?)
 
 ## Issue a CDN tune query. No domains means no request: `None` stands for the
 ## empty answer `cdn_tune` returns without asking.
-pub fn cdn_tune_start(cl: HttpCell, ak: String, sk: String, kind: String, days: Int, domains: List[String]) -> Result[Option[PendingQ], String] !io =
+pub fn cdn_tune_start(cl: HttpCell, q: Qiniu, kind: String, days: Int, domains: List[String]) -> Result[Option[PendingQ], String] !io =
   if len(domains) == 0 {
     Ok(None)
   } else {
@@ -157,8 +158,8 @@ pub fn cdn_tune_start(cl: HttpCell, ak: String, sk: String, kind: String, days: 
       ("endDate", jstr(now.format(d)!)),
       ("granularity", jstr("day")),
     ]))
-    let q = mac_json_start(cl, ak, sk, "POST", FUSION_HOST, "/v2/tune/$kind", body)?
-    Ok(Some(q))
+    let started = mac_json_start(cl, q, "POST", FUSION_HOST, "/v2/tune/$kind", body)?
+    Ok(Some(started))
   }
 
 ## Read a started CDN tune query: (times as unix seconds, totals).
@@ -208,17 +209,17 @@ fn leaf_arrays(data: Json) -> List[List[Json]] = {
 ## CDN traffic pack + storage pack overview, shaped exactly like Python's
 ## respack_summary: {"cdn": {...}|null, "storage": {...}|null}. Callers wrap it
 ## in a TTL cache (the billing API is rate-limited and slow-moving).
-pub fn respack_summary(cl: HttpCell, ak: String, sk: String) -> Result[Json, String] !io =
-  respack_finish(respack_start(cl, ak, sk)?)
+pub fn respack_summary(cl: HttpCell, q: Qiniu) -> Result[Json, String] !io =
+  respack_finish(respack_start(cl, q)?)
 
 ## The two billing requests `respack_summary` reads. They do not depend on each
 ## other, so both go on the wire before either is read.
 pub type PendingRespack = { listing: PendingQ, overview: PendingQ }
 
 ## Issue both billing requests.
-pub fn respack_start(cl: HttpCell, ak: String, sk: String) -> Result[PendingRespack, String] !io = {
-  let listing = mac_json_start(cl, ak, sk, "GET", API_HOST, "/billing-api/v1/respack/list", "")?
-  let overview = mac_json_start(cl, ak, sk, "GET", API_HOST, "/billing-api/v1/respack/month-overview", "")?
+pub fn respack_start(cl: HttpCell, q: Qiniu) -> Result[PendingRespack, String] !io = {
+  let listing = mac_json_start(cl, q, "GET", API_HOST, "/billing-api/v1/respack/list", "")?
+  let overview = mac_json_start(cl, q, "GET", API_HOST, "/billing-api/v1/respack/month-overview", "")?
   Ok(PendingRespack { listing: listing, overview: overview })
 }
 

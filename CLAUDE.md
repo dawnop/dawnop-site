@@ -63,7 +63,7 @@ dawnop-site/
 │   │   ├── svc/                # 服务层：auth search export monitor files（文件树操作，api_fm 与 webdav 共用）
 │   │   ├── repo/               # 数据层：repo_article/page/tag/pagetag/viz/settings/fm/write
 │   │   ├── db/                 # db（每请求一连接）sql（JDBC 薄包装）
-│   │   ├── qiniu/              # 对象存储（丢前缀）：sign 签名 / rs 管理 REST / stats 用量统计
+│   │   ├── qiniu/              # 对象存储（丢前缀）：creds 凭据记录 / sign 签名 / rs 管理 REST / stats 用量统计
 │   │   ├── tencent/            # 腾讯云（丢前缀）：sign TC3 签名 / client v3 请求装配
 │   │   ├── util/               # crypto jwt ttl slugify multipart paths ferr errkind
 │   │   │                       #   http（出站 HTTP 客户端）jsonx/jsonread（构造 wire 形状 / 读请求体字段）

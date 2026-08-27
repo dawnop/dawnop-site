@@ -537,9 +537,9 @@ def main() -> int:
         )
         replace_once(
             fm_api,
-            "          let r = as_http_with(as_outbound(stat(a.http, a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key)), mutation_failure)?\n"
+            "          let r = as_http_with(as_outbound(stat(a.http, a.qiniu, key)), mutation_failure)?\n"
             "          if r.status == 200 {\n",
-            "          let r = as_http_with(as_outbound(stat(a.http, a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key)), mutation_failure)?\n"
+            "          let r = as_http_with(as_outbound(stat(a.http, a.qiniu, key)), mutation_failure)?\n"
             "          let _ancestors = as_http_with(with_db(a.db.path, a.db.ext, c => validate_fm_ancestors(c, rel)), conflict_or(500))?\n"
             "          if r.status == 200 {\n",
         )
@@ -739,7 +739,7 @@ def main() -> int:
             "          if referenced || pending {\n"
             "            Ok(())\n"
             "          } else {\n"
-            "            let _d: Result[Unit, String] = delete_obj(cl, q.rs_host, q.ak, q.sk, q.bucket, key)\n"
+            "            let _d: Result[Unit, String] = delete_obj(cl, q, key)\n"
             "            Ok(())\n"
             "          }\n"
             "        })\n"
@@ -759,7 +759,7 @@ def main() -> int:
             "        })\n"
             "        let deletable = checked?\n"
             "        if deletable {\n"
-            "          let _d: Result[Unit, String] = delete_obj(cl, q.rs_host, q.ak, q.sk, q.bucket, key)\n"
+            "          let _d: Result[Unit, String] = delete_obj(cl, q, key)\n"
             "          Ok(())\n"
             "        } else {\n"
             "          Ok(())\n"
@@ -845,7 +845,7 @@ def main() -> int:
             "    ()\n"
             "  } else {\n"
             "    let _d: Result[Unit, String] = match rows[i].key {\n"
-            "      Some(key) -> delete_obj(a.http, a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key)\n"
+            "      Some(key) -> delete_obj(a.http, a.qiniu, key)\n"
             "      None -> Ok(())\n"
             "    }\n"
             "    mutant_delete_objects(a, rows, i + 1)\n"
@@ -1229,8 +1229,8 @@ def main() -> int:
         # credential, and nothing on this backend's own paths can tell
         replace_once(
             fm_api,
-            "    let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_s() + a.qiniu.expires)\n",
-            "    let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_s() - a.qiniu.expires)\n",
+            "    let token = upload_token(a.qiniu, key, now_s() + a.qiniu.expires)\n",
+            "    let token = upload_token(a.qiniu, key, now_s() - a.qiniu.expires)\n",
         )
     # One mutant per write entry, each dropping only that entry's call to the
     # name guard. The guard itself is shared, so a mutant that broke the

@@ -16,7 +16,8 @@ use java "java.time.Instant"
 use java "java.time.LocalDateTime"
 use java "java.time.ZoneOffset"
 use java "java.time.format.DateTimeFormatter"
-use svc/auth.{Auth, Qiniu}
+use svc/auth.{Auth}
+use qiniu/creds.{Qiniu}
 use tencent/client
 use util/ttl.{TtlCell, cache_get, cache_put, new_cell, now_s}
 use util/clock.{Clock, system_ms}
@@ -499,10 +500,10 @@ pub fn qiniu_start(a: Auth, respack_cell: TtlCell) -> Option[QiniuPending] !io =
   } else {
     Some(QiniuPending {
       kodo: kodo_start(a),
-      domains: cdn_domains_start(a.http, a.qiniu.ak, a.qiniu.sk),
+      domains: cdn_domains_start(a.http, a.qiniu),
       respack: match cache_get(respack_cell, 300) {
         Some(_s) -> None
-        None -> Some(respack_start(a.http, a.qiniu.ak, a.qiniu.sk))
+        None -> Some(respack_start(a.http, a.qiniu))
       },
     })
   }
@@ -534,10 +535,10 @@ pub fn qiniu_block(a: Auth, respack_cell: TtlCell) -> Json !io =
   qiniu_collect(a, respack_cell, qiniu_start(a, respack_cell))
 
 fn kodo_start(a: Auth) -> Result[KodoPending, String] !io = {
-  let space = kodo_series_start(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "space", 30)?
-  let count = kodo_series_start(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "count", 30)?
-  let flow = flow_series_start(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "flow", 30)?
-  let hits = flow_series_start(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "hits", 30)?
+  let space = kodo_series_start(a.http, a.qiniu, "space", 30)?
+  let count = kodo_series_start(a.http, a.qiniu, "count", 30)?
+  let flow = flow_series_start(a.http, a.qiniu, "flow", 30)?
+  let hits = flow_series_start(a.http, a.qiniu, "hits", 30)?
   Ok(KodoPending { space: space, count: count, flow: flow, hits: hits })
 }
 
@@ -571,8 +572,8 @@ fn cdn_stats(a: Auth, started: Result[PendingQ, String]) -> Result[List[(String,
   # The tune queries name the domains, so these two cannot go out until the
   # listing lands. Issuing them together is what holds this group to two round
   # trips instead of three.
-  let flux = cdn_tune_start(a.http, a.qiniu.ak, a.qiniu.sk, "flux", 30, domains)?
-  let bandwidth = cdn_tune_start(a.http, a.qiniu.ak, a.qiniu.sk, "bandwidth", 30, domains)?
+  let flux = cdn_tune_start(a.http, a.qiniu, "flux", 30, domains)?
+  let bandwidth = cdn_tune_start(a.http, a.qiniu, "bandwidth", 30, domains)?
   let (ftimes, fvalues) = cdn_tune_finish(flux)?
   let (_btimes, bvalues) = cdn_tune_finish(bandwidth)?
   let peak = fold(bvalues, 0, (acc, v) => if v > acc { v } else { acc })
@@ -595,7 +596,7 @@ fn trend_int(times: List[Int], values: List[Int]) -> Json = {
 pub fn respack_cached(a: Auth, cell: TtlCell) -> Result[Json, String] !io = {
   let started = match cache_get(cell, 300) {
     Some(_s) -> None
-    None -> Some(respack_start(a.http, a.qiniu.ak, a.qiniu.sk))
+    None -> Some(respack_start(a.http, a.qiniu))
   }
   respack_collect(a, cell, started)
 }
@@ -610,7 +611,7 @@ fn respack_collect(a: Auth, cell: TtlCell, started: Option[Result[PendingRespack
     None ->
       match cache_get(cell, 300) {
         Some(s) -> parse_text(s)
-        None -> respack_summary(a.http, a.qiniu.ak, a.qiniu.sk)
+        None -> respack_summary(a.http, a.qiniu)
       }
     Some(r) -> {
       let j = respack_finish(r?)?

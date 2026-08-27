@@ -204,7 +204,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `web` — **dawn-lang 的 `packages/web`**（`[deps.web]` url+hash 依赖，vendored 副本已删）：`server`（HttpServer + G6 二进制响应体 + 流式）/`router`（tags/任意动词）/`types`/`middleware`（logging/cors/body-limit）。
 
 **鉴权（刀 7）**
-- `svc/auth.dawn` — `Auth`/`Qiniu` 配置类型、`current_user`（Bearer + `?token=`）、login/me；jBCrypt 校验（`$2b$→$2a$` 归一）。
+- `svc/auth.dawn` — `Auth` 配置类型、`current_user`（Bearer + `?token=`）、login/me；jBCrypt 校验（`$2b$→$2a$` 归一）。
   **Authorization 头的形状由 `scheme_param` 一处说了算**（Bearer 与 WebDAV 的 Basic 共用它）：
   在**第一个空格**处切开，scheme 大小写不敏感地比，其余部分**原样**取走。三条推论都与 FastAPI
   的 `get_authorization_scheme_param` 一致：没有空格就是「全是 scheme、没有凭据」，所以裸 token
@@ -297,6 +297,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `svc/files.dawn`：文件树操作层。①`api_fm` 与 `webdav` 共用的对象存储原语（`signed_url`、
   `copy_object`、引用感知 GC），只回 `Result` 或 best-effort 结果，不在本层映射 HTTP 状态；②`api_fm`
   自己的树遍历（rename/move/copy/delete/save/upload）。
+- `qiniu/creds.dawn` — `Qiniu` 凭据与端点记录（ak/sk/bucket/domain/expires/rs_host/up_host）。
+  sign/rs/stats 的函数整条收它，而不是收一排靠位置对齐的 ak/sk/bucket 标量。
 - `qiniu/sign.dawn` — 三类七牛签名：上传凭证、私有下载 URL、QBox 管理、QiniuMacAuth（统计/CDN/账单，含 body）。
 - `qiniu/rs.dawn` — 管理 REST：stat/delete/copy/upload_text/upload_bytes/upload_file。
 - `util/paths.dawn` / `repo/repo_fm.dawn` — 路径原语 / 虚拟树（path↔key，DirEntry 序列化）。

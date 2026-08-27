@@ -178,7 +178,7 @@ fn remote_space(a: Auth, cell: TtlCell) -> Json !io =
         Err(_m) -> JNull
       }
     None -> {
-      let j = match kodo_series(a.http, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, "space", 7) {
+      let j = match kodo_series(a.http, a.qiniu, "space", 7) {
         Ok(pair) -> {
           let (_times, datas) = pair
           let v = last_nonzero(datas)
@@ -372,7 +372,7 @@ pub fn upload_token_ep(a: Auth) -> Handler =
     let _p = as_http_with(with_db(a.db.path, a.db.ext, c => upload_token_preflight(c, rel)), conflict_or(500))?
     let e = ext(sanitize_name(raw_name))
     let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
-    let token = upload_token(a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key, now_s() + a.qiniu.expires)
+    let token = upload_token(a.qiniu, key, now_s() + a.qiniu.expires)
     let _x = as_http(with_db(a.db.path, a.db.ext, c => ledger(c, key, rel)), 500)?
     Ok(json_ok(obj([
       ("token", jstr(token)),
@@ -484,7 +484,7 @@ pub fn register(a: Auth) -> Handler =
         } else {
           let _n = require_admissible_names(rel)?
           let _preflight = as_http_with(register_preflight(a, rel, key), conflict_or(500))?
-          let r = as_http_with(as_outbound(stat(a.http, a.qiniu.rs_host, a.qiniu.ak, a.qiniu.sk, a.qiniu.bucket, key)), mutation_failure)?
+          let r = as_http_with(as_outbound(stat(a.http, a.qiniu, key)), mutation_failure)?
           if r.status == 200 {
             Ok(json_ok(as_http_with(register_row(a, rel, key, r.body, opt_int(m, "size"), str_or(m, "content_type", "")), conflict_or(500))?))
           } else {
