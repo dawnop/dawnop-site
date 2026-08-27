@@ -93,8 +93,12 @@ pub fn login(a: Auth) -> Handler =
   req => {
     # the real clock for the `exp` this issues. It is installed here rather than
     # anywhere further out because a Handler is a closure and closures do not
-    # carry handlers (util/clock explains); `with handle` inline rather than
-    # clock.with_system_clock so the `?`s below stay transparent.
+    # carry handlers (util/clock explains). Inline `with handle` rather than
+    # clock.with_system_clock is a readability choice, not a typing one: the
+    # wrapper form was tried on this handler and compiles, `?`s and all, because
+    # the body's type is the same concrete Result the handler returns. It costs
+    # a closure and a level of indentation over the whole body, which is the
+    # only reason the statement form stays.
     with handle Clock { now_ms() => system_ms() }
     let form = parse_form(body_text(req)?)
     # OAuth2PasswordRequestForm requires both fields: an absent username/password
