@@ -39,10 +39,11 @@ pub fn system_s() -> Int !io = system_ms() / 1000
 ## handler at millisecond resolution pins this exactly.
 pub fn now_s() -> Int !Clock = now_ms() / 1000
 
-## Run `body` against the real machine clock: the production handler. Where `?`
-## has to pass through the boundary, write `with handle Clock { now_ms() =>
-## system_ms() }` inline instead — that form is a statement in the caller's own
-## block, so `?` stays transparent.
+## Run `body` against the real machine clock. The production sites all install
+## the same handler inline (`with handle Clock { now_ms() => system_ms() }`),
+## but that is a readability choice, not a typing one: the wrapper compiles
+## with `?` in the body too when the body's type is a concrete Result, which
+## was tried on svc/auth.login against the full suite.
 pub fn with_system_clock[T](body: fn() -> T !Clock !io) -> T !io = {
   with handle Clock { now_ms() => system_ms() }
   body()
