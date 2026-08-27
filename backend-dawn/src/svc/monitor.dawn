@@ -19,6 +19,7 @@ use java "java.time.format.DateTimeFormatter"
 use svc/auth.{Auth, Qiniu}
 use tencent/client
 use util/ttl.{TtlCell, cache_get, cache_put, new_cell, now_s}
+use util/clock.{Clock, system_ms}
 use qiniu/stats.{field, int_of, last_nonzero, PendingQ, PendingRespack, kodo_series_start, kodo_series_finish, flow_series_start, flow_series_finish, cdn_domains_start, cdn_domains_finish, cdn_tune_start, cdn_tune_finish, respack_start, respack_finish, respack_summary}
 use tencent/client.{PendingTc}
 use util/http.{HttpCell, Pending, fetch, new_client, fetch_start, await_resp}
@@ -322,7 +323,14 @@ pub type LighthousePending = {
 
 ## Issue lighthouse's three requests. None when it is not configured -- that
 ## block is a constant and asks nothing of the network.
-pub fn lighthouse_start(cl: HttpCell, secret_id: String, secret_key: String, region: String, instance: String) -> Option[LighthousePending] !io =
+##
+## This is where the real clock is installed for everything TC3: the three
+## signatures below are stamped with the second this runs in. It is the
+## outermost function that owns a complete unit of Tencent work, and stopping
+## here is what keeps `!Clock` out of api_monitor and off every route closure
+## (a route closure cannot carry it at all -- see util/clock).
+pub fn lighthouse_start(cl: HttpCell, secret_id: String, secret_key: String, region: String, instance: String) -> Option[LighthousePending] !io = {
+  with handle Clock { now_ms() => system_ms() }
   if secret_id == "" || secret_key == "" {
     None
   } else {
@@ -332,6 +340,7 @@ pub fn lighthouse_start(cl: HttpCell, secret_id: String, secret_key: String, reg
       trend: cpu_trend_start(cl, secret_id, secret_key, region, instance),
     })
   }
+}
 
 ## Read what `lighthouse_start` issued.
 pub fn lighthouse_collect(started: Option[LighthousePending]) -> Json !io =
@@ -375,7 +384,7 @@ fn jstr_plain(j: Json) -> String =
     _ -> "",
   }
 
-fn traffic_start(cl: HttpCell, id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !io =
+fn traffic_start(cl: HttpCell, id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !Clock !io =
   client.call_start(cl, id, key, "lighthouse", "DescribeInstancesTrafficPackages", "2020-03-24", region, "{\"InstanceIds\":[\"$instance\"]}")
 
 fn traffic_finish(started: Result[PendingTc, String]) -> Result[Json, String] !io = {
@@ -399,7 +408,7 @@ fn traffic_finish(started: Result[PendingTc, String]) -> Result[Json, String] !i
   }
 }
 
-fn instance_start(cl: HttpCell, id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !io =
+fn instance_start(cl: HttpCell, id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !Clock !io =
   client.call_start(cl, id, key, "lighthouse", "DescribeInstances", "2020-03-24", region, "{\"InstanceIds\":[\"$instance\"]}")
 
 fn instance_finish(started: Result[PendingTc, String]) -> Result[Json, String] !io = {
@@ -427,7 +436,7 @@ fn instance_finish(started: Result[PendingTc, String]) -> Result[Json, String] !
 }
 
 # QCE/LIGHTHOUSE CpuUsage, daily points over 30 days, via the monitor service
-fn cpu_trend_start(cl: HttpCell, id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !io = {
+fn cpu_trend_start(cl: HttpCell, id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !Clock !io = {
   let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")!
   let zone = ZoneOffset.ofHours(0)!
   let now = LocalDateTime.ofInstant(Instant.now()!, zone)!

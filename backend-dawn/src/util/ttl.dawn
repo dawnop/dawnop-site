@@ -4,8 +4,8 @@
 # mutable state, so main creates cells and threads them into the route closures.
 use std/str
 use std/list
+use util/clock.{system_s}
 use java "java.util.concurrent.atomic.AtomicReference"
-use java "java.lang.System"
 use java "java.lang.String"
 
 pub opaque type TtlCell = AtomicReference
@@ -38,10 +38,11 @@ pub fn cache_get(cell: TtlCell, ttl_s: Int) -> Option[String] !io = {
 pub fn cache_put(cell: TtlCell, payload: String) -> Unit !io =
   atomic(cell).set("${now_s()}|$payload")
 
-## Wall-clock seconds since the epoch. The cache stamps entries with it, and
-## everything else that needs "now" in seconds (JWT exp, qiniu URL deadlines,
-## the monitor's boot time, tencent request stamps) reads the same one.
-pub fn now_s() -> Int !io = System.currentTimeMillis() / 1000
+## Wall-clock seconds since the epoch, from the machine. The cache stamps
+## entries with it, and so does everything that has not been migrated to the
+## Clock effect (qiniu URL deadlines, the monitor's boot time) — see
+## util/clock for which sites those are and why they stayed.
+pub fn now_s() -> Int !io = system_s()
 
 test "cache: put then get within ttl, miss when empty" {
   let cell = new_cell()

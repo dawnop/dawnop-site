@@ -1,0 +1,64 @@
+# The wall clock as a named effect (effect migration batch 1). Code that reads
+# "what time is it" and whose output a test wants to assert on reads it through
+# the `now_ms` operation instead of the machine; the production handler is
+# `with_system_clock`, and a test installs a frozen one and gets to pin bytes
+# that would otherwise change every second (TC3 Authorization, a JWT).
+#
+# Why the handler is not installed once in main.dawn: `with handle` supplies
+# evidence to the *rest of its own block*, and a closure built inside the block
+# does not capture it (spec §6.5, "the handler is the call site's, not the
+# creation site's"). Every route is a closure main hands to the router, which
+# knows nothing about Clock, so a route closure that emitted `!Clock` would not
+# type-check as a `Handler` at all. The handler therefore sits at the innermost
+# boundary that owns a whole unit of work. That is also what keeps `!Clock` off
+# the public surface of api/ and svc/ — see the two installation sites,
+# svc/monitor.lighthouse_start and svc/auth (login / auth_with).
+#
+# Sites still reading the machine clock directly, deliberately: the fm/webdav
+# qiniu deadlines, the ttl cache, the monitor's boot time and its elapsed-time
+# probes, qiniu/stats' day windows. Each is reached only from inside a route
+# closure, so threading Clock there would put `!Clock` on the whole api/ surface
+# and then hit the wall above; and none of them has an assertion worth freezing.
+use java "java.lang.System"
+
+## Wall-clock milliseconds since the epoch, from whichever clock the caller's
+## handler installed.
+pub effect Clock {
+  fn now_ms() -> Int
+}
+
+## Wall-clock milliseconds straight from the machine. The one place this backend
+## reads the host clock; `with_system_clock` is what wires it to the effect, and
+## util/ttl.now_s is the reader for the sites that have not been migrated.
+pub fn system_ms() -> Int !io = System.currentTimeMillis()
+
+## Wall-clock seconds straight from the machine.
+pub fn system_s() -> Int !io = system_ms() / 1000
+
+## Wall-clock seconds from the installed clock. Truncating division, so a frozen
+## handler at millisecond resolution pins this exactly.
+pub fn now_s() -> Int !Clock = now_ms() / 1000
+
+## Run `body` against the real machine clock: the production handler. Where `?`
+## has to pass through the boundary, write `with handle Clock { now_ms() =>
+## system_ms() }` inline instead — that form is a statement in the caller's own
+## block, so `?` stays transparent.
+pub fn with_system_clock[T](body: fn() -> T !Clock !io) -> T !io = {
+  with handle Clock { now_ms() => system_ms() }
+  body()
+}
+
+test "the installed handler is what the readers see" {
+  with handle Clock { now_ms() => 1551113065789 }
+  assert now_ms() == 1551113065789
+  # seconds truncate rather than round: 789ms does not carry
+  assert now_s() == 1551113065
+}
+
+test "a frozen clock does not move and the system clock does not leak in" {
+  with handle Clock { now_ms() => 0 }
+  assert now_s() == 0
+  assert now_ms() == 0
+  # the machine clock is well past the epoch, so this is a real distinction
+  assert system_s() > 1700000000
+}

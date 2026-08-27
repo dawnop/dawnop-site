@@ -8,15 +8,16 @@ use java "java.time.LocalDate"
 use java "java.time.ZoneOffset"
 use java "java.time.format.DateTimeFormatter"
 use util/crypto.{sha256_hex}
-use util/ttl.{now_s}
+use util/clock.{Clock, now_s}
 use tencent/sign.{tc3_signature}
 use util/http.{HttpCell, Pending, post_start, await_resp}
 use json/value.{Json}
 use util/jsonread.{parse_text}
 
 ## Call a Tencent Cloud v3 action. `payload` is a compact JSON body string.
-## Returns the parsed Response JSON, or Err on transport / non-200.
-pub fn call(cl: HttpCell, secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[Json, String] !io =
+## Returns the parsed Response JSON, or Err on transport / non-200. The caller
+## supplies the clock the signature is stamped with (svc/monitor installs it).
+pub fn call(cl: HttpCell, secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[Json, String] !Clock !io =
   call_finish(call_start(cl, secret_id, secret_key, service, action, version, region, payload)?)
 
 ## A Tencent action on the wire. The action name rides along because the
@@ -26,8 +27,24 @@ pub type PendingTc = { p: Pending, action: String }
 ## Issue a Tencent Cloud v3 action without waiting. The monitor page makes three
 ## independent ones; the signature is stamped with the current second, so a
 ## started call must be read through the PendingTc it returned.
-pub fn call_start(cl: HttpCell, secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[PendingTc, String] !io = {
-  let host = "$service.tencentcloudapi.com"
+pub fn call_start(cl: HttpCell, secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[PendingTc, String] !Clock !io = {
+  let host = tc_host(service)
+  let headers = tc3_headers(secret_id, secret_key, service, action, version, region, payload)
+  let p = post_start(cl, "https://$host", headers, payload)?
+  Ok(PendingTc { p: p, action: action })
+}
+
+## The host a service's v3 endpoint lives on. It is also the `host` the
+## signature covers, so the two can never drift apart.
+pub fn tc_host(service: String) -> String = "$service.tencentcloudapi.com"
+
+## The full header list for a Tencent Cloud v3 POST, Authorization included.
+## Split out of `call_start` so the whole TC3 assembly — canonical request,
+## scope, string-to-sign, signature — is a value a test can hold to a golden;
+## the timestamp comes from the installed Clock, so freezing the clock freezes
+## every byte of the result.
+pub fn tc3_headers(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> List[(String, String)] !Clock !io = {
+  let host = tc_host(service)
   let ts = now_s()
   let date = utc_date(ts)
   let ct = "application/json; charset=utf-8"
@@ -44,7 +61,7 @@ pub fn call_start(cl: HttpCell, secret_id: String, secret_key: String, service: 
 
   # no explicit Host header: java.net.http restricts it and auto-sets it from
   # the URI, which equals the signed canonical host
-  let headers = [
+  [
     ("Authorization", auth),
     ("Content-Type", ct),
     ("X-TC-Action", action),
@@ -52,8 +69,6 @@ pub fn call_start(cl: HttpCell, secret_id: String, secret_key: String, service: 
     ("X-TC-Timestamp", to_string(ts)),
     ("X-TC-Region", region),
   ]
-  let p = post_start(cl, "https://$host", headers, payload)?
-  Ok(PendingTc { p: p, action: action })
 }
 
 ## Read a started Tencent action: the parsed Response JSON, or Err on transport
@@ -74,3 +89,73 @@ fn utc_date(ts: Int) -> String !io = {
 }
 
 fn java_instant(ts: Int) -> Instant !io = Instant.ofEpochSecond(ts)!
+
+# ---- TC3 assembly, against a frozen clock ----
+#
+# This module had no tests at all before the Clock effect, for the obvious
+# reason: every byte it produces depends on the second it ran in. With the
+# clock installed by the caller, a test installs a frozen one and the whole
+# assembly becomes a constant.
+#
+# The expected values below are NOT recorded from this code. They come from an
+# independent implementation of the published TC3-HMAC-SHA256 algorithm, in
+# Python, which was first checked against Tencent's own worked example
+# (SecretKey "Gu5t9xGARNpq86cd98joQYCN3*******", 2019-02-25, cvm,
+# DescribeInstances) and reproduces its documented signature
+# 2230eefd229f582d8b1b891af7107b91597240707d778ab3738f756258d7652c. The same
+# script was then pointed at the canonical request this module assembles — which
+# differs from the doc's example by signing x-tc-action as well — to get the
+# signature pinned here. The script is in the batch's report.
+#
+# The frozen instant is 1551113065000ms, the doc example's timestamp, so the
+# UTC date derivation (1551113065 -> "2019-02-25") is pinned by the same vector.
+
+const FROZEN_MS: Int = 1551113065000
+
+test "TC3 headers are byte-for-byte the reference signature, at a frozen instant" {
+  with handle Clock { now_ms() => FROZEN_MS }
+  let h = tc3_headers(
+    "AKIDtestidtestidtestid",
+    "SKtestkeytestkeytestkey",
+    "lighthouse",
+    "DescribeInstances",
+    "2020-03-24",
+    "ap-guangzhou",
+    "{\"InstanceIds\":[\"lhins-00000000\"]}",
+  )
+  assert h == [
+    ("Authorization", "TC3-HMAC-SHA256 Credential=AKIDtestidtestidtestid/2019-02-25/lighthouse/tc3_request, SignedHeaders=content-type;host;x-tc-action, Signature=cfd59b1ba44eb524305e394b7658c90fdf50691531a4585594da397f8dd87e5d"),
+    ("Content-Type", "application/json; charset=utf-8"),
+    ("X-TC-Action", "DescribeInstances"),
+    ("X-TC-Version", "2020-03-24"),
+    ("X-TC-Timestamp", "1551113065"),
+    ("X-TC-Region", "ap-guangzhou"),
+  ]
+}
+
+test "the signed host is the host the request is sent to" {
+  assert tc_host("lighthouse") == "lighthouse.tencentcloudapi.com"
+  assert tc_host("monitor") == "monitor.tencentcloudapi.com"
+}
+
+test "the scope date is the UTC day of the stamped second, not the local one" {
+  # 1551139199 is 2019-02-25T23:59:59Z, which is already 2019-02-26 in
+  # Asia/Shanghai — where this backend actually runs. A UTC slip here is not a
+  # 500, it is a 403 from Tencent, so the boundary is pinned on both sides.
+  assert utc_date(1551139199) == "2019-02-25"
+  assert utc_date(1551139200) == "2019-02-26"
+}
+
+test "moving the clock moves the signature" {
+  # the negative control for the golden above: without this, a handler that
+  # ignored its argument and a frozen constant would look the same.
+  let at = (ms: Int) => {
+    with handle Clock { now_ms() => ms }
+    tc3_headers("id", "key", "lighthouse", "DescribeInstances", "2020-03-24", "ap-guangzhou", "{}")
+  }
+  assert at(FROZEN_MS) == at(FROZEN_MS)
+  assert at(FROZEN_MS) != at(FROZEN_MS + 1000)
+  # inside the same second the stamp is identical, which is what makes the
+  # golden reproducible at millisecond granularity
+  assert at(FROZEN_MS) == at(FROZEN_MS + 999)
+}
