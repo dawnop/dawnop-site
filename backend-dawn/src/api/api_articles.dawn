@@ -130,16 +130,23 @@ pub fn update(a: Auth) -> Handler =
         None -> Err(http_error(422, "article_id must be an integer"))
       })
 
+# Wrap a field's read in the presence of its key. The readers below fall back to
+# a default for a key that is present but null or of the wrong type, so the two
+# answers have to stay separate: `{"tags": null}` is Some([]), which clears the
+# tags, while an absent "tags" is None and leaves them alone.
+fn present[T](m: Map[String, Json], key: String, v: T) -> Option[T] =
+  if has(m, key) { Some(v) } else { None }
+
 fn patch_of(m: Map[String, Json]) -> ArticlePatch =
   ArticlePatch {
-    has_title: has(m, "title"), title: str.trim(str_or(m, "title", "")),
-    has_slug: has(m, "slug"), slug: str_or(m, "slug", ""),
-    has_summary: has(m, "summary"), summary: str_or(m, "summary", ""),
-    has_content: has(m, "content"), content: str_or(m, "content", ""),
-    has_published: has(m, "published"), published: bool_or(m, "published", false),
-    has_auto_title: has(m, "auto_title"), auto_title: bool_or(m, "auto_title", false),
-    has_page_id: has(m, "page_id"), page_id: opt_int(m, "page_id"),
-    has_tags: has(m, "tags"), tags: str_list(m, "tags"),
+    title: present(m, "title", str.trim(str_or(m, "title", ""))),
+    slug: present(m, "slug", str_or(m, "slug", "")),
+    summary: present(m, "summary", str_or(m, "summary", "")),
+    content: present(m, "content", str_or(m, "content", "")),
+    published: present(m, "published", bool_or(m, "published", false)),
+    auto_title: present(m, "auto_title", bool_or(m, "auto_title", false)),
+    page_id: present(m, "page_id", opt_int(m, "page_id")),
+    tags: present(m, "tags", str_list(m, "tags")),
     created_at: opt_str(m, "created_at"),
   }
 

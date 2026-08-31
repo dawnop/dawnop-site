@@ -134,16 +134,19 @@ pub fn create_article(c: DbConn, a: NewArticle) -> Result[Int, String] !io = {
 
 ## A partial update. Present fields override; slug regenerates only when a slug
 ## or title is supplied; page_id and tags validated/synced when present. Matches
-## FastAPI's exclude_unset PATCH semantics. `has_*` flags mark presence.
+## FastAPI's exclude_unset PATCH semantics: None = the key was absent from the
+## body and the column is left alone, Some = the client sent it.
 pub type ArticlePatch = {
-  has_title: Bool, title: String,
-  has_slug: Bool, slug: String,
-  has_summary: Bool, summary: String,
-  has_content: Bool, content: String,
-  has_published: Bool, published: Bool,
-  has_auto_title: Bool, auto_title: Bool,
-  has_page_id: Bool, page_id: Option[Int],
-  has_tags: Bool, tags: List[String],
+  title: Option[String],
+  slug: Option[String],
+  summary: Option[String],
+  content: Option[String],
+  published: Option[Bool],
+  auto_title: Option[Bool],
+  # doubly optional, because absent and null mean different things here: None
+  # leaves the binding alone, Some(None) is an explicit null that unbinds it
+  page_id: Option[Option[Int]],
+  tags: Option[List[String]],
   # present-and-non-null publish time (null is dropped upstream, like FastAPI's
   # drop_null_created_at); Some = apply via datetime(?), None = leave unchanged
   created_at: Option[String],
@@ -155,21 +158,22 @@ pub fn update_article(c: DbConn, id: Int, p: ArticlePatch) -> Result[Bool, Strin
   if not exists {
     Ok(false)
   } else {
-    let _v = if p.has_page_id { validate_page_ref(c, p.page_id)? } else { true }
+    let _v = match p.page_id { Some(pid) -> validate_page_ref(c, pid)?, None -> true }
     let before = article_sig(c, id)?
-    let _s = if p.has_title { set_str(c, id, "title", p.title)? } else { 0 }
-    let _su = if p.has_summary { set_str(c, id, "summary", p.summary)? } else { 0 }
-    let _co = if p.has_content { set_str(c, id, "content", p.content)? } else { 0 }
-    let _pu = if p.has_published { set_int(c, id, "published", bool_int(p.published))? } else { 0 }
-    let _at = if p.has_auto_title { set_int(c, id, "auto_title", bool_int(p.auto_title))? } else { 0 }
-    let _pi = if p.has_page_id { set_page_id(c, id, p.page_id)? } else { 0 }
+    let _s = match p.title { Some(v) -> set_str(c, id, "title", v)?, None -> 0 }
+    let _su = match p.summary { Some(v) -> set_str(c, id, "summary", v)?, None -> 0 }
+    let _co = match p.content { Some(v) -> set_str(c, id, "content", v)?, None -> 0 }
+    let _pu = match p.published { Some(v) -> set_int(c, id, "published", bool_int(v))?, None -> 0 }
+    let _at = match p.auto_title { Some(v) -> set_int(c, id, "auto_title", bool_int(v))?, None -> 0 }
+    let _pi = match p.page_id { Some(pid) -> set_page_id(c, id, pid)?, None -> 0 }
     let _ca = match p.created_at { Some(s) -> exec(c, "update articles set created_at = datetime(?) where id = ?", [PStr(s), PInt(id)])?, None -> 0 }
-    let _sl = if p.has_slug { set_slug(c, id, p)? } else { 0 }
-    let _tg = if p.has_tags {
-      let ids = resolve_tags(c, p.tags)?
-      set_article_tags(c, id, ids)?
-    } else {
-      0
+    let _sl = match p.slug { Some(_x) -> set_slug(c, id, p)?, None -> 0 }
+    let _tg = match p.tags {
+      Some(names) -> {
+        let ids = resolve_tags(c, names)?
+        set_article_tags(c, id, ids)?
+      }
+      None -> 0
     }
     # a save that changed nothing is not an edit, so updated_at stays put — see
     # db/sql.row_sig. Retagging counts as an edit; article_sig covers it.
@@ -223,7 +227,8 @@ fn set_page_id(c: DbConn, id: Int, page_id: Option[Int]) -> Result[Int, String] 
 }
 
 fn set_slug(c: DbConn, id: Int, p: ArticlePatch) -> Result[Int, String] !io = {
-  let base = if p.slug != "" { p.slug } else if p.has_title { p.title } else { current_title(c, id)? }
+  let hint = unwrap_or(p.slug, "")
+  let base = if hint != "" { hint } else { match p.title { Some(t) -> t, None -> current_title(c, id)? } }
   let slug = unique_slug(c, "articles", base, Some(id))?
   exec(c, "update articles set slug = ? where id = ?", [PStr(slug), PInt(id)])
 }
@@ -312,28 +317,29 @@ fn article_updated(c: DbConn) -> String !io =
 # a patch with nothing set — the shape an empty PUT body arrives as
 fn no_patch() -> ArticlePatch =
   ArticlePatch {
-    has_title: false, title: "",
-    has_slug: false, slug: "",
-    has_summary: false, summary: "",
-    has_content: false, content: "",
-    has_published: false, published: false,
-    has_auto_title: false, auto_title: false,
-    has_page_id: false, page_id: None,
-    has_tags: false, tags: [],
+    title: None,
+    slug: None,
+    summary: None,
+    content: None,
+    published: None,
+    auto_title: None,
+    page_id: None,
+    tags: None,
     created_at: None,
   }
 
-# every field present, each carrying the value already stored
+# every field present, each carrying the value already stored — page_id is the
+# stored null, sent explicitly, which is Some(None) and not None
 fn same_patch() -> ArticlePatch =
   ArticlePatch {
-    has_title: true, title: "Title",
-    has_slug: true, slug: "title",
-    has_summary: true, summary: "Sum",
-    has_content: true, content: "Body",
-    has_published: true, published: true,
-    has_auto_title: true, auto_title: false,
-    has_page_id: true, page_id: None,
-    has_tags: true, tags: ["seed"],
+    title: Some("Title"),
+    slug: Some("title"),
+    summary: Some("Sum"),
+    content: Some("Body"),
+    published: Some(true),
+    auto_title: Some(false),
+    page_id: Some(None),
+    tags: Some(["seed"]),
     created_at: None,
   }
 
@@ -362,7 +368,7 @@ test "PUT article: an empty patch is not an edit" {
 test "PUT article: changing one field advances updated_at" {
   let c = article_test_db()
   let same = same_patch()
-  put_article(c, ArticlePatch { ..same, title: "Title 2" })
+  put_article(c, ArticlePatch { ..same, title: Some("Title 2") })
   assert article_updated(c) != STALE
   assert scalar_int(c, "select count(*) from articles where title = 'Title 2'", []) == Ok(1)
 }
@@ -370,13 +376,13 @@ test "PUT article: changing one field advances updated_at" {
 test "PUT article: each editable field on its own counts as an edit" {
   let none = no_patch()
   let edits: List[ArticlePatch] = [
-    ArticlePatch { ..none, has_title: true, title: "T2" },
-    ArticlePatch { ..none, has_slug: true, slug: "other" },
-    ArticlePatch { ..none, has_summary: true, summary: "S2" },
-    ArticlePatch { ..none, has_content: true, content: "B2" },
-    ArticlePatch { ..none, has_published: true, published: false },
-    ArticlePatch { ..none, has_auto_title: true, auto_title: true },
-    ArticlePatch { ..none, has_page_id: true, page_id: Some(7) },
+    ArticlePatch { ..none, title: Some("T2") },
+    ArticlePatch { ..none, slug: Some("other") },
+    ArticlePatch { ..none, summary: Some("S2") },
+    ArticlePatch { ..none, content: Some("B2") },
+    ArticlePatch { ..none, published: Some(false) },
+    ArticlePatch { ..none, auto_title: Some(true) },
+    ArticlePatch { ..none, page_id: Some(Some(7)) },
     ArticlePatch { ..none, created_at: Some("2021-02-03T04:05:06Z") },
   ]
   for p in edits {
@@ -402,7 +408,7 @@ test "article_sig ignores the view counter but sees a real edit" {
 test "PUT article: retagging is an edit" {
   let c = article_test_db()
   let none = no_patch()
-  put_article(c, ArticlePatch { ..none, has_tags: true, tags: ["jvm"] })
+  put_article(c, ArticlePatch { ..none, tags: Some(["jvm"]) })
   assert article_updated(c) != STALE
   assert scalar_int(c, "select count(*) from article_tags where article_id = 1", []) == Ok(1)
 }
@@ -411,11 +417,11 @@ test "PUT article: re-sending the same tag set in another order is not an edit" 
   let c = article_test_db()
   let none = no_patch()
   # first save really retags, so it advances
-  put_article(c, ArticlePatch { ..none, has_tags: true, tags: ["jvm", "dawn"] })
+  put_article(c, ArticlePatch { ..none, tags: Some(["jvm", "dawn"]) })
   assert article_updated(c) != STALE
   # tags are a set: the same two names, swapped, is the same state
   let _r = must(exec(c, "update articles set updated_at = '$STALE' where id = 1", []))
-  put_article(c, ArticlePatch { ..none, has_tags: true, tags: ["dawn", "jvm"] })
+  put_article(c, ArticlePatch { ..none, tags: Some(["dawn", "jvm"]) })
   assert article_updated(c) == STALE
   # and the links survived the rewrite intact
   assert scalar_int(c, "select count(*) from article_tags where article_id = 1", []) == Ok(2)
@@ -424,18 +430,18 @@ test "PUT article: re-sending the same tag set in another order is not an edit" 
 test "PUT article: dropping a tag and adding one are both edits" {
   let none = no_patch()
   let c = article_test_db()
-  put_article(c, ArticlePatch { ..none, has_tags: true, tags: ["jvm", "dawn"] })
+  put_article(c, ArticlePatch { ..none, tags: Some(["jvm", "dawn"]) })
   # drop one
   let _r = must(exec(c, "update articles set updated_at = '$STALE' where id = 1", []))
-  put_article(c, ArticlePatch { ..none, has_tags: true, tags: ["jvm"] })
+  put_article(c, ArticlePatch { ..none, tags: Some(["jvm"]) })
   assert article_updated(c) != STALE
   # add a different one
   let _r2 = must(exec(c, "update articles set updated_at = '$STALE' where id = 1", []))
-  put_article(c, ArticlePatch { ..none, has_tags: true, tags: ["jvm", "sqlite"] })
+  put_article(c, ArticlePatch { ..none, tags: Some(["jvm", "sqlite"]) })
   assert article_updated(c) != STALE
   # clearing them all is an edit too
   let _r3 = must(exec(c, "update articles set updated_at = '$STALE' where id = 1", []))
-  put_article(c, ArticlePatch { ..none, has_tags: true, tags: [] })
+  put_article(c, ArticlePatch { ..none, tags: Some([]) })
   assert article_updated(c) != STALE
   assert scalar_int(c, "select count(*) from article_tags where article_id = 1", []) == Ok(0)
 }
