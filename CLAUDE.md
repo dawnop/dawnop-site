@@ -66,7 +66,9 @@ dawnop-site/
 │   │   ├── qiniu/              # 对象存储（丢前缀）：creds 凭据记录 / sign 签名 / rs 管理 REST / stats 用量统计
 │   │   ├── tencent/            # 腾讯云（丢前缀）：sign TC3 签名 / client v3 请求装配
 │   │   ├── util/               # crypto jwt ttl slugify multipart paths ferr errkind
-│   │   │                       #   http（出站 HTTP 客户端）jsonx/jsonread（构造 wire 形状 / 读请求体字段）
+│   │   │                       #   http（出站 HTTP 客户端；出站是具名效果 Upstream，生产 handler
+│   │   │                       #     = with_upstream，装在 api_fm/webdav/api_monitor 三处路由边界）
+│   │   │                       #   jsonx/jsonread（构造 wire 形状 / 读请求体字段）
 │   │   # json 与 web 已不再 vendored：dawn.toml 的 [deps.json]/[deps.web] 指向
 │   │   # dawn-lang 仓库 tag 归档（url + hash + subdir），实体在 dawn-lang/packages/
 │   ├── dawn.toml               # [java-deps]（sqlite-jdbc / jbcrypt，coursier 解析）

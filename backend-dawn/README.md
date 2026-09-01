@@ -163,6 +163,24 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `db/db.dawn` — 每请求一连接（`with_db`）：WAL + `load_extension(libsimple)`。
 - `util/crypto.dawn` — sha256 / hmac-sha1 / hmac-sha256 / base64url / uuid（auth、七牛、JWT、腾讯共用）。
 - `util/http.dawn` — java.net.http 出站客户端：`fetch/post` + `fetch_bytes`（二进制体，G6）；
+  **出站 HTTP 是具名效果 `Upstream`**（四个操作：text / bytes / stream / 起一个不等的交换）。
+  调用方拼一个纯 Dawn 的 `OutReq` 交给装好的 handler，只有臂里才碰 java.net.http；生产臂是
+  `with_upstream(cell, body)`，测试臂按表作答。**切口刻意开在错误面之下**：臂交回的是原始
+  `ForeignError` 而不是成文的消息，于是 `deadline_text` 的措辞、`timed_out` 的判词、
+  `as_outbound` 的 504/502 分流在测试里跑的仍是生产代码——一条答 `HttpTimeoutException` 的臂，
+  微秒内断言完从前要停机十秒才断言得到的那三行。`Pending` 里装的是「交付回复的 thunk」而不是
+  future，所以 `await_resp` 是 `!io` 不是 `!Upstream`（证据在起交换时就花掉了），而想看 await
+  的 handler 看自己造的那个 thunk 即可，不必为「被观察」另开一个操作。
+  生产的安装点只有**三处**，都在最内层拥有一个完整出站工作单元的边界上：`api_fm` 的
+  `guarded_out`（`guarded` 里再套一层 handler，八条会出站的路由改调它）、`api/webdav` 的
+  `dav_handler`（一处罩住 GET/PUT/DELETE/MOVE/COPY 全部）、`api_monitor` 的路由闭包
+  （issue 与 read 是两次调用，必须同一个 handler 罩住）。其余 `with_upstream` 都在测试里。
+  **装不进 main**：`with handle` 只给自己块的剩余部分供证据，路由闭包不捕获它，而
+  web 的 `Handler` 别名是闭合行（`!io`），发 `!Upstream` 的闭包根本不是 `Handler`——和 `util/clock`
+  记的是同一堵墙。`db/sql` 的 `with_db` / `with_immediate_tx` 因此改成效果多态（`!e`）：它们是
+  纯转发器，闭在 `!io` 上会挡住「在写事务里做一次出站调用」这件生产每天都在做的事。
+  故意留在 `!io` 的三处：`new_client`（它造的正是臂用的客户端）、`file_body`（只装配请求体）、
+  `close_stream`（放掉臂已经交出来的流）——都不碰对端，也都没有值得注入的断言。
   **每个出站请求都带单请求超时**。`request_for` 是全模块唯一装配请求的地方，也是唯一一处 `.timeout(`，
   新加的 body handler 想漏掉超时都没有位置。分两档：管理类调用 `MANAGEMENT_TIMEOUT_S` = 10s
   （七牛 rs stat/delete/copy、用量与 CDN、腾讯云、vault 探活），搬字节的调用
@@ -182,7 +200,11 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   cell 同一套办法）：连接池长在实例上，每次调用新建一个等于每次出站重握手（对七牛还要重做 TLS）。
   判词不是「源码里只有一处 new」——那句话在旧的 `shared_client` 每次调用都 build 时也成立——
   而是假服务器把**客户端自己的源端口**回给测试：同一个 cell 的两次请求端口相同，另起一个客户端不同。
-  负控在 `scripts/http-timeout-mutants/`（9 个变异体，覆盖期限 / 超时分类 / 共享客户端三组规则）：
+  负控在 `scripts/http-timeout-mutants/`（10 个变异体，覆盖期限 / 超时分类 / 共享客户端三组规则）。
+  自 `Upstream` 落地起归属分成两半：关于**套接字**的（期限有没有真上到线上、一个 cell 是不是一条连接）
+  仍由停顿的回环对端持有，那些是计时断言；关于**代码**的（哪一档预算、怎么措辞怎么分类）由装 handler
+  的断言持有，微秒级。`transfer-tier-on-management` 就是跨过这条线的那个：从前只有等满十秒才抓得到，
+  现在两条 handler 断言直接读请求上的 `budget_s`，其中一条是 `svc/files` 的写事务窗口测试。
   假服务器接受连接后先停住再迟迟作答（有限停顿，所以变异体是转红而不是把门禁挂死），
   `inflate-deadline` 保留 `.timeout(` 只把值改荒谬，`client-per-call` 保留唯一那处 builder 只让它
   每次调用跑一遍，`timeout-tag-second-opinion` 给标签另开一套判据——三个都只有真跑才判得出来。
