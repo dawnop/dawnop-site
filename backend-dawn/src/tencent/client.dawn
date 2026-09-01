@@ -10,15 +10,15 @@ use java "java.time.format.DateTimeFormatter"
 use util/crypto.{sha256_hex}
 use util/clock.{Clock, now_s}
 use tencent/sign.{tc3_signature}
-use util/http.{HttpCell, Pending, post_start, await_resp}
+use util/http.{Pending, Upstream, post_start, await_resp}
 use json/value.{Json}
 use util/jsonread.{parse_text}
 
 ## Call a Tencent Cloud v3 action. `payload` is a compact JSON body string.
 ## Returns the parsed Response JSON, or Err on transport / non-200. The caller
 ## supplies the clock the signature is stamped with (svc/monitor installs it).
-pub fn call(cl: HttpCell, secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[Json, String] !Clock !io =
-  call_finish(call_start(cl, secret_id, secret_key, service, action, version, region, payload)?)
+pub fn call(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[Json, String] !Clock !Upstream !io =
+  call_finish(call_start(secret_id, secret_key, service, action, version, region, payload)?)
 
 ## A Tencent action on the wire. The action name rides along because the
 ## non-200 message names it and the call is off the stack by then.
@@ -27,10 +27,10 @@ pub type PendingTc = { p: Pending, action: String }
 ## Issue a Tencent Cloud v3 action without waiting. The monitor page makes three
 ## independent ones; the signature is stamped with the current second, so a
 ## started call must be read through the PendingTc it returned.
-pub fn call_start(cl: HttpCell, secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[PendingTc, String] !Clock !io = {
+pub fn call_start(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[PendingTc, String] !Clock !Upstream !io = {
   let host = tc_host(service)
   let headers = tc3_headers(secret_id, secret_key, service, action, version, region, payload)
-  let p = post_start(cl, "https://$host", headers, payload)?
+  let p = post_start("https://$host", headers, payload)?
   Ok(PendingTc { p: p, action: action })
 }
 

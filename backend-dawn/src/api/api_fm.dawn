@@ -7,7 +7,7 @@ use std/map
 use db/sql.{DbConn}
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, query, redirect, header, body_text}
 use util/multipart.{Part, boundary_of, parse_multipart, part_named}
-use util/http.{fetch_stream, ok_stream, stream_response, close_stream, as_outbound}
+use util/http.{Upstream, fetch_stream, ok_stream, stream_response, close_stream, as_outbound, with_upstream}
 use web/router.{Route, route_get, route_post, tagged}
 use util/jsonx.{obj, jstr, jint}
 use db/db.{with_db}
@@ -29,6 +29,16 @@ use util/ttl.{TtlCell, cache_get, cache_put, now_s}
 use json/value.{Json, JNull, JObj, JStr, JNum, JInt}
 use json/render.{render}
 use json/parser.{parse}
+
+# `guarded` with the production Upstream handler installed inside it, for the
+# routes that reach qiniu. It is a wrapper and not eight copies of the same four
+# arms, and it sits here rather than in svc/ because a route closure is the
+# innermost thing that owns a whole outbound unit of work: web's `Handler` type
+# is closed at `!io`, so a closure emitting `!Upstream` cannot BE a route (see
+# util/http). Routes that never call out keep plain `guarded`.
+fn guarded_out(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !Upstream !io) -> Result[Response, HttpError] !io =
+  guarded(a, req, () => with_upstream(a.http, body))
+
 
 ## GET /api/fm?path= — directory listing (FsData).
 pub fn fm_list(a: Auth) -> Handler =
@@ -150,7 +160,7 @@ pub fn sign(a: Auth) -> Handler =
 ## capacity over the settings value, like the FastAPI handler.
 pub fn stats(a: Auth, space_cell: TtlCell, respack_cell: TtlCell) -> Handler =
   req =>
-  guarded(a, req, () =>
+  guarded_out(a, req, () =>
       {
         let (used_local, files, dirs) = as_http(with_db(a.db.path, a.db.ext, c => stats_db(c)), 500)?
         {
@@ -170,7 +180,7 @@ pub fn stats(a: Auth, space_cell: TtlCell, respack_cell: TtlCell) -> Handler =
 
 # qiniu bucket space through a 600s TTL cell: 7-day series, last non-zero point;
 # JNull on failure or no data (stats lag by up to an hour) — the null caches too
-fn remote_space(a: Auth, cell: TtlCell) -> Json !io =
+fn remote_space(a: Auth, cell: TtlCell) -> Json !Upstream !io =
   match cache_get(cell, 600) {
     Some(s) ->
       match parse(s) {
@@ -178,7 +188,7 @@ fn remote_space(a: Auth, cell: TtlCell) -> Json !io =
         Err(_m) -> JNull
       }
     None -> {
-      let j = match kodo_series(a.http, a.qiniu, "space", 7) {
+      let j = match kodo_series(a.qiniu, "space", 7) {
         Ok(pair) -> {
           let (_times, datas) = pair
           let v = last_nonzero(datas)
@@ -192,7 +202,7 @@ fn remote_space(a: Auth, cell: TtlCell) -> Json !io =
   }
 
 # quota: storage respack capacity when present, else the settings-table value
-fn quota_bytes(a: Auth, respack_cell: TtlCell) -> Int !io = {
+fn quota_bytes(a: Auth, respack_cell: TtlCell) -> Int !Upstream !io = {
   let cap = match respack_cached(a, respack_cell) {
     Ok(j) -> int_of(field(field(j, "storage"), "capacity"))
     Err(_m) -> 0
@@ -212,14 +222,14 @@ fn quota_bytes(a: Auth, respack_cell: TtlCell) -> Int !io = {
 ## fallback when a cross-origin 302 to qiniu is CORS-blocked). Binary body (G6).
 pub fn content(a: Auth) -> Handler =
   req =>
-  guarded(a, req, () => {
+  guarded_out(a, req, () => {
     let rel = fm_split(qparam(req, "path"))
     match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
       Some(o) ->
         match o.key {
           Some(k) -> {
             let url = signed_url(a.qiniu, k, "")
-            let r = as_http_with(as_outbound(fetch_stream(a.http, url, [])), mutation_failure)?
+            let r = as_http_with(as_outbound(fetch_stream(url, [])), mutation_failure)?
             # a non-2xx body is qiniu's error, not the file — serving it would
             # hand the browser a JSON error under the file's content type. Close
             # the stream (don't leak the connection) and map to an error.
@@ -407,12 +417,12 @@ fn qparam(req: Request, name: String) -> String = unwrap_or(query(req, name), ""
 ## Returns FsData + {deleted}.
 pub fn delete(a: Auth) -> Handler =
   req =>
-  guarded(a, req, () =>
+  guarded_out(a, req, () =>
       {
         let m = as_http(body_obj(body_text(req)?), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let items = item_paths(m)
-        let deleted = as_http_with(with_db(a.db.path, a.db.ext, c => do_delete(a.qiniu, a.http, c, items, 0, [])), mutation_failure)?
+        let deleted = as_http_with(with_db(a.db.path, a.db.ext, c => do_delete(a.qiniu, c, items, 0, [])), mutation_failure)?
         let base = as_http(with_db(a.db.path, a.db.ext, c => fs_data(c, cur)), 500)?
         Ok(json_ok(merge_deleted(base, deleted)))
       })
@@ -420,7 +430,7 @@ pub fn delete(a: Auth) -> Handler =
 ## POST /api/fm/create-file — {path, name}. Creates an empty file object.
 pub fn create_file(a: Auth) -> Handler =
   req =>
-  guarded(a, req, () =>
+  guarded_out(a, req, () =>
       {
         let m = as_http(body_obj(body_text(req)?), 422)?
         let cur = fm_split(str_or(m, "path", ""))
@@ -442,7 +452,7 @@ pub fn create_file(a: Auth) -> Handler =
 ## old key. Returns {path}.
 pub fn save(a: Auth) -> Handler =
   req =>
-  guarded(a, req, () =>
+  guarded_out(a, req, () =>
       {
         let m = as_http(body_obj(body_text(req)?), 422)?
         let rel = fm_split(str_or(m, "path", ""))
@@ -459,14 +469,14 @@ pub fn save(a: Auth) -> Handler =
 ## files get a fresh qiniu object (new uuid key), dirs are recreated.
 pub fn copy(a: Auth) -> Handler =
   req =>
-  guarded(a, req, () =>
+  guarded_out(a, req, () =>
       {
         let m = as_http(body_obj(body_text(req)?), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let dest = fm_split(str_or(m, "destination", ""))
         let sources = str_list(m, "sources")
         let _n = check_relocation_targets(dest, sources, 0)?
-        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, a.http, c, sources, dest, cur, 0)), mutation_failure)?))
+        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), mutation_failure)?))
       })
 
 ## POST /api/fm/register — {path, key, size?, content_type?}. Confirms the
@@ -474,7 +484,7 @@ pub fn copy(a: Auth) -> Handler =
 ## size/mime, clears the ledger row. Rejects if the object isn't really there.
 pub fn register(a: Auth) -> Handler =
   req =>
-  guarded(a, req, () =>
+  guarded_out(a, req, () =>
       {
         let m = as_http(body_obj(body_text(req)?), 422)?
         let rel = fm_split(str_or(m, "path", ""))
@@ -484,7 +494,7 @@ pub fn register(a: Auth) -> Handler =
         } else {
           let _n = require_admissible_names(rel)?
           let _preflight = as_http_with(register_preflight(a, rel, key), conflict_or(500))?
-          let r = as_http_with(as_outbound(stat(a.http, a.qiniu, key)), mutation_failure)?
+          let r = as_http_with(as_outbound(stat(a.qiniu, key)), mutation_failure)?
           if r.status == 200 {
             Ok(json_ok(as_http_with(register_row(a, rel, key, r.body, opt_int(m, "size"), str_or(m, "content_type", "")), conflict_or(500))?))
           } else {
@@ -496,7 +506,7 @@ pub fn register(a: Auth) -> Handler =
 fn register_preflight(a: Auth, rel: String, key: String) -> Result[Unit, String] !io =
   with_db(a.db.path, a.db.ext, c => validate_register_preflight(c, rel, key))
 
-fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint: Option[Int], ct_hint: String) -> Result[Json, String] !io = {
+fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint: Option[Int], ct_hint: String) -> Result[Json, String] !Upstream !io = {
   # qiniu's stat is authoritative for size/mime; fall back to the client's
   # reported values, then a name-based guess, exactly like FastAPI's
   #   size = fsize or payload.size or 0
@@ -571,7 +581,7 @@ pub fn fm_search(a: Auth) -> Handler =
 ## re-POSTed to qiniu. Matches FastAPI: form field `path` (target dir) + file part.
 pub fn upload(a: Auth) -> Handler =
   req =>
-  guarded(a, req, () =>
+  guarded_out(a, req, () =>
       match header(req, "content-type") {
         None -> Err(http_error(422, "expected multipart/form-data"))
         Some(ct) ->
@@ -601,7 +611,7 @@ fn upload_path_field(parts: List[Part]) -> Result[String, HttpError] !io =
     None -> Ok("")
   }
 
-fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpError] !io = {
+fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpError] !Upstream !io = {
   let target = fm_split(path_field)
   # fp.filename comes from the (UTF-8-decoded) part headers already
   let name = sanitize_name(fp.filename)

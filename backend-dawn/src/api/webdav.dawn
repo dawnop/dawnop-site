@@ -37,7 +37,7 @@ use util/paths.{basename, parent_rel, ext, ts, guess_mime, safe_persisted_mime, 
 use qiniu/rs.{upload_file}
 use java "java.io.File"
 use util/crypto.{sha256_hex, uuid, uuid_hex}
-use util/http.{fetch_stream, ok_stream, stream_response, close_stream, as_outbound, tag_outbound}
+use util/http.{Upstream, fetch_stream, ok_stream, stream_response, close_stream, as_outbound, tag_outbound, with_upstream}
 use util/ttl.{TtlCell, cache_get, cache_put, now_s}
 use util/errkind.{KConflict, KPrecondition, KUpstream, KTimeout, precondition, upstream, timeout, split_kind}
 use svc/export.{url_encode}
@@ -233,7 +233,7 @@ fn follows_redirect(req: Request) -> Bool = {
   fold(REDIRECT_CLIENTS, false, (acc, tag) => acc || contains_ci(ua, tag))
 }
 
-fn get_or_head(a: Auth, req: Request, rel: String, head: Bool) -> Result[Response, HttpError] !io =
+fn get_or_head(a: Auth, req: Request, rel: String, head: Bool) -> Result[Response, HttpError] !Upstream !io =
   if rel == "" {
     Err(http_error(405, "不能下载目录"))
   } else {
@@ -251,7 +251,7 @@ fn get_or_head(a: Auth, req: Request, rel: String, head: Bool) -> Result[Respons
     }
   }
 
-fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Result[Response, HttpError] !io = {
+fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Result[Response, HttpError] !Upstream !io = {
   let mime = safe_persisted_mime(o.content_type)
   let etag = "\"$key\""
   let lastmod = http_date(ts(o.updated_at))
@@ -277,7 +277,7 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
       Some(pair) -> {
         let (start, end) = pair
         {
-          let r = as_http_with(as_outbound(fetch_stream(a.http, signed_url(a.qiniu, key, ""), [("Accept-Encoding", "identity"), ("Range", "bytes=$start-$end")])), mutation_error)?
+          let r = as_http_with(as_outbound(fetch_stream(signed_url(a.qiniu, key, ""), [("Accept-Encoding", "identity"), ("Range", "bytes=$start-$end")])), mutation_error)?
           # a ranged hit is 206, a server that ignored the Range answers 200 —
           # anything else is an upstream error whose body is not the file. Streaming
           # can't measure the returned length, so decide 206-vs-200 by the upstream
@@ -294,7 +294,7 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
       }
       None ->
         {
-          let r = as_http_with(as_outbound(fetch_stream(a.http, signed_url(a.qiniu, key, ""), [("Accept-Encoding", "identity")])), mutation_error)?
+          let r = as_http_with(as_outbound(fetch_stream(signed_url(a.qiniu, key, ""), [("Accept-Encoding", "identity")])), mutation_error)?
           if not ok_stream(r) {
             close_stream(r.stream)
             Err(http_error(502, "qiniu ${r.status}"))
@@ -420,7 +420,7 @@ fn mutation_error(msg: String) -> HttpError = {
 fn file_size(path: String) -> Result[Int, String] !io =
   catch_text(() => File.new(path).length())
 
-fn put(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io =
+fn put(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !Upstream !io =
   if rel == "" {
     Err(http_error(405, "不能写入根"))
   } else {
@@ -445,7 +445,7 @@ fn put_preflight(c: DbConn, rel: String) -> Result[Option[FileRow], String] !io 
     }
   }
 
-fn put_do(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io =
+fn put_do(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !Upstream !io =
   {
     let ok = as_http(parent_exists(a, rel), 500)?
     if not ok {
@@ -460,7 +460,7 @@ fn put_do(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io
         None -> Err(http_error(500, "请求体未落盘"))
         Some(path) -> {
           let size = as_http(file_size(path), 500)?
-          match upload_file(a.http, a.qiniu, key, path, mime, now_s() + a.qiniu.expires) {
+          match upload_file(a.qiniu, key, path, mime, now_s() + a.qiniu.expires) {
             Ok(_) -> put_commit(a, rel, key, mime, size)
             Err(m) -> {
               let _gc = gc_unreferenced(a, Some(key))
@@ -473,7 +473,7 @@ fn put_do(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io
     }
   }
 
-fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int) -> Result[Response, HttpError] !io =
+fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int) -> Result[Response, HttpError] !Upstream !io =
   match with_db(a.db.path, a.db.ext, c => replace_file_strict(c, rel, key, mime, size)) {
     Ok(outcome) -> {
       let _gc = gc_unreferenced(a, outcome.superseded_key)
@@ -487,7 +487,7 @@ fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int) -> Res
 
 # ---- DELETE ----
 
-fn del(a: Auth, rel: String) -> Result[Response, HttpError] !io =
+fn del(a: Auth, rel: String) -> Result[Response, HttpError] !Upstream !io =
   if rel == "" {
     Err(http_error(405, "不能删除根"))
   } else {
@@ -897,7 +897,7 @@ fn validate_move_copy_request(req: Request, is_move: Bool, source_is_dir: Bool) 
 # FastAPI checks the source exists (404) BEFORE parsing Destination (400) or the
 # self/subdir guard (409); preserve source ordering while validating every
 # write-affecting header before Destination resolution and any external effect.
-fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Response, HttpError] !io =
+fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Response, HttpError] !Upstream !io =
   if rel == "" {
     Err(http_error(405, "不能操作根"))
   } else {
@@ -929,7 +929,7 @@ fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Res
 fn destination_is_source_ancestor(rel: String, dst: String) -> Bool =
   str.starts_with(rel, dst ++ "/")
 
-fn mc_check_dst(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !io =
+fn mc_check_dst(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Upstream !io =
   {
     let dst_existing = as_http(with_db(a.db.path, a.db.ext, c => get_row(c, dst)), 500)?
     match dst_existing {
@@ -961,7 +961,7 @@ fn mc_validate_copy_source(a: Auth, rel: String, is_move: Bool) -> Result[Unit, 
     as_http_with(with_db(a.db.path, a.db.ext, c => validate_copy_source_objects(c, rel)), conflict_or(500))
   }
 
-fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !io =
+fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Upstream !io =
   {
     let ok = as_http(parent_exists(a, dst), 500)?
     if not ok {
@@ -971,7 +971,7 @@ fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, overwrite
     }
   }
 
-fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !io = {
+fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Upstream !io = {
   let result: Result[SubtreeWriteOutcome, String] =
     if is_move {
       with_db(a.db.path, a.db.ext, c => commit_webdav_move(c, rel, dst, overwrite))
@@ -989,9 +989,9 @@ fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -
 }
 
 # COPY: recreate dirs, and for each file copy the qiniu object to a fresh key.
-fn copy_subtree(a: Auth, rel: String, dst: String, overwrite: Bool) -> Result[SubtreeWriteOutcome, String] !io = {
+fn copy_subtree(a: Auth, rel: String, dst: String, overwrite: Bool) -> Result[SubtreeWriteOutcome, String] !Upstream !io = {
   let planned = with_db(a.db.path, a.db.ext, c => prepare_webdav_copy(c, rel, dst, overwrite))?
-  let copied = copy_tree_objects(a.qiniu, a.http, planned)?
+  let copied = copy_tree_objects(a.qiniu, planned)?
   match with_db(a.db.path, a.db.ext, c => commit_webdav_copy(c, copied, overwrite)) {
     Ok(outcome) -> Ok(outcome)
     Err(m) -> {
@@ -1105,19 +1105,24 @@ fn dav_handler(a: Auth, cell: TtlCell, method: String) -> Handler =
       Some(resp) -> Ok(resp)
       None -> {
         let rel = dav_rel(req)?
-        match method {
-          "PROPFIND" -> propfind(a, req, rel)
-          "HEAD" -> get_or_head(a, req, rel, true)
-          "GET" -> get_or_head(a, req, rel, false)
-          "PUT" -> put(a, req, rel)
-          "DELETE" -> del(a, rel)
-          "MKCOL" -> mkcol(a, rel)
-          "MOVE" -> move_or_copy(a, req, rel, true)
-          "COPY" -> move_or_copy(a, req, rel, false)
-          "LOCK" -> Ok(lock_response(req, rel))
-          "UNLOCK" -> Ok(text(204, ""))
-          _ -> Err(http_error(405, "method not allowed"))
-        }
+        # One installation point for the whole of WebDAV: this dispatcher is
+        # the innermost thing that owns a request, and the closure it lives in
+        # is a web `Handler`, whose type is closed at `!io` (util/http says
+        # why). GET/PUT/DELETE/MOVE/COPY all reach qiniu from in here.
+        with_upstream(a.http, () =>
+          match method {
+            "PROPFIND" -> propfind(a, req, rel)
+            "HEAD" -> get_or_head(a, req, rel, true)
+            "GET" -> get_or_head(a, req, rel, false)
+            "PUT" -> put(a, req, rel)
+            "DELETE" -> del(a, rel)
+            "MKCOL" -> mkcol(a, rel)
+            "MOVE" -> move_or_copy(a, req, rel, true)
+            "COPY" -> move_or_copy(a, req, rel, false)
+            "LOCK" -> Ok(lock_response(req, rel))
+            "UNLOCK" -> Ok(text(204, ""))
+            _ -> Err(http_error(405, "method not allowed"))
+          })
       }
     }
   }

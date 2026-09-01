@@ -34,6 +34,11 @@ RESPONSE_STREAM_REPRESENTATION = re.compile(
     r"^(?:pub opaque type|pub alias) ResponseStream = InputStream$"
 )
 RESPONSE_STREAM_CAST = "let got: Result[InputStream, ForeignError] = cast(resp.body()!)"
+# `bytes_stream`'s widening. A ByteArrayInputStream is an InputStream, but Dawn
+# has no Java upcast, so the only way to hand one to `ResponseStream` is the
+# same `cast` the response body uses. It is approved by its exact spelling, like
+# the other three, and stays test-only: nothing in production calls it.
+RESPONSE_STREAM_BYTES_CAST = "let raw: Result[InputStream, ForeignError] = cast(boxed)"
 RAW_RESPONSE_STREAM_DECLARATION = (
     "fn raw_response_stream(s: ResponseStream) -> InputStream = s"
 )
@@ -420,6 +425,8 @@ def response_stream_seam(tokens: list[str]) -> str | None:
         return "ResponseStream representation"
     if tokens == token_values(RESPONSE_STREAM_CAST):
         return "response body cast"
+    if tokens == token_values(RESPONSE_STREAM_BYTES_CAST):
+        return "bytes stream cast"
     if tokens == token_values(RAW_RESPONSE_STREAM_DECLARATION):
         return "private raw accessor"
     return None
@@ -435,6 +442,7 @@ def report_raw_response_stream_assertion(root: Path) -> bool:
         ),
         "ResponseStream representation": 0,
         "response body cast": 0,
+        "bytes stream cast": 0,
         "private raw accessor": 0,
     }
     violations: list[tuple[int, str]] = []

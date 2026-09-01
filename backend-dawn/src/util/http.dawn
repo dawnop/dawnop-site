@@ -16,12 +16,15 @@ use java "java.net.http.HttpRequest.BodyPublishers"
 use java "java.net.http.HttpResponse.BodyHandlers"
 use java "java.io.File"
 use java "java.io.InputStream"
+use java "java.io.ByteArrayInputStream"
+use java "java.util.Objects"
 use java "java.time.Duration"
 use java "java.lang.String"
 use java "java.lang.System"
 use java "java.lang.Thread"
 use java "java.net.http.HttpResponse"
 use java "java.util.concurrent.CompletableFuture"
+use java "java.util.concurrent.atomic.AtomicReference"
 use java "com.sun.net.httpserver.HttpServer"
 use java "java.net.InetSocketAddress"
 
@@ -52,7 +55,7 @@ use java "java.net.InetSocketAddress"
 ## Ceiling for small management/probe calls: qiniu rs stat/delete/copy, the
 ## qiniu usage and CDN APIs, the Tencent Cloud API, the vault liveness probe.
 ## Also the ceiling on how long gc's delete can hold the SQLite write lock.
-const MANAGEMENT_TIMEOUT_S: Int = 10
+pub const MANAGEMENT_TIMEOUT_S: Int = 10
 
 ## Ceiling for calls that move object bytes: proxy upload, WebDAV PUT, and the
 ## download proxies. Deliberately far above any plausible transfer on this site
@@ -115,63 +118,261 @@ pub type BytesResp = { status: Int, bytes: Bytes }
 # data. See docs/streaming-response-design.md §4.1.
 pub type StreamResp = { status: Int, stream: ResponseStream }
 
-## A binary GET: the body comes back as first-class Bytes (spec §9.5.1). Ok on 2xx,
-## Err otherwise. For the fm content proxy (fetch bytes from qiniu, stream out).
-## resp.body() is an erased-generic Object that is a byte[] at runtime — cast
-## reclaims it (Result since v0.33.0; a mismatch was a ClassCastException that
-## catch_fault turned into Err, so it still maps to this function's Err).
-pub fn fetch_bytes(cl: HttpCell, url: String, headers: List[(String, String)]) -> Result[BytesResp, String] !io =
-  fetch_bytes_within(cl, url, headers, TRANSFER_TIMEOUT_S)
+# ---- outbound HTTP as a named effect (effect migration knife 1) ----
+#
+# Everything above this line is data and deadlines; below it something reaches a
+# peer, and reaching a peer is the one thing a test cannot afford to do at the
+# speed of a real deadline. `Upstream` is the seam. A caller assembles an
+# `OutReq` — ordinary Dawn data — and asks the installed handler for the reply;
+# only an arm ever touches java.net.http. Production installs `with_upstream`,
+# which answers every operation out of the process's shared HttpCell. A test
+# installs arms that answer from a table, in microseconds.
+#
+# The seam sits BELOW the error surface on purpose. An arm answers with the raw
+# `ForeignError` a failed exchange would have raised, not with a finished
+# message, so `deadline_text`'s wording, `timed_out`'s predicate and
+# `as_outbound`'s 504-vs-502 split are still the production code under test. An
+# arm answering `Err(HttpTimeoutException)` exercises exactly the three lines a
+# ten-second stall used to, and the assertion costs a microsecond.
+#
+# Why the handler is not installed once in main.dawn: the wall util/clock
+# describes, verbatim. `with handle` supplies evidence to the rest of its own
+# block, and a route closure built inside that block does not capture it, so a
+# route emitting `!Upstream` would not type-check as web's `Handler` at all. The
+# installation points are therefore the innermost boundaries that own a whole
+# outbound unit of work; `with_upstream`'s callers are that list.
+#
+# Sites deliberately left on `!io`: `new_client` (it builds the client the
+# handler answers from, so it cannot be behind the handler), `file_body` (it
+# assembles a body, it does not send one) and `close_stream` (it releases a
+# stream an arm already handed over). None of the three touches a peer, and none
+# has an assertion worth injecting.
 
-fn fetch_bytes_within(cl: HttpCell, url: String, headers: List[(String, String)], budget_s: Int) -> Result[BytesResp, String] !io = {
-  let r: Result[Result[BytesResp, String], ForeignError] = catch_fault(() => {
-    let nobody: BodyPublisher = BodyPublishers.noBody()!
-    let req = request_for(url, headers, "GET", nobody, budget_s)
-    let resp = client_of(cl).send(req, BodyHandlers.ofByteArray()!)!
+## What a caller wants put on the wire, before any of it is Java.
+pub type OutBody =
+  | NoBody
+  | TextBody(s: String)
+  | RawBody(b: Bytes)
+  | PublishedBody(p: RequestBody)
+
+## A request that has not been built yet: method, target, headers, body, and the
+## deadline it must be built with. The budget travels on the request because the
+## failure text names it and the builder that applied it is gone by then.
+pub type OutReq = {
+  method: String,
+  url: String,
+  headers: List[(String, String)],
+  body: OutBody,
+  budget_s: Int,
+}
+
+## Outbound HTTP. One operation per shape of reply this backend needs: a text
+## body, a Bytes body, a live stream, and an exchange started without waiting.
+## Every operation is total — a transport failure comes back as the raw
+## `ForeignError`, which is what keeps the rewording and the classification
+## above this line. No operation declares effects of its own (spec §6.5): what
+## an arm does is charged where the handler is installed.
+pub effect Upstream {
+  fn exchange(req: OutReq) -> Result[HttpResp, ForeignError]
+  fn exchange_bytes(req: OutReq) -> Result[BytesResp, ForeignError]
+  fn exchange_stream(req: OutReq) -> Result[StreamResp, ForeignError]
+  fn exchange_start(req: OutReq) -> Result[Pending, ForeignError]
+}
+
+## An exchange the handler has already set in motion. `await_resp` is where the
+## calling thread joins it; one that is never awaited still completes and is
+## then discarded.
+##
+## It holds a thunk rather than a future because the handler decides how a reply
+## arrives: the production arm hands back `() => future.get()`, and an arm that
+## answered on the spot hands back a thunk over the value it already has. That
+## also makes the await visible to a handler that wants to see it — the thunk it
+## built is what runs — without a second operation whose only job is to be
+## observed.
+pub opaque type Pending = PendingBox
+
+type PendingBox = { run: fn() -> Result[HttpResp, ForeignError] !io, budget_s: Int }
+
+## The only way to make a Pending: an arm answering `exchange_start` names the
+## budget its failure will be reported against and the thunk that delivers the
+## reply.
+pub fn pending(budget_s: Int, run: fn() -> Result[HttpResp, ForeignError] !io) -> Pending =
+  PendingBox { run: run, budget_s: budget_s }
+
+## The fault an arm answers with for a shape it does not mean to serve. A
+## handler that answers one operation and refuses the other three is the ordinary
+## shape of a test; refusing loudly beats handing back a plausible blank.
+pub fn no_answer(op: String) -> ForeignError =
+  ForeignError { kind: "dawnop.UpstreamNotAnswered", message: op, cause: None }
+
+## Run `body` against the real network, through the process's shared client.
+##
+## This is the production handler, and unlike util/clock's `with_system_clock` it
+## is the form that gets used. Clock had three installation sites and one arm to
+## write at each, so writing the arm inline read better; Upstream has a dozen
+## sites and four arms apiece, and a dozen copies of the same four arms is a
+## dozen places for them to drift.
+pub fn with_upstream[T](cl: HttpCell, body: fn() -> T !Upstream !io) -> T !io = {
+  with handle Upstream {
+    exchange(req) => wire_exchange(cl, req)
+    exchange_bytes(req) => wire_exchange_bytes(cl, req)
+    exchange_stream(req) => wire_exchange_stream(cl, req)
+    exchange_start(req) => wire_start(cl, req)
+  }
+  body()
+}
+
+# ---- the arms that do reach a peer ----
+
+fn wire_exchange(cl: HttpCell, req: OutReq) -> Result[HttpResp, ForeignError] !io =
+  catch_fault(() => {
+    let built = request_for(req)
+    let resp = client_of(cl).send(built, BodyHandlers.ofString()!)!
+    HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! }
+  })
+
+# resp.body() is an erased-generic Object that is a byte[] at runtime — cast
+# reclaims it (Result since v0.33.0; a mismatch was a ClassCastException that
+# catch_fault turned into a fault, and it still lands in the same Err).
+fn wire_exchange_bytes(cl: HttpCell, req: OutReq) -> Result[BytesResp, ForeignError] !io =
+  flatten_fault(catch_fault(() => {
+    let built = request_for(req)
+    let resp = client_of(cl).send(built, BodyHandlers.ofByteArray()!)!
     let got: Result[Bytes, ForeignError] = cast(resp.body()!)
     match got {
       Ok(b) -> Ok(BytesResp { status: resp.statusCode(), bytes: b })
-      Err(e) -> Err(fe_text(e))
+      Err(e) -> Err(e)
     }
+  }))
+
+# ofInputStream returns as soon as the headers land; the body is NOT buffered.
+# The stream is unconsumed here — reading it later pumps bytes, and it MUST be
+# closed (transferTo to EOF, or close_stream) or the HttpClient connection leaks.
+fn wire_exchange_stream(cl: HttpCell, req: OutReq) -> Result[StreamResp, ForeignError] !io =
+  flatten_fault(catch_fault(() => {
+    let built = request_for(req)
+    let resp = client_of(cl).send(built, BodyHandlers.ofInputStream()!)!
+    let got: Result[InputStream, ForeignError] = cast(resp.body()!)
+    match got {
+      Ok(s) -> Ok(StreamResp { status: resp.statusCode(), stream: s })
+      Err(e) -> Err(e)
+    }
+  }))
+
+fn wire_start(cl: HttpCell, req: OutReq) -> Result[Pending, ForeignError] !io =
+  catch_fault(() => {
+    let built = request_for(req)
+    let f: CompletableFuture = client_of(cl).sendAsync(built, BodyHandlers.ofString()!)!
+    pending(req.budget_s, () => future_reply(f))
   })
+
+fn future_reply(f: CompletableFuture) -> Result[HttpResp, ForeignError] !io =
+  flatten_fault(catch_fault(() => {
+    let got: Result[HttpResponse, ForeignError] = cast(f.get()!)
+    match got {
+      Ok(resp) -> Ok(HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! })
+      Err(e) -> Err(e)
+    }
+  }))
+
+fn flatten_fault[T](r: Result[Result[T, ForeignError], ForeignError]) -> Result[T, ForeignError] =
   match r {
     Ok(inner) -> inner
+    Err(e) -> Err(e)
+  }
+
+# The one place a request is assembled, so the deadline cannot be forgotten by a
+# body handler that gets added later. Every outbound call in this module comes
+# through here; there is exactly one `.timeout(` in the file and this is it.
+fn request_for(req: OutReq) -> HttpRequest !io = {
+  let uri = URI.create(req.url)!
+  let base = HttpRequest.newBuilder()!.uri(uri)!
+  let timed = base.timeout(Duration.ofSeconds(req.budget_s)!)!
+  let withHeaders = add_headers(timed, req.headers, 0)
+  withHeaders.method(req.method, publisher_for(req.body))!.build()!
+}
+
+fn publisher_for(b: OutBody) -> BodyPublisher !io =
+  match b {
+    NoBody -> BodyPublishers.noBody()!
+    TextBody(s) -> BodyPublishers.ofString(s)!
+    RawBody(raw) -> BodyPublishers.ofByteArray(raw)!
+    PublishedBody(p) -> raw_body_publisher(p)
+  }
+
+fn raw_body_publisher(p: RequestBody) -> BodyPublisher = p
+
+# apply (header_name, value) pairs onto a builder, threading the builder through
+fn add_headers(b: Builder, hs: List[(String, String)], i: Int) -> Builder !io =
+  if i == len(hs) {
+    b
+  } else {
+    let (k, v) = hs[i]
+    let b2 = b.header(k, v)!
+    add_headers(b2, hs, i + 1)
+  }
+
+# ---- what callers see ----
+
+# The rewording is applied here rather than in an arm, so an arm that answers a
+# timeout gets the production wording for free and cannot spell it differently.
+fn settle[T](budget_s: Int, r: Result[T, ForeignError]) -> Result[T, String] =
+  match r {
+    Ok(v) -> Ok(v)
     Err(e) -> Err(deadline_text(budget_s, e))
   }
-}
+
+fn text_exchange(method: String, url: String, headers: List[(String, String)], body: OutBody, budget_s: Int) -> Result[HttpResp, String] !Upstream =
+  settle(budget_s, exchange(OutReq {
+    method: method, url: url, headers: headers, body: body, budget_s: budget_s,
+  }))
+
+## A GET whose body comes back as text. Ok on transport success; a non-2xx status
+## is still Ok and the caller inspects `.status`.
+pub fn fetch(url: String, headers: List[(String, String)]) -> Result[HttpResp, String] !Upstream =
+  text_exchange("GET", url, headers, NoBody, MANAGEMENT_TIMEOUT_S)
+
+## A POST with a text body. Management deadline, like `fetch`.
+pub fn post(url: String, headers: List[(String, String)], body: String) -> Result[HttpResp, String] !Upstream =
+  text_exchange("POST", url, headers, TextBody(body), MANAGEMENT_TIMEOUT_S)
+
+## POST a raw Bytes body, sent verbatim via ofByteArray. For binary proxy upload:
+## the assembled multipart body carries the file bytes exactly.
+pub fn post_bytes(url: String, headers: List[(String, String)], body: Bytes) -> Result[HttpResp, String] !Upstream =
+  text_exchange("POST", url, headers, RawBody(body), TRANSFER_TIMEOUT_S)
+
+## POST a request body produced by this module, on the transfer deadline (this
+## is WebDAV PUT's path to qiniu). Transport failures other than a timeout
+## retain their original text so callers keep their established error surface.
+pub fn post_body(url: String, headers: List[(String, String)], publisher: RequestBody) -> Result[HttpResp, String] !Upstream =
+  text_exchange("POST", url, headers, PublishedBody(publisher), TRANSFER_TIMEOUT_S)
+
+## A binary GET: the body comes back as first-class Bytes (spec §9.5.1). Ok on
+## transport success, the status carried like `fetch`. For the fm content proxy
+## (fetch bytes from qiniu, stream out).
+pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[BytesResp, String] !Upstream =
+  fetch_bytes_within(url, headers, TRANSFER_TIMEOUT_S)
+
+fn fetch_bytes_within(url: String, headers: List[(String, String)], budget_s: Int) -> Result[BytesResp, String] !Upstream =
+  settle(budget_s, exchange_bytes(OutReq {
+    method: "GET", url: url, headers: headers, body: NoBody, budget_s: budget_s,
+  }))
 
 ## True for a 2xx. Callers proxying bytes must check: an upstream error body is
 ## still bytes, and serving it as the file's content (what happens when the status
 ## is dropped) hands the user a JSON error where a file should be.
 pub fn ok_status(r: BytesResp) -> Bool = r.status >= 200 && r.status < 300
 
-## A streaming GET: the body comes back as a live InputStream via ofInputStream —
-## NOT buffered into memory. Ok on transport success (the status, incl. non-2xx, is
-## carried for the caller to decide, like fetch_bytes). For the fm content proxy and
-## WebDAV serve_file, so a large download costs a fixed transferTo buffer, not 1x the
-## object. body() is an erased-generic Object; cast reclaims it as InputStream (T from
-## the StreamResp.stream field type). The stream is unconsumed here — reading it later
-## pumps bytes; it MUST be closed (transferTo to EOF, or close_stream) or the
-## HttpClient connection leaks.
-pub fn fetch_stream(cl: HttpCell, url: String, headers: List[(String, String)]) -> Result[StreamResp, String] !io =
-  fetch_stream_within(cl, url, headers, TRANSFER_TIMEOUT_S)
+## A streaming GET: the body is a live stream, NOT buffered into memory. For the
+## fm content proxy and WebDAV serve_file, so a large download costs a fixed
+## transferTo buffer, not 1x the object.
+pub fn fetch_stream(url: String, headers: List[(String, String)]) -> Result[StreamResp, String] !Upstream =
+  fetch_stream_within(url, headers, TRANSFER_TIMEOUT_S)
 
-fn fetch_stream_within(cl: HttpCell, url: String, headers: List[(String, String)], budget_s: Int) -> Result[StreamResp, String] !io = {
-  let r: Result[Result[StreamResp, String], ForeignError] = catch_fault(() => {
-    let nobody: BodyPublisher = BodyPublishers.noBody()!
-    let req = request_for(url, headers, "GET", nobody, budget_s)
-    let resp = client_of(cl).send(req, BodyHandlers.ofInputStream()!)!
-    let got: Result[InputStream, ForeignError] = cast(resp.body()!)
-    match got {
-      Ok(s) -> Ok(StreamResp { status: resp.statusCode(), stream: s })
-      Err(e) -> Err(fe_text(e))
-    }
-  })
-  match r {
-    Ok(inner) -> inner
-    Err(e) -> Err(deadline_text(budget_s, e))
-  }
-}
+fn fetch_stream_within(url: String, headers: List[(String, String)], budget_s: Int) -> Result[StreamResp, String] !Upstream =
+  settle(budget_s, exchange_stream(OutReq {
+    method: "GET", url: url, headers: headers, body: NoBody, budget_s: budget_s,
+  }))
 
 ## True for a 2xx (206 included — a Range hit). Same contract as ok_status: a non-2xx
 ## upstream must NOT be streamed as file content; the handler maps it to an error and
@@ -193,15 +394,19 @@ pub fn close_stream(s: ResponseStream) -> Unit !io = {
 
 fn raw_response_stream(s: ResponseStream) -> InputStream = s
 
-# The one place a request is assembled, so the deadline cannot be forgotten by a
-# body handler that gets added later. Every outbound call in this module comes
-# through here; there is exactly one `.timeout(` in the file and this is it.
-fn request_for(url: String, headers: List[(String, String)], method: String, publisher: BodyPublisher, budget_s: Int) -> HttpRequest !io = {
-  let uri = URI.create(url)!
-  let base = HttpRequest.newBuilder()!.uri(uri)!
-  let timed = base.timeout(Duration.ofSeconds(budget_s)!)!
-  let withHeaders = add_headers(timed, headers, 0)
-  withHeaders.method(method, publisher)!.build()!
+## A stream over bytes already in hand. Nothing in production calls it: it is how
+## a handler arm answers `exchange_stream` without a socket, which is the only
+## way the streaming path gets a test that does not need one.
+pub fn bytes_stream(b: Bytes) -> ResponseStream !io = {
+  # a ByteArrayInputStream is an InputStream, but Dawn has no Java upcast: the
+  # only widening this backend has is `cast`, and `cast` wants an Object.
+  # requireNonNull's erased return type is that Object.
+  let boxed = Objects.requireNonNull(ByteArrayInputStream.new(b))!
+  let raw: Result[InputStream, ForeignError] = cast(boxed)
+  match raw {
+    Ok(s) -> s
+    Err(e) -> panic(fe_text(e))
+  }
 }
 
 # A timeout reads as a plain transport failure otherwise: the JDK's own text is
@@ -255,48 +460,10 @@ pub fn as_outbound[T](r: Result[T, String]) -> Result[T, String] =
 pub fn tag_outbound(m: String) -> String =
   if timed_out(m) { timeout(m) } else { upstream(m) }
 
-# `ferr.catch_text` with the timeout rewording folded in.
-fn catch_within[T](budget_s: Int, body: fn() -> T !io) -> Result[T, String] !io =
-  match catch_fault(body) {
-    Ok(v) -> Ok(v)
-    Err(e) -> Err(deadline_text(budget_s, e))
-  }
-
-# apply (header_name, value) pairs onto a builder, threading the builder through
-fn add_headers(b: Builder, hs: List[(String, String)], i: Int) -> Builder !io =
-  if i == len(hs) {
-    b
-  } else {
-    let (k, v) = hs[i]
-    let b2 = b.header(k, v)!
-    add_headers(b2, hs, i + 1)
-  }
-
-fn send(cl: HttpCell, method: String, url: String, headers: List[(String, String)], body: Option[String]) -> Result[HttpResp, String] !io = {
-  let publisher: BodyPublisher = match body {
-    Some(s) -> BodyPublishers.ofString(s)!
-    None -> BodyPublishers.noBody()!
-  }
-  send_body(cl, method, url, headers, publisher, MANAGEMENT_TIMEOUT_S)
-}
-
-fn send_body(cl: HttpCell, method: String, url: String, headers: List[(String, String)], publisher: BodyPublisher, budget_s: Int) -> Result[HttpResp, String] !io =
-  catch_within(budget_s, () => {
-    let req = request_for(url, headers, method, publisher, budget_s)
-    let resp = client_of(cl).send(req, BodyHandlers.ofString()!)!
-    HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! }
-  })
-
-pub fn fetch(cl: HttpCell, url: String, headers: List[(String, String)]) -> Result[HttpResp, String] !io =
-  send(cl, "GET", url, headers, None)
-
-pub fn post(cl: HttpCell, url: String, headers: List[(String, String)], body: String) -> Result[HttpResp, String] !io =
-  send(cl, "POST", url, headers, Some(body))
-
 # ---- requests that do not block the caller ----
 #
-# `send` occupies the calling thread for the whole exchange, so a handler making
-# several independent outbound calls pays their latencies end to end. The
+# `fetch`/`post` occupy the calling thread for the whole exchange, so a handler
+# making several independent outbound calls pays their latencies end to end. The
 # monitor endpoint makes a dozen, which is why it was the slowest thing on the
 # site by an order of magnitude.
 #
@@ -316,57 +483,42 @@ pub fn post(cl: HttpCell, url: String, headers: List[(String, String)], body: St
 #     exchanges in flight as it has started, and every start is a fixed call in
 #     the source; there is no queue that grows with load.
 
-## An exchange already on the wire. Await it with `await_resp`; one that is
-## never awaited still completes and is then discarded.
-pub opaque type Pending = PendingReq
-
-# The deadline travels with the request because `await_resp` has to name it,
-# and by then the builder that applied it is long gone.
-type PendingReq = { future: CompletableFuture, budget_s: Int }
-
 ## Start a GET without waiting for it. Management deadline, like `fetch`.
-pub fn fetch_start(cl: HttpCell, url: String, headers: List[(String, String)]) -> Result[Pending, String] !io =
-  send_start(cl, "GET", url, headers, None)
+pub fn fetch_start(url: String, headers: List[(String, String)]) -> Result[Pending, String] !Upstream =
+  start_exchange("GET", url, headers, NoBody)
 
 ## Start a POST without waiting for it. Management deadline, like `post`.
-pub fn post_start(cl: HttpCell, url: String, headers: List[(String, String)], body: String) -> Result[Pending, String] !io =
-  send_start(cl, "POST", url, headers, Some(body))
+pub fn post_start(url: String, headers: List[(String, String)], body: String) -> Result[Pending, String] !Upstream =
+  start_exchange("POST", url, headers, TextBody(body))
 
 # Only the management budget is offered asynchronously: every caller of these is
 # a probe or a management/statistics call. A transfer has one exchange and
 # nothing to overlap it with, and handing it a non-blocking start would only
 # invite a body to be buffered where today it streams.
-fn send_start(cl: HttpCell, method: String, url: String, headers: List[(String, String)], body: Option[String]) -> Result[Pending, String] !io =
-  catch_within(MANAGEMENT_TIMEOUT_S, () => {
-    let publisher: BodyPublisher = match body {
-      Some(s) -> BodyPublishers.ofString(s)!
-      None -> BodyPublishers.noBody()!
-    }
-    let req = request_for(url, headers, method, publisher, MANAGEMENT_TIMEOUT_S)
-    let f: CompletableFuture = client_of(cl).sendAsync(req, BodyHandlers.ofString()!)!
-    let p: Pending = PendingReq { future: f, budget_s: MANAGEMENT_TIMEOUT_S }
-    p
-  })
+fn start_exchange(method: String, url: String, headers: List[(String, String)], body: OutBody) -> Result[Pending, String] !Upstream =
+  start_within(method, url, headers, body, MANAGEMENT_TIMEOUT_S)
+
+fn start_within(method: String, url: String, headers: List[(String, String)], body: OutBody, budget_s: Int) -> Result[Pending, String] !Upstream =
+  settle(budget_s, exchange_start(OutReq {
+    method: method, url: url, headers: headers, body: body, budget_s: budget_s,
+  }))
 
 ## Wait for a started exchange. Identical contract to `fetch`/`post`: a
 ## transport failure is Err, a non-2xx status is Ok and the caller inspects it.
+##
+## It is `!io` and not `!Upstream`: the evidence was spent when the exchange was
+## started, and what is left is the thunk that start handed back. A handler that
+## wants to watch awaits watches the thunk it built.
 pub fn await_resp(p: Pending) -> Result[HttpResp, String] !io = {
-  let box: PendingReq = p
-  match catch_fault(() => {
-    let got: Result[HttpResponse, ForeignError] = cast(box.future.get()!)
-    got
-  }) {
-    Ok(inner) ->
-      match inner {
-        Ok(resp) -> Ok(HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! })
-        Err(e) -> Err(fe_text(e))
-      }
+  let box: PendingBox = p
+  match box.run() {
+    Ok(r) -> Ok(r)
     Err(e) -> Err(deadline_text(box.budget_s, unwrap_execution(e)))
   }
 }
 
 # `Future.get` reports every failure as an ExecutionException wrapping the real
-# one, so the fault arriving here is not the fault a blocking `send` would have
+# one, so the fault arriving here is not the fault a blocking exchange would have
 # seen: asking "is this a timeout" of the wrapper answers no for every timeout
 # there is. Rebuilding the cause puts the SAME exception in front of
 # `deadline_text` -- the one predicate on ForeignError this file allows itself
@@ -391,11 +543,6 @@ fn unwrap_execution(e: ForeignError) -> ForeignError =
       }
   }
 
-## POST a raw Bytes body, sent verbatim via ofByteArray. For binary proxy upload:
-## the assembled multipart body carries the file bytes exactly.
-pub fn post_bytes(cl: HttpCell, url: String, headers: List[(String, String)], body: Bytes) -> Result[HttpResp, String] !io =
-  post_body(cl, url, headers, BodyPublishers.ofByteArray(body)!)
-
 ## Build head ++ file ++ tail without materializing the file in the heap.
 ## `ofFile` streams from disk, and `concat` preserves an exact Content-Length.
 pub fn file_body(head: Bytes, src: String, tail: Bytes) -> Result[RequestBody, String] !io =
@@ -409,19 +556,24 @@ pub fn file_body(head: Bytes, src: String, tail: Bytes) -> Result[RequestBody, S
     Ok(p) -> Ok(p)
   }
 
-## POST a request body produced by this module, on the transfer deadline (this
-## is WebDAV PUT's path to qiniu). Transport failures other than a timeout
-## retain their original text so callers keep their established error surface.
-pub fn post_body(cl: HttpCell, url: String, headers: List[(String, String)], publisher: RequestBody) -> Result[HttpResp, String] !io = {
-  let raw: BodyPublisher = publisher
-  send_body(cl, "POST", url, headers, raw, TRANSFER_TIMEOUT_S)
-}
-
 # ---- tests ----
 #
-# These used to GET https://dawnop.com/api/health, which made a unit test of this
-# wrapper depend on production being up and reachable. A loopback server is both
-# hermetic and a stronger assertion: it can see what we actually put on the wire.
+# Two kinds live here, and the split is the point of this module's effect.
+#
+#   - Wire tests keep a loopback peer and go through `with_upstream`. They are
+#     the only evidence for the claims that are about the socket: that the
+#     deadline reaches it, that one client is one connection, that `sendAsync`
+#     really overlaps. A handler cannot answer those, and a handler that
+#     pretended to would be testing itself.
+#   - Handler tests install arms instead. Everything above the wire -- the
+#     rewording, the classification, which budget each shape asks for, what the
+#     request looked like -- is production code they exercise in microseconds.
+#
+# Before the effect the second kind did not exist, so the claims it covers were
+# either untested or paid for in seconds. The two that cost ten seconds each (a
+# quiet peer against the production budget, and its async twin) are gone: the
+# part about the wire is kept by the budget-of-1 tests below, and the part about
+# the wording and the status is asserted by a handler.
 
 ## Serve one canned response on an ephemeral port; returns (server, port).
 fn echo_server(status: Int, body: String) -> (HttpServer, Int) !io = {
@@ -441,7 +593,7 @@ fn echo_server(status: Int, body: String) -> (HttpServer, Int) !io = {
 
 test "GET returns the status and body the server sent" {
   let (server, port) = echo_server(200, """{"status":"ok"}""")
-  match fetch(new_client(), "http://127.0.0.1:$port/api/health", []) {
+  match with_upstream(new_client(), () => fetch("http://127.0.0.1:$port/api/health", [])) {
     Ok(r) -> {
       assert r.status == 200
       assert str.contains(r.body, "ok")
@@ -453,7 +605,7 @@ test "GET returns the status and body the server sent" {
 
 test "a bad host is an Err, not a crash" {
   # .invalid is reserved by RFC 2606 and never resolves — no live host involved
-  match fetch(new_client(), "https://no-such-host.invalid/", []) {
+  match with_upstream(new_client(), () => fetch("https://no-such-host.invalid/", [])) {
     Ok(_) -> { assert false }
     Err(m) -> { assert str.len(m) > 0 }
   }
@@ -463,7 +615,8 @@ test "custom headers reach the server" {
   # the old version only asserted 200 back from prod, which passes even if the
   # headers are silently dropped; echoing X-Probe proves they went out
   let (server, port) = echo_server(200, "probe=")
-  match fetch(new_client(), "http://127.0.0.1:$port/", [("X-Probe", "dawn"), ("Accept", "application/json")]) {
+  let headers = [("X-Probe", "dawn"), ("Accept", "application/json")]
+  match with_upstream(new_client(), () => fetch("http://127.0.0.1:$port/", headers)) {
     Ok(r) -> {
       assert r.status == 200
       assert r.body == "probe=dawn"
@@ -475,7 +628,7 @@ test "custom headers reach the server" {
 
 test "a non-2xx status is Ok, not Err — the caller decides" {
   let (server, port) = echo_server(404, "nope:")
-  match fetch(new_client(), "http://127.0.0.1:$port/", []) {
+  match with_upstream(new_client(), () => fetch("http://127.0.0.1:$port/", [])) {
     Ok(r) -> { assert r.status == 404 }
     Err(m) -> panic(m)
   }
@@ -484,7 +637,7 @@ test "a non-2xx status is Ok, not Err — the caller decides" {
 
 test "fetch_stream hands back a readable upstream stream" {
   let (server, port) = echo_server(200, "streamed:")
-  match fetch_stream(new_client(), "http://127.0.0.1:$port/", [("X-Probe", "s")]) {
+  match with_upstream(new_client(), () => fetch_stream("http://127.0.0.1:$port/", [("X-Probe", "s")])) {
     Ok(r) -> {
       assert r.status == 200
       assert ok_stream(r)
@@ -494,6 +647,20 @@ test "fetch_stream hands back a readable upstream stream" {
       assert bytes.decode_utf8_lossy(raw) == "streamed:s"
     }
     Err(m) -> panic("fetch_stream failed: $m")
+  }
+  server.stop(0)
+}
+
+test "fetch_stream carries a non-2xx status; ok_stream is false" {
+  let (server, port) = echo_server(404, "nope:")
+  match with_upstream(new_client(), () => fetch_stream("http://127.0.0.1:$port/", [])) {
+    Ok(r) -> {
+      assert r.status == 404
+      assert not ok_stream(r)
+      # a rejecting caller closes the stream so the connection frees
+      close_stream(r.stream)
+    }
+    Err(m) -> panic(m)
   }
   server.stop(0)
 }
@@ -518,48 +685,26 @@ fn stall_server(stall_ms: Int, status: Int, body: String) -> (HttpServer, Int) !
   (server, server.getAddress()!.getPort())
 }
 
-test "a quiet peer hits the management deadline instead of blocking forever" {
-  # This is the regression: before the deadline existed, `fetch` against a peer
-  # that accepts and then goes quiet blocked in send() with no upper bound, and
-  # gc's delete_obj runs that call while holding BEGIN IMMEDIATE.
-  #
-  # The peer answers 200 five seconds AFTER the budget. Both failure modes are
-  # therefore visible and bounded: no deadline (or an absurd one, ofDays(1)) is
-  # a late Ok, and a too-tight deadline is an early Err. Asserting only "Err" or
-  # only "there is a .timeout( in the source" would pass for both.
-  let stall_ms = (MANAGEMENT_TIMEOUT_S + 5) * 1000
-  let (server, port) = stall_server(stall_ms, 200, "late")
-  let t0 = System.currentTimeMillis()
-  let outcome = fetch(new_client(), "http://127.0.0.1:$port/", [])
-  let elapsed = System.currentTimeMillis() - t0
-  server.stop(0)
-  match outcome {
-    Ok(r) ->
-      panic("a quiet peer must not answer: got ${to_string(r.status)} after ${to_string(elapsed)}ms")
-    Err(m) -> {
-      # the text names the budget, so a timeout is not just another 500 line
-      assert str.contains(m, "outbound HTTP timed out after ${to_string(MANAGEMENT_TIMEOUT_S)}s")
-      # it waited for the budget rather than failing on the spot ...
-      assert elapsed >= (MANAGEMENT_TIMEOUT_S - 2) * 1000
-      # ... and gave up on the budget rather than riding the peer's stall out
-      assert elapsed <= (MANAGEMENT_TIMEOUT_S + 3) * 1000
-    }
-  }
-}
-
 test "every request shape carries its deadline, whichever body handler it uses" {
   # `send()` returns at different points per handler: ofString/ofByteArray only
   # once the body is complete, ofInputStream as soon as the headers land. Each
   # shape assembles its own request, so each is asked separately whether the
   # deadline made it onto the wire. Small budget, small stall: the point here is
-  # coverage of the shapes, not the production values.
+  # coverage of the shapes, not the production values — which budget each public
+  # entry point asks for is a separate, handler-answered assertion below.
+  #
+  # This is also what is left of the ten-second regression test. That the
+  # deadline is real, and is enforced by the socket rather than by anything in
+  # this file, can only be shown against a peer that stalls; that it is the
+  # MANAGEMENT budget `fetch` hands over cannot be shown that way at all, only
+  # waited for.
   let budget = 1
   let stall_ms = 6000
   let ceiling = 4000
 
   let (s1, p1) = stall_server(stall_ms, 200, "late")
   let t1 = System.currentTimeMillis()
-  let bytes_outcome = fetch_bytes_within(new_client(), "http://127.0.0.1:$p1/", [], budget)
+  let bytes_outcome = with_upstream(new_client(), () => fetch_bytes_within("http://127.0.0.1:$p1/", [], budget))
   let e1 = System.currentTimeMillis() - t1
   s1.stop(0)
   match bytes_outcome {
@@ -570,7 +715,7 @@ test "every request shape carries its deadline, whichever body handler it uses" 
 
   let (s2, p2) = stall_server(stall_ms, 200, "late")
   let t2 = System.currentTimeMillis()
-  let stream_outcome = fetch_stream_within(new_client(), "http://127.0.0.1:$p2/", [], budget)
+  let stream_outcome = with_upstream(new_client(), () => fetch_stream_within("http://127.0.0.1:$p2/", [], budget))
   let e2 = System.currentTimeMillis() - t2
   s2.stop(0)
   match stream_outcome {
@@ -581,9 +726,9 @@ test "every request shape carries its deadline, whichever body handler it uses" 
 
   # the POST/publisher shape, i.e. what upload_file and upload_bytes ride on
   let (s3, p3) = stall_server(stall_ms, 200, "late")
-  let publisher: BodyPublisher = BodyPublishers.ofString("x")!
   let t3 = System.currentTimeMillis()
-  let post_outcome = send_body(new_client(), "POST", "http://127.0.0.1:$p3/", [], publisher, budget)
+  let post_outcome = with_upstream(new_client(), () =>
+      text_exchange("POST", "http://127.0.0.1:$p3/", [], TextBody("x"), budget))
   let e3 = System.currentTimeMillis() - t3
   s3.stop(0)
   match post_outcome {
@@ -649,7 +794,7 @@ fn port_server() -> (HttpServer, Int) !io = {
 }
 
 fn probe_source_port(cl: HttpCell, url: String) -> String !io =
-  match fetch(cl, url, []) {
+  match with_upstream(cl, () => fetch(url, [])) {
     Ok(r) -> r.body
     Err(m) -> panic("source-port probe failed: $m")
   }
@@ -757,10 +902,16 @@ fn must[T](r: Result[T, String]) -> T !io =
   }
 
 test "started requests travel together, not one after another" {
-  # The point of the pair, and the only thing that can tell a real overlap from
+  # The point of the trio, and the only thing that can tell a real overlap from
   # a start that secretly blocks: three peers that each stall for the same
   # second. Serial, that is three seconds; together, one. Asserting only "the
   # bodies came back" passes for both, which is why the bound is on the clock.
+  #
+  # This one stays on the wire because what it is about IS the wire: whether
+  # `sendAsync` overlaps. A handler answering `exchange_start` proves nothing
+  # about the JDK. What a handler CAN prove without a clock is that a caller
+  # starts everything before it awaits anything — that assertion belongs to the
+  # caller, and svc/monitor writes it.
   let stall_ms = 1000
   let (s1, p1) = stall_server(stall_ms, 200, "one")
   let (s2, p2) = stall_server(stall_ms, 200, "two")
@@ -768,14 +919,18 @@ test "started requests travel together, not one after another" {
   let cl = new_client()
 
   let t0 = System.currentTimeMillis()
-  let f1 = must(fetch_start(cl, "http://127.0.0.1:$p1/", []))
-  let f2 = must(fetch_start(cl, "http://127.0.0.1:$p2/", []))
-  let f3 = must(fetch_start(cl, "http://127.0.0.1:$p3/", []))
+  let started = with_upstream(cl, () => {
+    let f1 = must(fetch_start("http://127.0.0.1:$p1/", []))
+    let f2 = must(fetch_start("http://127.0.0.1:$p2/", []))
+    let f3 = must(fetch_start("http://127.0.0.1:$p3/", []))
+    (f1, f2, f3)
+  })
   # starting must not be waiting: this is before any body has landed
   let started_at = System.currentTimeMillis() - t0
-  let r1 = must(await_resp(f1))
-  let r2 = must(await_resp(f2))
-  let r3 = must(await_resp(f3))
+  let (g1, g2, g3) = started
+  let r1 = must(await_resp(g1))
+  let r2 = must(await_resp(g2))
+  let r3 = must(await_resp(g3))
   let elapsed = System.currentTimeMillis() - t0
   s1.stop(0)
   s2.stop(0)
@@ -795,15 +950,23 @@ test "an async timeout reads exactly like a blocking one" {
   # `Future.get` reports failures as ExecutionException, so without unwrapping
   # the cause every async timeout would be classified as a plain upstream error
   # and lose the budget from its text -- a 502 where the blocking path says 504.
-  let stall_ms = (MANAGEMENT_TIMEOUT_S + 5) * 1000
+  #
+  # A real future is what makes this evidence: that `get` wraps, and wraps in
+  # that shape, is a fact about the JDK and not about this file. It runs on a
+  # budget of one second rather than the production ten because the budget is
+  # not what is under test here; which budget each entry point asks for is
+  # asserted by a handler below, in microseconds.
+  let budget = 1
+  let stall_ms = 6000
   let (server, port) = stall_server(stall_ms, 200, "late")
-  let started = must(fetch_start(new_client(), "http://127.0.0.1:$port/", []))
+  let started = with_upstream(new_client(), () =>
+      must(start_within("GET", "http://127.0.0.1:$port/", [], NoBody, budget)))
   let outcome = await_resp(started)
   server.stop(0)
   match outcome {
     Ok(r) -> panic("a quiet peer must not answer: got ${to_string(r.status)}")
     Err(m) -> {
-      assert m == "outbound HTTP timed out after ${to_string(MANAGEMENT_TIMEOUT_S)}s: java.net.http.HttpTimeoutException: request timed out"
+      assert m == "outbound HTTP timed out after ${to_string(budget)}s: java.net.http.HttpTimeoutException: request timed out"
       # and the text and the tag are still one judgement, as for `fetch`
       assert timed_out(m)
       let tagged: Result[Unit, String] = as_outbound(Err(m))
@@ -849,16 +1012,290 @@ test "unwrap_execution recovers the fault the blocking path would have seen" {
   assert fe_text(unwrap_execution(direct)) == "java.lang.InterruptedException"
 }
 
-test "fetch_stream carries a non-2xx status; ok_stream is false" {
-  let (server, port) = echo_server(404, "nope:")
-  match fetch_stream(new_client(), "http://127.0.0.1:$port/", []) {
+# ---- tests that install a handler instead of a peer ----
+
+## An append-only string, for arms that need to report what they saw. Dawn has
+## no mutable global state, so this is the same shape util/ttl's cells use.
+fn log_new() -> AtomicReference !io = AtomicReference.new("")
+
+fn log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!
+
+fn log_add(r: AtomicReference, s: String) -> Unit !io = r.set("${log_read(r)}$s;")
+
+## The timeout the JDK raises when a request deadline expires. An arm answering
+## with it is answering exactly what the socket would have.
+fn wire_timeout() -> ForeignError =
+  ForeignError {
+    kind: "java.net.http.HttpTimeoutException",
+    message: "request timed out",
+    cause: None,
+  }
+
+## A handler that answers every text exchange with `r` and refuses the rest.
+## The refusals are not padding: an operation this test did not mean to exercise
+## must fail loudly rather than hand back a plausible blank.
+fn with_text_answer[T](r: Result[HttpResp, ForeignError], body: fn() -> T !Upstream) -> T = {
+  with handle Upstream {
+    exchange(req) => r
+    exchange_bytes(req) => Err(no_answer("exchange_bytes"))
+    exchange_stream(req) => Err(no_answer("exchange_stream"))
+    exchange_start(req) => Err(no_answer("exchange_start"))
+  }
+  body()
+}
+
+test "an injected deadline is the production deadline, in microseconds" {
+  # THE assertion this knife was cut for. Before the effect, showing that a
+  # timeout is worded with its budget, recognised by `timed_out`, tagged
+  # KTimeout and turned into a 504 meant standing up a peer that stalls past the
+  # ten-second management budget and waiting for it. Every line below is the
+  # same production code — deadline_text, timed_out, as_outbound, split_kind —
+  # reached by answering the operation instead of the socket.
+  let t0 = System.currentTimeMillis()
+  let outcome = with_text_answer(Err(wire_timeout()), () => fetch("http://127.0.0.1:1/", []))
+  let elapsed = System.currentTimeMillis() - t0
+
+  match outcome {
+    Ok(r) -> panic("a refusing handler must not answer: ${to_string(r.status)}")
+    Err(m) -> {
+      # the wording names the budget the shape asked for, byte for byte
+      assert m == "outbound HTTP timed out after ${to_string(MANAGEMENT_TIMEOUT_S)}s: java.net.http.HttpTimeoutException: request timed out"
+      assert timed_out(m)
+      let tagged: Result[Unit, String] = as_outbound(Err(m))
+      match tagged {
+        Ok(_) -> { assert false }
+        Err(t) -> {
+          let (k, text) = split_kind(t)
+          # KTimeout is what the API edge turns into 504; KUpstream is 502
+          assert k == KTimeout
+          assert text == m
+        }
+      }
+    }
+  }
+  # the whole judgement, at the speed of a function call rather than a deadline
+  assert elapsed < 1000
+}
+
+test "the connect-timeout class is a timeout here too, and a refusal is not" {
+  let connect = ForeignError {
+    kind: "java.net.http.HttpConnectTimeoutException",
+    message: "HTTP connect timed out",
+    cause: None,
+  }
+  match with_text_answer(Err(connect), () => fetch("http://127.0.0.1:1/", [])) {
+    Ok(_) -> { assert false }
+    Err(m) -> {
+      assert timed_out(m)
+      let tagged: Result[Unit, String] = as_outbound(Err(m))
+      match tagged {
+        Ok(_) -> { assert false }
+        Err(t) -> {
+          let (k, _text) = split_kind(t)
+          assert k == KTimeout
+        }
+      }
+    }
+  }
+
+  let refused = ForeignError {
+    kind: "java.net.ConnectException", message: "Connection refused", cause: None,
+  }
+  match with_text_answer(Err(refused), () => fetch("http://127.0.0.1:1/", [])) {
+    Ok(_) -> { assert false }
+    Err(m) -> {
+      # a peer that answered "no" keeps its text untouched and is a 502
+      assert m == "java.net.ConnectException: Connection refused"
+      assert not timed_out(m)
+      let tagged: Result[Unit, String] = as_outbound(Err(m))
+      match tagged {
+        Ok(_) -> { assert false }
+        Err(t) -> {
+          let (k, _text) = split_kind(t)
+          assert k == KUpstream
+        }
+      }
+    }
+  }
+}
+
+test "the installed handler is what the callers see, and the machine is not" {
+  # util/clock's leak assertion, for this effect. Port 1 is privileged and
+  # nothing on this host listens there, and no HttpCell is built anywhere in
+  # this block: if any of these answers came from the network the test could
+  # not pass at all.
+  let answered = with_text_answer(Ok(HttpResp { status: 418, body: "from the arm" }), () => {
+    let a = fetch("http://127.0.0.1:1/never", [])
+    let b = post("http://127.0.0.1:1/never", [], "body")
+    let c = post_bytes("http://127.0.0.1:1/never", [], bytes.utf8("raw"))
+    (a, b, c)
+  })
+  let (a, b, c) = answered
+  assert a == Ok(HttpResp { status: 418, body: "from the arm" })
+  assert a == b
+  assert b == c
+
+  # and the distinction is real: the same URL through the production handler
+  # fails, because nothing is listening there
+  match with_upstream(new_client(), () => fetch("http://127.0.0.1:1/never", [])) {
+    Ok(r) -> panic("port 1 answered ${to_string(r.status)}")
+    Err(m) -> { assert str.len(m) > 0 }
+  }
+}
+
+test "the arm reads the request it was given, not a constant" {
+  # The negative control, in the shape util/clock's frozen clock uses: an arm
+  # that ignored its argument and returned a fixed value would satisfy every
+  # assertion above. Echoing the request back is what tells them apart.
+  let echo = () => {
+    with handle Upstream {
+      exchange(req) => Ok(HttpResp {
+        status: 200,
+        body: "${req.method} ${req.url} ${to_string(len(req.headers))} ${body_tag(req.body)}",
+      })
+      exchange_bytes(req) => Err(no_answer("exchange_bytes"))
+      exchange_stream(req) => Err(no_answer("exchange_stream"))
+      exchange_start(req) => Err(no_answer("exchange_start"))
+    }
+    (
+      fetch("http://a/", []),
+      fetch("http://b/", [("X", "1")]),
+      post("http://a/", [], "payload"),
+    )
+  }
+  let (a, b, c) = echo()
+  assert a == Ok(HttpResp { status: 200, body: "GET http://a/ 0 none" })
+  assert b == Ok(HttpResp { status: 200, body: "GET http://b/ 1 none" })
+  assert c == Ok(HttpResp { status: 200, body: "POST http://a/ 0 text:payload" })
+  # three calls, three different answers: the arm cannot be a constant
+  assert a != b
+  assert b != c
+  assert a != c
+}
+
+fn body_tag(b: OutBody) -> String =
+  match b {
+    NoBody -> "none"
+    TextBody(s) -> "text:$s"
+    RawBody(raw) -> "raw:${to_string(bytes.len(raw))}"
+    PublishedBody(_p) -> "published"
+  }
+
+test "every call shape asks for the budget its deadline was chosen for" {
+  # Which constant a given entry point hands to the builder used to be knowable
+  # only by waiting for it: the ten-second test at the top of this file existed
+  # to show that `fetch` uses MANAGEMENT_TIMEOUT_S, and it showed it by taking
+  # ten seconds. An arm reads the number off the request.
+  let seen = log_new()
+  let tmp = File.createTempFile("dawn-upstream-", ".bin")!
+  let src = tmp.getPath()!
+  let published = must(file_body(bytes.utf8("h"), src, bytes.utf8("t")))
+
+  with handle Upstream {
+    exchange(req) => {
+      log_add(seen, "${req.method}/${body_tag(req.body)}=${to_string(req.budget_s)}")
+      Ok(HttpResp { status: 200, body: "" })
+    }
+    exchange_bytes(req) => {
+      log_add(seen, "bytes=${to_string(req.budget_s)}")
+      Ok(BytesResp { status: 200, bytes: bytes.utf8("") })
+    }
+    exchange_stream(req) => {
+      log_add(seen, "stream=${to_string(req.budget_s)}")
+      Err(no_answer("exchange_stream"))
+    }
+    exchange_start(req) => {
+      log_add(seen, "start/${req.method}=${to_string(req.budget_s)}")
+      Err(no_answer("exchange_start"))
+    }
+  }
+  let _a = fetch("http://x/", [])
+  let _b = post("http://x/", [], "p")
+  let _c = post_bytes("http://x/", [], bytes.utf8("r"))
+  let _d = post_body("http://x/", [], published)
+  let _e = fetch_bytes("http://x/", [])
+  let _f = fetch_stream("http://x/", [])
+  let _g = fetch_start("http://x/", [])
+  let _h = post_start("http://x/", [], "p")
+  let _deleted = tmp.delete()
+
+  let m = to_string(MANAGEMENT_TIMEOUT_S)
+  let t = to_string(TRANSFER_TIMEOUT_S)
+  # a management call is small and may run inside the SQLite write lock; a
+  # transfer moves object bytes and its deadline is a cap on duration
+  assert log_read(seen) ==
+    "GET/none=$m;POST/text:p=$m;POST/raw:1=$t;POST/published=$t;bytes=$t;stream=$t;start/GET=$m;start/POST=$m;"
+}
+
+test "a stream can be answered without a socket" {
+  # The streaming path had no test that did not need a peer, because a
+  # StreamResp carries a live InputStream. `bytes_stream` is how an arm builds
+  # one, which is what puts webdav's and fm's proxy paths within reach of a
+  # handler.
+  let served = {
+    with handle Upstream {
+      exchange(req) => Err(no_answer("exchange"))
+      exchange_bytes(req) => Err(no_answer("exchange_bytes"))
+      exchange_stream(req) => Ok(StreamResp { status: 206, stream: bytes_stream(bytes.utf8("partial")) })
+      exchange_start(req) => Err(no_answer("exchange_start"))
+    }
+    fetch_stream("http://127.0.0.1:1/", [])
+  }
+  match served {
     Ok(r) -> {
-      assert r.status == 404
-      assert not ok_stream(r)
-      # a rejecting caller closes the stream so the connection frees
+      assert r.status == 206
+      assert ok_stream(r)
+      let raw = raw_response_stream(r.stream).readAllBytes()!
       close_stream(r.stream)
+      assert bytes.decode_utf8_lossy(raw) == "partial"
     }
     Err(m) -> panic(m)
   }
-  server.stop(0)
+}
+
+test "an answered start delivers through await_resp, and its failure is reworded" {
+  # A Pending is a thunk, so an arm answers a start by naming what the await
+  # will find. Two things follow, and both are asserted here: the await runs the
+  # arm's thunk (so a handler can watch awaits), and a failure delivered that way
+  # goes through the same unwrap-and-reword `Future.get` failures do.
+  let seen = log_new()
+  let started = {
+    with handle Upstream {
+      exchange(req) => Err(no_answer("exchange"))
+      exchange_bytes(req) => Err(no_answer("exchange_bytes"))
+      exchange_stream(req) => Err(no_answer("exchange_stream"))
+      exchange_start(req) => {
+        log_add(seen, "start ${req.url}")
+        let url = req.url
+        Ok(pending(req.budget_s, () => {
+          log_add(seen, "await $url")
+          if str.ends_with(url, "/slow") {
+            Err(ForeignError {
+              kind: "java.util.concurrent.ExecutionException",
+              message: "java.net.http.HttpTimeoutException: request timed out",
+              cause: Some("java.net.http.HttpTimeoutException: request timed out"),
+            })
+          } else {
+            Ok(HttpResp { status: 200, body: url })
+          }
+        }))
+      }
+    }
+    (must(fetch_start("http://x/ok", [])), must(fetch_start("http://x/slow", [])))
+  }
+  let (ok_one, slow_one) = started
+  # both starts happened before either await: the thunks have not run yet
+  assert log_read(seen) == "start http://x/ok;start http://x/slow;"
+
+  assert await_resp(ok_one) == Ok(HttpResp { status: 200, body: "http://x/ok" })
+  match await_resp(slow_one) {
+    Ok(_) -> { assert false }
+    Err(m) -> {
+      # the ExecutionException wrapper is peeled and the cause reworded, exactly
+      # as for a real future
+      assert m == "outbound HTTP timed out after ${to_string(MANAGEMENT_TIMEOUT_S)}s: java.net.http.HttpTimeoutException: request timed out"
+      assert timed_out(m)
+    }
+  }
+  assert log_read(seen) == "start http://x/ok;start http://x/slow;await http://x/ok;await http://x/slow;"
 }

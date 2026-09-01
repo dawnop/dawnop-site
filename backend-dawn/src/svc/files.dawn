@@ -16,7 +16,7 @@
 use std/str
 use std/map
 use std/bytes
-use db/sql.{DbConn, with_immediate_tx}
+use db/sql.{DbConn, with_immediate_tx, open, exec}
 use svc/auth.{Auth}
 use qiniu/creds.{Qiniu}
 use db/db.{with_db}
@@ -26,7 +26,11 @@ use util/crypto.{uuid_hex}
 use qiniu/sign.{private_url}
 use qiniu/rs.{delete_obj, copy_obj, upload_text, upload_bytes}
 use util/errkind.{conflict}
-use util/http.{HttpCell, as_outbound}
+use util/http.{Upstream, HttpResp, MANAGEMENT_TIMEOUT_S, as_outbound, no_answer}
+use java "java.lang.String"
+use java "java.lang.System"
+use java "java.lang.Thread"
+use java "java.util.concurrent.atomic.AtomicReference"
 use util/jsonx.{obj, jstr}
 use util/ttl.{now_s}
 use json/value.{Json, JArr, JObj, JStr}
@@ -46,16 +50,16 @@ pub fn signed_url(q: Qiniu, key: String, suffix: String) -> String !io = {
 pub fn rebase(src_root: String, dst_root: String, path: String) -> String =
   dst_root ++ str.slice(path, str.len(src_root), str.len(path))
 
-fn best_effort_gc(body: fn() -> Result[Unit, String] !io) -> Unit !io = {
+fn best_effort_gc[!e](body: fn() -> Result[Unit, String] !e !io) -> Unit !e !io = {
   let _outcome: Result[Result[Unit, String], ForeignError] = catch_panic(body)
   ()
 }
 
-pub fn gc_unreferenced(a: Auth, candidate: Option[String]) -> Unit !io =
+pub fn gc_unreferenced(a: Auth, candidate: Option[String]) -> Unit !Upstream !io =
   best_effort_gc(() =>
-      with_db(a.db.path, a.db.ext, c => gc_unreferenced_on(a.qiniu, a.http, c, candidate)))
+      with_db(a.db.path, a.db.ext, c => gc_unreferenced_on(a.qiniu, c, candidate)))
 
-fn gc_unreferenced_on(q: Qiniu, cl: HttpCell, c: DbConn, candidate: Option[String]) -> Result[Unit, String] !io =
+fn gc_unreferenced_on(q: Qiniu, c: DbConn, candidate: Option[String]) -> Result[Unit, String] !Upstream !io =
   match candidate {
     Some(key) ->
       if str.trim(key) == "" {
@@ -67,7 +71,7 @@ fn gc_unreferenced_on(q: Qiniu, cl: HttpCell, c: DbConn, candidate: Option[Strin
           if referenced || pending {
             Ok(())
           } else {
-            let _d: Result[Unit, String] = delete_obj(cl, q, key)
+            let _d: Result[Unit, String] = delete_obj(q, key)
             Ok(())
           }
         })
@@ -75,10 +79,10 @@ fn gc_unreferenced_on(q: Qiniu, cl: HttpCell, c: DbConn, candidate: Option[Strin
     None -> Ok(())
   }
 
-pub fn gc_rows_unreferenced(a: Auth, rows: List[FileRow]) -> Unit !io =
+pub fn gc_rows_unreferenced(a: Auth, rows: List[FileRow]) -> Unit !Upstream !io =
   gc_row_candidates(a, rows, 0)
 
-fn gc_row_candidates(a: Auth, rows: List[FileRow], i: Int) -> Unit !io =
+fn gc_row_candidates(a: Auth, rows: List[FileRow], i: Int) -> Unit !Upstream !io =
   if i >= len(rows) {
     ()
   } else {
@@ -86,10 +90,10 @@ fn gc_row_candidates(a: Auth, rows: List[FileRow], i: Int) -> Unit !io =
     gc_row_candidates(a, rows, i + 1)
   }
 
-pub fn gc_copy_tree_unreferenced(a: Auth, tree: CopyTree) -> Unit !io =
+pub fn gc_copy_tree_unreferenced(a: Auth, tree: CopyTree) -> Unit !Upstream !io =
   gc_copied_rows_unreferenced(a, tree.rows, 0)
 
-fn gc_copied_rows_unreferenced(a: Auth, rows: List[CopiedRow], i: Int) -> Unit !io =
+fn gc_copied_rows_unreferenced(a: Auth, rows: List[CopiedRow], i: Int) -> Unit !Upstream !io =
   if i >= len(rows) {
     ()
   } else {
@@ -99,9 +103,9 @@ fn gc_copied_rows_unreferenced(a: Auth, rows: List[CopiedRow], i: Int) -> Unit !
 
 ## Duplicate an object under a fresh uuid key; Ok carries the new key. This is
 ## what makes copy (unlike rename/move) a real object-store operation.
-pub fn copy_object(q: Qiniu, cl: HttpCell, src_key: String) -> Result[String, String] !io = {
+pub fn copy_object(q: Qiniu, src_key: String) -> Result[String, String] !Upstream !io = {
   let new_key = uuid_hex()
-  let _c = as_outbound(copy_obj(cl, q, src_key, new_key))?
+  let _c = as_outbound(copy_obj(q, src_key, new_key))?
   Ok(new_key)
 }
 
@@ -174,15 +178,15 @@ fn plan_fm_moves(c: DbConn, sources: List[String], dest: String, i: Int, acc: Li
 
 # ---- copy (dirs are recreated, files get a fresh qiniu object) ----
 
-pub fn do_copy(q: Qiniu, cl: HttpCell, c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
+pub fn do_copy(q: Qiniu, c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !Upstream !io =
   {
     let planned = plan_fm_copies(c, sources, dest, i, [])?
     let _u = validate_copy_plan_targets(planned)?
-    let copied = copy_tree_list_objects(q, cl, planned, 0, [])?
+    let copied = copy_tree_list_objects(q, planned, 0, [])?
     match commit_fm_copies(c, copied) {
       Ok(_) -> fs_data(c, cur)
       Err(m) -> {
-        let _gc = gc_copy_trees_on(q, cl, c, copied, 0)
+        let _gc = gc_copy_trees_on(q, c, copied, 0)
         Err(m)
       }
     }
@@ -211,17 +215,17 @@ fn plan_fm_copies(c: DbConn, sources: List[String], dest: String, i: Int, acc: L
     }
   }
 
-fn copy_tree_list_objects(q: Qiniu, cl: HttpCell, trees: List[CopyTree], i: Int, acc: List[CopyTree]) -> Result[List[CopyTree], String] !io =
+fn copy_tree_list_objects(q: Qiniu, trees: List[CopyTree], i: Int, acc: List[CopyTree]) -> Result[List[CopyTree], String] !Upstream !io =
   if i >= len(trees) {
     Ok(acc)
   } else {
-    match copy_tree_objects(q, cl, trees[i]) {
+    match copy_tree_objects(q, trees[i]) {
       Err(m) -> Err(m)
       Ok(copied) ->
-        match copy_tree_list_objects(q, cl, trees, i + 1, acc ++ [copied]) {
+        match copy_tree_list_objects(q, trees, i + 1, acc ++ [copied]) {
           Ok(done) -> Ok(done)
           Err(m) -> {
-            let _gc = cleanup_copy_tree_direct(q, cl, copied)
+            let _gc = cleanup_copy_tree_direct(q, copied)
             Err(m)
           }
         }
@@ -230,8 +234,8 @@ fn copy_tree_list_objects(q: Qiniu, cl: HttpCell, trees: List[CopyTree], i: Int,
 
 ## Copy every keyed file in a prepared tree to a fresh object key. Metadata is
 ## not touched here; the caller commits the returned plan as one transaction.
-pub fn copy_tree_objects(q: Qiniu, cl: HttpCell, tree: CopyTree) -> Result[CopyTree, String] !io = {
-  let rows = copy_tree_object_rows(q, cl, tree.rows, 0, [])?
+pub fn copy_tree_objects(q: Qiniu, tree: CopyTree) -> Result[CopyTree, String] !Upstream !io = {
+  let rows = copy_tree_object_rows(q, tree.rows, 0, [])?
   Ok(CopyTree {
     source_root: tree.source_root,
     destination_root: tree.destination_root,
@@ -239,7 +243,7 @@ pub fn copy_tree_objects(q: Qiniu, cl: HttpCell, tree: CopyTree) -> Result[CopyT
   })
 }
 
-fn copy_tree_object_rows(q: Qiniu, cl: HttpCell, rows: List[CopiedRow], i: Int, acc: List[CopiedRow]) -> Result[List[CopiedRow], String] !io =
+fn copy_tree_object_rows(q: Qiniu, rows: List[CopiedRow], i: Int, acc: List[CopiedRow]) -> Result[List[CopiedRow], String] !Upstream !io =
   if i >= len(rows) {
     Ok(acc)
   } else {
@@ -255,7 +259,7 @@ fn copy_tree_object_rows(q: Qiniu, cl: HttpCell, rows: List[CopiedRow], i: Int, 
           if str.trim(key) == "" {
             Err(conflict("复制源文件的对象 key 为空：${full(row.source.path)}"))
           } else {
-            Ok(Some(copy_object(q, cl, key)?))
+            Ok(Some(copy_object(q, key)?))
           }
         None -> Err(conflict("复制源文件缺少对象 key：${full(row.source.path)}"))
       }
@@ -264,10 +268,10 @@ fn copy_tree_object_rows(q: Qiniu, cl: HttpCell, rows: List[CopiedRow], i: Int, 
       Err(m) -> Err(m)
       Ok(copied_key) -> {
         let copied = CopiedRow { source: row.source, copied_key: copied_key }
-        match copy_tree_object_rows(q, cl, rows, i + 1, acc ++ [copied]) {
+        match copy_tree_object_rows(q, rows, i + 1, acc ++ [copied]) {
           Ok(done) -> Ok(done)
           Err(m) -> {
-            let _gc = cleanup_fresh_key(q, cl, copied_key)
+            let _gc = cleanup_fresh_key(q, copied_key)
             Err(m)
           }
         }
@@ -275,39 +279,39 @@ fn copy_tree_object_rows(q: Qiniu, cl: HttpCell, rows: List[CopiedRow], i: Int, 
     }
   }
 
-fn cleanup_fresh_key(q: Qiniu, cl: HttpCell, candidate: Option[String]) -> Unit !io = {
+fn cleanup_fresh_key(q: Qiniu, candidate: Option[String]) -> Unit !Upstream !io = {
   let _d: Result[Unit, String] = match candidate {
-    Some(key) -> delete_obj(cl, q, key)
+    Some(key) -> delete_obj(q, key)
     None -> Ok(())
   }
   ()
 }
 
-fn cleanup_copy_tree_direct(q: Qiniu, cl: HttpCell, tree: CopyTree) -> Unit !io =
-  cleanup_copied_rows_direct(q, cl, tree.rows, 0)
+fn cleanup_copy_tree_direct(q: Qiniu, tree: CopyTree) -> Unit !Upstream !io =
+  cleanup_copied_rows_direct(q, tree.rows, 0)
 
-fn cleanup_copied_rows_direct(q: Qiniu, cl: HttpCell, rows: List[CopiedRow], i: Int) -> Unit !io =
+fn cleanup_copied_rows_direct(q: Qiniu, rows: List[CopiedRow], i: Int) -> Unit !Upstream !io =
   if i >= len(rows) {
     ()
   } else {
-    let _d = cleanup_fresh_key(q, cl, rows[i].copied_key)
-    cleanup_copied_rows_direct(q, cl, rows, i + 1)
+    let _d = cleanup_fresh_key(q, rows[i].copied_key)
+    cleanup_copied_rows_direct(q, rows, i + 1)
   }
 
-fn gc_copy_trees_on(q: Qiniu, cl: HttpCell, c: DbConn, trees: List[CopyTree], i: Int) -> Unit !io =
+fn gc_copy_trees_on(q: Qiniu, c: DbConn, trees: List[CopyTree], i: Int) -> Unit !Upstream !io =
   if i >= len(trees) {
     ()
   } else {
-    let _g = gc_copied_rows_on(q, cl, c, trees[i].rows, 0)
-    gc_copy_trees_on(q, cl, c, trees, i + 1)
+    let _g = gc_copied_rows_on(q, c, trees[i].rows, 0)
+    gc_copy_trees_on(q, c, trees, i + 1)
   }
 
-fn gc_copied_rows_on(q: Qiniu, cl: HttpCell, c: DbConn, rows: List[CopiedRow], i: Int) -> Unit !io =
+fn gc_copied_rows_on(q: Qiniu, c: DbConn, rows: List[CopiedRow], i: Int) -> Unit !Upstream !io =
   if i >= len(rows) {
     ()
   } else {
-    let _g: Result[Unit, String] = gc_unreferenced_on(q, cl, c, rows[i].copied_key)
-    gc_copied_rows_on(q, cl, c, rows, i + 1)
+    let _g: Result[Unit, String] = gc_unreferenced_on(q, c, rows[i].copied_key)
+    gc_copied_rows_on(q, c, rows, i + 1)
   }
 
 # ---- delete ----
@@ -327,12 +331,12 @@ pub fn item_paths(m: Map[String, Json]) -> List[String] =
     _ -> []
   }
 
-pub fn do_delete(q: Qiniu, cl: HttpCell, c: DbConn, items: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
+pub fn do_delete(q: Qiniu, c: DbConn, items: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !Upstream !io =
   {
     let rels = delete_paths(items, i, [])
     let rows = delete_subtrees(c, rels)?
     let deleted = deleted_entries(rows, 0, [])?
-    let _gc = gc_deleted_rows(q, cl, c, rows, 0)
+    let _gc = gc_deleted_rows(q, c, rows, 0)
     Ok(acc ++ deleted)
   }
 
@@ -353,12 +357,12 @@ fn deleted_entries(rows: List[FileRow], i: Int, acc: List[Json]) -> Result[List[
     deleted_entries(rows, i + 1, acc ++ [e])
   }
 
-fn gc_deleted_rows(q: Qiniu, cl: HttpCell, c: DbConn, rows: List[FileRow], i: Int) -> Unit !io =
+fn gc_deleted_rows(q: Qiniu, c: DbConn, rows: List[FileRow], i: Int) -> Unit !Upstream !io =
   if i >= len(rows) {
     ()
   } else {
-    let _g: Result[Unit, String] = gc_unreferenced_on(q, cl, c, rows[i].key)
-    gc_deleted_rows(q, cl, c, rows, i + 1)
+    let _g: Result[Unit, String] = gc_unreferenced_on(q, c, rows[i].key)
+    gc_deleted_rows(q, c, rows, i + 1)
   }
 
 pub fn merge_deleted(base: Json, deleted: List[Json]) -> Json =
@@ -369,7 +373,7 @@ pub fn merge_deleted(base: Json, deleted: List[Json]) -> Json =
 
 # ---- create empty file / save text ----
 
-pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json], String] !io = {
+pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json], String] !Upstream !io = {
   let checked: Result[Bool, String] = with_db(a.db.path, a.db.ext, c => {
     let _v = validate_effect_path(c, rel)?
     taken(c, rel)
@@ -380,7 +384,7 @@ pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json],
   } else {
     let mime = guess_mime(rel)
     let key = uuid_hex()
-    let _up = as_outbound(upload_text(a.http, a.qiniu, key, "", mime, now_s() + a.qiniu.expires))?
+    let _up = as_outbound(upload_text(a.qiniu, key, "", mime, now_s() + a.qiniu.expires))?
     match with_db(a.db.path, a.db.ext, c => create_file_db(c, rel, key, mime, cur)) {
       Ok(d) -> Ok(Some(d))
       Err(m) -> {
@@ -398,7 +402,7 @@ fn create_file_db(c: DbConn, rel: String, key: String, mime: String, cur: String
 
 ## Write text to a NEW qiniu key, repoint the row, then best-effort collect the
 ## old key only when no metadata row still references it. Returns {path}.
-pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !io = {
+pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !Upstream !io = {
   let checked: Result[Option[FileRow], String] = with_db(a.db.path, a.db.ext, c => {
     let _v = validate_effect_path(c, rel)?
     get_row(c, rel)
@@ -406,7 +410,7 @@ pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !i
   let existing = checked?
   let mime = save_mime(existing, rel)
   let new_key = save_key(rel)
-  let _up = as_outbound(upload_text(a.http, a.qiniu, new_key, content, mime, now_s() + a.qiniu.expires))?
+  let _up = as_outbound(upload_text(a.qiniu, new_key, content, mime, now_s() + a.qiniu.expires))?
   match with_db(a.db.path, a.db.ext, c => save_db(c, rel, new_key, mime, text_byte_size(content))) {
     Ok(outcome) -> {
       let _gc = gc_unreferenced(a, outcome.superseded_key)
@@ -443,11 +447,11 @@ fn save_key(rel: String) -> String !io = {
 
 # ---- proxy upload ----
 
-pub fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int) -> Result[Json, String] !io = {
+pub fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int) -> Result[Json, String] !Upstream !io = {
   let checked: Result[Unit, String] = with_db(a.db.path, a.db.ext, c => validate_effect_path(c, rel))
   let _v = checked?
   let key = upload_key()
-  let _up = as_outbound(upload_bytes(a.http, a.qiniu, key, content, mime, now_s() + a.qiniu.expires))?
+  let _up = as_outbound(upload_bytes(a.qiniu, key, content, mime, now_s() + a.qiniu.expires))?
   match with_db(a.db.path, a.db.ext, c => replace_upload(c, rel, key, mime, size)) {
     Ok(result) -> {
       let (uploaded, outcome) = result
@@ -537,3 +541,145 @@ test "best-effort GC isolates success, errors, and panics" {
   let _panic: Unit = best_effort_gc(() => panic("expected GC panic"))
   assert true
 }
+
+
+# ---- the SQLite write-lock window, asserted ----
+#
+# util/http spends seventeen lines arguing that a hung qiniu endpoint stops
+# every write on the site: `gc_unreferenced_on` deletes the object from inside
+# `BEGIN IMMEDIATE`, SQLite has one writer, and a request deadline is the only
+# thing bounding how long that lock is held. Nothing asserted any of it. Doing
+# so needed a real database, a peer that really hangs, and a real clock, and the
+# last two are what made it unaffordable.
+#
+# With the delete behind `Upstream`, the peer is an arm, and the window becomes
+# three things a test can read off it: how many calls go out under the lock,
+# which budget each asked for, and whether the lock is back when gc returns.
+# One call times the management ceiling is the bound.
+#
+# What is deliberately NOT asserted here: that the writer is *reserved* while
+# the call is in flight. An arm can see that -- probe a second connection from
+# inside it -- but two mutants already own that rule at other layers, and the FM
+# ancestor harness holds a test-role mutant to exactly one red assertion and a
+# contract-role mutant to a green Dawn layer. Asserting it a third time here
+# reddens `immediate-tx-as-deferred` (test, owned by db/sql's
+# "with_immediate_tx reserves the writer before its body") and
+# `object-gc-release-lock-before-delete` (contract, owned by
+# webdav.overwrite.gc-after-switch) -- a real dependency that harness would have
+# to call collateral. Owed: either it learns multi-layer ownership, or this
+# stays split across the three layers it is split across today.
+
+fn gc_ok(r: Result[Unit, String]) -> Bool =
+  match r {
+    Ok(_u) -> true
+    Err(_m) -> false
+  }
+
+fn gc_log_new() -> AtomicReference !io = AtomicReference.new("")
+
+fn gc_log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!
+
+fn gc_log_add(r: AtomicReference, s: String) -> Unit !io = r.set("${gc_log_read(r)}$s;")
+
+fn gc_test_qiniu() -> Qiniu =
+  Qiniu {
+    ak: "ak", sk: "sk", bucket: "b", domain: "",
+    expires: 3600, rs_host: "http://127.0.0.1:1", up_host: "http://127.0.0.1:1",
+  }
+
+# Whether a second connection can start its own write transaction right now.
+# It is the only question that matters here, and the only one a connection other
+# than the holder can ask; it rolls back whatever it took.
+fn writer_free(probe: DbConn) -> Bool !io =
+  match exec(probe, "begin immediate", []) {
+    Err(_m) -> false
+    Ok(_n) -> {
+      let _r = exec(probe, "rollback", [])
+      true
+    }
+  }
+
+fn gc_tables(c: DbConn) -> Unit !io = {
+  let _f = exec(c, "create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null)", [])
+  let _p = exec(c, "create table pending_uploads (key text primary key, path text not null, created_at text not null)", [])
+  ()
+}
+
+test "gc's write transaction spans one outbound call, on the management budget" {
+  let c = open("jdbc:sqlite:file:gc_lock_window?mode=memory&cache=shared")
+  let probe = open("jdbc:sqlite:file:gc_lock_window?mode=memory&cache=shared")
+  gc_tables(c)
+  assert writer_free(probe)
+
+  let seen = gc_log_new()
+  let stall_ms = 120
+  let t0 = System.currentTimeMillis()
+  let outcome = {
+    with handle Upstream {
+      exchange(req) => {
+        # what a hung rs endpoint looks like from inside the transaction
+        gc_log_add(seen, "${req.method} budget=${to_string(req.budget_s)}")
+        Thread.sleep(stall_ms)
+        Ok(HttpResp { status: 200, body: "{}" })
+      }
+      exchange_bytes(req) => Err(no_answer("exchange_bytes"))
+      exchange_stream(req) => Err(no_answer("exchange_stream"))
+      exchange_start(req) => Err(no_answer("exchange_start"))
+    }
+    gc_unreferenced_on(gc_test_qiniu(), c, Some("orphan-key"))
+  }
+  let elapsed = System.currentTimeMillis() - t0
+
+  assert gc_ok(outcome)
+  # Exactly one call goes out, on the management budget. That is the window
+  # bound in one line: one call (a retry would be a second entry) times the
+  # ceiling the call asked for (the transfer tier would read 3600 here) is the
+  # longest the site's single writer can be stopped for.
+  assert gc_log_read(seen) ==
+    "POST budget=${to_string(MANAGEMENT_TIMEOUT_S)};"
+  # the window is that call's duration and nothing else is serialised behind it
+  assert elapsed >= stall_ms
+  assert elapsed < stall_ms * 5
+  # the lock is gone by the time gc returns, for this connection ...
+  assert with_immediate_tx(c, () => exec(c, "insert into pending_uploads values ('k', 'p', 'now')", [])) == Ok(1)
+  # ... and for everyone else
+  assert writer_free(probe)
+}
+
+test "a delete that times out leaves the writer free, it does not wedge the site" {
+  # The failure mode the deadline exists for, now assertable without waiting for
+  # one: the arm answers what an expired budget raises, instantly. gc is
+  # best-effort, so the site's answer is still Ok -- what must not survive is a
+  # held lock.
+  let c = open("jdbc:sqlite:file:gc_lock_timeout?mode=memory&cache=shared")
+  let probe = open("jdbc:sqlite:file:gc_lock_timeout?mode=memory&cache=shared")
+  gc_tables(c)
+
+  let t0 = System.currentTimeMillis()
+  let outcome = {
+    with handle Upstream {
+      exchange(req) => Err(ForeignError {
+        kind: "java.net.http.HttpTimeoutException",
+        message: "request timed out",
+        cause: None,
+      })
+      exchange_bytes(req) => Err(no_answer("exchange_bytes"))
+      exchange_stream(req) => Err(no_answer("exchange_stream"))
+      exchange_start(req) => Err(no_answer("exchange_start"))
+    }
+    gc_unreferenced_on(gc_test_qiniu(), c, Some("orphan-key"))
+  }
+  let elapsed = System.currentTimeMillis() - t0
+
+  assert gc_ok(outcome)
+  assert writer_free(probe)
+  assert with_immediate_tx(c, () => exec(c, "insert into pending_uploads values ('k', 'p', 'now')", [])) == Ok(1)
+  # the whole failure, at the speed of a function call instead of ten seconds
+  assert elapsed < 1000
+}
+
+# The third half of the window claim -- that a still-referenced key makes no
+# outbound call at all -- is the FM ancestor contract case
+# `object-gc.live-key-reference` (mutant `gc-skip-live-key-reference`), which is
+# contract-role and therefore needs this Dawn layer to stay green. Asserting it
+# here too would redden it.

@@ -9,6 +9,7 @@ use db/db.{with_db}
 use repo/repo_settings.{setting_int}
 use util/ttl.{TtlCell, cache_get, cache_put, now_s}
 use svc/monitor.{LighthousePending, QiniuPending, server_block, lighthouse_start, lighthouse_collect, qiniu_start, qiniu_collect, vault_block}
+use util/http.{Upstream, with_upstream}
 use qiniu/stats.{field}
 use json/value.{Json, JBool, JInt, JObj}
 use json/render.{render}
@@ -60,18 +61,25 @@ pub fn get_monitor(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell, c
       Some(v) -> v == "1" || v == "true"
       None -> false
     }
-    let work = third_start(a, cfg, cell, respack_cell, refresh)
-    let vault = vault_block(a.http, cfg.vault_alive, cfg.vault_public)
-    let server = server_block(cpu_cell)
-    let third = third_collect(a, cell, respack_cell, work)
-    let qn = with_quota(a, field(third, "qiniu"))
-    Ok(json_ok(obj([
-      ("server", server),
-      ("lighthouse", field(third, "lighthouse")),
-      ("qiniu", qn),
-      ("vault", vault),
-      ("cached_at", field(third, "cached_at")),
-    ])))
+    # The Upstream handler is installed here, around all three phases, and not
+    # deeper: the issue phase and the read phase are separate calls, so a
+    # handler that wrapped either alone would be gone by the time the other ran.
+    # It cannot go higher either -- this closure is a web `Handler`, whose type
+    # is closed at `!io` (util/http says why).
+    with_upstream(a.http, () => {
+      let work = third_start(a, cfg, cell, respack_cell, refresh)
+      let vault = vault_block(cfg.vault_alive, cfg.vault_public)
+      let server = server_block(cpu_cell)
+      let third = third_collect(a, cell, respack_cell, work)
+      let qn = with_quota(a, field(third, "qiniu"))
+      Ok(json_ok(obj([
+        ("server", server),
+        ("lighthouse", field(third, "lighthouse")),
+        ("qiniu", qn),
+        ("vault", vault),
+        ("cached_at", field(third, "cached_at")),
+      ])))
+    })
   }
 
 # Where the cached {lighthouse, qiniu, cached_at} pair will come from: the
@@ -82,7 +90,7 @@ type ThirdWork =
 
 # phase 1: read the 120s cell, and on a miss put the third-party calls on the
 # wire without waiting for any of them
-fn third_start(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell, refresh: Bool) -> ThirdWork !io = {
+fn third_start(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell, refresh: Bool) -> ThirdWork !Upstream !io = {
   let cached: Option[String] = if refresh { None } else { cache_get(cell, 120) }
   match cached {
     Some(s) ->
@@ -94,13 +102,13 @@ fn third_start(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell, refre
   }
 }
 
-fn start_fresh(a: Auth, cfg: MonCfg, respack_cell: TtlCell) -> ThirdWork !io =
+fn start_fresh(a: Auth, cfg: MonCfg, respack_cell: TtlCell) -> ThirdWork !Upstream !io =
   TStarted(
-    lighthouse_start(a.http, cfg.tencent_id, cfg.tencent_key, cfg.region, cfg.instance),
+    lighthouse_start(cfg.tencent_id, cfg.tencent_key, cfg.region, cfg.instance),
     qiniu_start(a, respack_cell))
 
 # phase 3: read the replies and refill the cell (a cache hit has nothing to do)
-fn third_collect(a: Auth, cell: TtlCell, respack_cell: TtlCell, work: ThirdWork) -> Json !io =
+fn third_collect(a: Auth, cell: TtlCell, respack_cell: TtlCell, work: ThirdWork) -> Json !Upstream !io =
   match work {
     TCached(j) -> j
     TStarted(lh, qn) -> {
