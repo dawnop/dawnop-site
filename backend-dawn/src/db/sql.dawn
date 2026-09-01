@@ -59,7 +59,7 @@ pub fn open_ext(url: String) -> DbConn !io = {
 }
 
 ## Run `body` and close the connection on both normal and panic paths.
-pub fn with_connection[T](c: DbConn, body: fn(DbConn) -> T !io) -> T !io =
+pub fn with_connection[T, !e](c: DbConn, body: fn(DbConn) -> T !e !io) -> T !e !io =
   bracket(c, h => close_conn(h), body)
 
 fn close_conn(c: DbConn) -> Unit !io = raw(c).close()
@@ -201,7 +201,7 @@ fn in_tx(c: DbConn) -> Bool !io =
 ## NOTE: this helper has no production callers (2026-08-15; every transaction in
 ## this backend goes through `with_immediate_tx`). It is kept because it is the
 ## generic shape and is exercised by the tests below, but nothing depends on it.
-pub fn with_tx[T](c: DbConn, body: fn() -> Result[T, String] !io) -> Result[T, String] !io = {
+pub fn with_tx[T, !e](c: DbConn, body: fn() -> Result[T, String] !e !io) -> Result[T, String] !e !io = {
   let conn = raw(c)
   if in_tx(c) {
     Err("with_tx entered with a transaction already open on this connection")
@@ -231,7 +231,7 @@ pub fn with_tx[T](c: DbConn, body: fn() -> Result[T, String] !io) -> Result[T, S
 ## fails exactly when a transaction is already open, so the refusal costs
 ## nothing on the path that matters (every write on the site takes it) and, like
 ## `with_tx`, it leaves the transaction it found alone.
-pub fn with_immediate_tx[T](c: DbConn, body: fn() -> Result[T, String] !io) -> Result[T, String] !io =
+pub fn with_immediate_tx[T, !e](c: DbConn, body: fn() -> Result[T, String] !e !io) -> Result[T, String] !e !io =
   match exec(c, "begin immediate", []) {
     Err(m) ->
       if nested_tx_refusal(m) {
@@ -274,7 +274,7 @@ fn rollback_immediate(c: DbConn) -> Unit !io = {
   ()
 }
 
-fn finish_immediate_tx[T](c: DbConn, body: fn() -> Result[T, String] !io) -> Result[T, String] !io =
+fn finish_immediate_tx[T, !e](c: DbConn, body: fn() -> Result[T, String] !e !io) -> Result[T, String] !e !io =
   match body() {
     Ok(v) ->
       match exec(c, "commit", []) {

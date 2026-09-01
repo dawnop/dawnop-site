@@ -25,5 +25,5 @@ fn connect(path: String, ext: String) -> DbConn !io = {
 }
 
 ## Open a connection, run `body`, and close it — the per-request lifecycle.
-pub fn with_db[T](path: String, ext: String, body: fn(DbConn) -> T !io) -> T !io =
+pub fn with_db[T, !e](path: String, ext: String, body: fn(DbConn) -> T !e !io) -> T !e !io =
   with_connection(connect(path, ext), body)
