@@ -499,8 +499,8 @@ def main() -> int:
     elif args.mutant == "fm-copy-plain-error-as-502":
         replace_once(
             fm_api,
-            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, a.http, c, sources, dest, cur, 0)), mutation_failure)?))\n",
-            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, a.http, c, sources, dest, cur, 0)), conflict_or(502))?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), mutation_failure)?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), conflict_or(502))?))\n",
         )
     elif args.mutant == "fm-skip-directory-target-preflight":
         replace_once(
@@ -537,9 +537,9 @@ def main() -> int:
         )
         replace_once(
             fm_api,
-            "          let r = as_http_with(as_outbound(stat(a.http, a.qiniu, key)), mutation_failure)?\n"
+            "          let r = as_http_with(as_outbound(stat(a.qiniu, key)), mutation_failure)?\n"
             "          if r.status == 200 {\n",
-            "          let r = as_http_with(as_outbound(stat(a.http, a.qiniu, key)), mutation_failure)?\n"
+            "          let r = as_http_with(as_outbound(stat(a.qiniu, key)), mutation_failure)?\n"
             "          let _ancestors = as_http_with(with_db(a.db.path, a.db.ext, c => validate_fm_ancestors(c, rel)), conflict_or(500))?\n"
             "          if r.status == 200 {\n",
         )
@@ -715,11 +715,11 @@ def main() -> int:
     elif args.mutant == "object-gc-panic-leak":
         replace_once(
             service,
-            "fn best_effort_gc(body: fn() -> Result[Unit, String] !io) -> Unit !io = {\n"
+            "fn best_effort_gc[!e](body: fn() -> Result[Unit, String] !e !io) -> Unit !e !io = {\n"
             "  let _outcome: Result[Result[Unit, String], ForeignError] = catch_panic(body)\n"
             "  ()\n"
             "}\n",
-            "fn best_effort_gc(body: fn() -> Result[Unit, String] !io) -> Unit !io = {\n"
+            "fn best_effort_gc[!e](body: fn() -> Result[Unit, String] !e !io) -> Unit !e !io = {\n"
             "  let _outcome: Result[Unit, String] = body()\n"
             "  ()\n"
             "}\n",
@@ -727,7 +727,7 @@ def main() -> int:
     elif args.mutant == "object-gc-release-lock-before-delete":
         replace_once(
             service,
-            "fn gc_unreferenced_on(q: Qiniu, cl: HttpCell, c: DbConn, candidate: Option[String]) -> Result[Unit, String] !io =\n"
+            "fn gc_unreferenced_on(q: Qiniu, c: DbConn, candidate: Option[String]) -> Result[Unit, String] !Upstream !io =\n"
             "  match candidate {\n"
             "    Some(key) ->\n"
             '      if str.trim(key) == "" {\n'
@@ -739,14 +739,14 @@ def main() -> int:
             "          if referenced || pending {\n"
             "            Ok(())\n"
             "          } else {\n"
-            "            let _d: Result[Unit, String] = delete_obj(cl, q, key)\n"
+            "            let _d: Result[Unit, String] = delete_obj(q, key)\n"
             "            Ok(())\n"
             "          }\n"
             "        })\n"
             "      }\n"
             "    None -> Ok(())\n"
             "  }\n",
-            "fn gc_unreferenced_on(q: Qiniu, cl: HttpCell, c: DbConn, candidate: Option[String]) -> Result[Unit, String] !io =\n"
+            "fn gc_unreferenced_on(q: Qiniu, c: DbConn, candidate: Option[String]) -> Result[Unit, String] !Upstream !io =\n"
             "  match candidate {\n"
             "    Some(key) ->\n"
             '      if str.trim(key) == "" {\n'
@@ -759,7 +759,7 @@ def main() -> int:
             "        })\n"
             "        let deletable = checked?\n"
             "        if deletable {\n"
-            "          let _d: Result[Unit, String] = delete_obj(cl, q, key)\n"
+            "          let _d: Result[Unit, String] = delete_obj(q, key)\n"
             "          Ok(())\n"
             "        } else {\n"
             "          Ok(())\n"
@@ -787,8 +787,8 @@ def main() -> int:
         )
         replace_once(
             webdav,
-            "fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int) -> Result[Response, HttpError] !io =\n",
-            "fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int, stale_key: Option[String]) -> Result[Response, HttpError] !io =\n",
+            "fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int) -> Result[Response, HttpError] !Upstream !io =\n",
+            "fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int, stale_key: Option[String]) -> Result[Response, HttpError] !Upstream !io =\n",
         )
         replace_once(
             webdav,
@@ -819,7 +819,7 @@ def main() -> int:
         )
         replace_once(
             webdav,
-            "fn del(a: Auth, rel: String) -> Result[Response, HttpError] !io =\n"
+            "fn del(a: Auth, rel: String) -> Result[Response, HttpError] !Upstream !io =\n"
             '  if rel == "" {\n'
             '    Err(http_error(405, "不能删除根"))\n'
             "  } else {\n"
@@ -840,18 +840,18 @@ def main() -> int:
             "    Ok(deleted + rest)\n"
             "  }\n"
             "\n"
-            "fn mutant_delete_objects(a: Auth, rows: List[FileRow], i: Int) -> Unit !io =\n"
+            "fn mutant_delete_objects(a: Auth, rows: List[FileRow], i: Int) -> Unit !Upstream !io =\n"
             "  if i >= len(rows) {\n"
             "    ()\n"
             "  } else {\n"
             "    let _d: Result[Unit, String] = match rows[i].key {\n"
-            "      Some(key) -> delete_obj(a.http, a.qiniu, key)\n"
+            "      Some(key) -> delete_obj(a.qiniu, key)\n"
             "      None -> Ok(())\n"
             "    }\n"
             "    mutant_delete_objects(a, rows, i + 1)\n"
             "  }\n"
             "\n"
-            "fn mutant_delete_before_commit(a: Auth, rel: String) -> Result[List[FileRow], String] !io =\n"
+            "fn mutant_delete_before_commit(a: Auth, rel: String) -> Result[List[FileRow], String] !Upstream !io =\n"
             "  with_db(a.db.path, a.db.ext, c =>\n"
             "    with_immediate_tx(c, () => {\n"
             "      let rows = subtree_rows(c, rel)?\n"
@@ -860,7 +860,7 @@ def main() -> int:
             "      Ok(rows)\n"
             "    }))\n"
             "\n"
-            "fn del(a: Auth, rel: String) -> Result[Response, HttpError] !io =\n"
+            "fn del(a: Auth, rel: String) -> Result[Response, HttpError] !Upstream !io =\n"
             '  if rel == "" {\n'
             '    Err(http_error(405, "不能删除根"))\n'
             "  } else {\n"
@@ -880,7 +880,7 @@ def main() -> int:
         )
         replace_once(
             webdav,
-            "fn del(a: Auth, rel: String) -> Result[Response, HttpError] !io =\n"
+            "fn del(a: Auth, rel: String) -> Result[Response, HttpError] !Upstream !io =\n"
             '  if rel == "" {\n'
             '    Err(http_error(405, "不能删除根"))\n'
             "  } else {\n"
@@ -908,7 +908,7 @@ def main() -> int:
             "    Ok(rows)\n"
             "  })\n"
             "\n"
-            "fn del(a: Auth, rel: String) -> Result[Response, HttpError] !io =\n"
+            "fn del(a: Auth, rel: String) -> Result[Response, HttpError] !Upstream !io =\n"
             '  if rel == "" {\n'
             '    Err(http_error(405, "不能删除根"))\n'
             "  } else {\n"
@@ -929,8 +929,8 @@ def main() -> int:
         )
         replace_once(
             webdav,
-            "  let copied = copy_tree_objects(a.qiniu, a.http, planned)?\n",
-            "  let copied_result: Result[CopyTree, String] = match copy_tree_objects(a.qiniu, a.http, planned) {\n"
+            "  let copied = copy_tree_objects(a.qiniu, planned)?\n",
+            "  let copied_result: Result[CopyTree, String] = match copy_tree_objects(a.qiniu, planned) {\n"
             "    Ok(tree) -> Ok(tree)\n"
             "    Err(m) -> {\n"
             "      let removed = with_db(a.db.path, a.db.ext, c => delete_subtree(c, dst))?\n"
@@ -943,8 +943,8 @@ def main() -> int:
     elif args.mutant == "webdav-move-overwrite-delete-on-failure":
         replace_once(
             webdav,
-            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !io = {\n",
-            "fn mutant_cleanup_failed_file_move(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Unit !io =\n"
+            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Upstream !io = {\n",
+            "fn mutant_cleanup_failed_file_move(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Unit !Upstream !io =\n"
             "  if not is_move || not overwrite {\n"
             "    ()\n"
             "  } else {\n"
@@ -962,7 +962,7 @@ def main() -> int:
             "    }\n"
             "  }\n"
             "\n"
-            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !io = {\n",
+            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Upstream !io = {\n",
         )
         replace_once(
             webdav,
@@ -975,8 +975,8 @@ def main() -> int:
     elif args.mutant == "webdav-collection-overwrite-delete-on-failure":
         replace_once(
             webdav,
-            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !io = {\n",
-            "fn mutant_cleanup_failed_collection(a: Auth, rel: String, dst: String, overwrite: Bool) -> Unit !io =\n"
+            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Upstream !io = {\n",
+            "fn mutant_cleanup_failed_collection(a: Auth, rel: String, dst: String, overwrite: Bool) -> Unit !Upstream !io =\n"
             "  if not overwrite {\n"
             "    ()\n"
             "  } else {\n"
@@ -994,7 +994,7 @@ def main() -> int:
             "    }\n"
             "  }\n"
             "\n"
-            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !io = {\n",
+            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Upstream !io = {\n",
         )
         replace_once(
             webdav,
@@ -1261,8 +1261,8 @@ def main() -> int:
         replace_once(
             fm_api,
             "        let _n = check_relocation_targets(dest, sources, 0)?\n"
-            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, a.http, c, sources, dest, cur, 0)), mutation_failure)?))\n",
-            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, a.http, c, sources, dest, cur, 0)), mutation_failure)?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), mutation_failure)?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), mutation_failure)?))\n",
         )
     elif args.mutant == "name-guard-fm-create-file-fail-open":
         replace_once(

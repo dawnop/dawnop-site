@@ -12,6 +12,16 @@
 # client: the source still has one builder expression, and only the peer's view
 # of the source port says whether the connection was reused.
 #
+# Since the outbound calls went behind the `Upstream` effect the owners split in
+# two. What is about the SOCKET -- that a deadline reaches it at all, that one
+# client is one connection -- is still owned by tests that stall a loopback
+# peer, and those are the timing ones. What is about the CODE -- which budget a
+# shape asks for, how a fault is worded and classified -- is owned by tests that
+# install a handler and answer in microseconds. `transfer-tier-on-management`
+# moved across that line: it used to be caught only by waiting ten seconds for
+# `fetch`, and is now read off the request by two handlers, one of them the gc
+# write-lock test in svc/files.
+#
 # The started/awaited pair rides on the same two functions the blocking calls
 # do -- `request_for` puts the deadline on, `deadline_text` reads the fault back
 # -- so it is held by these same mutants rather than by rules of its own. That
@@ -22,13 +32,13 @@
 # asked. `Future.get` reports the fault wrapped in an ExecutionException, so the
 # started path can lose the timeout on the way out with the deadline, the
 # wording and the classifier all intact.
-async-timeout-not-unwrapped|an async timeout reads exactly like a blocking one
+async-timeout-not-unwrapped|an async timeout reads exactly like a blocking one;;an answered start delivers through await_resp, and its failure is reworded
 client-per-call|one cell is one connection; a client built per call is not
 collapse-transfer-tier|the two deadlines say what they are for
-drop-deadline|a quiet peer hits the management deadline instead of blocking forever;;every request shape carries its deadline, whichever body handler it uses;;an async timeout reads exactly like a blocking one
+drop-deadline|every request shape carries its deadline, whichever body handler it uses;;an async timeout reads exactly like a blocking one
 edge-times-out-as-502|FM mutation errors keep DB failures distinct from upstream failures;;a WebDAV client is told to retry a timeout, not to check its credentials
-inflate-deadline|a quiet peer hits the management deadline instead of blocking forever;;every request shape carries its deadline, whichever body handler it uses;;an async timeout reads exactly like a blocking one
-mute-timeout-text|a quiet peer hits the management deadline instead of blocking forever;;only a timeout is reworded; every other fault keeps its text;;a timeout is classified apart from a refusal, and keeps its wire text;;an async timeout reads exactly like a blocking one
-timeout-reads-as-upstream|a WebDAV client is told to retry a timeout, not to check its credentials;;a timeout is classified apart from a refusal, and keeps its wire text;;the timeout text and the timeout tag are one judgement, not two;;an async timeout reads exactly like a blocking one
-timeout-tag-second-opinion|a WebDAV client is told to retry a timeout, not to check its credentials;;the timeout text and the timeout tag are one judgement, not two
-transfer-tier-on-management|a quiet peer hits the management deadline instead of blocking forever
+inflate-deadline|every request shape carries its deadline, whichever body handler it uses;;an async timeout reads exactly like a blocking one
+mute-timeout-text|only a timeout is reworded; every other fault keeps its text;;a timeout is classified apart from a refusal, and keeps its wire text;;an async timeout reads exactly like a blocking one;;an injected deadline is the production deadline, in microseconds;;the connect-timeout class is a timeout here too, and a refusal is not;;an answered start delivers through await_resp, and its failure is reworded
+timeout-reads-as-upstream|a WebDAV client is told to retry a timeout, not to check its credentials;;a timeout is classified apart from a refusal, and keeps its wire text;;the timeout text and the timeout tag are one judgement, not two;;an async timeout reads exactly like a blocking one;;an injected deadline is the production deadline, in microseconds;;the connect-timeout class is a timeout here too, and a refusal is not
+timeout-tag-second-opinion|a WebDAV client is told to retry a timeout, not to check its credentials;;the timeout text and the timeout tag are one judgement, not two;;the connect-timeout class is a timeout here too, and a refusal is not
+transfer-tier-on-management|every call shape asks for the budget its deadline was chosen for;;gc's write transaction spans one outbound call, on the management budget

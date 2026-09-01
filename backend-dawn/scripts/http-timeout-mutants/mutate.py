@@ -111,7 +111,7 @@ def main() -> int:
         # No deadline at all: the state this task found the code in.
         replace_once(
             http,
-            "  let timed = base.timeout(Duration.ofSeconds(budget_s)!)!\n",
+            "  let timed = base.timeout(Duration.ofSeconds(req.budget_s)!)!\n",
             "  let timed = base\n",
         )
     elif args.mutant == "inflate-deadline":
@@ -120,17 +120,19 @@ def main() -> int:
         # only actually timing a stalled peer catches it.
         replace_once(
             http,
-            "  let timed = base.timeout(Duration.ofSeconds(budget_s)!)!\n",
+            "  let timed = base.timeout(Duration.ofSeconds(req.budget_s)!)!\n",
             "  let timed = base.timeout(Duration.ofSeconds(86400)!)!\n",
         )
     elif args.mutant == "transfer-tier-on-management":
         # Deadline present and sane, but the small management calls inherit the
         # transfer ceiling, so gc's delete_obj could hold the SQLite write lock
-        # for an hour instead of ten seconds.
+        # for an hour instead of ten seconds. The budget now travels on the
+        # request, so a handler sees it -- which is what turned this from a
+        # ten-second wait into two microsecond assertions.
         replace_once(
             http,
-            "  send_body(cl, method, url, headers, publisher, MANAGEMENT_TIMEOUT_S)\n",
-            "  send_body(cl, method, url, headers, publisher, TRANSFER_TIMEOUT_S)\n",
+            '  text_exchange("POST", url, headers, TextBody(body), MANAGEMENT_TIMEOUT_S)\n',
+            '  text_exchange("POST", url, headers, TextBody(body), TRANSFER_TIMEOUT_S)\n',
         )
     elif args.mutant == "collapse-transfer-tier":
         # The two tiers stop being two tiers, capping every upload and download
