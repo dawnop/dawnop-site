@@ -55,8 +55,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   **jar 与 `lib/` 都是构建产物，不入库**——jar 曾经入库，结果是它悄悄落后于 `src/`（要靠手动
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
-- 测试：`dawn test .`（`src/` 共 42 个 Dawn 源文件、206 个本仓单测，连 web/json/sha2 三个包
-  共 274 个；`use java` import 共 63 条、分布在 12 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
+- 测试：`dawn test .`（`src/` 共 44 个 Dawn 源文件、238 个本仓单测，连 web/json/sha2 三个包
+  共 319 个；`use java` import 共 77 条、分布在 14 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
   libsimple / 网络，CI 每次 push 都跑）。用到 SQLite 的几个跑内存库（`jdbc:sqlite::memory:`），
   自带建表，不碰 fixture。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
@@ -213,6 +213,12 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   FFI 门禁只约束显式 `InputStream` 源码名，不阻止 Java 返回类型由推断得到；响应侧另以
   `Stream`/`ResponseBody` 与 `streaming` 两个独立 seam 门禁阻止业务模块绕过 owner。扫描时忽略
   普通、三引号与 raw string 的文本，但 `$name` 和 `${expr}` 插值表达式仍按 Dawn 代码检查。
+- **文件系统是 std 的具名效果 `Fs`**（`std/io` 自 dawn 0.72.0 起，`read_file` 等由 `!io` 改为 `!Fs`），
+  形状与上面的 `Upstream` 同款：声明 + `with_fs_real` 生产 handler，没有别的语言支持。
+  本仓的安装点只有**两处**，都在最内层拥有一个完整文件工作单元的边界上：`main.dawn` 罩住
+  `config.load`（整个进程唯一一次启动期读文件），`api/api_monitor` 的路由闭包罩住 `server_block`
+  （读 /proc 的那一段；同样装不进 main，理由与 `Upstream` 那条一样）。
+  其余 `with_fs_real` 都在测试里，另有一处在 `packages/web` 自己的 `server.dawn`。
 - `util/jsonx.dawn` / `util/jsonread.dawn` — JSON 构造（`obj/jint/jstr/jopt_*`）/ 请求体读取（`opt_int/str_or/str_list`）。
   `body_obj` 先按正式 parser 解析（错误文案不变），再用同一个 `json/lexer` 走第二遍，
   拒绝**同一 object 内的重复成员**——解析进 Map 等于默默选了「后写的赢」，而
@@ -223,6 +229,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `json` — **dawn-lang 的 `packages/json`**（`[deps.json]` url+hash 依赖，vendored 副本已删）；游标版解析器，整数字面量产 `JInt`（保真、免 round-trip 变 `x.0`）。
 - `config.dawn` — .env 读取，env 优先（对齐 pydantic-settings 精度）；`int_in_range` /
   `require_int_in_range` 是带上下界的整数项，写错就在启动时 panic（见上「关键环境变量」）。
+  `load` 是 `!Fs` 不是 `!io`：它唯一的对外接触就是那次读。
 - `web` — **dawn-lang 的 `packages/web`**（`[deps.web]` url+hash 依赖，vendored 副本已删）：`server`（HttpServer + G6 二进制响应体 + 流式）/`router`（tags/任意动词）/`types`/`middleware`（logging/cors/body-limit）。
 
 **鉴权（刀 7）**
@@ -331,6 +338,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 **监控（刀 12）**
 - `api/api_monitor.dawn` — `/api/monitor`，120s TTL + `?refresh`，配额从 settings 表实时注入。
 - `svc/monitor.dawn` — 四块容错聚合：server（/proc，回落 JMX）、lighthouse（TC3）、qiniu（kodo+CDN+respack）、vault 探活。
+  读 /proc 的那几个是 `!Fs`（`server_block` / `cpu_*` / `loadavg` / `meminfo` / `net_totals` / `uptime_s`）。
   **CPU 占用是「本次 /proc/stat 采样 − 上次调用留下的快照」**（psutil 的 `cpu_percent(interval=None)`），
   不再每次自己睡 300ms 采窗口：三个第三方请求改成并发之后，那个窗口和本端点自己的活儿重叠了，
   报出来的数被「测它」这个动作本身污染；它同时还是缓存命中路径上一道 300ms 硬地板（实测

@@ -4,13 +4,18 @@
 use std/str
 use std/list
 use std/io
+use std/io.{Fs}
 use std/map
 
 pub type Config = { values: Map[String, String] }
 
 ## Load .env from a path. Missing file yields an empty config (env vars can
 ## still supply values through `get_env`).
-pub fn load(path: String) -> Config !io =
+##
+## `!Fs` and not `!io`: the only outside contact here is the read. The handler
+## is installed by the caller, which for this backend is `main` (the one place
+## with a lifetime longer than the read).
+pub fn load(path: String) -> Config !Fs =
   match io.read_file(path) {
     Ok(text) -> Config { values: parse_env(text) }
     Err(_) -> Config { values: map.empty() }

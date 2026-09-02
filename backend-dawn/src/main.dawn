@@ -29,7 +29,9 @@ pub fn main() -> Unit !io = {
   # instance id there for a month. scripts/check_config_defaults.py now compares
   # the two tables key by key, with a named reason for each key only one side
   # has, and CI runs it.
-  let cfg = load(env_or("DAWNOP_ENV", "backend/.env"))
+  # The one Fs install point on the startup path: config.load is the only file
+  # read this process does outside a request, and it happens once, here.
+  let cfg = io.with_fs_real(() => load(env_or("DAWNOP_ENV", "backend/.env")))
   let db_path = get_or(cfg, "DAWN_DB_PATH", "backend/dawnop.db")
   let db_ext = get_or(cfg, "DAWN_SIMPLE_EXT", "backend/extensions/libsimple")
   let db = Db { path: db_path, ext: db_ext }

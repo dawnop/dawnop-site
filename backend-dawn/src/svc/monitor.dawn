@@ -4,6 +4,7 @@
 # Vaultwarden probe. A failing item lands in its own *_error field, never 500s.
 use std/str
 use std/io
+use std/io.{Fs}
 use std/list
 use std/bytes
 use java "java.lang.String"
@@ -37,7 +38,7 @@ use util/jsonx.{obj, jint, jstr, jbool}
 
 # ---- server: the local machine, /proc first (production is Linux), JMX fallback ----
 
-pub fn server_block(cpu_cell: TtlCell) -> Json !io = {
+pub fn server_block(cpu_cell: TtlCell) -> Json !Fs !io = {
   let rt = Runtime.getRuntime()!
   let procs = rt.availableProcessors()
   let root = File.new("/")
@@ -119,7 +120,7 @@ const CPU_SNAPSHOT_MAX_AGE_S: Int = 300
 ## (if short) window, and the later write wins, which only means the next call's
 ## window starts a little earlier than it otherwise would. The cases that
 ## ordering rules out are still checked rather than assumed, in cpu_delta_pct.
-fn cpu_percent(cell: TtlCell, max_age_s: Int) -> Float !io = {
+fn cpu_percent(cell: TtlCell, max_age_s: Int) -> Float !Fs !io = {
   let prev = cpu_prev(cell, max_age_s)
   let cur = cpu_sample()
   let reading = match prev {
@@ -143,7 +144,7 @@ fn cpu_percent(cell: TtlCell, max_age_s: Int) -> Float !io = {
 # implementation cost. The SECOND sample is the one that goes in the cell: it is
 # the fresher of the two, and the next call's window should start at the end of
 # this one rather than before it.
-fn cpu_window(cell: TtlCell, first: (Int, Int)) -> Float !io = {
+fn cpu_window(cell: TtlCell, first: (Int, Int)) -> Float !Fs !io = {
   Thread.sleep(CPU_WINDOW_MS)
   let second = cpu_sample()
   cpu_put(cell, second)
@@ -202,7 +203,7 @@ fn cpu_prev_of(s: String) -> Option[(Int, Int)] = {
 }
 
 # (busy, total) jiffies from the aggregate cpu line; idle = idle + iowait
-fn cpu_sample() -> (Int, Int) !io =
+fn cpu_sample() -> (Int, Int) !Fs =
   match io.read_file("/proc/stat") {
     Ok(text) -> cpu_of(text)
     Err(_m) -> (0, 0)
@@ -216,7 +217,7 @@ fn cpu_of(text: String) -> (Int, Int) = {
   (total - idle, total)
 }
 
-fn loadavg() -> Json !io =
+fn loadavg() -> Json !Fs =
   match io.read_file("/proc/loadavg") {
     Ok(text) -> loadavg_of(text)
     Err(_m) -> JArr([JNull, JNull, JNull])
@@ -232,7 +233,7 @@ fn loadavg_of(text: String) -> Json = {
 }
 
 # MemTotal/MemAvailable in kB; used/percent match psutil (total - available)
-fn meminfo() -> Json !io =
+fn meminfo() -> Json !Fs =
   match io.read_file("/proc/meminfo") {
     Ok(text) -> meminfo_of(text)
     Err(_m) -> obj([("total", jint(0)), ("used", jint(0)), ("percent", JNum(0.0))])
@@ -258,7 +259,7 @@ fn meminfo_kb(text: String, key: String) -> Int =
       })
 
 # cumulative bytes over every interface (psutil net_io_counters aggregates all)
-fn net_totals() -> Json !io =
+fn net_totals() -> Json !Fs =
   match io.read_file("/proc/net/dev") {
     Ok(text) -> net_totals_of(text)
     Err(_m) -> obj([("sent", jint(0)), ("recv", jint(0))])
@@ -281,7 +282,7 @@ fn net_totals_of(text: String) -> Json = {
   obj([("sent", jint(sent)), ("recv", jint(recv))])
 }
 
-fn uptime_s() -> Int !io =
+fn uptime_s() -> Int !Fs =
   match io.read_file("/proc/uptime") {
     Ok(text) -> uptime_of(text)
     Err(_m) -> 0
@@ -761,7 +762,7 @@ test "a reading with a snapshot to difference against opens no window of its own
   # the genuine first call: nothing recorded yet, so this one has to sample a
   # window and pays for it
   let t0 = System.currentTimeMillis()
-  let first = cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S)
+  let first = io.with_fs_real(() => cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S))
   let first_ms = System.currentTimeMillis() - t0
   assert first >= 0.0
   assert first_ms >= CPU_WINDOW_MS
@@ -770,7 +771,7 @@ test "a reading with a snapshot to difference against opens no window of its own
   Thread.sleep(120)
 
   let t1 = System.currentTimeMillis()
-  let second = cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S)
+  let second = io.with_fs_real(() => cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S))
   let second_ms = System.currentTimeMillis() - t1
   assert second >= 0.0
   # the whole point of the change: the second call reports the 120ms above
@@ -783,7 +784,7 @@ test "every reading leaves its own snapshot behind" {
   let cell = new_cell()
   # a plausible snapshot, young enough that this call takes the delta path
   cpu_put(cell, (0, 0))
-  let _x = cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S)
+  let _x = io.with_fs_real(() => cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S))
   # the next call's window has to start here. A reading that differenced and
   # left the cell alone would keep widening its window until the snapshot aged
   # out, which is the drift this design exists to remove -- and it would look
@@ -801,7 +802,7 @@ test "a snapshot too old to describe now sends the call back to sampling" {
   # its own window. Differencing against a snapshot from an hour ago would put
   # the hour's average on the dashboard and call it live.
   let t0 = System.currentTimeMillis()
-  let stale = cpu_percent(cell, 0)
+  let stale = io.with_fs_real(() => cpu_percent(cell, 0))
   let stale_ms = System.currentTimeMillis() - t0
   assert stale >= 0.0
   assert stale_ms >= CPU_WINDOW_MS
