@@ -13,6 +13,7 @@ a mutant that fails to build tests the compiler, not the assertions.
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -46,6 +47,20 @@ def replace_once(path: Path, old: str, new: str) -> None:
     if count != 1:
         raise ValueError(f"expected one anchor in {path}, found {count}: {old!r}")
     path.write_text(text.replace(old, new), encoding="utf-8")
+
+
+def drop_import(path: Path, name: str) -> None:
+    """Remove `name` from the one selective `use` list in `path` that has it.
+
+    Since dawn 0.78.0 an unused import is a compile error, so a mutant that
+    takes away a name's last use has to take the import with it to still build.
+    """
+    text = path.read_text(encoding="utf-8")
+    item = re.compile(rf"(?m)^(use [^\n{{]+\.\{{[^\n}}]*?)(?:\b{name}, |, {name}\b)")
+    new, count = item.subn(r"\1", text)
+    if count != 1:
+        raise ValueError(f"expected one import of {name} in {path}, found {count}")
+    path.write_text(new, encoding="utf-8")
 
 
 MUTANTS = {
@@ -120,6 +135,12 @@ MUTANTS = {
     ),
 }
 
+# Mutants that remove the last use of an imported name, and that name.
+ORPHANED_IMPORTS = {
+    "page-never-touches": "touch_page",
+    "viz-never-touches": "touch_viz",
+}
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -139,6 +160,8 @@ def main() -> int:
 
     rel, old, new = MUTANTS[args.mutant]
     replace_once(project / rel, old, new)
+    if args.mutant in ORPHANED_IMPORTS:
+        drop_import(project / rel, ORPHANED_IMPORTS[args.mutant])
     return 0
 
 
