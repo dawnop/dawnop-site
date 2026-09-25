@@ -18,7 +18,7 @@ fn tag_json(r: List[Cell]) -> Json =
 ## GET /api/tags — public: only tags with ≥1 published article, ordered by
 ## count desc then name (matches list_tags' inner join).
 pub fn list_public(c: DbConn) -> Result[List[Json], String] !io = {
-  let rows = query(c, "$TAG_SELECT where cnt > 0 order by cnt desc, t.name", [], [ColInt, ColStr, ColStr, ColInt])?
+  let rows = query(c, "${TAG_SELECT} where cnt > 0 order by cnt desc, t.name", [], [ColInt, ColStr, ColStr, ColInt])?
   Ok(map(rows, tag_json))
 }
 
@@ -53,6 +53,6 @@ pub fn with_count(c: DbConn, id: Int, count: Int) -> Result[Option[Json], String
 
 ## GET /api/tags/{slug} — one tag. None when missing.
 pub fn by_slug(c: DbConn, slug: String) -> Result[Option[Json], String] !io = {
-  let rows = query(c, "$TAG_SELECT where t.slug = ?", [PStr(slug)], [ColInt, ColStr, ColStr, ColInt])?
+  let rows = query(c, "${TAG_SELECT} where t.slug = ?", [PStr(slug)], [ColInt, ColStr, ColStr, ColInt])?
   Ok(first_map(rows, r => tag_json(r)))
 }

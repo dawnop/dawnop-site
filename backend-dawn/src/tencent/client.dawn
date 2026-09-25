@@ -30,13 +30,13 @@ pub type PendingTc = { p: Pending, action: String }
 pub fn call_start(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[PendingTc, String] !Clock !Upstream !io = {
   let host = tc_host(service)
   let headers = tc3_headers(secret_id, secret_key, service, action, version, region, payload)
-  let p = post_start("https://$host", headers, payload)?
+  let p = post_start("https://${host}", headers, payload)?
   Ok(PendingTc { p: p, action: action })
 }
 
 ## The host a service's v3 endpoint lives on. It is also the `host` the
 ## signature covers, so the two can never drift apart.
-pub fn tc_host(service: String) -> String = "$service.tencentcloudapi.com"
+pub fn tc_host(service: String) -> String = "${service}.tencentcloudapi.com"
 
 ## The full header list for a Tencent Cloud v3 POST, Authorization included.
 ## Split out of `call_start` so the whole TC3 assembly — canonical request,
@@ -49,15 +49,15 @@ pub fn tc3_headers(secret_id: String, secret_key: String, service: String, actio
   let date = utc_date(ts)
   let ct = "application/json; charset=utf-8"
 
-  let canonical_headers = "content-type:$ct\nhost:$host\nx-tc-action:${str.to_lower(action)}\n"
+  let canonical_headers = "content-type:${ct}\nhost:${host}\nx-tc-action:${str.to_lower(action)}\n"
   let signed_headers = "content-type;host;x-tc-action"
   let payload_hash = sha256_hex(payload)
-  let canonical_request = "POST\n/\n\n$canonical_headers\n$signed_headers\n$payload_hash"
+  let canonical_request = "POST\n/\n\n${canonical_headers}\n${signed_headers}\n${payload_hash}"
 
-  let scope = "$date/$service/tc3_request"
-  let string_to_sign = "TC3-HMAC-SHA256\n$ts\n$scope\n${sha256_hex(canonical_request)}"
+  let scope = "${date}/${service}/tc3_request"
+  let string_to_sign = "TC3-HMAC-SHA256\n${ts}\n${scope}\n${sha256_hex(canonical_request)}"
   let signature = tc3_signature(secret_key, date, service, string_to_sign)
-  let auth = "TC3-HMAC-SHA256 Credential=$secret_id/$scope, SignedHeaders=$signed_headers, Signature=$signature"
+  let auth = "TC3-HMAC-SHA256 Credential=${secret_id}/${scope}, SignedHeaders=${signed_headers}, Signature=${signature}"
 
   # no explicit Host header: java.net.http restricts it and auto-sets it from
   # the URI, which equals the signed canonical host

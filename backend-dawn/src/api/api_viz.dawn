@@ -57,7 +57,7 @@ pub fn viz_create(a: Auth) -> Handler =
             }
             match as_http(with_db(a.db.path, a.db.ext, c => viz_create_read(c, nv)), 500)? {
               Some(j) -> Ok(json_response(201, j))
-              None -> Err(http_error(409, "标识 $slug 已存在"))
+              None -> Err(http_error(409, "标识 ${slug} 已存在"))
             }
           }
         }
@@ -129,7 +129,7 @@ fn update_viz_slug(c: DbConn, id: Int, raw: String) -> Result[Int, String] !io =
     Err("slug 格式非法")
   } else {
     let free = slug_free(c, slug, Some(id))?
-    if not free { Err(conflict("标识 $slug 已存在")) } else { set_viz_str(c, id, "slug", slug) }
+    if not free { Err(conflict("标识 ${slug} 已存在")) } else { set_viz_str(c, id, "slug", slug) }
   }
 }
 
@@ -178,7 +178,7 @@ fn must(r: Result[Int, String]) -> Int =
 fn viz_test_db() -> DbConn !io = {
   let c = open("jdbc:sqlite::memory:")
   let _t = must(exec(c, "create table viz_components (id integer primary key, slug text unique, name text, source text, compiled text, style text, created_at text, updated_at text)", []))
-  let _r = must(exec(c, "insert into viz_components values (1, 'chart', 'Chart', 'SRC', 'CMP', 'STY', '2020-01-01 00:00:00', '$STALE')", []))
+  let _r = must(exec(c, "insert into viz_components values (1, 'chart', 'Chart', 'SRC', 'CMP', 'STY', '2020-01-01 00:00:00', '${STALE}')", []))
   c
 }
 
@@ -192,7 +192,7 @@ fn viz_updated(c: DbConn) -> String !io =
 fn put_viz(c: DbConn, body: String) -> Unit !io = {
   let m = match body_obj(body) {
     Ok(x) -> x
-    Err(e) -> panic("bad test body: $e")
+    Err(e) -> panic("bad test body: ${e}")
   }
   match viz_update_read(c, 1, m) {
     Ok(Some(_j)) -> {}

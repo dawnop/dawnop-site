@@ -10,7 +10,7 @@ pub fn page_path(kind: String, slug: String) -> String =
   if kind == "builtin" {
     if slug == "home" { "/" } else if slug == "tags" { "/tags" } else { "/" }
   } else {
-    "/p/$slug"
+    "/p/${slug}"
   }
 
 ## GET /api/pages/nav — visible nav items ordered by (nav_order, id).
@@ -40,7 +40,7 @@ fn page_col_types() -> List[Col] =
 ## GET /api/pages/{slug} — full page. None when missing or a builtin page
 ## (builtin pages are SPA routes, not content served here — matches FastAPI).
 pub fn by_slug(c: DbConn, slug: String) -> Result[Option[Json], String] !io = {
-  let rows = query_rows(c, "select $PAGE_COLS from pages where slug = ? and type != 'builtin'", [PStr(slug)], page_col_types())?
+  let rows = query_rows(c, "select ${PAGE_COLS} from pages where slug = ? and type != 'builtin'", [PStr(slug)], page_col_types())?
   Ok(first_named_map(rows, r => page_row_json(r)))
 }
 
@@ -65,13 +65,13 @@ fn page_row_json(r: Row) -> Json = {
 
 ## Full page by id (any type, including builtin) — for admin create/update/list.
 pub fn by_id_admin(c: DbConn, id: Int) -> Result[Option[Json], String] !io = {
-  let rows = query_rows(c, "select $PAGE_COLS from pages where id = ?", [PInt(id)], page_col_types())?
+  let rows = query_rows(c, "select ${PAGE_COLS} from pages where id = ?", [PInt(id)], page_col_types())?
   Ok(first_named_map(rows, r => page_row_json(r)))
 }
 
 ## All pages ordered by (nav_order, id) — the admin list.
 pub fn list_admin(c: DbConn) -> Result[List[Json], String] !io = {
-  let rows = query_rows(c, "select $PAGE_COLS from pages order by nav_order, id", [], page_col_types())?
+  let rows = query_rows(c, "select ${PAGE_COLS} from pages order by nav_order, id", [], page_col_types())?
   Ok(map(rows, page_row_json))
 }
 

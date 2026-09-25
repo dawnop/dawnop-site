@@ -170,11 +170,11 @@ test "parse a two-field multipart body (a text field and a file)" {
   let nl = from_code_points(['\r', '\n'])
   let b = "----DawnTest"
   let body =
-    "--$b$nl" ++
-    "Content-Disposition: form-data; name=\"path\"${nl}${nl}qiniu://pics$nl" ++
-    "--$b$nl" ++
-    "Content-Disposition: form-data; name=\"file\"; filename=\"a.txt\"${nl}Content-Type: text/plain${nl}${nl}hello$nl" ++
-    "--$b--$nl"
+    "--${b}${nl}" ++
+    "Content-Disposition: form-data; name=\"path\"${nl}${nl}qiniu://pics${nl}" ++
+    "--${b}${nl}" ++
+    "Content-Disposition: form-data; name=\"file\"; filename=\"a.txt\"${nl}Content-Type: text/plain${nl}${nl}hello${nl}" ++
+    "--${b}--${nl}"
   let parts = parse_multipart(bytes.utf8(body), b)
   assert len(parts) == 2
   match part_named(parts, "path") {
@@ -199,7 +199,7 @@ fn one_file_part(header_lines: List[String]) -> Option[Part] = {
   let nl = crlf()
   let b = "BB"
   let block = join(header_lines, nl)
-  let body = "--$b$nl" ++ block ++ "$nl$nl" ++ "payload$nl" ++ "--$b--$nl"
+  let body = "--${b}${nl}" ++ block ++ "${nl}${nl}" ++ "payload${nl}" ++ "--${b}--${nl}"
   part_named(parse_multipart(bytes.utf8(body), b), "file")
 }
 
@@ -257,8 +257,8 @@ test "Content-Disposition is read case-insensitively too" {
 test "a part whose header block is not UTF-8 is refused, not decoded lossily" {
   let nl = crlf()
   let b = "BB"
-  let head = "--$b${nl}Content-Disposition: form-data; name=\"f"
-  let tail = "\"${nl}${nl}payload${nl}--$b--$nl"
+  let head = "--${b}${nl}Content-Disposition: form-data; name=\"f"
+  let tail = "\"${nl}${nl}payload${nl}--${b}--${nl}"
   # a lone 0xFF spliced into the header block (inside the field name)
   let buf = bytes.put_bytes(bytes.put(bytes.put_bytes(bytes.buf(), bytes.utf8(head)), 0xFF), bytes.utf8(tail))
   assert len(parse_multipart(bytes.freeze(buf), b)) == 0
@@ -275,9 +275,9 @@ test "file content with embedded CRLF is preserved, only the trailing one droppe
   let b = "BB"
   let payload = "line1${nl}line2" # an internal CRLF that must survive
   let body =
-    "--$b$nl" ++
-    "Content-Disposition: form-data; name=\"file\"; filename=\"f\"${nl}${nl}$payload$nl" ++
-    "--$b--$nl"
+    "--${b}${nl}" ++
+    "Content-Disposition: form-data; name=\"file\"; filename=\"f\"${nl}${nl}${payload}${nl}" ++
+    "--${b}--${nl}"
   match part_named(parse_multipart(bytes.utf8(body), b), "file") {
     Some(p) -> { assert bytes.decode_utf8_lossy(p.content) == payload }
     None -> { assert false }

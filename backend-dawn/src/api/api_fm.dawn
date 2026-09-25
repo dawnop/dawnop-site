@@ -289,7 +289,7 @@ pub fn preview(a: Auth) -> Handler =
         match o.key {
           Some(k) -> {
             let suffix = match thumb_fop(o.content_type, o.size, w, h, mode) {
-              Some(fop) -> "?$fop"
+              Some(fop) -> "?${fop}"
               None -> ""
             }
             Ok(redirect(302, signed_url(a.qiniu, k, suffix)))
@@ -316,8 +316,8 @@ fn bounded_opt(req: Request, name: String, lo: Int, hi: Int) -> Result[Option[In
   match query(req, name) {
     None -> Ok(None)
     Some(s) -> match parse_int(s) {
-      None -> Err(http_error(422, "$name must be an integer"))
-      Some(n) -> if n < lo || n > hi { Err(http_error(422, "$name 超出范围")) } else { Ok(Some(n)) }
+      None -> Err(http_error(422, "${name} must be an integer"))
+      Some(n) -> if n < lo || n > hi { Err(http_error(422, "${name} 超出范围")) } else { Ok(Some(n)) }
     }
   }
 
@@ -333,9 +333,9 @@ fn thumb_fop(content_type: String, size: Int, w: Option[Int], h: Option[Int], mo
         None
       } else {
         let code = if mode == "fill" { "1" } else { "2" } # 1=裁剪铺满, 2=等比缩放
-        let ww = match w { Some(n) -> "/w/$n", None -> "" }
-        let hh = match h { Some(n) -> "/h/$n", None -> "" }
-        Some("imageView2/$code$ww$hh/format/webp/q/82")
+        let ww = match w { Some(n) -> "/w/${n}", None -> "" }
+        let hh = match h { Some(n) -> "/h/${n}", None -> "" }
+        Some("imageView2/${code}${ww}${hh}/format/webp/q/82")
       }
   }
 
@@ -381,7 +381,7 @@ pub fn upload_token_ep(a: Auth) -> Handler =
     let _n = require_admissible_names(rel)?
     let _p = as_http_with(with_db(a.db.path, a.db.ext, c => upload_token_preflight(c, rel)), conflict_or(500))?
     let e = ext(sanitize_name(raw_name))
-    let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
+    let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.${e}" }
     let token = upload_token(a.qiniu, key, now_s() + a.qiniu.expires)
     let _x = as_http(with_db(a.db.path, a.db.ext, c => ledger(c, key, rel)), 500)?
     Ok(json_ok(obj([
@@ -523,7 +523,7 @@ fn register_stat_failure(status: Int) -> HttpError =
   if status == 612 {
     http_error(400, "对象未在七牛找到，注册被拒")
   } else {
-    http_error(502, "七牛 stat 返回 $status")
+    http_error(502, "七牛 stat 返回 ${status}")
   }
 
 # fsize of 0 (absent or genuinely empty) falls through to the client hint, then 0

@@ -50,10 +50,10 @@ fn validate_settings(keys: List[String], m: Map[String, Json], i: Int) -> Result
         validate_settings(keys, m, i + 1)
       }
       None -> match repo_settings.range_of(key) {
-        None -> Err("未知配置项：$key")
+        None -> Err("未知配置项：${key}")
         Some(pair) -> {
           let (lo, hi) = pair
-          Err("$key 应为 $lo~$hi 的整数")
+          Err("${key} 应为 ${lo}~${hi} 的整数")
         }
       }
     }

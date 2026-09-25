@@ -29,8 +29,8 @@ pub fn range_of(key: String) -> Option[(Int, Int)] =
 ## (JSON value → strict int) since only the raw JSON distinguishes 3 from 3.0.
 pub fn check_setting(key: String, value: Int) -> Result[Bool, String] =
   match range_of(key) {
-    None -> Err("未知配置项：$key")
-    Some((lo, hi)) -> if value < lo || value > hi { Err("$key 应为 $lo~$hi 的整数") } else { Ok(true) }
+    None -> Err("未知配置项：${key}")
+    Some((lo, hi)) -> if value < lo || value > hi { Err("${key} 应为 ${lo}~${hi} 的整数") } else { Ok(true) }
   }
 
 ## Read all settings, defaults overlaid by stored rows (dirty rows fall back).
@@ -63,10 +63,10 @@ pub fn setting_int(c: DbConn, key: String, dflt: Int) -> Result[Int, String] !io
 ## else upsert. Value is stored as its plain integer text (JSON for an int).
 pub fn put_one(c: DbConn, key: String, value: Int) -> Result[Bool, String] !io =
   match range_of(key) {
-    None -> Err("未知配置项：$key")
+    None -> Err("未知配置项：${key}")
     Some((lo, hi)) ->
       if value < lo || value > hi {
-        Err("$key 应为 $lo~$hi 的整数")
+        Err("${key} 应为 ${lo}~${hi} 的整数")
       } else {
         let _u = exec(c, "insert into settings (key, value) values (?, ?) on conflict(key) do update set value = excluded.value", [PStr(key), PStr(to_string(value))])?
         Ok(true)

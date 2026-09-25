@@ -36,7 +36,7 @@ pub fn cache_get(cell: TtlCell, ttl_s: Int) -> Option[String] !io = {
 ## Store a payload with the current time. The payload may contain "|" (only the
 ## first separator is structural).
 pub fn cache_put(cell: TtlCell, payload: String) -> Unit !io =
-  atomic(cell).set("${now_s()}|$payload")
+  atomic(cell).set("${now_s()}|${payload}")
 
 ## Wall-clock seconds since the epoch, from the machine. The cache stamps
 ## entries with it, and so does everything that has not been migrated to the

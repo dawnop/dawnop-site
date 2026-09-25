@@ -11,7 +11,7 @@ use java "javax.crypto.spec.SecretKeySpec"
 pub fn tc3_signature(secret_key: String, date: String, service: String, string_to_sign: String) -> String !io = {
   # signing_key = HMAC(HMAC(HMAC("TC3"+sk, date), service), "tc3_request")
   let mac1 = Mac.getInstance("HmacSHA256")!
-  mac1.init(SecretKeySpec.new(bytes.utf8("TC3$secret_key"), "HmacSHA256"))
+  mac1.init(SecretKeySpec.new(bytes.utf8("TC3${secret_key}"), "HmacSHA256"))
   let k1 = mac1.doFinal(bytes.utf8(date))!
 
   let mac2 = Mac.getInstance("HmacSHA256")!

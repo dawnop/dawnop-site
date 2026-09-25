@@ -28,7 +28,7 @@ fn opt_query_int(req: Request, name: String) -> Result[Option[Int], HttpError] =
     None -> Ok(None)
     Some(s) -> match parse_int(s) {
       Some(n) -> Ok(Some(n))
-      None -> Err(http_error(422, "$name must be an integer"))
+      None -> Err(http_error(422, "${name} must be an integer"))
     }
   }
 

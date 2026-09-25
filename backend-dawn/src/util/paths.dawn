@@ -50,7 +50,7 @@ pub fn strip_slashes(s: String) -> String = strip_trailing_slash(strip_leading_s
 fn strip_leading_slash(s: String) -> String = if str.starts_with(s, "/") { strip_leading_slash(str.slice(s, 1, str.len(s))) } else { s }
 pub fn strip_trailing_slash(s: String) -> String = if str.ends_with(s, "/") && str.len(s) > 0 { strip_trailing_slash(str.slice(s, 0, str.len(s) - 1)) } else { s }
 
-pub fn full(rel: String) -> String = if rel == "" { "$STORAGE://" } else { "$STORAGE://$rel" }
+pub fn full(rel: String) -> String = if rel == "" { "${STORAGE}://" } else { "${STORAGE}://${rel}" }
 
 pub fn parent_rel(rel: String) -> String =
   match str.last_index_of(rel, "/") {
@@ -68,7 +68,7 @@ pub fn basename(rel: String) -> String =
     }
   }
 
-pub fn fm_join(parent: String, name: String) -> String = if parent == "" { name } else { "$parent/$name" }
+pub fn fm_join(parent: String, name: String) -> String = if parent == "" { name } else { "${parent}/${name}" }
 
 ## Whether a name may be written, and when it may not, which of the three ways
 ## it fails. A verdict only; `require_admissible_names` puts the HTTP shape on it.

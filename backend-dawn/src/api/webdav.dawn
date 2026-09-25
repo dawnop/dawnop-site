@@ -129,7 +129,7 @@ fn href(prefix: String, rel: String, is_dir: Bool) -> String !io = {
     if path == "" {
       if prefix != "" { prefix ++ "/" } else { "/" }
     } else {
-      "$prefix/$path"
+      "${prefix}/${path}"
     }
   if is_dir && not str.ends_with(base, "/") { base ++ "/" } else { base }
 }
@@ -137,7 +137,7 @@ fn href(prefix: String, rel: String, is_dir: Bool) -> String !io = {
 # ---- PROPFIND XML ----
 
 fn multistatus(inner: String) -> String =
-  "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\">$inner</D:multistatus>"
+  "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\">${inner}</D:multistatus>"
 
 fn response_xml(prefix: String, rel: String, name: String, is_dir: Bool, size: Int, mime: String, mtime: Int, ctime: Int, etag: String) -> String !io = {
   let typ = if is_dir { "<D:collection/>" } else { "" }
@@ -147,15 +147,15 @@ fn response_xml(prefix: String, rel: String, name: String, is_dir: Bool, size: I
     } else {
       let m = safe_persisted_mime(mime)
       let etag_xml = if etag == "" { "" } else { "<D:getetag>${xml_escape(etag)}</D:getetag>" }
-      "<D:getcontentlength>$size</D:getcontentlength><D:getcontenttype>${xml_escape(m)}</D:getcontenttype>$etag_xml"
+      "<D:getcontentlength>${size}</D:getcontentlength><D:getcontenttype>${xml_escape(m)}</D:getcontenttype>${etag_xml}"
     }
   "<D:response><D:href>${xml_escape(href(prefix, rel, is_dir))}</D:href>" ++
     "<D:propstat><D:prop>" ++
     "<D:displayname>${xml_escape(name)}</D:displayname>" ++
-    "<D:resourcetype>$typ</D:resourcetype>" ++
+    "<D:resourcetype>${typ}</D:resourcetype>" ++
     "<D:getlastmodified>${http_date(mtime)}</D:getlastmodified>" ++
     "<D:creationdate>${iso_date(ctime)}</D:creationdate>" ++
-    "$extra</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>"
+    "${extra}</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>"
 }
 
 # A row's <D:response>. FileRow has no created_at column, so creationdate reuses
@@ -166,7 +166,7 @@ fn entry_xml(prefix: String, o: FileRow) -> String !io = {
   response_xml(prefix, o.path, basename(o.path), o.is_dir, o.size, o.content_type, t, t, etag)
 }
 
-fn key_etag(k: Option[String]) -> String = match k { Some(v) -> "\"$v\"", None -> "" }
+fn key_etag(k: Option[String]) -> String = match k { Some(v) -> "\"${v}\"", None -> "" }
 
 fn kids_xml(prefix: String, rows: List[FileRow]) -> String !io =
   fold(rows, "", (acc, o) => acc ++ entry_xml(prefix, o))
@@ -253,7 +253,7 @@ fn get_or_head(a: Auth, req: Request, rel: String, head: Bool) -> Result[Respons
 
 fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Result[Response, HttpError] !Upstream !io = {
   let mime = safe_persisted_mime(o.content_type)
-  let etag = "\"$key\""
+  let etag = "\"${key}\""
   let lastmod = http_date(ts(o.updated_at))
   if head {
     Ok(with_meta(raw(200, mime, ""), o.size, etag, lastmod))
@@ -277,7 +277,7 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
       Some(pair) -> {
         let (start, end) = pair
         {
-          let r = as_http_with(as_outbound(fetch_stream(signed_url(a.qiniu, key, ""), [("Accept-Encoding", "identity"), ("Range", "bytes=$start-$end")])), mutation_error)?
+          let r = as_http_with(as_outbound(fetch_stream(signed_url(a.qiniu, key, ""), [("Accept-Encoding", "identity"), ("Range", "bytes=${start}-${end}")])), mutation_error)?
           # a ranged hit is 206, a server that ignored the Range answers 200 —
           # anything else is an upstream error whose body is not the file. Streaming
           # can't measure the returned length, so decide 206-vs-200 by the upstream
@@ -286,7 +286,7 @@ fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Res
             close_stream(r.stream)
             Err(http_error(502, "qiniu ${r.status}"))
           } else if r.status == 206 {
-            Ok(add_headers(stream_response(206, mime, r.stream), [("Accept-Ranges", "bytes"), ("Content-Range", "bytes $start-$end/${o.size}"), ("Last-Modified", lastmod), ("ETag", etag)]))
+            Ok(add_headers(stream_response(206, mime, r.stream), [("Accept-Ranges", "bytes"), ("Content-Range", "bytes ${start}-${end}/${o.size}"), ("Last-Modified", lastmod), ("ETag", etag)]))
           } else {
             Ok(add_headers(stream_response(200, mime, r.stream), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
           }
@@ -453,7 +453,7 @@ fn put_do(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !Up
     } else {
       let mime = guess_mime(basename(rel))
       let e = ext(basename(rel))
-      let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
+      let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.${e}" }
       # the body was streamed to disk by the server (route tag "stream-body"), so
       # upload it straight from there: constant memory, whatever the size.
       match req.body_file {
@@ -547,7 +547,7 @@ fn effective_port(scheme: String, port: Int) -> Int =
   if port >= 0 { port } else { destination_default_port(scheme) }
 
 fn parse_destination_host_uri(scheme: String, raw_host: String) -> Option[URI] !io =
-  match catch_text(() => URI.create("$scheme://$raw_host")!) {
+  match catch_text(() => URI.create("${scheme}://${raw_host}")!) {
     Ok(uri) -> Some(uri)
     Err(_) -> None
   }
@@ -1010,10 +1010,10 @@ fn lock_response(req: Request, rel: String) -> Response !io = {
     "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:prop xmlns:D=\"DAV:\"><D:lockdiscovery><D:activelock>" ++
     "<D:locktype><D:write/></D:locktype><D:lockscope><D:exclusive/></D:lockscope>" ++
     "<D:depth>infinity</D:depth><D:timeout>Second-3600</D:timeout>" ++
-    "<D:locktoken><D:href>$token</D:href></D:locktoken>" ++
+    "<D:locktoken><D:href>${token}</D:href></D:locktoken>" ++
     "<D:lockroot><D:href>${xml_escape(href(prefix, rel, false))}</D:href></D:lockroot>" ++
     "</D:activelock></D:lockdiscovery></D:prop>"
-  with_header(raw(200, "application/xml; charset=\"utf-8\"", body), "Lock-Token", "<$token>")
+  with_header(raw(200, "application/xml; charset=\"utf-8\"", body), "Lock-Token", "<${token}>")
 }
 
 # ---- OPTIONS ----

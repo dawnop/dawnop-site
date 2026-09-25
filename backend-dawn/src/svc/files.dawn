@@ -42,7 +42,7 @@ use json/value.{Json, JArr, JObj, JStr}
 ## fop, an `attname`); WebDAV passes "".
 pub fn signed_url(q: Qiniu, key: String, suffix: String) -> String !io = {
   let domain = strip_trailing_slash(q.domain)
-  private_url(q, "$domain/$key$suffix", now_s() + q.expires)
+  private_url(q, "${domain}/${key}${suffix}", now_s() + q.expires)
 }
 
 ## Move `path` from under `src_root` to under `dst_root`, keeping the tail. Both
@@ -162,7 +162,7 @@ fn plan_fm_moves(c: DbConn, sources: List[String], dest: String, i: Int, acc: Li
       plan_fm_moves(c, sources, dest, i + 1, acc)
     } else {
       let new_rel = fm_join(dest, basename(src))
-      if new_rel == src || str.starts_with(new_rel, "$src/") {
+      if new_rel == src || str.starts_with(new_rel, "${src}/") {
         plan_fm_moves(c, sources, dest, i + 1, acc)
       } else {
         let t = taken(c, new_rel)?
@@ -201,7 +201,7 @@ fn plan_fm_copies(c: DbConn, sources: List[String], dest: String, i: Int, acc: L
       plan_fm_copies(c, sources, dest, i + 1, acc)
     } else {
       let new_rel = fm_join(dest, basename(src))
-      if str.starts_with(new_rel, "$src/") {
+      if str.starts_with(new_rel, "${src}/") {
         plan_fm_copies(c, sources, dest, i + 1, acc)
       } else {
         let t = taken(c, new_rel)?
@@ -442,7 +442,7 @@ fn save_mime(existing: Option[FileRow], rel: String) -> String =
 
 fn save_key(rel: String) -> String !io = {
   let e = ext(basename(rel))
-  if e == "" { uuid_hex() } else { "${uuid_hex()}.$e" }
+  if e == "" { uuid_hex() } else { "${uuid_hex()}.${e}" }
 }
 
 # ---- proxy upload ----
@@ -579,7 +579,7 @@ fn gc_log_new() -> AtomicReference !io = AtomicReference.new("")
 
 fn gc_log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!
 
-fn gc_log_add(r: AtomicReference, s: String) -> Unit !io = r.set("${gc_log_read(r)}$s;")
+fn gc_log_add(r: AtomicReference, s: String) -> Unit !io = r.set("${gc_log_read(r)}${s};")
 
 fn gc_test_qiniu() -> Qiniu =
   Qiniu {

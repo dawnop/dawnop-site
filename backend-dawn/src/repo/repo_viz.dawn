@@ -39,13 +39,13 @@ fn out_json(r: Row) -> Json =
 ## GET /api/viz — all components (admin, full VizOut). Ordered newest-edited
 ## first to match app/api/viz.py (order_by updated_at desc).
 pub fn list_all(c: DbConn) -> Result[List[Json], String] !io = {
-  let rows = query_rows(c, "select $OUT_COLS from viz_components order by updated_at desc", [], out_col_types())?
+  let rows = query_rows(c, "select ${OUT_COLS} from viz_components order by updated_at desc", [], out_col_types())?
   Ok(map(rows, out_json))
 }
 
 ## Full component by id (VizOut) — create/update response.
 pub fn by_id(c: DbConn, id: Int) -> Result[Option[Json], String] !io = {
-  let rows = query_rows(c, "select $OUT_COLS from viz_components where id = ?", [PInt(id)], out_col_types())?
+  let rows = query_rows(c, "select ${OUT_COLS} from viz_components where id = ?", [PInt(id)], out_col_types())?
   Ok(first_named_map(rows, r => out_json(r)))
 }
 
@@ -84,7 +84,7 @@ pub fn create_viz(c: DbConn, v: NewViz) -> Result[Int, String] !io = {
 }
 
 pub fn set_viz_str(c: DbConn, id: Int, col: String, val: String) -> Result[Int, String] !io =
-  exec(c, "update viz_components set $col = ? where id = ?", [PStr(val), PInt(id)])
+  exec(c, "update viz_components set ${col} = ? where id = ?", [PStr(val), PInt(id)])
 
 pub fn touch_viz(c: DbConn, id: Int) -> Result[Int, String] !io =
   exec(c, "update viz_components set updated_at = datetime('now') where id = ?", [PInt(id)])

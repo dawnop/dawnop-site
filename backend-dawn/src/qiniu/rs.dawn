@@ -37,7 +37,7 @@ pub fn upload_text(q: Qiniu, key: String, content: String, mime: String, deadlin
 pub fn upload_bytes(q: Qiniu, key: String, content: Bytes, mime: String, deadline: Int) -> Result[Unit, String] !Upstream !io = {
   let token = upload_token(q, key, deadline)
   let body = multipart(token, key, content, mime)
-  let ct = "multipart/form-data; boundary=$BOUNDARY"
+  let ct = "multipart/form-data; boundary=${BOUNDARY}"
   let r = post_bytes("${q.up_host}/", [("Content-Type", ct)], body)?
   ok_status(r, "upload")
 }
@@ -56,7 +56,7 @@ pub fn upload_bytes(q: Qiniu, key: String, content: Bytes, mime: String, deadlin
 # authenticated admin (every fm route is behind `guarded`), and "qiniu 401
 # {"error":"bad token"}" is the difference between a five-minute fix and an hour.
 fn ok_status(r: HttpResp, what: String) -> Result[Unit, String] =
-  if r.status == 200 { Ok(()) } else { Err("$what: qiniu ${r.status} ${r.body}") }
+  if r.status == 200 { Ok(()) } else { Err("${what}: qiniu ${r.status} ${r.body}") }
 
 fn multipart(token: String, key: String, content: Bytes, mime: String) -> Bytes =
   bytes.utf8(mp_head(token, key, mime)) ++ content ++ bytes.utf8(mp_tail())
@@ -72,15 +72,15 @@ fn multipart(token: String, key: String, content: Bytes, mime: String) -> Bytes 
 # replaces an unshippable value entirely rather than cleaning it.
 fn mp_head(token: String, key: String, mime: String) -> String = {
   let nl = from_code_points(['\r', '\n']) # CRLF
-  let d = "--$BOUNDARY$nl"
-  let field = (name: String, value: String) => "${d}Content-Disposition: form-data; name=\"$name\"$nl$nl$value$nl"
+  let d = "--${BOUNDARY}${nl}"
+  let field = (name: String, value: String) => "${d}Content-Disposition: form-data; name=\"${name}\"${nl}${nl}${value}${nl}"
   field("token", token) ++ field("key", key) ++
-    "${d}Content-Disposition: form-data; name=\"file\"; filename=\"$key\"${nl}Content-Type: ${safe_persisted_mime(mime)}$nl$nl"
+    "${d}Content-Disposition: form-data; name=\"file\"; filename=\"${key}\"${nl}Content-Type: ${safe_persisted_mime(mime)}${nl}${nl}"
 }
 
 fn mp_tail() -> String = {
   let nl = from_code_points(['\r', '\n'])
-  "$nl--$BOUNDARY--$nl"
+  "${nl}--${BOUNDARY}--${nl}"
 }
 
 ## Upload a file from DISK to a key with CONSTANT memory: the multipart body is
@@ -92,14 +92,14 @@ fn mp_tail() -> String = {
 pub fn upload_file(q: Qiniu, key: String, path: String, mime: String, deadline: Int) -> Result[Unit, String] !Upstream !io = {
   let token = upload_token(q, key, deadline)
   let body = upload_body(bytes.utf8(mp_head(token, key, mime)), path, bytes.utf8(mp_tail()))?
-  let ct = "multipart/form-data; boundary=$BOUNDARY"
+  let ct = "multipart/form-data; boundary=${BOUNDARY}"
   let r = post_body("${q.up_host}/", [("Content-Type", ct)], body)?
   ok_status(r, "upload_file")
 }
 
 fn upload_body(head: Bytes, src: String, tail: Bytes) -> Result[RequestBody, String] !io =
   match file_body(head, src, tail) {
-    Err(e) -> Err("upload_file: $e")
+    Err(e) -> Err("upload_file: ${e}")
     Ok(body) -> Ok(body)
   }
 
@@ -110,13 +110,13 @@ fn hdr(q: Qiniu, op: String, entry: String) -> List[(String, String)] !io =
 ## 612 when it does not. Transport failure is Err.
 pub fn stat(q: Qiniu, key: String) -> Result[HttpResp, String] !Upstream !io = {
   let entry = entry_uri(q, key)
-  fetch("${q.rs_host}/stat/$entry", hdr(q, "stat", entry))
+  fetch("${q.rs_host}/stat/${entry}", hdr(q, "stat", entry))
 }
 
 ## delete an object. Ok on 200; a missing object (612) is also Ok (idempotent).
 pub fn delete_obj(q: Qiniu, key: String) -> Result[Unit, String] !Upstream !io = {
   let entry = entry_uri(q, key)
-  let r = post("${q.rs_host}/delete/$entry", hdr(q, "delete", entry), "")?
+  let r = post("${q.rs_host}/delete/${entry}", hdr(q, "delete", entry), "")?
   if r.status == 612 { Ok(()) } else { ok_status(r, "delete") }
 }
 
@@ -125,9 +125,9 @@ pub fn delete_obj(q: Qiniu, key: String) -> Result[Unit, String] !Upstream !io =
 pub fn copy_obj(q: Qiniu, src_key: String, dst_key: String) -> Result[Unit, String] !Upstream !io = {
   let src = entry_uri(q, src_key)
   let dst = entry_uri(q, dst_key)
-  let path = "/copy/$src/$dst/force/true"
-  let auth = management_token(q, "$path\n")
-  let r = post("${q.rs_host}$path", [("Authorization", auth)], "")?
+  let path = "/copy/${src}/${dst}/force/true"
+  let auth = management_token(q, "${path}\n")
+  let r = post("${q.rs_host}${path}", [("Authorization", auth)], "")?
   ok_status(r, "copy")
 }
 
@@ -138,13 +138,13 @@ test "Qiniu upload multipart replaces unsafe persisted MIME wholesale" {
   let framed = (mime: String) => mp_head("tok", "k.bin", mime)
 
   # a shippable type is framed verbatim, parameters and all
-  assert str.contains(framed("text/plain; charset=utf-8"), "Content-Type: text/plain; charset=utf-8$nl$nl")
+  assert str.contains(framed("text/plain; charset=utf-8"), "Content-Type: text/plain; charset=utf-8${nl}${nl}")
 
   # a stored CRLF would close the Content-Type line and open an attacker-chosen
   # one inside a token-signed request. The whole value is dropped, so neither the
   # injected header nor the prefix that carried it appears anywhere in the body.
   let injected = framed("text/plain${nl}X-Injected: 1")
-  assert str.contains(injected, "Content-Type: $FALLBACK_MIME$nl$nl")
+  assert str.contains(injected, "Content-Type: ${FALLBACK_MIME}${nl}${nl}")
   assert not str.contains(injected, "X-Injected")
   assert not str.contains(injected, "text/plain")
   # exactly one Content-Type line survives in the file part's header block
@@ -152,13 +152,13 @@ test "Qiniu upload multipart replaces unsafe persisted MIME wholesale" {
 
   # an empty stored type, and the JDK low-byte aliases of CR/LF that an 8-bit
   # decode turns a line break into, take the same wholesale replacement
-  assert str.contains(framed(""), "Content-Type: $FALLBACK_MIME$nl$nl")
+  assert str.contains(framed(""), "Content-Type: ${FALLBACK_MIME}${nl}${nl}")
   let low_byte = match (char.of(0x010D), char.of(0x010A)) {
     (Some(cr), Some(lf)) -> from_code_points([cr, lf])
     _ -> ""
   }
   let aliased = framed("text/plain${low_byte}X-Injected: 1")
-  assert str.contains(aliased, "Content-Type: $FALLBACK_MIME$nl$nl")
+  assert str.contains(aliased, "Content-Type: ${FALLBACK_MIME}${nl}${nl}")
   assert not str.contains(aliased, "X-Injected")
 }
 
@@ -206,10 +206,10 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
   })
   server.start()
   let port = server.getAddress()!.getPort()
-  let q = Qiniu { ..creds, up_host: "http://127.0.0.1:$port" }
+  let q = Qiniu { ..creds, up_host: "http://127.0.0.1:${port}" }
 
   match with_upstream(new_client(), () => upload_file(q, key, src_path, mime, deadline)) {
-    Err(m) -> panic("byte-exact upload failed: $m")
+    Err(m) -> panic("byte-exact upload failed: ${m}")
     Ok(_) -> ()
   }
   server.stop(0)
@@ -255,7 +255,7 @@ test "a refused qiniu call is an Err, not Ok(false)" {
   # /api/fm/create-file recorded a FileObject for an object qiniu never accepted.
   match ok_status(HttpResp { status: 200, body: "{}" }, "upload") {
     Ok(_) -> ()
-    Err(m) -> panic("a 200 must be Ok, got $m")
+    Err(m) -> panic("a 200 must be Ok, got ${m}")
   }
 
   match ok_status(HttpResp { status: 401, body: "{\"error\":\"bad token\"}" }, "upload") {

@@ -284,7 +284,7 @@ fn simple_query(c: DbConn, q: String, offset: Int, size: Int) -> Result[(Int, Li
 # LIKE fallback (single-term subset; matches the common case). Terms ANDed.
 fn like_query(c: DbConn, terms: List[String], offset: Int, size: Int) -> Result[(Int, List[Int]), String] !io = {
   let first = terms[0]
-  let pat = "%$first%"
+  let pat = "%${first}%"
   let tot = query(c, "select count(*) from articles where published = 1 and (title like ? or summary like ? or content like ?)", [PStr(pat), PStr(pat), PStr(pat)], [ColInt])?
   let total = first_int_or(tot, 0)
   let rows = query(c, "select id from articles where published = 1 and (title like ? or summary like ? or content like ?) order by created_at desc limit ? offset ?", [PStr(pat), PStr(pat), PStr(pat), PInt(size), PInt(offset)], [ColInt])?

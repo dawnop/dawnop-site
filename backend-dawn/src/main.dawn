@@ -86,7 +86,7 @@ pub fn main() -> Unit !io = {
   # live reading. See svc/monitor.cpu_percent.
   let cpu_cell = new_cell()
 
-  println("backend-dawn starting: db=$db_path port=$port")
+  println("backend-dawn starting: db=${db_path} port=${port}")
   # admin routes precede the public /api/{articles,pages,tags}/{slug} so the
   # static /admin, /reorder, /merge, /cleanup paths win over the {slug} capture
   serve_app_with(ServerConfig {

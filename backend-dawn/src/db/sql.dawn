@@ -48,14 +48,14 @@ pub type Row = { cells: List[Cell], names: Map[String, Int] }
 ## Open a database. Panics when the connection cannot be made — a service
 ## that cannot reach its database has no useful degraded mode.
 pub fn open(url: String) -> DbConn !io =
-  DriverManager.getConnection(url).expect("db connect failed: $url")
+  DriverManager.getConnection(url).expect("db connect failed: ${url}")
 
 ## Open with `enable_load_extension` so `select load_extension(...)` works
 ## (the FTS `simple` tokenizer rides in via this).
 pub fn open_ext(url: String) -> DbConn !io = {
   let props = Properties.new()
   props.setProperty("enable_load_extension", "true")
-  DriverManager.getConnection(url, props).expect("db connect failed: $url")
+  DriverManager.getConnection(url, props).expect("db connect failed: ${url}")
 }
 
 ## Run `body` and close the connection on both normal and panic paths.
@@ -148,7 +148,7 @@ pub fn scalar_int(c: DbConn, q: String, ps: List[SqlV]) -> Result[Int, String] !
   let rows = query(c, q, ps, [ColInt])?
   match first_row(rows) {
     Some(row) -> Ok(int_at(row, 0))
-    None -> Err("scalar query returned no rows: $q")
+    None -> Err("scalar query returned no rows: ${q}")
   }
 }
 
@@ -259,13 +259,13 @@ pub fn require_tx(c: DbConn, what: String) -> Result[Unit, String] !io =
   match exec(c, "begin", []) {
     Ok(_) -> {
       let _r = exec(c, "rollback", [])
-      Err("$what ran outside a transaction")
+      Err("${what} ran outside a transaction")
     }
     Err(m) ->
       if nested_tx_refusal(m) {
         Ok(())
       } else {
-        Err("$what could not confirm its transaction: $m")
+        Err("${what} could not confirm its transaction: ${m}")
       }
   }
 
@@ -287,7 +287,7 @@ fn finish_immediate_tx[T, !e](c: DbConn, body: fn() -> Result[T, String] !e !io)
     Err(m) ->
       match exec(c, "rollback", []) {
         Ok(_) -> Err(m)
-        Err(r) -> Err("$m; rollback failed: $r")
+        Err(r) -> Err("${m}; rollback failed: ${r}")
       }
   }
 
@@ -296,19 +296,19 @@ fn finish_immediate_tx[T, !e](c: DbConn, body: fn() -> Result[T, String] !e !io)
 pub fn int_at(row: List[Cell], i: Int) -> Int =
   match row[i] {
     VInt(n) -> n
-    other -> panic("column $i is not an Int: ${to_string(other)}")
+    other -> panic("column ${i} is not an Int: ${to_string(other)}")
   }
 
 pub fn float_at(row: List[Cell], i: Int) -> Float =
   match row[i] {
     VFloat(x) -> x
-    other -> panic("column $i is not a Float: ${to_string(other)}")
+    other -> panic("column ${i} is not a Float: ${to_string(other)}")
   }
 
 pub fn str_at(row: List[Cell], i: Int) -> String =
   match row[i] {
     VStr(s) -> s
-    other -> panic("column $i is not a String: ${to_string(other)}")
+    other -> panic("column ${i} is not a String: ${to_string(other)}")
   }
 
 ## SQLite stores booleans as 0/1 integers.
@@ -321,14 +321,14 @@ pub fn opt_str_at(row: List[Cell], i: Int) -> Option[String] =
   match row[i] {
     VStr(s) -> Some(s)
     VNull -> None
-    other -> panic("column $i is not a nullable String: ${to_string(other)}")
+    other -> panic("column ${i} is not a nullable String: ${to_string(other)}")
   }
 
 pub fn opt_int_at(row: List[Cell], i: Int) -> Option[Int] =
   match row[i] {
     VInt(n) -> Some(n)
     VNull -> None
-    other -> panic("column $i is not a nullable Int: ${to_string(other)}")
+    other -> panic("column ${i} is not a nullable Int: ${to_string(other)}")
   }
 
 # ---- first-row shortcuts ----
@@ -404,7 +404,7 @@ pub fn first_named_map[T](rows: List[Row], f: fn(Row) -> T !io) -> Option[T] !io
 fn col_idx(r: Row, name: String) -> Int =
   match map.get(r.names, name) {
     Some(i) -> i
-    None -> panic("no such column: $name (have ${to_string(map.keys(r.names))})")
+    None -> panic("no such column: ${name} (have ${to_string(map.keys(r.names))})")
   }
 
 pub fn col_int(r: Row, name: String) -> Int = int_at(r.cells, col_idx(r, name))
@@ -439,16 +439,16 @@ pub fn sig_expr(cols: List[String]) -> String =
     _ -> fold(cols, "", (acc, c) => join_sig(acc, quoted(c)))
   }
 
-fn quoted(col: String) -> String = "quote($col)"
+fn quoted(col: String) -> String = "quote(${col})"
 
-fn join_sig(acc: String, q: String) -> String = if acc == "" { q } else { "$acc || '|' || $q" }
+fn join_sig(acc: String, q: String) -> String = if acc == "" { q } else { "${acc} || '|' || ${q}" }
 
 ## Snapshot `cols` of the row `id` in `table`. Compare a before- and after-write
 ## snapshot to tell an edit from a no-op save. `table`/`cols` are module-owned
 ## literals, never request data.
 pub fn row_sig(c: DbConn, table: String, cols: List[String], id: Int) -> Result[String, String] !io = {
   let expr = sig_expr(cols)
-  let rows = query(c, "select $expr from $table where id = ?", [PInt(id)], [ColStr])?
+  let rows = query(c, "select ${expr} from ${table} where id = ?", [PInt(id)], [ColStr])?
   Ok(first_str_or(rows, ""))
 }
 
@@ -657,7 +657,7 @@ test "a refused entry leaves the transaction it found alone" {
   # and it is still the caller's to commit
   match exec(c, "commit", []) {
     Ok(_) -> ()
-    Err(m) -> panic("the caller could not commit its own transaction: $m")
+    Err(m) -> panic("the caller could not commit its own transaction: ${m}")
   }
   assert not in_tx(c)
   assert scalar_int(c, "select count(*) from keep_probe", []) == Ok(1)
