@@ -219,6 +219,9 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   `config.load`（整个进程唯一一次启动期读文件），`api/api_monitor` 的路由闭包罩住 `server_block`
   （读 /proc 的那一段；同样装不进 main，理由与 `Upstream` 那条一样）。
   其余 `with_fs_real` 都在测试里，另有一处在 `packages/web` 自己的 `server.dawn`。
+- **环境变量是 std 的具名效果 `Env`**（`io.getenv` 自 dawn 0.76.0 起为 `!Env`；0.78.0 起 `io` 是唯一的环境效果，
+  其余效果必须写在签名上）。本仓只在启动期读两处环境变量：`config.lookup` 与 `main.env_or`，
+  各自就地罩一层 `io.with_env_real`，签名保持 `!io`（调用方本来都是 `!io`，启动期读取也没有测试替身要装）。
 - `util/jsonx.dawn` / `util/jsonread.dawn` — JSON 构造（`obj/jint/jstr/jopt_*`）/ 请求体读取（`opt_int/str_or/str_list`）。
   `body_obj` 先按正式 parser 解析（错误文案不变），再用同一个 `json/lexer` 走第二遍，
   拒绝**同一 object 内的重复成员**——解析进 Map 等于默默选了「后写的赢」，而
