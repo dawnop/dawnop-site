@@ -117,12 +117,12 @@ def main() -> int:
         replace_once(
             source,
             "fn parse_destination_host_uri(scheme: String, raw_host: String) -> Option[URI] !io =\n"
-            '  match catch_text(() => URI.create("$scheme://$raw_host")!) {\n'
+            '  match catch_text(() => URI.create("${scheme}://${raw_host}")!) {\n'
             "    Ok(uri) -> Some(uri)\n"
             "    Err(_) -> None\n"
             "  }\n",
             "fn parse_destination_host_uri(scheme: String, raw_host: String) -> Option[URI] !io =\n"
-            '  Some(URI.create("$scheme://$raw_host")!)\n',
+            '  Some(URI.create("${scheme}://${raw_host}")!)\n',
         )
     elif args.mutant == "host-absent-fail-open":
         replace_once(

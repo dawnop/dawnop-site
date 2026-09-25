@@ -24,7 +24,7 @@ PAGE_TOUCH = "let _u = if after != before { touch_page(c, id)? } else { 0 }"
 VIZ_TOUCH = "let _t = if after != before { touch_viz(c, id)? } else { 0 }"
 
 ARTICLE_TAG_FOLD = """  let tags = article_tag_sig(c, id)?
-  Ok("$cols|tags=$tags")
+  Ok("${cols}|tags=${tags}")
 """
 
 ARTICLE_COLS = '["title", "slug", "summary", "content", "published", "auto_title", "page_id", "created_at"]'
@@ -110,13 +110,13 @@ MUTANTS = {
     # ---- how a signature is spelled ----
     "row-sig-drops-separator": (
         "src/db/sql.dawn",
-        'if acc == "" { q } else { "$acc || \'|\' || $q" }',
-        'if acc == "" { q } else { "$acc || $q" }',
+        'if acc == "" { q } else { "${acc} || \'|\' || ${q}" }',
+        'if acc == "" { q } else { "${acc} || ${q}" }',
     ),
     "row-sig-unquoted-values": (
         "src/db/sql.dawn",
-        'fn quoted(col: String) -> String = "quote($col)"',
-        "fn quoted(col: String) -> String = \"coalesce($col, 'NULL')\"",
+        'fn quoted(col: String) -> String = "quote(${col})"',
+        "fn quoted(col: String) -> String = \"coalesce(${col}, 'NULL')\"",
     ),
 }
 
