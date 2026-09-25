@@ -50,8 +50,11 @@ fn unquote(s: String) -> String =
 ## A config value, preferring the process environment then the .env file. This
 ## matches pydantic-settings' precedence (env var wins over .env), so the Dawn
 ## and FastAPI backends resolve shared keys like SECRET_KEY identically.
+##
+## `io.getenv` is `!Env`. The real handler is installed here rather than at
+## `main`: every caller is already `!io`, and a startup read has no test double.
 pub fn lookup(cfg: Config, key: String) -> Option[String] !io =
-  match io.getenv(key) {
+  match io.with_env_real(() => io.getenv(key)) {
     Some(v) -> Some(v)
     None -> map.get(cfg.values, key)
   }
