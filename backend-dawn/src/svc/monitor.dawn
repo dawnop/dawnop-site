@@ -24,12 +24,11 @@ use util/ttl.{TtlCell, cache_get, cache_put, new_cell, now_s}
 use util/clock.{Clock, system_ms}
 use qiniu/stats.{field, int_of, last_nonzero, PendingQ, PendingRespack, kodo_series_start, kodo_series_finish, flow_series_start, flow_series_finish, cdn_domains_start, cdn_domains_finish, cdn_tune_start, cdn_tune_finish, respack_start, respack_finish, respack_summary}
 use tencent/client.{PendingTc}
-use util/http.{HttpCell, HttpResp, Pending, Upstream, fetch, new_client, fetch_start, await_resp, with_upstream, pending, no_answer}
+use util/http.{HttpCell, HttpResp, Upstream, fetch, new_client, fetch_start, await_resp, with_upstream, pending, no_answer}
 use java "java.util.concurrent.atomic.AtomicReference"
 use db/db.{Db}
 use java "com.sun.net.httpserver.HttpServer"
 use java "java.net.InetSocketAddress"
-use java "java.net.URI"
 use json/value.{Json, JNull, JNum, JInt, JStr, JArr, JObj}
 use json/render.{render}
 use json/parser.{parse}
