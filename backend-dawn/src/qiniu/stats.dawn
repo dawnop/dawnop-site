@@ -38,17 +38,17 @@ pub type PendingQ = { p: Pending, fail: String }
 fn stat_start(q: Qiniu, path_query: String) -> Result[PendingQ, String] !Upstream !io = {
   let ct = "application/x-www-form-urlencoded"
   let auth = qiniu_mac(q, "GET", path_query, STAT_HOST, ct, "")
-  let p = fetch_start("http://$STAT_HOST$path_query", [("Authorization", auth), ("Content-Type", ct)])?
-  Ok(PendingQ { p: p, fail: "七牛统计失败 $path_query" })
+  let p = fetch_start("http://${STAT_HOST}${path_query}", [("Authorization", auth), ("Content-Type", ct)])?
+  Ok(PendingQ { p: p, fail: "七牛统计失败 ${path_query}" })
 }
 
 fn mac_json_start(q: Qiniu, method: String, host: String, path_query: String, body: String) -> Result[PendingQ, String] !Upstream !io = {
   let ct = "application/json"
   let auth = qiniu_mac(q, method, path_query, host, ct, body)
   let headers = [("Authorization", auth), ("Content-Type", ct)]
-  let url = "http://$host$path_query"
+  let url = "http://${host}${path_query}"
   let p = if method == "POST" { post_start(url, headers, body)? } else { fetch_start(url, headers)? }
-  Ok(PendingQ { p: p, fail: "七牛 CDN 接口失败 $path_query" })
+  Ok(PendingQ { p: p, fail: "七牛 CDN 接口失败 ${path_query}" })
 }
 
 ## The parsed body of a started qiniu request, or the family's non-200 message.
@@ -72,7 +72,7 @@ fn day_range(days: Int) -> (String, String) !io = {
 ## query later (a second `day_range` would name a different second).
 pub fn kodo_series_start(q: Qiniu, what: String, days: Int) -> Result[PendingQ, String] !Upstream !io = {
   let (begin, end) = day_range(days)
-  stat_start(q, "/v6/$what?bucket=${q.bucket}&begin=$begin&end=$end&g=day")
+  stat_start(q, "/v6/${what}?bucket=${q.bucket}&begin=${begin}&end=${end}&g=day")
 }
 
 ## Read a started `kodo_series`: (times, datas).
@@ -97,7 +97,7 @@ pub fn flow_series(q: Qiniu, select: String, days: Int) -> Result[List[(String, 
 ## Issue the `flow_series` request.
 pub fn flow_series_start(q: Qiniu, select: String, days: Int) -> Result[PendingQ, String] !Upstream !io = {
   let (begin, end) = day_range(days)
-  stat_start(q, "/v6/blob_io?\$bucket=${q.bucket}&select=$select&begin=$begin&end=$end&g=day")
+  stat_start(q, "/v6/blob_io?\$bucket=${q.bucket}&select=${select}&begin=${begin}&end=${end}&g=day")
 }
 
 ## Read a started `flow_series`. `select` must be the one it was started with:
@@ -158,7 +158,7 @@ pub fn cdn_tune_start(q: Qiniu, kind: String, days: Int, domains: List[String]) 
       ("endDate", jstr(now.format(d)!)),
       ("granularity", jstr("day")),
     ]))
-    let started = mac_json_start(q, "POST", FUSION_HOST, "/v2/tune/$kind", body)?
+    let started = mac_json_start(q, "POST", FUSION_HOST, "/v2/tune/${kind}", body)?
     Ok(Some(started))
   }
 

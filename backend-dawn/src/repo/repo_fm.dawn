@@ -72,9 +72,9 @@ fn entry(o: FileRow) -> Json !io = {
 ## Direct children of a directory, dirs-first then case-insensitive path order.
 pub fn children(c: DbConn, parent: String) -> Result[List[FileRow], String] !io = {
   let rows = if parent == "" {
-    query(c, "select $COLS from files", [], col_types())?
+    query(c, "select ${COLS} from files", [], col_types())?
   } else {
-    query(c, "select $COLS from files where instr(path, ? || '/') = 1", [PStr(parent)], col_types())?
+    query(c, "select ${COLS} from files where instr(path, ? || '/') = 1", [PStr(parent)], col_types())?
   }
   let all = map(rows, row_of)
   let kids = filter(all, o => parent_rel(o.path) == parent)
@@ -115,9 +115,9 @@ fn entries_of(rows: List[FileRow], i: Int, acc: List[Json]) -> Result[List[Json]
 ## basename contains `needle` (case-insensitive). Returns {files:[entry...]}.
 pub fn search_files(c: DbConn, base: String, needle: String, deep: Bool) -> Result[Json, String] !io = {
   let rows = if base == "" {
-    query(c, "select $COLS from files", [], col_types())?
+    query(c, "select ${COLS} from files", [], col_types())?
   } else {
-    query(c, "select $COLS from files where instr(path, ? || '/') = 1", [PStr(base)], col_types())?
+    query(c, "select ${COLS} from files where instr(path, ? || '/') = 1", [PStr(base)], col_types())?
   }
   let all = map(rows, row_of)
   let scoped = if deep { all } else { filter(all, o => parent_rel(o.path) == base) }
@@ -128,7 +128,7 @@ pub fn search_files(c: DbConn, base: String, needle: String, deep: Bool) -> Resu
 }
 
 pub fn get_row(c: DbConn, rel: String) -> Result[Option[FileRow], String] !io = {
-  let rows = query(c, "select $COLS from files where path = ?", [PStr(rel)], col_types())?
+  let rows = query(c, "select ${COLS} from files where path = ?", [PStr(rel)], col_types())?
   Ok(first_map(rows, r => row_of(r)))
 }
 
@@ -255,7 +255,7 @@ fn insert_folder_row(c: DbConn, rel: String) -> Result[Int, String] !io =
 
 ## A rel plus its whole subtree in deterministic parent-before-child order.
 pub fn subtree_rows(c: DbConn, rel: String) -> Result[List[FileRow], String] !io = {
-  let rows = query(c, "select $COLS from files where path = ? or instr(path, ? || '/') = 1 order by path", [PStr(rel), PStr(rel)], col_types())?
+  let rows = query(c, "select ${COLS} from files where path = ? or instr(path, ? || '/') = 1 order by path", [PStr(rel), PStr(rel)], col_types())?
   Ok(map(rows, row_of))
 }
 
@@ -454,7 +454,7 @@ pub fn validate_register_preflight(c: DbConn, rel: String, key: String) -> Resul
   if not pending {
     Err(conflict("上传凭证与登记路径不匹配：${full(rel)}"))
   } else if key_referenced(c, key)? {
-    Err(conflict("对象 key 已被文件引用：$key"))
+    Err(conflict("对象 key 已被文件引用：${key}"))
   } else {
     let _a = validate_fm_ancestors(c, rel)?
     validate_fm_file_target(c, rel)
@@ -467,12 +467,12 @@ pub fn finalize_register(c: DbConn, rel: String, key: String, content_type: Stri
     if not pending {
       Err(conflict("上传凭证与登记路径不匹配：${full(rel)}"))
     } else if key_referenced(c, key)? {
-      Err(conflict("对象 key 已被文件引用：$key"))
+      Err(conflict("对象 key 已被文件引用：${key}"))
     } else {
       let outcome = replace_file_tx(c, rel, key, content_type, size, AllowMissingAncestors)?
       let consumed = exec(c, "delete from pending_uploads where key = ? and path = ?", [PStr(key), PStr(full(rel))])?
       if consumed != 1 {
-        Err("register ledger consume count changed: $key")
+        Err("register ledger consume count changed: ${key}")
       } else {
         match receipt_row(c, rel)? {
           Some(o) -> Ok((o, outcome))
@@ -2035,10 +2035,10 @@ test "copy, move, and rename commits reject unmapped destination descendants" {
 const FM_STALE: String = "2000-01-02 03:04:05"
 
 fn stale_dir(c: DbConn, path: String) -> Result[Int, String] !io =
-  exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, '$FM_STALE', '$FM_STALE')", [PStr(path)])
+  exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, '${FM_STALE}', '${FM_STALE}')", [PStr(path)])
 
 fn stale_file(c: DbConn, path: String, key: String) -> Result[Int, String] !io =
-  exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, 'text/plain', 3, '$FM_STALE', '$FM_STALE')", [PStr(path), PStr(key)])
+  exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, 'text/plain', 3, '${FM_STALE}', '${FM_STALE}')", [PStr(path), PStr(key)])
 
 # "<gone>" rather than a panic: a path that vanished is a legible assertion
 # failure, and every caller below compares against FM_STALE anyway.

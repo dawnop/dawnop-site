@@ -16,7 +16,7 @@ use java "javax.crypto.spec.SecretKeySpec"
 pub fn sha256_hex(s: String) -> String !io = sha256.hex(bytes.utf8(s))
 
 fn hmac(algo: String, key: String) -> Mac !io = {
-  let mac = Mac.getInstance(algo).expect("mac $algo")
+  let mac = Mac.getInstance(algo).expect("mac ${algo}")
   mac.init(SecretKeySpec.new(bytes.utf8(key), algo))
   mac
 }

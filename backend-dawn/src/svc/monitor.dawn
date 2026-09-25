@@ -177,7 +177,7 @@ fn cpu_delta_pct(prev: (Int, Int), cur: (Int, Int)) -> Option[Float] = {
 # bound asked for, which is the staleness rule already written down once.
 fn cpu_put(cell: TtlCell, s: (Int, Int)) -> Unit !io = {
   let (busy, total) = s
-  cache_put(cell, "$busy $total")
+  cache_put(cell, "${busy} ${total}")
 }
 
 fn cpu_prev(cell: TtlCell, max_age_s: Int) -> Option[(Int, Int)] !io =
@@ -251,7 +251,7 @@ fn meminfo_of(text: String) -> Json = {
 
 fn meminfo_kb(text: String, key: String) -> Int =
   fold(str.split(text, "\n"), 0, (acc, line) =>
-      if str.starts_with(line, "$key:") {
+      if str.starts_with(line, "${key}:") {
         let fs = fields_of(line)
         if len(fs) > 1 { parse_or0(fs[1]) } else { acc }
       } else {
@@ -375,7 +375,7 @@ fn tc_resp(action: String, j: Json) -> Result[Json, String] = {
   match field(resp, "Error") {
     JObj(_e) -> {
       let err = field(resp, "Error")
-      Err("$action 失败: ${jstr_plain(field(err, "Code"))} ${jstr_plain(field(err, "Message"))}")
+      Err("${action} 失败: ${jstr_plain(field(err, "Code"))} ${jstr_plain(field(err, "Message"))}")
     }
     _ -> Ok(resp),
   }
@@ -388,7 +388,7 @@ fn jstr_plain(j: Json) -> String =
   }
 
 fn traffic_start(id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !Clock !Upstream !io =
-  client.call_start(id, key, "lighthouse", "DescribeInstancesTrafficPackages", "2020-03-24", region, "{\"InstanceIds\":[\"$instance\"]}")
+  client.call_start(id, key, "lighthouse", "DescribeInstancesTrafficPackages", "2020-03-24", region, "{\"InstanceIds\":[\"${instance}\"]}")
 
 fn traffic_finish(started: Result[PendingTc, String]) -> Result[Json, String] !io = {
   let j = client.call_finish(started?)?
@@ -412,7 +412,7 @@ fn traffic_finish(started: Result[PendingTc, String]) -> Result[Json, String] !i
 }
 
 fn instance_start(id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !Clock !Upstream !io =
-  client.call_start(id, key, "lighthouse", "DescribeInstances", "2020-03-24", region, "{\"InstanceIds\":[\"$instance\"]}")
+  client.call_start(id, key, "lighthouse", "DescribeInstances", "2020-03-24", region, "{\"InstanceIds\":[\"${instance}\"]}")
 
 fn instance_finish(started: Result[PendingTc, String]) -> Result[Json, String] !io = {
   let j = client.call_finish(started?)?
@@ -444,7 +444,7 @@ fn cpu_trend_start(id: String, key: String, region: String, instance: String) ->
   let zone = ZoneOffset.ofHours(0)!
   let now = LocalDateTime.ofInstant(Instant.now()!, zone)!
   let start = now.minusDays(30)!
-  let payload = "{\"Namespace\":\"QCE/LIGHTHOUSE\",\"MetricName\":\"CpuUsage\",\"Period\":86400,\"StartTime\":\"${start.format(fmt)!}+00:00\",\"EndTime\":\"${now.format(fmt)!}+00:00\",\"Instances\":[{\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"$instance\"}]}]}"
+  let payload = "{\"Namespace\":\"QCE/LIGHTHOUSE\",\"MetricName\":\"CpuUsage\",\"Period\":86400,\"StartTime\":\"${start.format(fmt)!}+00:00\",\"EndTime\":\"${now.format(fmt)!}+00:00\",\"Instances\":[{\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"${instance}\"}]}]}"
   client.call_start(id, key, "monitor", "GetMonitorData", "2018-07-24", region, payload)
 }
 
@@ -638,7 +638,7 @@ pub fn vault_block(alive_url: String, public_url: String) -> Json !Upstream !io 
   # (One consequence, and it is deliberate: a vault that is down is now asked
   # twice rather than once. Both requests fail on the same deadline, in
   # parallel, and the block reads exactly as it did before.)
-  let version_started = fetch_start("$base/api/config", [])
+  let version_started = fetch_start("${base}/api/config", [])
   let t0 = System.currentTimeMillis()
   match fetch(alive_url, []) {
     Ok(r) -> {
@@ -848,15 +848,15 @@ fn stub_server(routes: List[(String, String)]) -> (HttpServer, Int) !io = {
 }
 
 fn stub_q(port: Int, path: String, fail: String) -> PendingQ !Upstream !io =
-  match fetch_start("http://127.0.0.1:$port$path", []) {
+  match fetch_start("http://127.0.0.1:${port}${path}", []) {
     Ok(p) -> PendingQ { p: p, fail: fail }
-    Err(m) -> panic("stub start failed: $m")
+    Err(m) -> panic("stub start failed: ${m}")
   }
 
 fn stub_tc(port: Int, path: String, action: String) -> Result[PendingTc, String] !Upstream !io =
-  match fetch_start("http://127.0.0.1:$port$path", []) {
+  match fetch_start("http://127.0.0.1:${port}${path}", []) {
     Ok(p) -> Ok(PendingTc { p: p, action: action })
-    Err(m) -> panic("stub start failed: $m")
+    Err(m) -> panic("stub start failed: ${m}")
   }
 
 fn test_auth_with(cl: HttpCell, ak: String) -> Auth =
@@ -1085,7 +1085,7 @@ fn log_new() -> AtomicReference !io = AtomicReference.new("")
 
 fn log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!
 
-fn log_add(r: AtomicReference, s: String) -> Unit !io = r.set("${log_read(r)}$s;")
+fn log_add(r: AtomicReference, s: String) -> Unit !io = r.set("${log_read(r)}${s};")
 
 fn header_value(hs: List[(String, String)], name: String) -> String =
   fold(hs, "", (acc, kv) => {
@@ -1103,7 +1103,7 @@ fn tc_canned(action: String) -> String =
   } else if action == "GetMonitorData" {
     "{\"Response\":{\"DataPoints\":[{\"Timestamps\":[1000],\"Values\":[1.5]}]}}"
   } else {
-    "{\"Response\":{\"Error\":{\"Code\":\"NoSuchAction\",\"Message\":\"$action\"}}}"
+    "{\"Response\":{\"Error\":{\"Code\":\"NoSuchAction\",\"Message\":\"${action}\"}}}"
   }
 
 test "the three lighthouse calls all go out before any reply is read" {
@@ -1115,9 +1115,9 @@ test "the three lighthouse calls all go out before any reply is read" {
       exchange_stream(req) => Err(no_answer("exchange_stream"))
       exchange_start(req) => {
         let action = header_value(req.headers, "X-TC-Action")
-        log_add(seen, "start $action")
+        log_add(seen, "start ${action}")
         Ok(pending(req.budget_s, () => {
-          log_add(seen, "await $action")
+          log_add(seen, "await ${action}")
           Ok(HttpResp { status: 200, body: tc_canned(action) })
         }))
       }

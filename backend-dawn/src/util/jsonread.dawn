@@ -122,7 +122,7 @@ fn scan_members(src: String, i: Cursor, seen: Map[String, Bool]) -> Result[Curso
       Err(e) -> Err(error_text(e))
       Ok((name, after_name)) ->
         if seen_name(seen, name) {
-          Err("duplicate JSON object member: \"$name\"")
+          Err("duplicate JSON object member: \"${name}\"")
         } else {
           let colon = lexer.skip_ws(src, after_name)
           let after = scan_value(src, cursor.next(src, colon))?

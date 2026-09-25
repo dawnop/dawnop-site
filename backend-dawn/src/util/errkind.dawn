@@ -29,7 +29,7 @@ pub type Kind =
 # tag can never be mistaken for message text.
 fn sep() -> String = str.from_char('\u{0001}')
 
-fn tag(name: String, text: String) -> String = "$name${sep()}$text"
+fn tag(name: String, text: String) -> String = "${name}${sep()}${text}"
 
 ## Mark a message as "that name/slug is taken".
 pub fn conflict(text: String) -> String = tag("conflict", text)

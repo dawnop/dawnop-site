@@ -19,7 +19,7 @@ pub fn unique_slug(c: DbConn, table: String, base: String, exclude: Option[Int])
 fn dedup(c: DbConn, table: String, root: String, candidate: String, n: Int, exclude: Option[Int]) -> Result[String, String] !io = {
   let taken = slug_taken(c, table, candidate, exclude)?
   if taken {
-    dedup(c, table, root, "$root-$n", n + 1, exclude)
+    dedup(c, table, root, "${root}-${n}", n + 1, exclude)
   } else {
     Ok(candidate)
   }
@@ -27,8 +27,8 @@ fn dedup(c: DbConn, table: String, root: String, candidate: String, n: Int, excl
 
 fn slug_taken(c: DbConn, table: String, candidate: String, exclude: Option[Int]) -> Result[Bool, String] !io = {
   let rows = match exclude {
-    Some(id) -> query(c, "select count(*) from $table where slug = ? and id != ?", [PStr(candidate), PInt(id)], [ColInt])?
-    None -> query(c, "select count(*) from $table where slug = ?", [PStr(candidate)], [ColInt])?
+    Some(id) -> query(c, "select count(*) from ${table} where slug = ? and id != ?", [PStr(candidate), PInt(id)], [ColInt])?
+    None -> query(c, "select count(*) from ${table} where slug = ?", [PStr(candidate)], [ColInt])?
   }
   Ok(first_bool_or(rows, false))
 }
@@ -124,7 +124,7 @@ pub fn create_article(c: DbConn, a: NewArticle) -> Result[Int, String] !io = {
   let created_expr = match a.created_at { Some(_x) -> "datetime(?)", None -> "datetime('now')" }
   let created_params: List[SqlV] = match a.created_at { Some(s) -> [PStr(s)], None -> [] }
   let _i = exec(c,
-    "insert into articles (title, slug, summary, content, published, auto_title, page_id, views, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, 0, $created_expr, datetime('now'))",
+    "insert into articles (title, slug, summary, content, published, auto_title, page_id, views, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, 0, ${created_expr}, datetime('now'))",
     [PStr(a.title), PStr(slug), PStr(a.summary), PStr(a.content), PInt(bool_int(a.published)), PInt(bool_int(a.auto_title)), pid] ++ created_params)?
   let id = last_id(c)?
   let ids = resolve_tags(c, a.tags)?
@@ -196,7 +196,7 @@ fn article_sig(c: DbConn, id: Int) -> Result[String, String] !io = {
   let cols = row_sig(c, "articles",
     ["title", "slug", "summary", "content", "published", "auto_title", "page_id", "created_at"], id)?
   let tags = article_tag_sig(c, id)?
-  Ok("$cols|tags=$tags")
+  Ok("${cols}|tags=${tags}")
 }
 
 ## The article's tag set as a canonical string. Tags are a set, so `order by`
@@ -206,17 +206,17 @@ fn article_sig(c: DbConn, id: Int) -> Result[String, String] !io = {
 ## leaning on SQLite preserving a subquery's order.
 fn article_tag_sig(c: DbConn, id: Int) -> Result[String, String] !io = {
   let rows = query(c, "select tag_id from article_tags where article_id = ? order by tag_id", [PInt(id)], [ColInt])?
-  Ok(fold(rows, "", (acc, r) => "$acc,${to_string(int_at(r, 0))}"))
+  Ok(fold(rows, "", (acc, r) => "${acc},${to_string(int_at(r, 0))}"))
 }
 
 fn touch_article(c: DbConn, id: Int) -> Result[Int, String] !io =
   exec(c, "update articles set updated_at = datetime('now') where id = ?", [PInt(id)])
 
 fn set_str(c: DbConn, id: Int, col: String, v: String) -> Result[Int, String] !io =
-  exec(c, "update articles set $col = ? where id = ?", [PStr(v), PInt(id)])
+  exec(c, "update articles set ${col} = ? where id = ?", [PStr(v), PInt(id)])
 
 fn set_int(c: DbConn, id: Int, col: String, v: Int) -> Result[Int, String] !io =
-  exec(c, "update articles set $col = ? where id = ?", [PInt(v), PInt(id)])
+  exec(c, "update articles set ${col} = ? where id = ?", [PInt(v), PInt(id)])
 
 fn set_page_id(c: DbConn, id: Int, page_id: Option[Int]) -> Result[Int, String] !io = {
   let pid = match page_id {
@@ -301,7 +301,7 @@ fn article_test_db() -> DbConn !io = {
   let _t = must(exec(c, "create table tags (id integer primary key, name text, slug text, created_at text)", []))
   let _l = must(exec(c, "create table article_tags (article_id integer, tag_id integer)", []))
   let _lp = must(exec(c, "insert into pages values (7, 'article_list')", []))
-  let _r = must(exec(c, "insert into articles values (1, 'Title', 'title', 'Sum', 'Body', 1, 0, null, 0, '2020-01-01 00:00:00', '$STALE')", []))
+  let _r = must(exec(c, "insert into articles values (1, 'Title', 'title', 'Sum', 'Body', 1, 0, null, 0, '2020-01-01 00:00:00', '${STALE}')", []))
   # one tag already on the article, so "re-save what is stored" covers tags too
   let _sd = must(exec(c, "insert into tags values (1, 'seed', 'seed', '2020-01-01 00:00:00')", []))
   let _sl = must(exec(c, "insert into article_tags values (1, 1)", []))
@@ -420,7 +420,7 @@ test "PUT article: re-sending the same tag set in another order is not an edit" 
   put_article(c, ArticlePatch { ..none, tags: Some(["jvm", "dawn"]) })
   assert article_updated(c) != STALE
   # tags are a set: the same two names, swapped, is the same state
-  let _r = must(exec(c, "update articles set updated_at = '$STALE' where id = 1", []))
+  let _r = must(exec(c, "update articles set updated_at = '${STALE}' where id = 1", []))
   put_article(c, ArticlePatch { ..none, tags: Some(["dawn", "jvm"]) })
   assert article_updated(c) == STALE
   # and the links survived the rewrite intact
@@ -432,15 +432,15 @@ test "PUT article: dropping a tag and adding one are both edits" {
   let c = article_test_db()
   put_article(c, ArticlePatch { ..none, tags: Some(["jvm", "dawn"]) })
   # drop one
-  let _r = must(exec(c, "update articles set updated_at = '$STALE' where id = 1", []))
+  let _r = must(exec(c, "update articles set updated_at = '${STALE}' where id = 1", []))
   put_article(c, ArticlePatch { ..none, tags: Some(["jvm"]) })
   assert article_updated(c) != STALE
   # add a different one
-  let _r2 = must(exec(c, "update articles set updated_at = '$STALE' where id = 1", []))
+  let _r2 = must(exec(c, "update articles set updated_at = '${STALE}' where id = 1", []))
   put_article(c, ArticlePatch { ..none, tags: Some(["jvm", "sqlite"]) })
   assert article_updated(c) != STALE
   # clearing them all is an edit too
-  let _r3 = must(exec(c, "update articles set updated_at = '$STALE' where id = 1", []))
+  let _r3 = must(exec(c, "update articles set updated_at = '${STALE}' where id = 1", []))
   put_article(c, ArticlePatch { ..none, tags: Some([]) })
   assert article_updated(c) != STALE
   assert scalar_int(c, "select count(*) from article_tags where article_id = 1", []) == Ok(0)

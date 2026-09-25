@@ -15,10 +15,10 @@ const HEADER_JSON: String = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}"
 pub fn sign(secret: String, sub: String, exp_minutes: Int) -> String !Clock !io = {
   let head = b64url_encode_nopad(HEADER_JSON)
   let exp = now_s() + exp_minutes * 60
-  let payload = b64url_encode_nopad("{\"sub\":\"$sub\",\"exp\":$exp}")
-  let signing_input = "$head.$payload"
+  let payload = b64url_encode_nopad("{\"sub\":\"${sub}\",\"exp\":${exp}}")
+  let signing_input = "${head}.${payload}"
   let sig = hmac_sha256_b64url_nopad(secret, signing_input)
-  "$signing_input.$sig"
+  "${signing_input}.${sig}"
 }
 
 ## Verify a token's signature and expiry; Ok carries the subject.

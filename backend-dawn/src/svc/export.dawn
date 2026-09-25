@@ -105,7 +105,7 @@ fn tag_names(c: DbConn, id: Int) -> Result[List[String], String] !io = {
 fn frontmatter(title: String, slug: String, summary: String, published: Bool, auto_title: Bool, tags: List[String]) -> String = {
   let l1: List[String] = if auto_title { [] } else { ["title: ${yaml_scalar(title)}"] }
   let l2: List[String] = if summary != "" { ["summary: ${yaml_scalar(summary)}"] } else { [] }
-  let l3: List[String] = ["slug: $slug"]
+  let l3: List[String] = ["slug: ${slug}"]
   let l4: List[String] = if len(tags) > 0 { ["tags: [" ++ join(map(tags, yaml_scalar), ", ") ++ "]"] } else { [] }
   let l5: List[String] = [if published { "published: true" } else { "published: false" }]
   let lines = l1 ++ l2 ++ l3 ++ l4 ++ l5

@@ -60,7 +60,7 @@ pub fn lookup(cfg: Config, key: String) -> Option[String] !io =
 pub fn require(cfg: Config, key: String) -> String !io =
   match lookup(cfg, key) {
     Some(v) -> v
-    None -> panic("missing required config key: $key")
+    None -> panic("missing required config key: ${key}")
   }
 
 ## A value with a fallback default (checks .env then the process environment).
@@ -89,7 +89,7 @@ pub fn int_in_range(raw: Option[String], lo: Int, hi: Int, dflt: Int) -> Result[
     None -> Ok(dflt)
     Some(s) ->
       match parse_int(str.trim(s)) {
-        None -> Err("expected an integer in ${to_string(lo)}..${to_string(hi)}, got \"$s\"")
+        None -> Err("expected an integer in ${to_string(lo)}..${to_string(hi)}, got \"${s}\"")
         Some(n) ->
           if n < lo || n > hi {
             Err("expected an integer in ${to_string(lo)}..${to_string(hi)}, got ${to_string(n)}")
@@ -103,7 +103,7 @@ pub fn int_in_range(raw: Option[String], lo: Int, hi: Int, dflt: Int) -> Result[
 pub fn require_int_in_range(cfg: Config, key: String, lo: Int, hi: Int, dflt: Int) -> Int !io =
   match int_in_range(lookup(cfg, key), lo, hi, dflt) {
     Ok(n) -> n
-    Err(why) -> panic("invalid config value for $key: $why")
+    Err(why) -> panic("invalid config value for ${key}: ${why}")
   }
 
 fn range_accepted(r: Result[Int, String]) -> Bool =

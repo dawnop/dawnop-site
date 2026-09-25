@@ -26,7 +26,7 @@ pub fn create_page(c: DbConn, p: NewPage) -> Result[Int, String] !io = {
   let created_expr = match p.created_at { Some(_x) -> "datetime(?)", None -> "datetime('now')" }
   let created_params: List[SqlV] = match p.created_at { Some(s) -> [PStr(s)], None -> [] }
   let _i = exec(c,
-    "insert into pages (title, slug, type, description, content, nav_visible, nav_order, auto_title, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, $created_expr, datetime('now'))",
+    "insert into pages (title, slug, type, description, content, nav_visible, nav_order, auto_title, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ${created_expr}, datetime('now'))",
     [PStr(p.title), PStr(slug), PStr(p.kind), PStr(p.description), PStr(p.content), PInt(bool_int(p.nav_visible)), PInt(p.nav_order), PInt(bool_int(p.auto_title))] ++ created_params)?
   last_id(c)
 }
@@ -38,10 +38,10 @@ pub fn page_kind(c: DbConn, id: Int) -> Result[Option[String], String] !io = {
 }
 
 pub fn set_page_str(c: DbConn, id: Int, col: String, v: String) -> Result[Int, String] !io =
-  exec(c, "update pages set $col = ? where id = ?", [PStr(v), PInt(id)])
+  exec(c, "update pages set ${col} = ? where id = ?", [PStr(v), PInt(id)])
 
 pub fn set_page_int(c: DbConn, id: Int, col: String, v: Int) -> Result[Int, String] !io =
-  exec(c, "update pages set $col = ? where id = ?", [PInt(v), PInt(id)])
+  exec(c, "update pages set ${col} = ? where id = ?", [PInt(v), PInt(id)])
 
 pub fn touch_page(c: DbConn, id: Int) -> Result[Int, String] !io =
   exec(c, "update pages set updated_at = datetime('now') where id = ?", [PInt(id)])
@@ -222,7 +222,7 @@ test "delete_page detaches its articles instead of deleting them" {
 test "reorder_pages numbers by position and drops repeated ids" {
   let c = test_db()
   for i in range(0, 4) {
-    let _p = create_page(c, a_page("P$i", "p$i"))
+    let _p = create_page(c, a_page("P${i}", "p${i}"))
   }
   assert reorder_pages(c, [4, 2, 3, 1]) == Ok(0)
   assert scalar_int(c, "select nav_order from pages where id = 4", []) == Ok(0)

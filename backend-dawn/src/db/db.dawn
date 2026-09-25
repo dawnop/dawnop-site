@@ -15,11 +15,11 @@ pub type Db = { path: String, ext: String }
 ## tokenizer: simple"). Reads are unaffected. `ext` is a path with or without
 ## the platform suffix (SQLite appends .dylib/.so); "" skips loading.
 fn connect(path: String, ext: String) -> DbConn !io = {
-  let c = open_ext("jdbc:sqlite:$path")
+  let c = open_ext("jdbc:sqlite:${path}")
   let _w = exec(c, "PRAGMA journal_mode=WAL", [])
   let _b = exec(c, "PRAGMA busy_timeout=5000", [])
   if ext != "" {
-    let _e = query(c, "select load_extension('$ext')", [], [ColStr])
+    let _e = query(c, "select load_extension('${ext}')", [], [ColStr])
   }
   c
 }
