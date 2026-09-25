@@ -2,7 +2,6 @@
 # handler authenticates first via auth.current_user; the request body is JSON
 # (create/update). Writes run on a connection with the FTS extension loaded.
 use std/str
-use std/map
 use db/sql.{DbConn}
 use web/types.{Request, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text, raw, with_header, param_segs, query, query_int_bounded_with, body_text}
 use svc/export.{export_markdown, url_encode}

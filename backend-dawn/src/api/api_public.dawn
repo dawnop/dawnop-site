@@ -1,15 +1,14 @@
 # Public read handlers (M6 knife 6/8). Handlers close over the db path and open
 # a connection per request via with_db. Errors map to the FastAPI JSON shape
 # {"detail": ...} through the web framework's Err branch.
-use std/map
 use db/sql.{DbConn}
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, param_segs, query, query_int_bounded_with}
 use web/router.{Route, route_get}
 use json/value.{Json, JArr}
-use util/jsonx.{paginated, detail, obj, jstr, fastapi_errors}
+use util/jsonx.{paginated, obj, jstr, fastapi_errors}
 use db/db.{Db, with_db}
 use svc/auth.{Auth, is_authed}
-use repo/repo_article.{list_published, list_by_page, by_slug, by_slug_any, published_of, bump_views}
+use repo/repo_article.{list_published, list_by_page, by_slug_any, published_of, bump_views}
 use repo/repo_page
 use repo/repo_tag
 use repo/repo_viz
