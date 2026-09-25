@@ -408,24 +408,24 @@ def main() -> int:
     elif args.mutant == "repo-literal-prefix-use-like":
         replace_once(
             repo,
-            "    query(c, \"select $COLS from files where instr(path, ? || '/') = 1\", [PStr(parent)], col_types())?\n",
-            '    query(c, "select $COLS from files where path like ?", [PStr("$parent/%")], col_types())?\n',
+            "    query(c, \"select ${COLS} from files where instr(path, ? || '/') = 1\", [PStr(parent)], col_types())?\n",
+            '    query(c, "select ${COLS} from files where path like ?", [PStr("${parent}/%")], col_types())?\n',
         )
         replace_once(
             repo,
-            "    query(c, \"select $COLS from files where instr(path, ? || '/') = 1\", [PStr(base)], col_types())?\n",
-            '    query(c, "select $COLS from files where path like ?", [PStr("$base/%")], col_types())?\n',
+            "    query(c, \"select ${COLS} from files where instr(path, ? || '/') = 1\", [PStr(base)], col_types())?\n",
+            '    query(c, "select ${COLS} from files where path like ?", [PStr("${base}/%")], col_types())?\n',
         )
         replace_once(
             repo,
-            "  let rows = query(c, \"select $COLS from files where path = ? or instr(path, ? || '/') = 1 order by path\", [PStr(rel), PStr(rel)], col_types())?\n",
-            '  let rows = query(c, "select $COLS from files where path = ? or path like ? order by path", [PStr(rel), PStr("$rel/%")], col_types())?\n',
+            "  let rows = query(c, \"select ${COLS} from files where path = ? or instr(path, ? || '/') = 1 order by path\", [PStr(rel), PStr(rel)], col_types())?\n",
+            '  let rows = query(c, "select ${COLS} from files where path = ? or path like ? order by path", [PStr(rel), PStr("${rel}/%")], col_types())?\n',
         )
     elif args.mutant == "repo-subtree-child-first":
         replace_once(
             repo,
-            "  let rows = query(c, \"select $COLS from files where path = ? or instr(path, ? || '/') = 1 order by path\", [PStr(rel), PStr(rel)], col_types())?\n",
-            "  let rows = query(c, \"select $COLS from files where path = ? or instr(path, ? || '/') = 1 order by path desc\", [PStr(rel), PStr(rel)], col_types())?\n",
+            "  let rows = query(c, \"select ${COLS} from files where path = ? or instr(path, ? || '/') = 1 order by path\", [PStr(rel), PStr(rel)], col_types())?\n",
+            "  let rows = query(c, \"select ${COLS} from files where path = ? or instr(path, ? || '/') = 1 order by path desc\", [PStr(rel), PStr(rel)], col_types())?\n",
         )
     elif args.mutant == "repo-fm-copy-split-transaction":
         replace_once(
@@ -1163,8 +1163,8 @@ def main() -> int:
         # a stored content type reaches the qiniu multipart header block as written
         replace_once(
             qiniu_rs,
-            'Content-Type: ${safe_persisted_mime(mime)}$nl$nl"',
-            'Content-Type: $mime$nl$nl"',
+            'Content-Type: ${safe_persisted_mime(mime)}${nl}${nl}"',
+            'Content-Type: ${mime}${nl}${nl}"',
         )
     elif args.mutant == "multipart-part-ctype-literal-spelling":
         # #241: one spelling of the header name recognised, the rest reported as
@@ -1221,7 +1221,7 @@ def main() -> int:
     elif args.mutant == "config-nonnumeric-falls-back-to-default":
         replace_once(
             config,
-            '        None -> Err("expected an integer in ${to_string(lo)}..${to_string(hi)}, got \\"$s\\"")\n',
+            '        None -> Err("expected an integer in ${to_string(lo)}..${to_string(hi)}, got \\"${s}\\"")\n',
             "        None -> Ok(dflt)\n",
         )
     elif args.mutant == "upload-token-expired-deadline":

@@ -149,7 +149,7 @@ def main() -> int:
         # the single-judgement design working, not a second defect.
         replace_once(
             http,
-            '    "$TIMEOUT_PREFIX${to_string(budget_s)}s: ${fe_text(e)}"\n',
+            '    "${TIMEOUT_PREFIX}${to_string(budget_s)}s: ${fe_text(e)}"\n',
             "    fe_text(e)\n",
         )
     return 0

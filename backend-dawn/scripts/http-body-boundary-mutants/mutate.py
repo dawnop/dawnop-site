@@ -39,7 +39,7 @@ def main() -> int:
     elif args.mutant == "drop-upload-prefix":
         replace_once(
             qiniu,
-            '    Err(e) -> Err("upload_file: $e")\n',
+            '    Err(e) -> Err("upload_file: ${e}")\n',
             "    Err(e) -> Err(e)\n",
         )
     else:
