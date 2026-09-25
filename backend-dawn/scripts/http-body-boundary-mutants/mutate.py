@@ -43,11 +43,16 @@ def main() -> int:
             "    Err(e) -> Err(e)\n",
         )
     else:
+        # The leaked import has to be used as well: since dawn 0.78.0 an unused
+        # import is a compile error, and this mutant must fully build so that
+        # only the FFI boundary check can be the thing that turns red.
         replace_once(
             qiniu,
-            "use std/map\n",
-            'use std/map\nuse java "java.net.http.HttpRequest.BodyPublisher"\n',
+            "use std/char\n",
+            'use std/char\nuse java "java.net.http.HttpRequest.BodyPublisher"\n',
         )
+        with qiniu.open("a", encoding="utf-8") as f:
+            f.write("\nfn leaked_publisher(p: BodyPublisher) -> BodyPublisher = p\n")
     return 0
 
 

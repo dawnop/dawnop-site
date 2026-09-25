@@ -2,6 +2,7 @@
 """Apply one compiling FM/WebDAV ancestor mutant in place."""
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -103,6 +104,20 @@ def replace_once(path: Path, old: str, new: str) -> None:
     if count != 1:
         raise ValueError(f"expected one anchor in {path}, found {count}")
     path.write_text(text.replace(old, new), encoding="utf-8")
+
+
+def drop_import(path: Path, name: str) -> None:
+    """Remove `name` from the one selective `use` list in `path` that has it.
+
+    Since dawn 0.78.0 an unused import is a compile error, so a mutant that
+    takes away a name's last use has to take the import with it to still build.
+    """
+    text = path.read_text(encoding="utf-8")
+    item = re.compile(rf"(?m)^(use [^\n{{]+\.\{{[^\n}}]*?)(?:\b{name}, |, {name}\b)")
+    new, count = item.subn(r"\1", text)
+    if count != 1:
+        raise ValueError(f"expected one import of {name} in {path}, found {count}")
+    path.write_text(new, encoding="utf-8")
 
 
 def main() -> int:
@@ -450,7 +465,7 @@ def main() -> int:
         replace_once(
             service,
             "use repo/repo_fm.{FileRow, ReplaceOutcome, MovePlan, CopiedRow, CopyTree, fs_data, taken, insert_folder, replace_file, replace_file_receipt, create_file_once, reparent_allow_missing, prepare_fm_move, commit_fm_moves, get_row, delete_subtrees, entry_json, key_referenced, key_pending, validate_fm_ancestors, validate_fm_file_target, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}\n",
-            "use repo/repo_fm.{FileRow, ReplaceOutcome, MovePlan, CopiedRow, CopyTree, fs_data, taken, insert_folder, insert_folder_strict, replace_file, replace_file_receipt, create_file_once, reparent_allow_missing, prepare_fm_move, commit_fm_moves, get_row, delete_subtrees, entry_json, key_referenced, key_pending, validate_fm_ancestors, validate_fm_file_target, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}\n",
+            "use repo/repo_fm.{FileRow, ReplaceOutcome, MovePlan, CopiedRow, CopyTree, fs_data, taken, insert_folder_strict, replace_file, replace_file_receipt, create_file_once, reparent_allow_missing, prepare_fm_move, commit_fm_moves, get_row, delete_subtrees, entry_json, key_referenced, key_pending, validate_fm_ancestors, validate_fm_file_target, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}\n",
         )
         replace_once(
             service,
@@ -465,6 +480,7 @@ def main() -> int:
             "fn validate_effect_ancestors(_c: DbConn, _rel: String) -> Result[Unit, String] !io =\n"
             "  Ok(())\n",
         )
+        drop_import(service, "validate_fm_ancestors")
     elif args.mutant == "fm-upload-reuse-existing-key":
         replace_once(
             service,
@@ -518,6 +534,7 @@ def main() -> int:
             "fn upload_token_ancestor_preflight(_c: DbConn, _rel: String) -> Result[Unit, String] !io =\n"
             "  Ok(())\n",
         )
+        drop_import(fm_api, "validate_fm_ancestors")
     elif args.mutant == "fm-register-stat-before-preflight":
         replace_once(
             repo,
@@ -635,6 +652,7 @@ def main() -> int:
             "  validate_webdav_ancestors(c, parent_rel(new_rel))\n",
             "  Ok(())\n",
         )
+        drop_import(webdav, "validate_webdav_ancestors")
     elif args.mutant == "webdav-missing-parent-fail-open":
         replace_once(
             repo,
@@ -682,7 +700,7 @@ def main() -> int:
         replace_once(
             webdav,
             "use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}\n",
-            "use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, mutant_commit_webdav_move_without_overlap_guard, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}\n",
+            "use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, mutant_commit_webdav_move_without_overlap_guard, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}\n",
         )
         replace_once(
             webdav,
@@ -810,7 +828,7 @@ def main() -> int:
         replace_once(
             webdav,
             "use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}\n",
-            "use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, delete_row, subtree_rows, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}\n",
+            "use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_row, subtree_rows, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}\n",
         )
         replace_once(
             webdav,
@@ -876,7 +894,7 @@ def main() -> int:
         replace_once(
             webdav,
             "use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}\n",
-            "use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, delete_row, subtree_rows, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}\n",
+            "use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_row, subtree_rows, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}\n",
         )
         replace_once(
             webdav,
@@ -1166,6 +1184,7 @@ def main() -> int:
             'Content-Type: ${safe_persisted_mime(mime)}${nl}${nl}"',
             'Content-Type: ${mime}${nl}${nl}"',
         )
+        drop_import(qiniu_rs, "safe_persisted_mime")
     elif args.mutant == "multipart-part-ctype-literal-spelling":
         # #241: one spelling of the header name recognised, the rest reported as
         # "the part declared no type"
@@ -1190,6 +1209,7 @@ def main() -> int:
             "    None -> guess_mime(rel)\n"
             "  }\n",
         )
+        drop_import(service, "safe_persisted_mime")
     elif args.mutant == "fm-split-trims-addressing":
         # the lossy addressing this backend shipped with: fm_split normalised
         # away the whitespace at the edges of a path, so "a.txt " and "a.txt"
