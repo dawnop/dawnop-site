@@ -17,7 +17,7 @@ CA_PATH = "/etc/ssl/dawnop/dawnop.com_bundle.crt"
 KEY_PATH = "/etc/ssl/dawnop/dawnop.com.key"
 # 七牛侧用通配符证书的所有加速域名：域名 -> forceHttps
 # storage 强制 https（签名 URL 全是 https）；cdn 不强制（回源探测走 http 也能通）
-DOMAINS = {"storage.dawnop.com": True, "cdn.dawnop.com": False}
+DOMAINS = {"storage.dawnop.com": True, "cdn.dawnop.com": False, "dawn-lang.dawnop.com": True}
 
 
 def load_env(path):
