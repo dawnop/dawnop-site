@@ -207,8 +207,11 @@ dawnop-site/
   `pending_uploads` 供孤儿治理）；额度在写文件行的即时事务里复核并扣减，超额删对象回 413。
   未知 token 404，过期/吊销/用尽/目录没了 410。两张表 `upload_drops`/`drop_pending` 是 Dawn 自己
   `create table if not exists` 建的（FastAPI 冻结，回滚时这组端点不存在）。分享链接形如 `/drop#<token>`。
-  nginx 侧的 `limit_req` 与 `client_max_body_size` 见 `deploy/README.md`。curl 一步式受 nginx
-  `client_max_body_size` 限制（主域 32m；请求体在处理函数之前落盘，见 dawn-lang#310），大文件用网页直传。
+  一步式 PUT 挂了路由 guard（web 5.1，dawn v0.81.0 起）：token、链接状态、名字、Content-Length（缺或
+  chunked 411）与声明长度的额度（413）都在**读请求体之前**判完，被拒不建临时文件（dawn-lang#310 已修）；
+  后端落盘上限 5GiB。生产上 curl 一步式的实际单文件上限由 nginx 的 `client_max_body_size` 决定，
+  且该 location 须 `proxy_request_buffering off`（否则 nginx 先替匿名请求把体收完），见 `deploy/README.md`。
+  WebDAV 除 OPTIONS 外同样先鉴权再读体，PUT 后端上限 512MiB。
 
 - 全局设置：`GET/PUT /api/settings`（需鉴权）→ key-value 存 `settings` 表与 DEFAULTS 合并；
   现有项：上传/下载并发、存储配额(GB, 用量条展示)、文本预览大小上限(KB)。后台「系统 → 全局设置」页编辑。

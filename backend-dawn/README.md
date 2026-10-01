@@ -9,7 +9,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 与 `POST /api/fm/upload`（multipart 代理上传，`src/util/multipart.dawn`）**也已落地**。
 
 契约由 `scripts/golden/*.json` 钉住（`scripts/contract_run.py`，CI 每次 push 都跑）：
-播种固定 fixture → 起后端 → 343 条响应比对（read 48 / edge 102 / webdav 103 / qiniu 90）。
+播种固定 fixture → 起后端 → 345 条响应比对（read 48 / edge 102 / webdav 104 / qiniu 91）。
 
 **比的是什么，别当成「逐字节」**——三种粒度，各自的理由写在 `contract_golden.py` 与
 `contract_webdav.py` 的注释里：
@@ -360,13 +360,14 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   register 只收 key，按 `(key, drop_id)` 查账本，别的 drop 签的、管理端签的、编的一律 404；path 取自账本，
   stat 以七牛 fsize/mimeType 为准再过 `safe_persisted_mime`。④一步式 PUT：路由带 `stream-body`，
   请求体由框架落盘、处理完删除；没有 Content-Length 或带 Transfer-Encoding 回 411，声明长度超额度回 413，
-  落盘大小与声明不符回 400。⑤两条路共用 `commit_tx`：在 `with_immediate_tx` 里重判链接、复核账本行
+  落盘大小与声明不符回 400。前四条（连同 token 与链接状态）是 `put_precheck`，路由 guard 在读体之前跑它
+  （`api_drop.put_guard`），处理函数再跑一遍，两处状态码与文案不会分叉；路由 `body_limit` 是
+  `MAX_MAX_FILE_BYTES`（5GiB），挡住声明长度说谎、流中途越界的体。⑤两条路共用 `commit_tx`：在 `with_immediate_tx` 里重判链接、复核账本行
   （防重放）、按真实大小复核额度、挑名字、插行（普通 insert，从不 upsert）、消费账本、扣额度；所有检查
   在第一次写之前，拒绝时提交的是空事务。被拒的上传删掉七牛对象（`discard`：先删账本行，再走引用感知 GC）。
-  **已知缺口**：web 框架对 `stream-body` 路由是先把整个请求体落盘、再进处理函数，所以「Content-Length
-  超额直接 413 不读体」「流式中途超额立刻中止」在后端做不到，落盘大小的上界只能靠 nginx 的
-  `client_max_body_size`（见 `deploy/README.md`）。要在后端做到，得给 `packages/web` 加一个按路由的
-  落盘上限或落盘前的钩子。
+  **读体之前拒绝**：web 5.1 之前，框架对 `stream-body` 路由是先把整个请求体落盘、再进处理函数
+  （dawn-lang#310），落盘大小只能靠 nginx 封顶。现在靠路由 guard 与 `body_limit` 在后端做到；
+  契约 `drop.put.refused-unread` 用「声明 100MB、只发几个字节」的请求钉住（不读体才能在超时内答复）。
 - `repo/repo_drop.dawn` — `upload_drops`（token 只存 sha256）与 `drop_pending` 两张表的 SQL，以及
   `ensure_schema`。这是本后端**第一次自己建表**（其余都是 FastAPI `create_all` 建的）：启动时建一次，
   每个 drop 请求在自己的连接上再 `create table if not exists` 一次（表已在时 SQLite 不拿写锁，实测），

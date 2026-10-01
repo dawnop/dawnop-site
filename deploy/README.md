@@ -253,12 +253,25 @@ nginx 的所有配置在 `~/workspace/dawnop-ops/`（私有，不推送）。按
 `nginx -t` 过了再 `reload`；**改 nginx 前必读它开头的警告**。`deploy/gzip.conf` 是仓库里唯一留下的
 nginx 片段（`gzip_static` 直发预压缩 `.gz`，与 443 接入无关），放 `/etc/nginx/conf.d/`。
 
-**上传链接（`/api/drop*`）是匿名端点**，建议在 nginx 上给它单独加 `limit_req`，并给
-`/api/drop/files/` 设一个不大于单文件上限（默认 100MiB，最大 5GiB）的 `client_max_body_size`：
-一步式 `PUT` 的请求体在后端拿到 token 之前就被 web 框架整包落到临时文件，后端的额度只能在落盘之后
-判，落盘本身的上界是 nginx 给的（框架侧的修法跟踪在
-[dawn-lang#310](https://github.com/dawnop/dawn-lang/issues/310)，修好之前以 nginx 为准；现在主域的
-`client_max_body_size` 是 32m，所以 curl 一步式单文件实际上限约 32MB）。配置写在私有 ops 仓，不在本仓库。
+**上传链接（`/api/drop*`）是匿名端点**，建议在 nginx 上给它单独加 `limit_req`。
+
+**一步式 `PUT /api/drop/files/{name}` 与 WebDAV `PUT` 的拒绝都发生在读请求体之前**（web 5.1 的路由
+guard 与 `body_limit`，dawn v0.81.0 起；修的是
+[dawn-lang#310](https://github.com/dawnop/dawn-lang/issues/310)，此前框架先把整包落盘才进处理函数）：
+- drop：token、链接状态（未吊销/未过期/未用尽/目录在）、名字、`Content-Length`（必须有、不许 chunked，
+  否则 411）、声明长度不超过单文件上限与剩余总额（否则 413），全部在后端读第一个字节之前判完，被拒的
+  请求不建临时文件。后端自己的落盘上限是 5GiB（任何链接可设的单文件上限的最大值），流中途超过即 413
+  并删残文件。
+- WebDAV：除 `OPTIONS` 外所有动词先过 Basic 鉴权再读体（匿名直接 401），`PUT` 后端上限 512MiB，
+  与 dav vhost 的 `client_max_body_size 512m` 对齐。
+
+于是 nginx 的 `client_max_body_size` 不再是挡匿名落盘的那道闸，而是**生产上一步式 PUT 的实际单文件
+上限**：后端上限（drop 5GiB、dav 512MiB）只在 nginx 放行之后才起作用。有一条依赖要随 nginx 一起配：
+nginx 默认**先把整个请求体缓冲到它自己的临时文件**再转发（`proxy_request_buffering on`），这时后端的
+guard 虽然不读体，nginx 已经替匿名请求把体收完了。所以 `/api/drop` 的 location 要
+`proxy_request_buffering off`（边收边转，后端 guard 一拒，连接即断），再把 `client_max_body_size`
+放宽到想给 curl 一步式的上限（不必超过 5GiB）。dav vhost 同理（它的 PUT 本来就流式落盘）。
+配置写在私有 ops 仓，不在本仓库。
 
 ### 5. 验证
 ```bash
