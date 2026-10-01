@@ -18,8 +18,8 @@ use std/str
 use std/list
 use std/char
 use std/bytes
-use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, body_text, headers_all, param}
-use web/router.{Route, route_get, route_post, route_put, tagged}
+use web/types.{Request, Response, HttpError, Handler, Guard, http_error, json_ok, json_response, body_text, headers_all, param}
+use web/router.{Route, route_get, route_post, route_put, tagged, body_limit, guarded as route_guarded}
 use json/value.{Json, JNull, JInt, JStr, JObj, JArr}
 use util/jsonx.{obj, jstr, jint, jbool, jdatetime}
 use util/jsonread.{body_obj}
@@ -30,9 +30,9 @@ use util/paths.{fm_split, full, basename}
 use svc/auth.{Auth, guarded}
 use repo/repo_drop.{DropRow}
 use svc/drop.{Refusal, NotFound, Gone, TooLarge, Invalid, Unprocessable, LengthRequired, NoFreeName,
-  DropErr, Refused, Failed, DropStatus, DropSpec, drop_info, grant_direct, register_direct, put_file,
+  DropErr, Refused, Failed, DropStatus, DropSpec, drop_info, grant_direct, register_direct, put_file, put_precheck,
   create_drop, list_all, revoke, remove, status_text, drop_status,
-  DEFAULT_EXPIRES_S, DEFAULT_MAX_FILES, DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_TOTAL_BYTES}
+  DEFAULT_EXPIRES_S, DEFAULT_MAX_FILES, DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_TOTAL_BYTES, MAX_MAX_FILE_BYTES}
 
 # ---- error mapping ----
 
@@ -182,6 +182,22 @@ pub fn put(a: Auth) -> Handler =
     Ok(receipt(stored, size))
   })
 
+## The one-step PUT's pre-body guard: the server runs it on the bodyless request
+## before it reads a byte or makes a temp file, so a request the link would
+## refuse anyway (unknown token, link gone, bad name, no Content-Length, a
+## Content-Length over the file cap or what is left of the total) is answered
+## with nothing read. It is put_file's own pre-spill judgement (svc/drop
+## put_precheck), so the status and detail are the ones the handler would give;
+## the handler still runs it, and the final transaction re-checks the quota.
+pub fn put_guard(a: Auth) -> Guard =
+  req => {
+    with handle Clock { now_ms() => system_ms() }
+    let token = drop_token(req)?
+    let name = param(req, "name")?
+    let _c = lift_public(put_precheck(a, token, name, declared_length(req)))?
+    Ok(())
+  }
+
 fn receipt(name: String, size: Int) -> Response =
   json_response(201, obj([("name", jstr(name)), ("size", jint(size))]))
 
@@ -325,14 +341,17 @@ pub fn routes(a: Auth) -> List[Route] =
     route_post("/api/drop/register", register(a)),
     # stream-body: the server spills the body to a temp file and deletes it when
     # the handler returns, so a file never sits in the heap. raw-body: the JSON
-    # ceiling does not apply; the drop's own quota does (svc/drop.put_file), and
-    # nginx's client_max_body_size bounds what is spilled before that.
-    # The spill happens before this handler runs, so the token and quota cannot
-    # stop it (dawn-lang issue #310,
-    # https://github.com/dawnop/dawn-lang/issues/310). Until web can hand a
-    # stream-body route the length and headers first, the nginx limit is the
-    # accepted bound: 32m on the main domain, so one-step PUTs top out near 32MB.
-    tagged(route_put("/api/drop/files/{name}", put(a)), ["raw-body", "stream-body"]),
+    # ceiling does not apply; the drop's own quota does.
+    # The guard judges the token, the link, the name and the declared length
+    # before the server reads a byte, so a request the link refuses is answered
+    # with no temp file made (dawn-lang#310 was the spill running first). The
+    # ceiling is the largest file any link may allow, and it also stops a body
+    # that runs past an honest-looking Content-Length; the link's own, smaller
+    # cap is the guard's to enforce. The reverse proxy's client_max_body_size is
+    # what bounds a production upload in practice (deploy/README.md).
+    route_guarded(
+      body_limit(tagged(route_put("/api/drop/files/{name}", put(a)), ["raw-body", "stream-body"]), MAX_MAX_FILE_BYTES),
+      put_guard(a)),
   ]
 
 test "the drop token is read from its header only, and once" {

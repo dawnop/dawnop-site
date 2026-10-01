@@ -462,16 +462,30 @@ fn stat_str(body: String, field: String) -> String !io =
 
 # ---- one-step upload (curl -T) ----
 
-## PUT /api/drop/files/{name}: the body was spilled to a temp file by the
-## server (route tag "stream-body"); it is uploaded from there, constant memory.
-## `declared` is the request's Content-Length (None when it had none, or sent a
-## chunked body). The quota is judged on the declared length before anything is
-## uploaded, and again on the actual length in the final transaction.
-pub fn put_file(a: Auth, token: String, name: String, declared: Option[Int], body_path: Option[String]) -> Result[(String, Int), DropErr] !Clock !Upstream !io = {
+## Everything a one-step PUT can be judged on before its body arrives: the link
+## is known and usable now, the name is one acceptable segment, a length was
+## declared (None, a missing or chunked one, is 411), and that length fits the
+## file cap, the file count and what is left of the total. The route's guard
+## runs this before the server reads a byte (api/api_drop), and put_file runs it
+## again after the spill, so the two can never disagree on a status or detail.
+## Answers the link and the declared length.
+pub fn put_precheck(a: Auth, token: String, name: String, declared: Option[Int]) -> Result[(DropRow, Int), DropErr] !Clock !io = {
   let d = with_db(a.db.path, a.db.ext, c => active_drop(c, token))?
   let _n = name_ok(name)?
   let length = required_length(declared)?
   let _q = refuse_if(quota_refusal(d, length))?
+  Ok((d, length))
+}
+
+## PUT /api/drop/files/{name}: the body was spilled to a temp file by the
+## server (route tag "stream-body"); it is uploaded from there, constant memory.
+## `declared` is the request's Content-Length (None when it had none, or sent a
+## chunked body). The quota is judged on the declared length before anything is
+## uploaded (by the route's guard before the spill, and here again after it),
+## and on the actual length in the final transaction.
+pub fn put_file(a: Auth, token: String, name: String, declared: Option[Int], body_path: Option[String]) -> Result[(String, Int), DropErr] !Clock !Upstream !io = {
+  let checked = put_precheck(a, token, name, declared)?
+  let (d, length) = checked
   let path = spilled(body_path)?
   let actual = file_length(path)?
   if actual != length {
