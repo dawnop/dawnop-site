@@ -22,7 +22,10 @@ It is a *protocol* fake, not a stub: every request's signature is recomputed
 with HMAC-SHA1 and rejected if it does not match, so qiniu_sign.dawn's tokens
 are exercised end to end rather than asserted against themselves. An upload
 token's putPolicy deadline is held to the same standard: it must still be in
-date and inside a day, so a token that cannot be spent cannot pass. What it does
+date and inside a day, so a token that cannot be spent cannot pass. The two
+limits the drop links put in a policy are enforced as the real bucket does:
+`fsizeLimit` refuses a larger upload with 413, and `insertOnly` refuses an
+upload to a key that already holds an object with 614. What it does
 not model — regions, quotas, rate limits, real 612/631 taxonomy beyond the two
 codes the backend branches on — is exactly the part a golden could not pin
 against the live bucket either.
@@ -312,11 +315,24 @@ class Handler(BaseHTTPRequestHandler):
         if "file" not in parts:
             return self._qiniu_error(400, "no file part")
         content, mime = parts["file"]
-        if not _check_upload_token(token, key):
+        policy = _upload_policy(token, key)
+        if policy is None:
             return self._qiniu_error(401, "bad token")
         self.bucket.wait_if_paused("upload")
         if self._refused("upload", key=key):
             return None
+        # The two putPolicy limits the drop links rely on (svc/drop). Both are
+        # enforced by the real bucket, so the fake has to refuse too, or a token
+        # that failed to carry them would spend exactly like one that did.
+        limit = policy.get("fsizeLimit")
+        if isinstance(limit, int) and len(content) > limit:
+            self.bucket.log(
+                op="upload", key=key, outcome="fsize-limit", size=len(content)
+            )
+            return self._qiniu_error(413, "request entity too large")
+        if policy.get("insertOnly") == 1 and key in self.bucket.objects:
+            self.bucket.log(op="upload", key=key, outcome="insert-only")
+            return self._qiniu_error(614, "file exists")
         self.bucket.objects[key] = {"content": content, "mime": mime}
         self.bucket.log(op="upload", key=key, size=len(content), mime=mime)
         return self._json(200, {"key": key, "hash": hashlib.sha1(content).hexdigest()})
@@ -439,8 +455,9 @@ def _multipart(body: bytes) -> dict:
 MAX_TOKEN_LIFETIME = 86400
 
 
-def _check_upload_token(token: str, key: str) -> bool:
-    """`<ak>:<sign>:<encodedPutPolicy>`, scoped to this key and still in date.
+def _upload_policy(token: str, key: str):
+    """The putPolicy of `<ak>:<sign>:<encodedPutPolicy>` when the token is
+    signed, scoped to this key and still in date; None otherwise.
 
     The deadline is checked, not just carried: a real bucket refuses an expired
     putPolicy, and without that the signing code could hand out tokens nobody
@@ -449,18 +466,18 @@ def _check_upload_token(token: str, key: str) -> bool:
     try:
         ak, sign, policy_b64 = token.split(":")
     except ValueError:
-        return False
+        return None
     if ak != FAKE_AK or sign != _sign(policy_b64):
-        return False
+        return None
     pad = "=" * (-len(policy_b64) % 4)
     policy = json.loads(base64.urlsafe_b64decode(policy_b64 + pad))
     if policy.get("scope") != f"{FAKE_BUCKET}:{key}":
-        return False
+        return None
     deadline = policy.get("deadline")
     if not isinstance(deadline, int) or isinstance(deadline, bool):
-        return False
+        return None
     now = int(time.time())
-    return now < deadline <= now + MAX_TOKEN_LIFETIME
+    return policy if now < deadline <= now + MAX_TOKEN_LIFETIME else None
 
 
 def _range(header: str, total: int):

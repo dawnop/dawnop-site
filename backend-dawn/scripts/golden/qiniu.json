@@ -1559,6 +1559,863 @@
      "key": "<quiet key>"
     }
    ]
+  },
+  "drop.setup.inbox": {
+   "status": 200
+  },
+  "drop.admin.requires-jwt": {
+   "POST /api/fm/drops": {
+    "status": 401,
+    "body": {
+     "detail": "无效或过期的凭证"
+    }
+   },
+   "GET /api/fm/drops": {
+    "status": 401,
+    "body": {
+     "detail": "无效或过期的凭证"
+    }
+   },
+   "POST /api/fm/drops/revoke": {
+    "status": 401,
+    "body": {
+     "detail": "无效或过期的凭证"
+    }
+   },
+   "POST /api/fm/drops/delete": {
+    "status": 401,
+    "body": {
+     "detail": "无效或过期的凭证"
+    }
+   }
+  },
+  "drop.create.defaults": {
+   "status": 201,
+   "body": {
+    "id": 1,
+    "label": "合同 inbox",
+    "dir": "qiniu://dav-test/drop-inbox",
+    "expires_at": "WALL-CLOCK",
+    "max_files": 20,
+    "max_file_bytes": 104857600,
+    "max_total_bytes": 1073741824,
+    "used_files": 0,
+    "used_bytes": 0,
+    "status": "active",
+    "created_at": "WALL-CLOCK",
+    "token": "<43-char token>"
+   },
+   "expires_in_about_a_day": true,
+   "stored_hash_is_sha256_of_token": true,
+   "plaintext_token_not_in_database": true
+  },
+  "drop.create.refusals": {
+   "expires_in_s.below": {
+    "status": 422,
+    "body": {
+     "detail": "expires_in_s 必须在 60~2592000 之间"
+    }
+   },
+   "expires_in_s.above": {
+    "status": 422,
+    "body": {
+     "detail": "expires_in_s 必须在 60~2592000 之间"
+    }
+   },
+   "max_files.zero": {
+    "status": 422,
+    "body": {
+     "detail": "max_files 必须在 1~1000 之间"
+    }
+   },
+   "max_files.above": {
+    "status": 422,
+    "body": {
+     "detail": "max_files 必须在 1~1000 之间"
+    }
+   },
+   "max_files.string": {
+    "status": 422,
+    "body": {
+     "detail": "max_files 必须是整数"
+    }
+   },
+   "max_files.float": {
+    "status": 422,
+    "body": {
+     "detail": "max_files 必须是整数"
+    }
+   },
+   "max_file_bytes.above": {
+    "status": 422,
+    "body": {
+     "detail": "max_file_bytes 必须在 1~5368709120 之间"
+    }
+   },
+   "max_total_bytes.above": {
+    "status": 422,
+    "body": {
+     "detail": "max_total_bytes 必须在 1~53687091200 之间"
+    }
+   },
+   "label.too-long": {
+    "status": 422,
+    "body": {
+     "detail": "label 不能超过 100 个字符"
+    }
+   },
+   "dir.absent-field": {
+    "status": 422,
+    "body": {
+     "detail": "dir 必须是字符串"
+    }
+   },
+   "dir.missing": {
+    "status": 404,
+    "body": {
+     "detail": "目录不存在"
+    }
+   },
+   "dir.is-a-file": {
+    "status": 404,
+    "body": {
+     "detail": "目录不存在"
+    }
+   }
+  },
+  "drop.info": {
+   "status": 200,
+   "body": {
+    "label": "合同 inbox",
+    "dir_name": "drop-inbox",
+    "expires_at": "WALL-CLOCK",
+    "max_files": 20,
+    "max_file_bytes": 104857600,
+    "max_total_bytes": 1073741824,
+    "used_files": 0,
+    "used_bytes": 0
+   }
+  },
+  "drop.token.placement": {
+   "no-header": {
+    "status": 404,
+    "body": {
+     "detail": "上传链接不存在"
+    }
+   },
+   "query": {
+    "status": 404,
+    "body": {
+     "detail": "上传链接不存在"
+    }
+   },
+   "authorization-bearer": {
+    "status": 404,
+    "body": {
+     "detail": "上传链接不存在"
+    }
+   },
+   "authorization-bare": {
+    "status": 404,
+    "body": {
+     "detail": "上传链接不存在"
+    }
+   },
+   "cookie": {
+    "status": 404,
+    "body": {
+     "detail": "上传链接不存在"
+    }
+   },
+   "admin-jwt": {
+    "status": 404,
+    "body": {
+     "detail": "上传链接不存在"
+    }
+   },
+   "unknown-token": {
+    "status": 404,
+    "body": {
+     "detail": "上传链接不存在"
+    }
+   },
+   "empty-token": {
+    "status": 404,
+    "body": {
+     "detail": "上传链接不存在"
+    }
+   },
+   "oversized-token": {
+    "status": 404,
+    "body": {
+     "detail": "上传链接不存在"
+    }
+   },
+   "header-twice": {
+    "status": 400,
+    "body": {
+     "detail": "X-Drop-Token 只能出现一次"
+    }
+   }
+  },
+  "drop.token.not-admin": {
+   "fm.bearer": {
+    "status": 401,
+    "body": {
+     "detail": "无效或过期的凭证"
+    }
+   },
+   "fm.x-drop-token": {
+    "status": 401,
+    "body": {
+     "detail": "无效或过期的凭证"
+    }
+   },
+   "fm.preview.query": {
+    "status": 401,
+    "body": {
+     "detail": "无效或过期的凭证"
+    }
+   },
+   "fm.download.query": {
+    "status": 401,
+    "body": {
+     "detail": "无效或过期的凭证"
+    }
+   },
+   "fm.drops.bearer": {
+    "status": 401,
+    "body": {
+     "detail": "无效或过期的凭证"
+    }
+   },
+   "auth.me.bearer": {
+    "status": 401,
+    "body": {
+     "detail": "无效或过期的凭证"
+    }
+   },
+   "dav.basic.password": {
+    "status": 401
+   },
+   "dav.basic.user": {
+    "status": 401
+   },
+   "dav.bearer": {
+    "status": 401
+   }
+  },
+  "drop.names": {
+   "dotdot-slash": {
+    "status": 400,
+    "body": {
+     "detail": "文件名不能包含 / 或 \\"
+    }
+   },
+   "slash": {
+    "status": 400,
+    "body": {
+     "detail": "文件名不能包含 / 或 \\"
+    }
+   },
+   "backslash": {
+    "status": 400,
+    "body": {
+     "detail": "文件名不能包含 / 或 \\"
+    }
+   },
+   "dotdot": {
+    "status": 400,
+    "body": {
+     "detail": "文件名不能是 . 或 .."
+    }
+   },
+   "dot": {
+    "status": 400,
+    "body": {
+     "detail": "文件名不能是 . 或 .."
+    }
+   },
+   "empty": {
+    "status": 400,
+    "body": {
+     "detail": "文件名不能为空"
+    }
+   },
+   "nul": {
+    "status": 400,
+    "body": {
+     "detail": "文件名不能包含控制字符"
+    }
+   },
+   "newline": {
+    "status": 400,
+    "body": {
+     "detail": "文件名不能包含控制字符"
+    }
+   },
+   "del": {
+    "status": 400,
+    "body": {
+     "detail": "文件名不能包含控制字符"
+    }
+   },
+   "edge-space": {
+    "status": 400,
+    "body": {
+     "detail": "名称不能以空白开头或结尾"
+    }
+   },
+   "too-long": {
+    "status": 400,
+    "body": {
+     "detail": "文件名不能超过 255 字节"
+    }
+   },
+   "not-a-string": {
+    "status": 422,
+    "body": {
+     "detail": "name 必须是字符串"
+    }
+   },
+   "size-missing": {
+    "status": 422,
+    "body": {
+     "detail": "size 必须是整数"
+    }
+   },
+   "size-negative": {
+    "status": 422,
+    "body": {
+     "detail": "size 不能为负数"
+    }
+   },
+   "put.encoded-slash": {
+    "status": 400,
+    "body": {
+     "detail": "文件名不能包含 / 或 \\"
+    }
+   },
+   "put.dotdot": {
+    "status": 400,
+    "body": {
+     "detail": "path contains a dot segment"
+    }
+   },
+   "put.encoded-dotdot": {
+    "status": 400,
+    "body": {
+     "detail": "path contains a dot segment"
+    }
+   }
+  },
+  "drop.direct.grant": {
+   "status": 200,
+   "body": {
+    "token": "<upload-token>",
+    "key": "<fresh-key>.txt",
+    "name": "hello.txt",
+    "up_host": "<fake-qiniu>"
+   },
+   "policy": {
+    "scope_is_bucket_key": true,
+    "insert_only": 1,
+    "fsize_limit": 104857600,
+    "fsize_limit_expected": true,
+    "deadline_within_an_hour": true,
+    "fields": [
+     "deadline",
+     "fsizeLimit",
+     "insertOnly",
+     "scope"
+    ]
+   }
+  },
+  "drop.direct.register": {
+   "spend": [
+    200,
+    {
+     "key": "<fresh-key>.txt",
+     "hash": "630787c170234d4f48dec6868c3e035201ca1e02"
+    }
+   ],
+   "status": 201,
+   "body": {
+    "name": "hello.txt",
+    "size": 21
+   },
+   "row": {
+    "path": "dav-test/drop-inbox/hello.txt",
+    "is_dir": false,
+    "key": "<fresh-key>.txt",
+    "content_type": "application/octet-stream",
+    "size": 21
+   },
+   "bytes_round_trip": true
+  },
+  "drop.direct.register.replay": {
+   "status": 404,
+   "body": {
+    "detail": "上传凭证不存在或已登记"
+   }
+  },
+  "drop.direct.insert-only": {
+   "status": 614,
+   "body": {
+    "error": "file exists"
+   },
+   "bytes_unchanged": true
+  },
+  "drop.direct.rename": {
+   "grant_status": 200,
+   "granted_name": "hello (1).txt",
+   "spend": [
+    200,
+    {
+     "key": "<fresh-key>.txt",
+     "hash": "3f14ecc8cc777b55f1f51ad82992e4c80a4b4c8f"
+    }
+   ],
+   "status": 201,
+   "body": {
+    "name": "hello (1).txt",
+    "size": 5
+   },
+   "original_row_unchanged": true,
+   "original_bytes_unchanged": true,
+   "renamed_row": {
+    "path": "dav-test/drop-inbox/hello (1).txt",
+    "is_dir": false,
+    "key": "<fresh-key>.txt",
+    "content_type": "application/octet-stream",
+    "size": 5
+   }
+  },
+  "drop.register.foreign-keys": {
+   "other-drops-key": {
+    "status": 404,
+    "body": {
+     "detail": "上传凭证不存在或已登记"
+    }
+   },
+   "admin-signed-key": {
+    "status": 404,
+    "body": {
+     "detail": "上传凭证不存在或已登记"
+    }
+   },
+   "made-up-key": {
+    "status": 404,
+    "body": {
+     "detail": "上传凭证不存在或已登记"
+    }
+   },
+   "empty-key": {
+    "status": 404,
+    "body": {
+     "detail": "上传凭证不存在或已登记"
+    }
+   },
+   "key-missing": {
+    "status": 422,
+    "body": {
+     "detail": "key 必须是字符串"
+    }
+   },
+   "owner-still-registers": {
+    "status": 201,
+    "body": {
+     "name": "foreign.txt",
+     "size": 3
+    }
+   },
+   "no-row-for-foreign-keys": true
+  },
+  "drop.register.not-uploaded-yet": {
+   "before": {
+    "status": 400,
+    "body": {
+     "detail": "对象未在七牛找到，请先完成上传"
+    }
+   },
+   "after": {
+    "status": 201,
+    "body": {
+     "name": "early.txt",
+     "size": 4
+    }
+   }
+  },
+  "drop.quota": {
+   "single-file-over": {
+    "status": 413,
+    "body": {
+     "detail": "文件超过单文件上限（100 字节）"
+    }
+   },
+   "first.policy": {
+    "scope_is_bucket_key": true,
+    "insert_only": 1,
+    "fsize_limit": 100,
+    "fsize_limit_expected": true,
+    "deadline_within_an_hour": true,
+    "fields": [
+     "deadline",
+     "fsizeLimit",
+     "insertOnly",
+     "scope"
+    ]
+   },
+   "first.register": {
+    "status": 201,
+    "body": {
+     "name": "first.bin",
+     "size": 100
+    }
+   },
+   "total-over": {
+    "status": 413,
+    "body": {
+     "detail": "超出上传链接的总额度（剩余 50 字节）"
+    }
+   },
+   "second.policy": {
+    "scope_is_bucket_key": true,
+    "insert_only": 1,
+    "fsize_limit": 50,
+    "fsize_limit_expected": true,
+    "deadline_within_an_hour": true,
+    "fields": [
+     "deadline",
+     "fsizeLimit",
+     "insertOnly",
+     "scope"
+    ]
+   },
+   "second.spend-over-fsize-limit": {
+    "status": 413,
+    "body": {
+     "error": "request entity too large"
+    }
+   },
+   "second.register": {
+    "status": 201,
+    "body": {
+     "name": "second.bin",
+     "size": 50
+    }
+   },
+   "info.exhausted": {
+    "status": 410,
+    "body": {
+     "detail": "上传链接的额度已用尽"
+    }
+   },
+   "files-over": {
+    "status": 410,
+    "body": {
+     "detail": "上传链接的额度已用尽"
+    }
+   },
+   "put.exhausted": {
+    "status": 410,
+    "body": {
+     "detail": "上传链接的额度已用尽"
+    }
+   },
+   "used": [
+    2,
+    150
+   ]
+  },
+  "drop.quota.final-transaction": {
+   "first": {
+    "status": 201,
+    "body": {
+     "name": "ra.bin",
+     "size": 60
+    }
+   },
+   "second": {
+    "status": 413,
+    "body": {
+     "detail": "超出上传链接的总额度（剩余 40 字节）"
+    }
+   },
+   "second.retry": {
+    "status": 404,
+    "body": {
+     "detail": "上传凭证不存在或已登记"
+    }
+   },
+   "used": [
+    1,
+    60
+   ],
+   "refused_object_deleted": true,
+   "refused_reservation_gone": true,
+   "refused_row_absent": true
+  },
+  "drop.put": {
+   "put": {
+    "status": 201,
+    "body": {
+     "name": "curl.txt",
+     "size": 21
+    }
+   },
+   "row": {
+    "path": "dav-test/drop-inbox/curl.txt",
+    "is_dir": false,
+    "key": "<fresh-key>.txt",
+    "content_type": "text/plain",
+    "size": 21
+   },
+   "bytes_round_trip": true,
+   "put.same-name": {
+    "status": 201,
+    "body": {
+     "name": "curl (1).txt",
+     "size": 6
+    }
+   },
+   "put.same-name.original-unchanged": true,
+   "put.chunked": {
+    "status": 411,
+    "body": {
+     "detail": "需要 Content-Length（不接受 chunked 请求体）"
+    }
+   },
+   "put.no-content-length": {
+    "status": 411,
+    "body": {
+     "detail": "需要 Content-Length（不接受 chunked 请求体）"
+    }
+   },
+   "put.over-file-limit": {
+    "status": 413,
+    "body": {
+     "detail": "文件超过单文件上限（64 字节）"
+    }
+   },
+   "put.refusals-wrote-nothing": true
+  },
+  "drop.expired": {
+   "info": {
+    "status": 410,
+    "body": {
+     "detail": "上传链接已过期"
+    }
+   },
+   "upload-token": {
+    "status": 410,
+    "body": {
+     "detail": "上传链接已过期"
+    }
+   },
+   "put": {
+    "status": 410,
+    "body": {
+     "detail": "上传链接已过期"
+    }
+   },
+   "register-signed-before": {
+    "status": 410,
+    "body": {
+     "detail": "上传链接已过期"
+    }
+   },
+   "object-of-late-register-deleted": true,
+   "no-row": true
+  },
+  "drop.revoked": {
+   "revoke": {
+    "status": 200,
+    "body": {
+     "ok": true
+    }
+   },
+   "revoke.again": {
+    "status": 200,
+    "body": {
+     "ok": true
+    }
+   },
+   "revoke.unknown": {
+    "status": 404,
+    "body": {
+     "detail": "上传链接不存在"
+    }
+   },
+   "revoke.id-not-int": {
+    "status": 422,
+    "body": {
+     "detail": "id 必须是整数"
+    }
+   },
+   "info": {
+    "status": 410,
+    "body": {
+     "detail": "上传链接已被吊销"
+    }
+   },
+   "upload-token": {
+    "status": 410,
+    "body": {
+     "detail": "上传链接已被吊销"
+    }
+   },
+   "register-signed-before": {
+    "status": 410,
+    "body": {
+     "detail": "上传链接已被吊销"
+    }
+   },
+   "object-of-late-register-deleted": true
+  },
+  "drop.dir-missing": {
+   "status": 410,
+   "body": {
+    "detail": "上传目录已不存在"
+   }
+  },
+  "drop.list": {
+   "status": 200,
+   "items": [
+    {
+     "id": 8,
+     "label": "",
+     "dir": "qiniu://dav-test/drop-gone",
+     "expires_at": "WALL-CLOCK",
+     "max_files": 20,
+     "max_file_bytes": 104857600,
+     "max_total_bytes": 1073741824,
+     "used_files": 0,
+     "used_bytes": 0,
+     "status": "dir_missing",
+     "created_at": "WALL-CLOCK"
+    },
+    {
+     "id": 7,
+     "label": "",
+     "dir": "qiniu://dav-test/drop-inbox",
+     "expires_at": "WALL-CLOCK",
+     "max_files": 20,
+     "max_file_bytes": 104857600,
+     "max_total_bytes": 1073741824,
+     "used_files": 0,
+     "used_bytes": 0,
+     "status": "revoked",
+     "created_at": "WALL-CLOCK"
+    },
+    {
+     "id": 6,
+     "label": "",
+     "dir": "qiniu://dav-test/drop-inbox",
+     "expires_at": "WALL-CLOCK",
+     "max_files": 20,
+     "max_file_bytes": 104857600,
+     "max_total_bytes": 1073741824,
+     "used_files": 0,
+     "used_bytes": 0,
+     "status": "expired",
+     "created_at": "WALL-CLOCK"
+    },
+    {
+     "id": 5,
+     "label": "",
+     "dir": "qiniu://dav-test/drop-inbox",
+     "expires_at": "WALL-CLOCK",
+     "max_files": 20,
+     "max_file_bytes": 64,
+     "max_total_bytes": 1073741824,
+     "used_files": 2,
+     "used_bytes": 27,
+     "status": "active",
+     "created_at": "WALL-CLOCK"
+    },
+    {
+     "id": 4,
+     "label": "",
+     "dir": "qiniu://dav-test/drop-inbox",
+     "expires_at": "WALL-CLOCK",
+     "max_files": 5,
+     "max_file_bytes": 100,
+     "max_total_bytes": 100,
+     "used_files": 1,
+     "used_bytes": 60,
+     "status": "active",
+     "created_at": "WALL-CLOCK"
+    },
+    {
+     "id": 3,
+     "label": "",
+     "dir": "qiniu://dav-test/drop-inbox",
+     "expires_at": "WALL-CLOCK",
+     "max_files": 2,
+     "max_file_bytes": 100,
+     "max_total_bytes": 150,
+     "used_files": 2,
+     "used_bytes": 150,
+     "status": "exhausted",
+     "created_at": "WALL-CLOCK"
+    },
+    {
+     "id": 2,
+     "label": "other",
+     "dir": "qiniu://dav-test/drop-inbox",
+     "expires_at": "WALL-CLOCK",
+     "max_files": 20,
+     "max_file_bytes": 104857600,
+     "max_total_bytes": 1073741824,
+     "used_files": 1,
+     "used_bytes": 3,
+     "status": "active",
+     "created_at": "WALL-CLOCK"
+    },
+    {
+     "id": 1,
+     "label": "合同 inbox",
+     "dir": "qiniu://dav-test/drop-inbox",
+     "expires_at": "WALL-CLOCK",
+     "max_files": 20,
+     "max_file_bytes": 104857600,
+     "max_total_bytes": 1073741824,
+     "used_files": 3,
+     "used_bytes": 30,
+     "status": "active",
+     "created_at": "WALL-CLOCK"
+    }
+   ],
+   "no_token_fields": true,
+   "ids_descending": true
+  },
+  "drop.delete": {
+   "delete": {
+    "status": 200,
+    "body": {
+     "ok": true
+    }
+   },
+   "token-after-delete": {
+    "status": 404,
+    "body": {
+     "detail": "上传链接不存在"
+    }
+   },
+   "delete.again": {
+    "status": 404,
+    "body": {
+     "detail": "上传链接不存在"
+    }
+   },
+   "reservations_gone": true,
+   "uploaded_file_kept": true
+  },
+  "drop.responses.minimal": {
+   "responses_checked": true,
+   "no_object_key": true,
+   "no_storage_path": true
   }
  }
 }

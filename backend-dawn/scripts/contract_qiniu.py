@@ -38,9 +38,11 @@ Normally driven by contract_run.py. Standalone (start the fake first):
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
+import socket
 import sqlite3
 import sys
 import time
@@ -335,6 +337,646 @@ class Fake:
 
     def state(self):
         return self._get("/__fake/state")["objects"]
+
+
+# --------------------------------------------------------------------------- #
+# Upload links ("drops"): /api/fm/drops* for the admin, /api/drop* for the
+# anonymous uploader. Everything a drop token may and may not do is pinned here,
+# against the fake bucket, because the interesting half (spending the direct
+# credential, the stat in register, the object deleted after a refusal) needs an
+# object store to be observable at all.
+
+DROP_HEADER = "X-Drop-Token"
+
+
+def drop_req(base, method, path, drop_token=None, body=None, headers=None, raw=None):
+    """A request to the drop surface. `drop_token` goes in X-Drop-Token and
+    nowhere else; `raw` sends bytes as the body instead of JSON."""
+    hdrs = dict(headers or {})
+    if drop_token is not None:
+        hdrs[DROP_HEADER] = drop_token
+    data = raw
+    if body is not None:
+        data = json.dumps(body).encode()
+        hdrs.setdefault("Content-Type", "application/json")
+    r = urllib.request.Request(base + path, data=data, method=method, headers=hdrs)
+    try:
+        with OPENER.open(r, timeout=30) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+    except Exception as e:  # noqa: BLE001 - transport failure is a case failure
+        return TRANSPORT_STATUS, transport_error(e).encode()
+
+
+def raw_request(base, method, path, header_pairs, body=b"", timeout=15):
+    """Exactly these header lines and this body over a socket; (status, body).
+
+    urllib always frames a body with a Content-Length it computes itself, so a
+    chunked upload, or one header sent twice, can only be spelled here.
+    """
+    parts = urllib.parse.urlsplit(base)
+    host, port = parts.hostname, parts.port or 80
+    lines = [
+        f"{method} {path} HTTP/1.1",
+        f"Host: {host}:{port}",
+        "Connection: close",
+        *(f"{k}: {v}" for k, v in header_pairs),
+    ]
+    request = ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1") + body
+    with socket.create_connection((host, port), timeout=timeout) as sock:
+        sock.settimeout(timeout)
+        sock.sendall(request)
+        buf = b""
+        while True:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+    head, _, rest = buf.partition(b"\r\n\r\n")
+    status_line = head.split(b"\r\n", 1)[0].decode("latin-1")
+    try:
+        status = int(status_line.split(" ")[1])
+    except (IndexError, ValueError):
+        status = TRANSPORT_STATUS
+    return status, rest
+
+
+def policy_facts(upload_token, key, expect_limit):
+    """What the direct credential lets its holder do, read off its putPolicy."""
+    policy = put_policy(upload_token)
+    deadline = policy.get("deadline", 0)
+    remaining = deadline - int(time.time())
+    return {
+        "scope_is_bucket_key": policy.get("scope")
+        == f"{contract_qiniu_fake.FAKE_BUCKET}:{key}",
+        "insert_only": policy.get("insertOnly"),
+        "fsize_limit": policy.get("fsizeLimit"),
+        "fsize_limit_expected": policy.get("fsizeLimit") == expect_limit,
+        "deadline_within_an_hour": 0 < remaining <= 3600,
+        "fields": sorted(policy),
+    }
+
+
+def drop_cases(g, B, token, auth, fake, fake_base, db_path):  # noqa: C901 - a case list
+    inbox_rel = f"{PREFIX}/drop-inbox"
+    inbox = f"qiniu://{inbox_rel}"
+    public_bodies = []  # every uploader-facing answer except upload-token's
+    minted_keys = []
+
+    def admin(method, path, body=None, auth_token=token):
+        st, raw = api(B, method, path, auth_token, body)
+        return st, body_value(raw)
+
+    def public(method, path, drop_token=None, body=None, headers=None, raw=None):
+        st, out = drop_req(B, method, path, drop_token, body, headers, raw)
+        if not path.startswith("/api/drop/upload-token"):
+            public_bodies.append(out)
+        return st, body_value(out)
+
+    def create(**fields):
+        body = {"dir": inbox, **fields}
+        st, out = admin("POST", "/api/fm/drops", body)
+        return st, out, (out.get("token", "") if isinstance(out, dict) else "")
+
+    def shown(created):
+        """A create/list item with the per-run values replaced by facts."""
+        if not isinstance(created, dict):
+            return created
+        out = dict(created)
+        if "token" in out:
+            out["token"] = f"<{len(out['token'])}-char token>"
+        if "created_at" in out:
+            out["created_at"] = (
+                "WALL-CLOCK"
+                if re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", out["created_at"])
+                else out["created_at"]
+            )
+        if "expires_at" in out:
+            out["expires_at"] = "WALL-CLOCK"
+        return out
+
+    def expire(drop_id):
+        with sqlite3.connect(db_path) as con:
+            con.execute(
+                "UPDATE upload_drops SET expires_at = ? WHERE id = ?",
+                (int(time.time()) - 1, drop_id),
+            )
+
+    def grant(drop_token, name, size):
+        st, out = public(
+            "POST", "/api/drop/upload-token", drop_token, {"name": name, "size": size}
+        )
+        if st == 200:
+            minted_keys.append(out["key"])
+        return st, out
+
+    def spend(granted, content):
+        st, out = spend_upload_token(
+            fake_base, granted.get("token", ""), granted.get("key", ""), content
+        )
+        # a list, not a tuple: the golden stores JSON, and a tuple reads back
+        # as a list
+        return [st, _fresh_key(out)]
+
+    def file_row(name):
+        return file_metadata(db_path, f"{inbox_rel}/{name}")
+
+    print("\n== drops: setup ==")
+    st, _ = admin(
+        "POST", "/api/fm/create-folder", {"path": SANDBOX, "name": "drop-inbox"}
+    )
+    g.case("drop.setup.inbox", {"status": st})
+
+    print("\n== drops: the admin door is the admin JWT ==")
+    statuses = {}
+    for method, path, body in (
+        ("POST", "/api/fm/drops", {"dir": inbox}),
+        ("GET", "/api/fm/drops", None),
+        ("POST", "/api/fm/drops/revoke", {"id": 1}),
+        ("POST", "/api/fm/drops/delete", {"id": 1}),
+    ):
+        st, out = admin(method, path, body, auth_token=None)
+        statuses[f"{method} {path}"] = {"status": st, "body": out}
+    g.case("drop.admin.requires-jwt", statuses)
+
+    print("\n== drops: create ==")
+    st, made, t_main = create(label="合同 inbox")
+    main_id = made.get("id") if isinstance(made, dict) else None
+    with sqlite3.connect(db_path) as con:
+        row = con.execute(
+            "SELECT token_hash, expires_at FROM upload_drops WHERE id = ?", (main_id,)
+        ).fetchone()
+        dump = "\n".join(con.iterdump())
+    g.case(
+        "drop.create.defaults",
+        {
+            "status": st,
+            "body": shown(made),
+            "expires_in_about_a_day": row is not None
+            and abs(row[1] - int(time.time()) - 86400) <= 5,
+            "stored_hash_is_sha256_of_token": row is not None
+            and row[0] == hashlib.sha256(t_main.encode()).hexdigest(),
+            "plaintext_token_not_in_database": t_main != "" and t_main not in dump,
+        },
+    )
+
+    big = "x" * 101
+    invalid = {}
+    for label, body in (
+        ("expires_in_s.below", {"dir": inbox, "expires_in_s": 59}),
+        ("expires_in_s.above", {"dir": inbox, "expires_in_s": 2592001}),
+        ("max_files.zero", {"dir": inbox, "max_files": 0}),
+        ("max_files.above", {"dir": inbox, "max_files": 1001}),
+        ("max_files.string", {"dir": inbox, "max_files": "20"}),
+        ("max_files.float", {"dir": inbox, "max_files": 1.5}),
+        ("max_file_bytes.above", {"dir": inbox, "max_file_bytes": 5368709121}),
+        ("max_total_bytes.above", {"dir": inbox, "max_total_bytes": 53687091201}),
+        ("label.too-long", {"dir": inbox, "label": big}),
+        ("dir.absent-field", {"label": "x"}),
+        ("dir.missing", {"dir": f"{SANDBOX}/no-such-dir"}),
+        ("dir.is-a-file", {"dir": "qiniu://example.txt"}),
+    ):
+        st, out = admin("POST", "/api/fm/drops", body)
+        invalid[label] = {"status": st, "body": out}
+    g.case("drop.create.refusals", invalid)
+
+    print("\n== drops: the uploader door reads X-Drop-Token and nothing else ==")
+    st, out = public("GET", "/api/drop", t_main)
+    g.case("drop.info", {"status": st, "body": shown(out)})
+
+    placements = {}
+    for label, kwargs in (
+        ("no-header", {}),
+        ("query", {"path": f"/api/drop?token={t_main}"}),
+        ("authorization-bearer", {"headers": {"Authorization": f"Bearer {t_main}"}}),
+        ("authorization-bare", {"headers": {"Authorization": t_main}}),
+        ("cookie", {"headers": {"Cookie": f"drop_token={t_main}; token={t_main}"}}),
+        ("admin-jwt", {"headers": {"Authorization": f"Bearer {token}"}}),
+        ("unknown-token", {"drop_token": "A" * 43}),
+        ("empty-token", {"drop_token": ""}),
+        ("oversized-token", {"drop_token": "A" * 300}),
+    ):
+        path = kwargs.pop("path", "/api/drop")
+        st, out = public("GET", path, **kwargs)
+        placements[label] = {"status": st, "body": out}
+    st, raw = raw_request(
+        B,
+        "GET",
+        "/api/drop",
+        [(DROP_HEADER, t_main), (DROP_HEADER, t_main), ("Content-Length", "0")],
+    )
+    placements["header-twice"] = {"status": st, "body": body_value(raw)}
+    g.case("drop.token.placement", placements)
+
+    print("\n== drops: a drop token is not an admin credential ==")
+    crossed = {}
+    for label, path, headers in (
+        (
+            "fm.bearer",
+            "/api/fm?path=qiniu%3A%2F%2F",
+            {"Authorization": f"Bearer {t_main}"},
+        ),
+        ("fm.x-drop-token", "/api/fm?path=qiniu%3A%2F%2F", {DROP_HEADER: t_main}),
+        (
+            "fm.preview.query",
+            f"/api/fm/preview?path=qiniu%3A%2F%2Fexample.txt&token={t_main}",
+            {},
+        ),
+        (
+            "fm.download.query",
+            f"/api/fm/download?path=qiniu%3A%2F%2Fexample.txt&token={t_main}",
+            {},
+        ),
+        ("fm.drops.bearer", "/api/fm/drops", {"Authorization": f"Bearer {t_main}"}),
+        ("auth.me.bearer", "/api/auth/me", {"Authorization": f"Bearer {t_main}"}),
+    ):
+        st, out = api(B, "GET", path, None, None, headers)
+        crossed[label] = {"status": st, "body": body_value(out)}
+    for label, basic in (
+        ("dav.basic.password", f"{auth.split(':', 1)[0]}:{t_main}"),
+        ("dav.basic.user", f"{t_main}:"),
+    ):
+        st, _hd, _raw = dav(B, "PROPFIND", "/dav/", basic, {"Depth": "0"})
+        crossed[label] = {"status": st}
+    r = urllib.request.Request(
+        B + "/dav/",
+        method="PROPFIND",
+        headers={"Authorization": f"Bearer {t_main}", "Depth": "0"},
+    )
+    try:
+        with OPENER.open(r, timeout=30) as resp:
+            crossed["dav.bearer"] = {"status": resp.status}
+    except urllib.error.HTTPError as e:
+        crossed["dav.bearer"] = {"status": e.code}
+    g.case("drop.token.not-admin", crossed)
+
+    print("\n== drops: a name is one segment ==")
+    names = {}
+    for label, name in (
+        ("dotdot-slash", "../x"),
+        ("slash", "a/b"),
+        ("backslash", "a\\b"),
+        ("dotdot", ".."),
+        ("dot", "."),
+        ("empty", ""),
+        ("nul", "a\u0000b"),
+        ("newline", "a\nb"),
+        ("del", "a\u007f"),
+        ("edge-space", " a.txt"),
+        ("too-long", "n" * 256),
+    ):
+        st, out = grant(t_main, name, 1)
+        names[label] = {"status": st, "body": out}
+    st, out = public("POST", "/api/drop/upload-token", t_main, {"name": 1, "size": 1})
+    names["not-a-string"] = {"status": st, "body": out}
+    st, out = public("POST", "/api/drop/upload-token", t_main, {"name": "a.txt"})
+    names["size-missing"] = {"status": st, "body": out}
+    st, out = public(
+        "POST", "/api/drop/upload-token", t_main, {"name": "a.txt", "size": -1}
+    )
+    names["size-negative"] = {"status": st, "body": out}
+    for label, path in (
+        ("put.encoded-slash", "/api/drop/files/a%2Fb"),
+        ("put.dotdot", "/api/drop/files/.."),
+        ("put.encoded-dotdot", "/api/drop/files/%2e%2e"),
+    ):
+        st, out = public("PUT", path, t_main, raw=b"x")
+        names[label] = {"status": st, "body": out}
+    g.case("drop.names", names)
+
+    print("\n== drops: direct upload (upload-token -> bucket -> register) ==")
+    hello = b"hello through a drop\n"
+    st, granted = grant(t_main, "hello.txt", len(hello))
+    g.case(
+        "drop.direct.grant",
+        {
+            "status": st,
+            "body": {
+                **_fresh_key(granted),
+                "token": "<upload-token>",
+                "up_host": "<fake-qiniu>"
+                if granted.get("up_host") == fake_base
+                else granted.get("up_host"),
+            },
+            "policy": policy_facts(
+                granted.get("token", ""), granted.get("key", ""), 104857600
+            ),
+        },
+    )
+    spent = spend(granted, hello)
+    st, out = public("POST", "/api/drop/register", t_main, {"key": granted.get("key")})
+    row = file_row("hello.txt")
+    obj = fake.state().get(granted.get("key", ""), {})
+    g.case(
+        "drop.direct.register",
+        {
+            "spend": spent,
+            "status": st,
+            "body": out,
+            "row": _fresh_key(row),
+            "bytes_round_trip": base64.b64decode(obj.get("content", "")) == hello,
+        },
+    )
+    st, out = public("POST", "/api/drop/register", t_main, {"key": granted.get("key")})
+    g.case("drop.direct.register.replay", {"status": st, "body": out})
+    # the credential cannot be spent twice either: insertOnly is in its policy,
+    # so a second upload to the now-registered key cannot replace its bytes
+    st, out = spend(granted, b"overwrite attempt\n")
+    g.case(
+        "drop.direct.insert-only",
+        {
+            "status": st,
+            "body": out,
+            "bytes_unchanged": base64.b64decode(
+                fake.state().get(granted.get("key", ""), {}).get("content", "")
+            )
+            == hello,
+        },
+    )
+
+    print("\n== drops: a taken name is renamed, never overwritten ==")
+    before = file_row("hello.txt")
+    before_bytes = fake.state().get((before or {}).get("key") or "", {}).get("content")
+    st, again = grant(t_main, "hello.txt", 5)
+    spent = spend(again, b"later")
+    st2, out = public("POST", "/api/drop/register", t_main, {"key": again.get("key")})
+    g.case(
+        "drop.direct.rename",
+        {
+            "grant_status": st,
+            "granted_name": again.get("name"),
+            "spend": spent,
+            "status": st2,
+            "body": out,
+            "original_row_unchanged": file_row("hello.txt") == before,
+            "original_bytes_unchanged": fake.state()
+            .get((before or {}).get("key") or "", {})
+            .get("content")
+            == before_bytes,
+            "renamed_row": _fresh_key(file_row("hello (1).txt")),
+        },
+    )
+
+    print("\n== drops: register accepts only this drop's own keys ==")
+    st, other, t_other = create(label="other")
+    other_id = other.get("id") if isinstance(other, dict) else None
+    st, foreign = grant(t_other, "foreign.txt", 3)
+    spend(foreign, b"abc")
+    st, admin_minted = admin(
+        "POST", "/api/fm/upload-token", {"path": inbox, "name": "admin.txt"}
+    )
+    admin_key = admin_minted.get("key", "") if isinstance(admin_minted, dict) else ""
+    fake.plant(admin_key, "admin bytes", "text/plain")
+    made_up = "0123456789abcdef0123456789abcdef.txt"
+    fake.plant(made_up, "made up", "text/plain")
+    refused = {}
+    for label, key in (
+        ("other-drops-key", foreign.get("key", "")),
+        ("admin-signed-key", admin_key),
+        ("made-up-key", made_up),
+        ("empty-key", ""),
+    ):
+        st, out = public("POST", "/api/drop/register", t_main, {"key": key})
+        refused[label] = {"status": st, "body": out}
+    st, out = public("POST", "/api/drop/register", t_main, {})
+    refused["key-missing"] = {"status": st, "body": out}
+    # nothing above consumed anything: the other drop still registers its key
+    st, out = public("POST", "/api/drop/register", t_other, {"key": foreign.get("key")})
+    refused["owner-still-registers"] = {"status": st, "body": out}
+    refused["no-row-for-foreign-keys"] = all(
+        file_row(n) is None
+        for n in ("admin.txt", "0123456789abcdef0123456789abcdef.txt")
+    )
+    g.case("drop.register.foreign-keys", refused)
+
+    print("\n== drops: register before the object exists keeps the reservation ==")
+    st, early = grant(t_main, "early.txt", 4)
+    st1, out1 = public("POST", "/api/drop/register", t_main, {"key": early.get("key")})
+    spend(early, b"late")
+    st2, out2 = public("POST", "/api/drop/register", t_main, {"key": early.get("key")})
+    g.case(
+        "drop.register.not-uploaded-yet",
+        {
+            "before": {"status": st1, "body": out1},
+            "after": {"status": st2, "body": out2},
+        },
+    )
+
+    print("\n== drops: quota ==")
+    st, q, t_q = create(max_files=2, max_file_bytes=100, max_total_bytes=150)
+    q_id = q.get("id") if isinstance(q, dict) else None
+    quota = {}
+    st, out = grant(t_q, "too-big.bin", 101)
+    quota["single-file-over"] = {"status": st, "body": out}
+    st, first = grant(t_q, "first.bin", 100)
+    quota["first.policy"] = policy_facts(
+        first.get("token", ""), first.get("key", ""), 100
+    )
+    spend(first, b"f" * 100)
+    st, out = public("POST", "/api/drop/register", t_q, {"key": first.get("key")})
+    quota["first.register"] = {"status": st, "body": out}
+    st, out = grant(t_q, "second.bin", 60)
+    quota["total-over"] = {"status": st, "body": out}
+    st, second = grant(t_q, "second.bin", 50)
+    quota["second.policy"] = policy_facts(
+        second.get("token", ""), second.get("key", ""), 50
+    )
+    # the bucket holds the credential to what is left: 51 bytes do not land
+    st, out = spend(second, b"s" * 51)
+    quota["second.spend-over-fsize-limit"] = {"status": st, "body": out}
+    spend(second, b"s" * 50)
+    st, out = public("POST", "/api/drop/register", t_q, {"key": second.get("key")})
+    quota["second.register"] = {"status": st, "body": out}
+    st, out = public("GET", "/api/drop", t_q)
+    quota["info.exhausted"] = {"status": st, "body": out}
+    st, out = grant(t_q, "third.bin", 1)
+    quota["files-over"] = {"status": st, "body": out}
+    st, out = public("PUT", "/api/drop/files/third.bin", t_q, raw=b"3")
+    quota["put.exhausted"] = {"status": st, "body": out}
+    with sqlite3.connect(db_path) as con:
+        quota["used"] = con.execute(
+            "SELECT used_files, used_bytes FROM upload_drops WHERE id = ?", (q_id,)
+        ).fetchone()
+        quota["used"] = list(quota["used"] or [])
+    g.case("drop.quota", quota)
+
+    print("\n== drops: quota is re-checked in the transaction that writes ==")
+    # Two credentials, each fine on its own when it was signed, together over
+    # the total: the second register is refused, its object is deleted, and the
+    # quota is charged once.
+    st, race, t_race = create(max_files=5, max_file_bytes=100, max_total_bytes=100)
+    race_id = race.get("id") if isinstance(race, dict) else None
+    st, ra = grant(t_race, "ra.bin", 60)
+    st, rb = grant(t_race, "rb.bin", 60)
+    spend(ra, b"a" * 60)
+    spend(rb, b"b" * 60)
+    st_a, out_a = public("POST", "/api/drop/register", t_race, {"key": ra.get("key")})
+    st_b, out_b = public("POST", "/api/drop/register", t_race, {"key": rb.get("key")})
+    st_c, out_c = public("POST", "/api/drop/register", t_race, {"key": rb.get("key")})
+    with sqlite3.connect(db_path) as con:
+        used = list(
+            con.execute(
+                "SELECT used_files, used_bytes FROM upload_drops WHERE id = ?",
+                (race_id,),
+            ).fetchone()
+            or []
+        )
+        pending = con.execute(
+            "SELECT count(*) FROM drop_pending WHERE key = ?", (rb.get("key"),)
+        ).fetchone()[0]
+        ledger = con.execute(
+            "SELECT count(*) FROM pending_uploads WHERE key = ?", (rb.get("key"),)
+        ).fetchone()[0]
+    g.case(
+        "drop.quota.final-transaction",
+        {
+            "first": {"status": st_a, "body": out_a},
+            "second": {"status": st_b, "body": out_b},
+            "second.retry": {"status": st_c, "body": out_c},
+            "used": used,
+            "refused_object_deleted": rb.get("key") not in fake.keys(),
+            "refused_reservation_gone": pending == 0 and ledger == 0,
+            "refused_row_absent": file_row("rb.bin") is None,
+        },
+    )
+
+    print("\n== drops: one-step PUT (curl -T) ==")
+    st, p, t_put = create(max_file_bytes=64)
+    curl_bytes = b"one step upload body\n"
+    st, out = public("PUT", "/api/drop/files/curl.txt", t_put, raw=curl_bytes)
+    row = file_row("curl.txt")
+    obj = fake.state().get((row or {}).get("key") or "", {})
+    put_cases = {
+        "put": {"status": st, "body": out},
+        "row": _fresh_key(row),
+        "bytes_round_trip": base64.b64decode(obj.get("content", "")) == curl_bytes,
+    }
+    st, out = public("PUT", "/api/drop/files/curl.txt", t_put, raw=b"second")
+    put_cases["put.same-name"] = {"status": st, "body": out}
+    put_cases["put.same-name.original-unchanged"] = file_row("curl.txt") == row
+    st, out = raw_request(
+        B,
+        "PUT",
+        "/api/drop/files/chunked.txt",
+        [(DROP_HEADER, t_put), ("Transfer-Encoding", "chunked")],
+        b"5\r\nhello\r\n0\r\n\r\n",
+    )
+    put_cases["put.chunked"] = {"status": st, "body": body_value(out)}
+    public_bodies.append(out)
+    st, out = raw_request(
+        B, "PUT", "/api/drop/files/nolength.txt", [(DROP_HEADER, t_put)]
+    )
+    put_cases["put.no-content-length"] = {"status": st, "body": body_value(out)}
+    public_bodies.append(out)
+    st, out = public("PUT", "/api/drop/files/big.bin", t_put, raw=b"z" * 65)
+    put_cases["put.over-file-limit"] = {"status": st, "body": out}
+    put_cases["put.refusals-wrote-nothing"] = all(
+        file_row(n) is None for n in ("chunked.txt", "nolength.txt", "big.bin")
+    )
+    g.case("drop.put", put_cases)
+
+    print("\n== drops: expiry ==")
+    st, e, t_exp = create()
+    exp_id = e.get("id") if isinstance(e, dict) else None
+    st, pre = grant(t_exp, "before-expiry.txt", 3)
+    spend(pre, b"pre")
+    expire(exp_id)
+    expiry = {}
+    st, out = public("GET", "/api/drop", t_exp)
+    expiry["info"] = {"status": st, "body": out}
+    st, out = grant(t_exp, "after.txt", 1)
+    expiry["upload-token"] = {"status": st, "body": out}
+    st, out = public("PUT", "/api/drop/files/after.txt", t_exp, raw=b"1")
+    expiry["put"] = {"status": st, "body": out}
+    st, out = public("POST", "/api/drop/register", t_exp, {"key": pre.get("key")})
+    expiry["register-signed-before"] = {"status": st, "body": out}
+    expiry["object-of-late-register-deleted"] = pre.get("key") not in fake.keys()
+    expiry["no-row"] = file_row("before-expiry.txt") is None
+    g.case("drop.expired", expiry)
+
+    print("\n== drops: revocation ==")
+    st, rv, t_rev = create()
+    rev_id = rv.get("id") if isinstance(rv, dict) else None
+    st, pre = grant(t_rev, "before-revoke.txt", 3)
+    spend(pre, b"pre")
+    revoked = {}
+    st, out = admin("POST", "/api/fm/drops/revoke", {"id": rev_id})
+    revoked["revoke"] = {"status": st, "body": out}
+    st, out = admin("POST", "/api/fm/drops/revoke", {"id": rev_id})
+    revoked["revoke.again"] = {"status": st, "body": out}
+    st, out = admin("POST", "/api/fm/drops/revoke", {"id": 999999})
+    revoked["revoke.unknown"] = {"status": st, "body": out}
+    st, out = admin("POST", "/api/fm/drops/revoke", {"id": "1"})
+    revoked["revoke.id-not-int"] = {"status": st, "body": out}
+    st, out = public("GET", "/api/drop", t_rev)
+    revoked["info"] = {"status": st, "body": out}
+    st, out = grant(t_rev, "after.txt", 1)
+    revoked["upload-token"] = {"status": st, "body": out}
+    st, out = public("POST", "/api/drop/register", t_rev, {"key": pre.get("key")})
+    revoked["register-signed-before"] = {"status": st, "body": out}
+    revoked["object-of-late-register-deleted"] = pre.get("key") not in fake.keys()
+    g.case("drop.revoked", revoked)
+
+    print("\n== drops: the directory going away ==")
+    st, _ = admin(
+        "POST", "/api/fm/create-folder", {"path": SANDBOX, "name": "drop-gone"}
+    )
+    st, dm = admin("POST", "/api/fm/drops", {"dir": f"{SANDBOX}/drop-gone"})
+    t_dm = dm.get("token", "") if isinstance(dm, dict) else ""
+    admin(
+        "POST",
+        "/api/fm/delete",
+        {"path": SANDBOX, "items": [{"path": f"{SANDBOX}/drop-gone"}]},
+    )
+    st, out = public("GET", "/api/drop", t_dm)
+    g.case("drop.dir-missing", {"status": st, "body": out})
+
+    print("\n== drops: admin list ==")
+    st, listed = admin("GET", "/api/fm/drops")
+    items = listed.get("items", []) if isinstance(listed, dict) else []
+    g.case(
+        "drop.list",
+        {
+            "status": st,
+            "items": [shown(i) for i in items],
+            "no_token_fields": all(
+                "token" not in i and "token_hash" not in i for i in items
+            ),
+            "ids_descending": [i.get("id") for i in items]
+            == sorted((i.get("id") for i in items), reverse=True),
+        },
+    )
+
+    print("\n== drops: delete ==")
+    deleted = {}
+    st, out = admin("POST", "/api/fm/drops/delete", {"id": other_id})
+    deleted["delete"] = {"status": st, "body": out}
+    st, out = public("GET", "/api/drop", t_other)
+    deleted["token-after-delete"] = {"status": st, "body": out}
+    st, out = admin("POST", "/api/fm/drops/delete", {"id": other_id})
+    deleted["delete.again"] = {"status": st, "body": out}
+    with sqlite3.connect(db_path) as con:
+        deleted["reservations_gone"] = (
+            con.execute(
+                "SELECT count(*) FROM drop_pending WHERE drop_id = ?", (other_id,)
+            ).fetchone()[0]
+            == 0
+        )
+    deleted["uploaded_file_kept"] = file_row("foreign.txt") is not None
+    g.case("drop.delete", deleted)
+
+    print("\n== drops: uploader responses carry no key and no path ==")
+    flat = b"\n".join(public_bodies).decode("utf-8", "replace")
+    g.case(
+        "drop.responses.minimal",
+        {
+            "responses_checked": len(public_bodies) > 40,
+            "no_object_key": not any(k and k in flat for k in minted_keys),
+            "no_storage_path": "qiniu://" not in flat and PREFIX not in flat,
+        },
+    )
+    fake.clear_calls()
 
 
 def main():  # noqa: C901 - a case list; splitting it would only hide the order
@@ -1166,6 +1808,8 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
         },
     )
     fake.clear_calls()
+
+    drop_cases(g, B, token, auth, fake, fake_base, db_path)
 
     # What is still not covered here, and why it is not a fake's job.
     g.skip(
