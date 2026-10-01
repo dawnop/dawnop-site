@@ -96,23 +96,24 @@ onMounted(load)
         empty-text="还没有上传链接"
         @header-dragend="onHeaderDrag"
       >
-        <el-table-column label="标签" :width="colW['标签'] || 180" show-overflow-tooltip>
+        <el-table-column label="标签" :width="colW['标签'] || 160" show-overflow-tooltip>
           <template #default="{ row }">
             <span v-if="row.label">{{ row.label }}</span>
             <span v-else class="muted">未命名</span>
           </template>
         </el-table-column>
-        <el-table-column label="目录" :width="colW['目录'] || 200" show-overflow-tooltip>
+        <!-- 目录列不定宽，吃掉剩余空间 -->
+        <el-table-column label="目录" :min-width="colW['目录'] || 140" show-overflow-tooltip>
           <template #default="{ row }">{{ dirText(row.dir) }}</template>
         </el-table-column>
-        <el-table-column label="状态" :width="colW['状态'] || 120">
+        <el-table-column label="状态" :width="colW['状态'] || 110">
           <template #default="{ row }">
             <el-tag :type="statusOf(row.status).type" size="small" disable-transitions>
               {{ statusOf(row.status).text }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="已用 / 上限" :width="colW['已用 / 上限'] || 210">
+        <el-table-column label="已用 / 上限" :width="colW['已用 / 上限'] || 170">
           <template #default="{ row }">
             <div class="usage">
               <span>{{ row.used_files }} / {{ row.max_files }} 个</span>
@@ -122,17 +123,13 @@ onMounted(load)
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="单文件上限" :width="colW['单文件上限'] || 110">
-          <template #default="{ row }">{{ fmtBytes(row.max_file_bytes) }}</template>
-        </el-table-column>
-        <el-table-column label="过期时间" :width="colW['过期时间'] || 160">
+        <el-table-column label="过期时间" :width="colW['过期时间'] || 140">
           <template #default="{ row }">{{ fmtDateTime(row.expires_at) }}</template>
         </el-table-column>
-        <el-table-column label="创建时间" :width="colW['创建时间'] || 160">
+        <el-table-column label="创建时间" :width="colW['创建时间'] || 140">
           <template #default="{ row }">{{ fmtDateTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column />
-        <el-table-column label="操作" :width="colW['操作'] || 140" fixed="right">
+        <el-table-column label="操作" :width="colW['操作'] || 120" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" :disabled="row.status === 'revoked'" @click="revoke(row)"
               >吊销</el-button

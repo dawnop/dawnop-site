@@ -89,12 +89,12 @@ dawnop-site/
 │   ├── requirements.txt requirements-dev.txt  .env.example  scripts/seed_admin.py
 ├── frontend/                   # Vue 3 + Vite
 │   ├── src/
-│   │   ├── views/              # Home, Article, Page(内容/列表); admin/{Login,Dashboard,Articles,Pages,Tags,Viz,FilesLab,Settings,Monitor}
+│   │   ├── views/              # Home, Article, Page(内容/列表), Drop(公开上传链接页); admin/{Login,Dashboard,Articles,Pages,Tags,Viz,FilesLab,Drops,Settings,Monitor}
 │   │   ├── components/         # PublicLayout, AdminLayout, SiteHeader, MarkdownView(md+katex), SearchModal; monitor/
 │   │   ├── composables/        # useFileManager / useUnsavedGuard / useIsMobile
 │   │   ├── viz/                # 文章内嵌 Vue 可视化组件的 SFC 编译 + island 运行时
 │   │   ├── utils/              # frontmatter / markdownTitle / format / colWidths
-│   │   ├── api/                # axios 封装(统一带 token) + fmApi.js(文件管理对接层)
+│   │   ├── api/                # axios 封装(统一带 token) + fmApi.js(文件管理对接层) + dropApi.js(公开上传页，独立实例) + qiniuUpload.js(直传共用)
 │   │   ├── router/ store/      # 公开+受保护路由 / 登录态
 │   │   └── hljs.js setupMdEditor.js  # 按需高亮语言 / 编辑器初始化
 │   ├── package.json vite.config.js

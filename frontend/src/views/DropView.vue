@@ -70,7 +70,10 @@ async function load(silent = false) {
     phase.value = 'ready'
   } catch (err) {
     const status = err?.response?.status
-    if (status === 404 || status === 410) {
+    if ((status === 404 || status === 410) && silent) {
+      // 传完后的静默刷新：最后一个文件用尽额度时服务端就回 410，这时保留本次结果，只给提示
+      linkLost.value = dropApi.errorText(err)
+    } else if (status === 404 || status === 410) {
       markDead(err)
       phase.value = 'dead'
     } else if (!silent) {
