@@ -253,6 +253,11 @@ nginx 的所有配置在 `~/workspace/dawnop-ops/`（私有，不推送）。按
 `nginx -t` 过了再 `reload`；**改 nginx 前必读它开头的警告**。`deploy/gzip.conf` 是仓库里唯一留下的
 nginx 片段（`gzip_static` 直发预压缩 `.gz`，与 443 接入无关），放 `/etc/nginx/conf.d/`。
 
+**上传链接（`/api/drop*`）是匿名端点**，建议在 nginx 上给它单独加 `limit_req`，并给
+`/api/drop/files/` 设一个不大于单文件上限（默认 100MiB，最大 5GiB）的 `client_max_body_size`：
+一步式 `PUT` 的请求体在后端拿到 token 之前就被 web 框架整包落到临时文件，后端的额度只能在落盘之后
+判，落盘本身的上界是 nginx 给的。配置写在私有 ops 仓，不在本仓库。
+
 ### 5. 验证
 ```bash
 curl -s http://127.0.0.1/api/health

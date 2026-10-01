@@ -59,15 +59,15 @@ dawnop-site/
 │   ├── src/                    # 按层分目录，依赖单向向下：util → db → qiniu → repo → tencent → svc → api → 根
 │   │   ├── main.dawn           # 入口：读 config、装路由/中间件、绑 127.0.0.1:8001
 │   │   ├── config.dawn         # 根只留这两个
-│   │   ├── api/                # HTTP 表面：api_public/articles/settings/tags/pages/viz/fm/monitor + webdav
-│   │   ├── svc/                # 服务层：auth search export monitor files（文件树操作，api_fm 与 webdav 共用）
-│   │   ├── repo/               # 数据层：repo_article/page/tag/pagetag/viz/settings/fm/write
+│   │   ├── api/                # HTTP 表面：api_public/articles/settings/tags/pages/viz/fm/drop/monitor + webdav
+│   │   ├── svc/                # 服务层：auth search export monitor files（文件树操作，api_fm 与 webdav 共用）drop（上传链接）
+│   │   ├── repo/               # 数据层：repo_article/page/tag/pagetag/viz/settings/fm/drop/write
 │   │   ├── db/                 # db（每请求一连接）sql（JDBC 薄包装）
 │   │   ├── qiniu/              # 对象存储（丢前缀）：creds 凭据记录 / sign 签名 / rs 管理 REST / stats 用量统计
 │   │   ├── tencent/            # 腾讯云（丢前缀）：sign TC3 签名 / client v3 请求装配
 │   │   ├── util/               # crypto jwt ttl slugify multipart paths ferr errkind
 │   │   │                       #   http（出站 HTTP 客户端；出站是具名效果 Upstream，生产 handler
-│   │   │                       #     = with_upstream，装在 api_fm/webdav/api_monitor 三处路由边界）
+│   │   │                       #     = with_upstream，装在 api_fm/webdav/api_monitor/api_drop 四处路由边界）
 │   │   │                       #   jsonx/jsonread（构造 wire 形状 / 读请求体字段）
 │   │   # 文件系统是 std 的具名效果 Fs（dawn 0.72.0 起），生产 handler = io.with_fs_real，
 │   │   # 只装两处：main.dawn 罩 config.load、api_monitor 路由闭包罩 server_block（读 /proc）
@@ -196,6 +196,18 @@ dawnop-site/
   默认 `/dav`；子域名 vhost 由 nginx 传 `X-Dav-Prefix: /` 归一化为空串，让 href 出 `/foo.txt` 而非 `/dav/foo.txt`，
   避免子域名下 `/dav/dav/...` 双前缀 404）。生产 nginx 的 `server dav.dawnop.com` 块在私有运维笔记里：
   DNS A 记录（备案随主域继承）、复用通配符证书 `*.dawnop.com`（acme.sh 自动续、续期钩子 reload nginx）、必须 HTTPS。
+
+- **上传链接（drop，`api/api_drop.dawn` + `svc/drop.dawn`）**：管理员给某个目录发一个临时 token，
+  持有者（匿名、不可信）只能往**那一个目录**里**新增**文件，到期/吊销/额度用尽即止。
+  管理端 `POST/GET /api/fm/drops`、`POST /api/fm/drops/revoke|delete`（需鉴权）；公开端只认请求头
+  `X-Drop-Token`（不读 query / Authorization / cookie）：`GET /api/drop`、`POST /api/drop/upload-token`
+  + `POST /api/drop/register`（前端直传，凭证带 `insertOnly` 与 `fsizeLimit`）、`PUT /api/drop/files/{name}`
+  （`curl -T` 一步式，流式落盘，必须带 Content-Length）。库里只存 `sha256(token)`；名字只当单个路径段，
+  同名自动 `name (1).ext` 不覆盖；register 只收本 drop 签发过的 key（`drop_pending` 账本，同时照写
+  `pending_uploads` 供孤儿治理）；额度在写文件行的即时事务里复核并扣减，超额删对象回 413。
+  未知 token 404，过期/吊销/用尽/目录没了 410。两张表 `upload_drops`/`drop_pending` 是 Dawn 自己
+  `create table if not exists` 建的（FastAPI 冻结，回滚时这组端点不存在）。分享链接形如 `/drop#<token>`。
+  nginx 侧的 `limit_req` 与 `client_max_body_size` 见 `deploy/README.md`。
 
 - 全局设置：`GET/PUT /api/settings`（需鉴权）→ key-value 存 `settings` 表与 DEFAULTS 合并；
   现有项：上传/下载并发、存储配额(GB, 用量条展示)、文本预览大小上限(KB)。后台「系统 → 全局设置」页编辑。

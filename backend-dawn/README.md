@@ -9,7 +9,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 与 `POST /api/fm/upload`（multipart 代理上传，`src/util/multipart.dawn`）**也已落地**。
 
 契约由 `scripts/golden/*.json` 钉住（`scripts/contract_run.py`，CI 每次 push 都跑）：
-播种固定 fixture → 起后端 → 312 条响应比对（read 48 / edge 95 / webdav 103 / qiniu 66）。
+播种固定 fixture → 起后端 → 343 条响应比对（read 48 / edge 102 / webdav 103 / qiniu 90）。
 
 **比的是什么，别当成「逐字节」**——三种粒度，各自的理由写在 `contract_golden.py` 与
 `contract_webdav.py` 的注释里：
@@ -28,7 +28,9 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 四套脚本里 `contract_qiniu.py` 另起一个**指向本地假七牛**（`contract_qiniu_fake.py`）的后端，
 把子目录 COPY、PUT→GET 字节往返、覆盖写换 key、register 的 stat 校验这些必须有对象存储才走得到
 的路径也钉住；假桶会重算每个 HMAC 签名，并校验上传凭证 putPolicy 的 `deadline` 仍在有效期内且
-不超过一天，所以「签出来的凭证真能用」是花掉它换来的结论，不是看它长得对。
+不超过一天，所以「签出来的凭证真能用」是花掉它换来的结论，不是看它长得对。上传链接（drop）
+签的凭证另带 `insertOnly` 与 `fsizeLimit`，假桶照真桶的样子执行这两条（超限 413、已存在 614），
+于是「凭证不能覆盖、不能超额」也是花出来的，见 `drop.direct.insert-only` 与 `drop.quota`。
 剩下的具名 skip 是两类共 7 条（`golden/*.json` 的 `skipped` 里逐条列着理由）：桶用量统计
 3 条（read/edge/qiniu 各一，走七牛计费/空间 API，假桶不模拟），以及 `webdav` 那套里搬字节的
 4 条（`get.file`/`put.new`/`copy.file`/`delete.file`）——它跑在没有凭据的后端上，同样的路径
@@ -55,8 +57,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   **jar 与 `lib/` 都是构建产物，不入库**——jar 曾经入库，结果是它悄悄落后于 `src/`（要靠手动
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
-- 测试：`dawn test .`（`src/` 共 44 个 Dawn 源文件、238 个本仓单测，连 web/json/sha2 三个包
-  共 319 个；`use java` import 共 77 条、分布在 14 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
+- 测试：`dawn test .`（`src/` 共 47 个 Dawn 源文件、258 个本仓单测，连 web/json/sha2 三个包
+  共 339 个；`use java` import 共 79 条、分布在 15 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
   libsimple / 网络，CI 每次 push 都跑）。用到 SQLite 的几个跑内存库（`jdbc:sqlite::memory:`），
   自带建表，不碰 fixture。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
@@ -171,10 +173,11 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   微秒内断言完从前要停机十秒才断言得到的那三行。`Pending` 里装的是「交付回复的 thunk」而不是
   future，所以 `await_resp` 是 `!io` 不是 `!Upstream`（证据在起交换时就花掉了），而想看 await
   的 handler 看自己造的那个 thunk 即可，不必为「被观察」另开一个操作。
-  生产的安装点只有**三处**，都在最内层拥有一个完整出站工作单元的边界上：`api_fm` 的
+  生产的安装点只有**四处**，都在最内层拥有一个完整出站工作单元的边界上：`api_fm` 的
   `guarded_out`（`guarded` 里再套一层 handler，八条会出站的路由改调它）、`api/webdav` 的
   `dav_handler`（一处罩住 GET/PUT/DELETE/MOVE/COPY 全部）、`api_monitor` 的路由闭包
-  （issue 与 read 是两次调用，必须同一个 handler 罩住）。其余 `with_upstream` 都在测试里。
+  （issue 与 read 是两次调用，必须同一个 handler 罩住）、`api_drop` 的 `public`（上传链接的四条
+  公开路由，连同 Clock 一起装）。其余 `with_upstream` 都在测试里。
   **装不进 main**：`with handle` 只给自己块的剩余部分供证据，路由闭包不捕获它，而
   web 的 `Handler` 别名是闭合行（`!io`），发 `!Upstream` 的闭包根本不是 `Handler`——和 `util/clock`
   记的是同一堵墙。`db/sql` 的 `with_db` / `with_immediate_tx` 因此改成效果多态（`!e`）：它们是
@@ -337,6 +340,39 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `util/multipart.dawn` — 入站 `multipart/form-data` 解析，只服务 `POST /api/fm/upload`（代理上传）。
   结构在**字节层**定位（`byte_index_of`/`byte_slice`），每个 part 的正文原样留作 `Bytes`，
   只有 ASCII 头块解成字符串取字段：文件字节不经过一次 String 往返，二进制上传才不会被改写。
+
+**上传链接（drop）**
+- `api/api_drop.dawn` — 两扇门。`/api/fm/drops*` 是管理端（`guarded`，管理员 JWT）：建、列、吊销、删。
+  `/api/drop*` 是匿名上传方：token **只从 `X-Drop-Token` 头读**（`drop_token`），不读 query（会进访问
+  日志）、不读 Authorization（那是管理员的头，两种凭据不能互相顶替）、不读 cookie；头出现两次是 400。
+  反过来，`guarded`/`guarded_flexible`/WebDAV Basic 都不看这个头，drop token 当 JWT 或 Basic 密码用
+  一律 401（`drop.token.not-admin`）。Clock 与 Upstream 的生产 handler 装在 `public` 路由闭包里，
+  理由同 `util/clock`。给上传方的回包只有 `{name, size}`（upload-token 必须回 `key`，客户端要拿它直传），
+  不回存储路径和任何别的文件（`drop.responses.minimal`）。
+- `svc/drop.dawn` — 规则全在这。①每个公开请求都从库里重新判一遍：存在、未吊销、未过期（Clock 的 now）、
+  额度没满、目录还在且是目录（`status_of`，吊销 > 过期 > 用尽 > 目录没了）；未知 404，其余 410。
+  ②名字只当**单个路径段**（`name_refusal`：空、`.`/`..`、`/` 或 `\`、C0/DEL/C1 控制字符、超 255 字节，
+  最后再过一遍 `util/paths.name_verdict`）；点号这条与写入守卫各有一份是刻意的，两边的变异体要能各自
+  唯一归属。路径由服务端 `fm_join(drop.dir, name)` 拼，同名取 `name (1).ext`…（`candidate_name`），
+  在写入事务里再确认一次。③直传：upload-token 在一个即时事务里挑名字并同时写 `drop_pending`（register
+  唯一认的账本）与 `pending_uploads`（孤儿治理），凭证 `scope=bucket:key`、`insertOnly=1`、
+  `fsizeLimit=min(单文件上限, 剩余字节)`、deadline ≤ 1 小时且不晚于链接过期（`direct_deadline`）。
+  register 只收 key，按 `(key, drop_id)` 查账本，别的 drop 签的、管理端签的、编的一律 404；path 取自账本，
+  stat 以七牛 fsize/mimeType 为准再过 `safe_persisted_mime`。④一步式 PUT：路由带 `stream-body`，
+  请求体由框架落盘、处理完删除；没有 Content-Length 或带 Transfer-Encoding 回 411，声明长度超额度回 413，
+  落盘大小与声明不符回 400。⑤两条路共用 `commit_tx`：在 `with_immediate_tx` 里重判链接、复核账本行
+  （防重放）、按真实大小复核额度、挑名字、插行（普通 insert，从不 upsert）、消费账本、扣额度；所有检查
+  在第一次写之前，拒绝时提交的是空事务。被拒的上传删掉七牛对象（`discard`：先删账本行，再走引用感知 GC）。
+  **已知缺口**：web 框架对 `stream-body` 路由是先把整个请求体落盘、再进处理函数，所以「Content-Length
+  超额直接 413 不读体」「流式中途超额立刻中止」在后端做不到，落盘大小的上界只能靠 nginx 的
+  `client_max_body_size`（见 `deploy/README.md`）。要在后端做到，得给 `packages/web` 加一个按路由的
+  落盘上限或落盘前的钩子。
+- `repo/repo_drop.dawn` — `upload_drops`（token 只存 sha256）与 `drop_pending` 两张表的 SQL，以及
+  `ensure_schema`。这是本后端**第一次自己建表**（其余都是 FastAPI `create_all` 建的）：启动时建一次，
+  每个 drop 请求在自己的连接上再 `create table if not exists` 一次（表已在时 SQLite 不拿写锁，实测），
+  因为库文件可能在进程运行中被换掉（恢复备份、契约 harness 重播 fixture）。
+- `qiniu/sign.upload_token_limited` 与 `util/crypto.random_token`（32 字节 SecureRandom，base64url 43 字符）
+  是它新加的两块地基；管理端的 `upload_token` 逐字节不变。
 
 **监控（刀 12）**
 - `api/api_monitor.dawn` — `/api/monitor`，120s TTL + `?refresh`，配额从 settings 表实时注入。
