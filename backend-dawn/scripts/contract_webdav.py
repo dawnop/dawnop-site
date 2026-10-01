@@ -45,7 +45,13 @@ import urllib.parse
 import urllib.request
 
 import contract_fixture
-from contract_golden import TRANSPORT_STATUS, Golden, transport_error
+from contract_golden import (
+    TRANSPORT_STATUS,
+    UNREAD_DECLARED,
+    Golden,
+    refused_unread,
+    transport_error,
+)
 
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -335,6 +341,43 @@ def main():
         {"Depth": "0"},
         creds=f"{user}:wrong-password",
     )
+
+    print("\n== refused before the body is read ==")
+    # Every DAV verb but OPTIONS has a pre-body guard (Basic auth), and PUT has a
+    # 512 MiB ceiling of its own. Each request below announces a large body and
+    # never sends it: an answer at all proves nothing was waited for, let alone
+    # spilled to disk. Without the guard an anonymous PUT was written to a temp
+    # file in full before its 401 (dawn-lang#310).
+    basic = "Basic " + base64.b64encode(auth.encode()).decode()
+    wrong = "Basic " + base64.b64encode(f"{user}:wrong-password".encode()).decode()
+    unread = {}
+    for label, method, path, pairs, declared in (
+        ("put.anonymous", "PUT", "/dav/unread.bin", [], UNREAD_DECLARED),
+        (
+            "put.badpass",
+            "PUT",
+            "/dav/unread.bin",
+            [("Authorization", wrong)],
+            UNREAD_DECLARED,
+        ),
+        ("propfind.anonymous", "PROPFIND", "/dav/", [("Depth", "0")], UNREAD_DECLARED),
+        # authenticated, but announcing one byte over the ceiling: 413 before
+        # the temp file exists
+        (
+            "put.over-ceiling",
+            "PUT",
+            "/dav/unread.bin",
+            [("Authorization", basic)],
+            536870913,
+        ),
+    ):
+        st, hd, text = refused_unread(B, method, path, pairs, declared)
+        unread[label] = {
+            "status": st,
+            "headers": {k: hd[k] for k in KEEP_HEADERS if k in hd},
+            "body": text,
+        }
+    g.case("prebody.refused-unread", unread)
 
     print("\n== PROPFIND (fixture tree) ==")
     case("propfind.root.d0", "PROPFIND", "/dav/", {"Depth": "0"}, with_facts=True)

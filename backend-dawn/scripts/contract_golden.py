@@ -36,6 +36,8 @@ worthless:
 import json
 import os
 import pathlib
+import socket
+import urllib.parse
 
 import contract_fixture
 
@@ -76,6 +78,67 @@ TRANSPORT_STATUS = -1
 def transport_error(e):
     """The recorded body for a request that got no HTTP answer."""
     return f"__ERR__ {type(e).__name__}: {e}"
+
+
+# --- refused before the body ---------------------------------------------------
+#
+# A pre-body refusal (a route guard, a declared length over the route's ceiling)
+# is only worth having if the server answers without waiting for the body. A
+# normal request cannot tell: it sends the whole body and gets the same status
+# either way. So this one declares a large body, sends the head and a handful of
+# bytes, keeps the connection open without ever sending the rest, and waits a
+# short while. A server that judges before reading answers at once; one that
+# waits for the body never answers, and the case records a transport timeout
+# (TRANSPORT_STATUS) where the golden expects a status.
+
+UNREAD_DECLARED = 104857600  # 100 MB announced, a few bytes sent
+UNREAD_TIMEOUT_S = 3
+
+
+def refused_unread(base, method, path, header_pairs, declared=UNREAD_DECLARED):
+    """(status, headers, body) for a request whose body is never finished.
+
+    `headers` maps lower-cased names to values. A request that got no answer
+    within UNREAD_TIMEOUT_S comes back as (TRANSPORT_STATUS, {}, error text).
+    """
+    parts = urllib.parse.urlsplit(base)
+    host, port = parts.hostname, parts.port or 80
+    lines = [
+        f"{method} {path} HTTP/1.1",
+        f"Host: {host}:{port}",
+        f"Content-Length: {declared}",
+        *(f"{k}: {v}" for k, v in header_pairs),
+    ]
+    request = ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1") + b"abcd"
+    try:
+        with socket.create_connection((host, port), timeout=UNREAD_TIMEOUT_S) as sock:
+            sock.settimeout(UNREAD_TIMEOUT_S)
+            sock.sendall(request)
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+            head, _, body = buf.partition(b"\r\n\r\n")
+            fields = {}
+            for line in head.decode("latin-1").split("\r\n")[1:]:
+                name, _, value = line.partition(":")
+                fields[name.strip().lower()] = value.strip()
+            want = int(fields.get("content-length", "0") or 0)
+            while len(body) < want:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                body += chunk
+    except OSError as e:  # socket.timeout is an OSError
+        return TRANSPORT_STATUS, {}, transport_error(e)
+    status_line = head.split(b"\r\n", 1)[0].decode("latin-1")
+    try:
+        status = int(status_line.split(" ")[1])
+    except (IndexError, ValueError):
+        return TRANSPORT_STATUS, {}, f"__ERR__ no status line: {status_line!r}"
+    return status, fields, body.decode("utf-8", "replace")
 
 
 # --- two observations of one row, recorded as a relation ---------------------

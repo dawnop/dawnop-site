@@ -59,6 +59,43 @@
    },
    "body": "{\"detail\":\"需要认证\"}"
   },
+  "prebody.refused-unread": {
+   "put.anonymous": {
+    "status": 401,
+    "headers": {
+     "content-type": "application/json; charset=utf-8",
+     "content-length": "25",
+     "www-authenticate": "Basic realm=\"dawnop-webdav\""
+    },
+    "body": "{\"detail\":\"需要认证\"}"
+   },
+   "put.badpass": {
+    "status": 401,
+    "headers": {
+     "content-type": "application/json; charset=utf-8",
+     "content-length": "25",
+     "www-authenticate": "Basic realm=\"dawnop-webdav\""
+    },
+    "body": "{\"detail\":\"需要认证\"}"
+   },
+   "propfind.anonymous": {
+    "status": 401,
+    "headers": {
+     "content-type": "application/json; charset=utf-8",
+     "content-length": "25",
+     "www-authenticate": "Basic realm=\"dawnop-webdav\""
+    },
+    "body": "{\"detail\":\"需要认证\"}"
+   },
+   "put.over-ceiling": {
+    "status": 413,
+    "headers": {
+     "content-type": "application/json; charset=utf-8",
+     "content-length": "49"
+    },
+    "body": "{\"detail\":\"request body exceeds 536870912 bytes\"}"
+   }
+  },
   "propfind.root.d0": {
    "method": "PROPFIND",
    "path": "/dav/",

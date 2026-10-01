@@ -51,7 +51,7 @@ import urllib.parse
 import urllib.request
 
 import contract_qiniu_fake
-from contract_golden import TRANSPORT_STATUS, Golden, transport_error
+from contract_golden import TRANSPORT_STATUS, Golden, refused_unread, transport_error
 from contract_webdav import KEEP_HEADERS, PREFIX, facts, raw_http, wire_report
 from contract_webdav import normalize as dav_normalize
 
@@ -965,6 +965,37 @@ def drop_cases(g, B, token, auth, fake, fake_base, db_path):  # noqa: C901 - a c
         )
     deleted["uploaded_file_kept"] = file_row("foreign.txt") is not None
     g.case("drop.delete", deleted)
+
+    print("\n== drops: one-step PUT refused before the body is read ==")
+    # Placed after the admin list so the extra link below does not shift it.
+    # The route's guard runs put_file's own pre-spill judgement before the server
+    # reads a byte. Each request announces 100 MB and never sends it, so an
+    # answer at all proves the refusal did not wait for (or spill) the body;
+    # without the guard every one of these hangs until the timeout.
+    st, _tb, t_total = create(max_total_bytes=1000)
+    unread = {}
+    for label, drop_token in (
+        ("unknown-token", "not-a-drop-token"),
+        ("no-token", None),
+        ("over-file-limit", t_put),
+        ("over-remaining-total", t_total),
+        ("expired", t_exp),
+        ("revoked", t_rev),
+    ):
+        pairs = [] if drop_token is None else [(DROP_HEADER, drop_token)]
+        st, _hd, text = refused_unread(B, "PUT", "/api/drop/files/unread.bin", pairs)
+        public_bodies.append(text.encode())
+        unread[label] = {"status": st, "body": body_value(text.encode())}
+    st, _hd, text = refused_unread(
+        B, "PUT", "/api/drop/files/a%01b.txt", [(DROP_HEADER, t_total)]
+    )
+    unread["control-in-name"] = {"status": st, "body": body_value(text.encode())}
+    st, _hd, text = refused_unread(
+        B, "PUT", "/api/drop/files/a%2Fb.txt", [(DROP_HEADER, t_total)]
+    )
+    unread["slash-in-name"] = {"status": st, "body": body_value(text.encode())}
+    unread["nothing-written"] = file_row("unread.bin") is None
+    g.case("drop.put.refused-unread", unread)
 
     print("\n== drops: uploader responses carry no key and no path ==")
     flat = b"\n".join(public_bodies).decode("utf-8", "replace")

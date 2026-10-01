@@ -2412,6 +2412,57 @@
    "reservations_gone": true,
    "uploaded_file_kept": true
   },
+  "drop.put.refused-unread": {
+   "unknown-token": {
+    "status": 404,
+    "body": {
+     "detail": "上传链接不存在"
+    }
+   },
+   "no-token": {
+    "status": 404,
+    "body": {
+     "detail": "上传链接不存在"
+    }
+   },
+   "over-file-limit": {
+    "status": 413,
+    "body": {
+     "detail": "文件超过单文件上限（64 字节）"
+    }
+   },
+   "over-remaining-total": {
+    "status": 413,
+    "body": {
+     "detail": "超出上传链接的总额度（剩余 1000 字节）"
+    }
+   },
+   "expired": {
+    "status": 410,
+    "body": {
+     "detail": "上传链接已过期"
+    }
+   },
+   "revoked": {
+    "status": 410,
+    "body": {
+     "detail": "上传链接已被吊销"
+    }
+   },
+   "control-in-name": {
+    "status": 400,
+    "body": {
+     "detail": "文件名不能包含控制字符"
+    }
+   },
+   "slash-in-name": {
+    "status": 400,
+    "body": {
+     "detail": "文件名不能包含 / 或 \\"
+    }
+   },
+   "nothing-written": true
+  },
   "drop.responses.minimal": {
    "responses_checked": true,
    "no_object_key": true,
