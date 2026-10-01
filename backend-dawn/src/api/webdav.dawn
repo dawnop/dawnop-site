@@ -27,8 +27,8 @@ use java "java.text.SimpleDateFormat"
 use java "java.util.Date"
 use java "java.util.Locale"
 use java "java.util.TimeZone"
-use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, text, raw, binary, redirect, with_header, header, headers_all, param_segs, response_headers}
-use web/router.{Route, route_method_of, tagged}
+use web/types.{Request, Response, HttpError, Handler, Guard, http_error, as_http, as_http_with, text, raw, binary, redirect, with_header, header, headers_all, param_segs, response_headers}
+use web/router.{Route, route_method_of, tagged, body_limit, guarded}
 use db/db.{with_db}
 use svc/auth.{Auth, check_basic, scheme_param}
 use svc/files.{signed_url, gc_unreferenced, gc_rows_unreferenced, gc_copy_tree_unreferenced, copy_tree_objects}
@@ -43,6 +43,15 @@ use util/errkind.{KConflict, KPrecondition, KUpstream, KTimeout, precondition, u
 use svc/export.{url_encode}
 
 const AUTH_TTL: Int = 300
+
+# Ceiling on one WebDAV PUT body, 512 MiB. It matches the client_max_body_size the
+# production nginx sets on the dav vhost, which was sized from the slowest
+# measured upload path (about 0.34 MB/s to qiniu inside the 1800 s proxy timeout,
+# roughly 600 MB), so it refuses no upload that could have finished anyway. It is
+# repeated here so the backend no longer leans on the proxy for it: a
+# Content-Length over it is a 413 before the temp file exists, and a body that
+# runs past it unannounced is cut off and its partial file deleted.
+const DAV_PUT_MAX_BYTES: Int = 536870912
 const REDIRECT_CLIENTS: List[String] = ["rclone", "cyberduck", "mountain duck", "raidrive", "webdavlib"]
 
 # ---- small string helpers ----
@@ -1031,38 +1040,40 @@ fn options_response() -> Response =
 
 # ---- auth ----
 
-# 401 body matches FastAPI's HTTPException(401,"需要认证") → {"detail":...} JSON
-fn unauthorized() -> Response =
-  with_header(
-    raw(401, "application/json; charset=utf-8", "{\"detail\":\"需要认证\"}"),
-    "WWW-Authenticate", "Basic realm=\"dawnop-webdav\"")
+# 401 body matches FastAPI's HTTPException(401,"需要认证") → {"detail":...} JSON.
+# An HttpError rather than a hand-built Response so the guard can answer it before
+# the body is read: the server renders it through ErrorFormat (detail_key
+# "detail", compact JSON, "application/json; charset=utf-8"), byte for byte what
+# the old raw(401, ...) wrote, and appends the challenge header the same way.
+fn unauthorized() -> HttpError =
+  HttpError { ..http_error(401, "需要认证"), headers: [("WWW-Authenticate", "Basic realm=\"dawnop-webdav\"")] }
 
-# None = authorized; Some(resp) = the 401 to return. A single-admin TTL cache
+# Ok = authorized; Err = the 401 to answer. A single-admin TTL cache
 # (keyed by sha256("user:pass")) skips bcrypt on the mount's high-frequency calls.
-fn dav_auth(a: Auth, cell: TtlCell, req: Request) -> Option[Response] !io =
+fn dav_auth(a: Auth, cell: TtlCell, req: Request) -> Result[Unit, HttpError] !io =
   match header(req, "authorization") {
-    None -> Some(unauthorized())
+    None -> Err(unauthorized())
     Some(h) -> {
       # Same scheme rule as the Bearer side (svc/auth.scheme_param): the scheme is
       # case-insensitive, so `basic` mounts too. This one only ever widens what is
       # accepted — a client that worked before spelled it "Basic" and still does.
       let cred = scheme_param(h, "basic")
       if cred == "" {
-        Some(unauthorized())
+        Err(unauthorized())
       } else {
         # malformed base64 is a 401, not a 500 (FastAPI wraps b64decode in try/except)
         match b64_decode_try(cred) {
-          Err(_e) -> Some(unauthorized())
+          Err(_e) -> Err(unauthorized())
           Ok(raw_cred) -> {
             let parts = str.split(raw_cred, ":")
             if len(parts) < 2 {
-              Some(unauthorized())
+              Err(unauthorized())
             } else {
               let user = parts[0]
               let pass = join(list.drop(parts, 1), ":")
               let key = sha256_hex(raw_cred)
               match cache_get(cell, AUTH_TTL) {
-                Some(cached) -> if cached == key { None } else { verify_cache(a, cell, user, pass, key) }
+                Some(cached) -> if cached == key { Ok(()) } else { verify_cache(a, cell, user, pass, key) }
                 None -> verify_cache(a, cell, user, pass, key)
               }
             }
@@ -1085,14 +1096,22 @@ fn b64_decode_try(s: String) -> Result[String, String] !io =
       }
   }
 
-fn verify_cache(a: Auth, cell: TtlCell, user: String, pass: String, key: String) -> Option[Response] !io =
+fn verify_cache(a: Auth, cell: TtlCell, user: String, pass: String, key: String) -> Result[Unit, HttpError] !io =
   match with_db(a.db.path, a.db.ext, c => check_basic(c, user, pass)) {
     Ok(true) -> {
       let _p = cache_put(cell, key)
-      None
+      Ok(())
     }
-    _ -> Some(unauthorized())
+    _ -> Err(unauthorized())
   }
+
+# The pre-body guard on every authenticated DAV route: the same check, run by the
+# server before it reads a byte of the body. On PUT that is the whole point,
+# since the route spills its body to disk and an anonymous client could otherwise
+# have the temp file written in full before its 401 (dawn-lang#310). The handler
+# still calls dav_auth itself, as depth: a route that loses its guard stays closed.
+fn dav_guard(a: Auth, cell: TtlCell) -> Guard =
+  req => dav_auth(a, cell, req)
 
 # ---- routes ----
 
@@ -1102,8 +1121,8 @@ fn dav_handler(a: Auth, cell: TtlCell, method: String) -> Handler =
     Ok(options_response())
   } else {
     match dav_auth(a, cell, req) {
-      Some(resp) -> Ok(resp)
-      None -> {
+      Err(e) -> Err(e)
+      Ok(_) -> {
         let rel = dav_rel(req)?
         # One installation point for the whole of WebDAV: this dispatcher is
         # the innermost thing that owns a request, and the closure it lives in
@@ -1137,8 +1156,19 @@ pub fn dav_routes(a: Auth, cell: TtlCell) -> List[Route] = {
   # verbs carry at most small XML bodies (PROPFIND/LOCK) that no handler reads:
   # PROPFIND answers the allprop set regardless and LOCK always grants its fake
   # lock, so those bodies are accepted and ignored.
-  map(verbs, v => tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, cell, v)),
-    if v == "PUT" { ["raw-body", "no-cors", "stream-body"] } else { ["raw-body", "no-cors"] }))
+  #
+  # Every verb but OPTIONS is guarded: credentials are checked before the body is
+  # read, so an anonymous request is a 401 with nothing read and nothing spilled.
+  # OPTIONS stays open, as in the handler: it is the capability probe a client
+  # sends before it has credentials to offer. PUT also carries its own ceiling.
+  map(verbs, v => dav_route(a, cell, v))
+}
+
+fn dav_route(a: Auth, cell: TtlCell, v: String) -> Route = {
+  let base = tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, cell, v)),
+    if v == "PUT" { ["raw-body", "no-cors", "stream-body"] } else { ["raw-body", "no-cors"] })
+  let bounded = if v == "PUT" { body_limit(base, DAV_PUT_MAX_BYTES) } else { base }
+  if v == "OPTIONS" { bounded } else { guarded(bounded, dav_guard(a, cell)) }
 }
 
 # A bare request carrying only the tail capture dav_rel reads.
