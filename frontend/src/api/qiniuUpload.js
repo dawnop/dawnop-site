@@ -5,11 +5,14 @@
 // localStorage 断点续传），大文件不再受表单上传 1GB 上限约束。上传域名由 qiniu-js 按凭证里的
 // 空间自动查询区域（useCdnDomain 走加速域名），不用后端回的 up_host：那是后端代理上传自己用的
 // 地址，管理端一直不读它，这里保持同样的行为。
-import * as qiniuJs from 'qiniu-js'
+//
+// qiniu-js 用动态 import：fmApi 经 api/index.js 处在首屏入口的静态依赖图里，静态引入会把
+// qiniu-js（约 40KB gz）拖进每个读者都要下载的首屏 chunk。改成真正上传时才加载。
 
 // file: File/Blob；key、token：后端 /upload-token 回的对象 key 与上传凭证；
 // fname：七牛侧记录的原始文件名；onProgress(0..1) 可选。成功 resolve，失败 reject Error。
-export function directUpload(file, key, token, fname, onProgress) {
+export async function directUpload(file, key, token, fname, onProgress) {
+  const qiniuJs = await import('qiniu-js')
   return new Promise((resolve, reject) => {
     const observable = qiniuJs.upload(file, key, token, { fname }, { useCdnDomain: true })
     observable.subscribe({
