@@ -266,6 +266,7 @@ watch(show, (v) => {
           空格或特殊字符时须先做 URL 编码（如 <code>报告.pdf</code> 写作
           <code>%E6%8A%A5%E5%91%8A.pdf</code>）。每次一个文件，同名不会覆盖，会自动改名。
         </p>
+        <p class="out-note">curl 方式适合小文件（单个不超过 32 MB），大文件请用网页上传。</p>
       </div>
     </template>
 

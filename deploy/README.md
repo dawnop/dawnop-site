@@ -256,7 +256,9 @@ nginx 片段（`gzip_static` 直发预压缩 `.gz`，与 443 接入无关），�
 **上传链接（`/api/drop*`）是匿名端点**，建议在 nginx 上给它单独加 `limit_req`，并给
 `/api/drop/files/` 设一个不大于单文件上限（默认 100MiB，最大 5GiB）的 `client_max_body_size`：
 一步式 `PUT` 的请求体在后端拿到 token 之前就被 web 框架整包落到临时文件，后端的额度只能在落盘之后
-判，落盘本身的上界是 nginx 给的。配置写在私有 ops 仓，不在本仓库。
+判，落盘本身的上界是 nginx 给的（框架侧的修法跟踪在
+[dawn-lang#310](https://github.com/dawnop/dawn-lang/issues/310)，修好之前以 nginx 为准；现在主域的
+`client_max_body_size` 是 32m，所以 curl 一步式单文件实际上限约 32MB）。配置写在私有 ops 仓，不在本仓库。
 
 ### 5. 验证
 ```bash

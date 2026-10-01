@@ -327,6 +327,11 @@ pub fn routes(a: Auth) -> List[Route] =
     # the handler returns, so a file never sits in the heap. raw-body: the JSON
     # ceiling does not apply; the drop's own quota does (svc/drop.put_file), and
     # nginx's client_max_body_size bounds what is spilled before that.
+    # The spill happens before this handler runs, so the token and quota cannot
+    # stop it (dawn-lang issue #310,
+    # https://github.com/dawnop/dawn-lang/issues/310). Until web can hand a
+    # stream-body route the length and headers first, the nginx limit is the
+    # accepted bound: 32m on the main domain, so one-step PUTs top out near 32MB.
     tagged(route_put("/api/drop/files/{name}", put(a)), ["raw-body", "stream-body"]),
   ]
 
