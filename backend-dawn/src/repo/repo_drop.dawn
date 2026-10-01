@@ -1,0 +1,231 @@
+# Upload links ("drops"): the two tables behind them and the SQL that reads and
+# writes them. Business rules (who may do what, quota, naming) live in
+# svc/drop; this module only knows rows.
+#
+# These are the first tables the Dawn backend creates itself. Every other table
+# in the shared database was created by FastAPI's `create_all`, but backend/ is
+# frozen, so these two get `create table if not exists` here instead. A rollback
+# to FastAPI simply ignores them (its routes do not exist there, so /api/drop
+# answers 404), which is the accepted cost.
+use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Cell, open, query, exec, require_tx, scalar_int, int_at, str_at, bool_at, first_map, first_bool_or}
+use repo/repo_fm.{get_row, subtree_rows, ledger_insert}
+use util/paths.{full}
+
+## One upload link as stored. The token itself is never here: only its sha256.
+pub type DropRow = {
+  id: Int,
+  label: String,
+  dir: String,
+  created_at: String,
+  expires_at: Int,
+  revoked: Bool,
+  max_files: Int,
+  max_file_bytes: Int,
+  max_total_bytes: Int,
+  used_files: Int,
+  used_bytes: Int,
+}
+
+## A direct-upload key this backend signed for one drop: where it is meant to
+## land and the largest object the signed token admits.
+pub type DropPending = { key: String, drop_id: Int, rel: String, size_limit: Int }
+
+const DDL_DROPS: String = "create table if not exists upload_drops (id integer primary key, token_hash text not null unique, label text not null default '', dir text not null, created_at text not null, expires_at integer not null, revoked integer not null default 0, max_files integer not null, max_file_bytes integer not null, max_total_bytes integer not null, used_files integer not null default 0, used_bytes integer not null default 0, last_used_at text)"
+
+const DDL_PENDING: String = "create table if not exists drop_pending (key text primary key, drop_id integer not null, rel text not null, size_limit integer not null, created_at text not null)"
+
+## Create the two tables when they are missing. Idempotent, and cheap when they
+## exist: SQLite answers `if not exists` from the schema without taking the
+## write lock (measured: it does not wait on another connection's open
+## `begin immediate`). main runs it once at startup, and every drop request runs
+## it again on its own connection, because the database file can be replaced
+## under a running process (a restore, or the contract harness reseeding its
+## fixture), and a missing table would otherwise be a 500 until the next restart.
+pub fn ensure_schema(c: DbConn) -> Result[Unit, String] !io = {
+  let _d = exec(c, DDL_DROPS, [])?
+  let _p = exec(c, DDL_PENDING, [])?
+  Ok(())
+}
+
+const DROP_COLS: String = "id, label, dir, created_at, expires_at, revoked, max_files, max_file_bytes, max_total_bytes, used_files, used_bytes"
+
+fn drop_cols() -> List[Col] = [ColInt, ColStr, ColStr, ColStr, ColInt, ColInt, ColInt, ColInt, ColInt, ColInt, ColInt]
+
+fn drop_of(r: List[Cell]) -> DropRow =
+  DropRow {
+    id: int_at(r, 0),
+    label: str_at(r, 1),
+    dir: str_at(r, 2),
+    created_at: str_at(r, 3),
+    expires_at: int_at(r, 4),
+    revoked: bool_at(r, 5),
+    max_files: int_at(r, 6),
+    max_file_bytes: int_at(r, 7),
+    max_total_bytes: int_at(r, 8),
+    used_files: int_at(r, 9),
+    used_bytes: int_at(r, 10),
+  }
+
+## Insert a link and read it back. The caller holds the immediate transaction,
+## so the id read through last_insert_rowid is this insert's.
+pub fn insert_drop(c: DbConn, token_hash: String, label: String, dir: String, expires_at: Int, max_files: Int, max_file_bytes: Int, max_total_bytes: Int) -> Result[DropRow, String] !io = {
+  let _t = require_tx(c, "drop insert")?
+  let _i = exec(c, "insert into upload_drops (token_hash, label, dir, created_at, expires_at, max_files, max_file_bytes, max_total_bytes) values (?, ?, ?, datetime('now'), ?, ?, ?, ?)",
+    [PStr(token_hash), PStr(label), PStr(dir), PInt(expires_at), PInt(max_files), PInt(max_file_bytes), PInt(max_total_bytes)])?
+  let id = scalar_int(c, "select last_insert_rowid()", [])?
+  match drop_by_id(c, id)? {
+    Some(d) -> Ok(d)
+    None -> Err("inserted drop vanished: ${to_string(id)}")
+  }
+}
+
+## The link whose token hashes to `token_hash`, whatever its state. An exact
+## match on a fixed-length digest: there is no plaintext to compare.
+pub fn drop_by_hash(c: DbConn, token_hash: String) -> Result[Option[DropRow], String] !io = {
+  let rows = query(c, "select ${DROP_COLS} from upload_drops where token_hash = ?", [PStr(token_hash)], drop_cols())?
+  Ok(first_map(rows, r => drop_of(r)))
+}
+
+pub fn drop_by_id(c: DbConn, id: Int) -> Result[Option[DropRow], String] !io = {
+  let rows = query(c, "select ${DROP_COLS} from upload_drops where id = ?", [PInt(id)], drop_cols())?
+  Ok(first_map(rows, r => drop_of(r)))
+}
+
+## Every link, newest first.
+pub fn list_drops(c: DbConn) -> Result[List[DropRow], String] !io = {
+  let rows = query(c, "select ${DROP_COLS} from upload_drops order by id desc", [], drop_cols())?
+  Ok(map(rows, r => drop_of(r)))
+}
+
+## Mark a link revoked. False when no such link exists; revoking twice is fine.
+pub fn revoke_drop(c: DbConn, id: Int) -> Result[Bool, String] !io = {
+  let n = exec(c, "update upload_drops set revoked = 1 where id = ?", [PInt(id)])?
+  Ok(n > 0)
+}
+
+## Delete a link and the keys it signed but never registered. The orphan ledger
+## rows in pending_uploads stay on purpose: they are how the sweeper finds an
+## object that may already sit in the bucket. The caller holds the transaction.
+pub fn delete_drop(c: DbConn, id: Int) -> Result[Bool, String] !io = {
+  let _t = require_tx(c, "drop delete")?
+  let _p = exec(c, "delete from drop_pending where drop_id = ?", [PInt(id)])?
+  let n = exec(c, "delete from upload_drops where id = ?", [PInt(id)])?
+  Ok(n > 0)
+}
+
+## Whether `dir` (a relative path, "" for the root) is an existing directory.
+pub fn dir_present(c: DbConn, dir: String) -> Result[Bool, String] !io =
+  if dir == "" {
+    Ok(true)
+  } else {
+    match get_row(c, dir)? {
+      Some(o) -> Ok(o.is_dir)
+      None -> Ok(false)
+    }
+  }
+
+## Whether a new file may be created at `rel` without touching anything: no row
+## there, no orphan descendants under it, and no other drop key reserved for it.
+## `own_key` is the key asking, whose own reservation does not count against it.
+pub fn rel_free(c: DbConn, rel: String, own_key: String) -> Result[Bool, String] !io = {
+  let subtree = subtree_rows(c, rel)?
+  if len(subtree) > 0 {
+    Ok(false)
+  } else {
+    let rows = query(c, "select count(*) from drop_pending where rel = ? and key <> ?", [PStr(rel), PStr(own_key)], [ColInt])?
+    Ok(not first_bool_or(rows, false))
+  }
+}
+
+## Record a signed key twice: in drop_pending, which is what /api/drop/register
+## accepts and nothing else does, and in pending_uploads, the orphan ledger the
+## sweeper and the reference-aware GC already read. The caller holds the
+## transaction, so the two rows exist together or not at all.
+pub fn reserve_key(c: DbConn, key: String, drop_id: Int, rel: String, size_limit: Int) -> Result[Unit, String] !io = {
+  let _t = require_tx(c, "drop key reservation")?
+  let _d = exec(c, "insert into drop_pending (key, drop_id, rel, size_limit, created_at) values (?, ?, ?, ?, datetime('now'))",
+    [PStr(key), PInt(drop_id), PStr(rel), PInt(size_limit)])?
+  let _l = ledger_insert(c, key, full(rel))?
+  Ok(())
+}
+
+## The reservation for `key`, but only when `drop_id` made it. A key another
+## drop signed, a key the admin signed, and a key nobody signed all answer None.
+pub fn pending_for(c: DbConn, key: String, drop_id: Int) -> Result[Option[DropPending], String] !io = {
+  let rows = query(c, "select key, drop_id, rel, size_limit from drop_pending where key = ? and drop_id = ?", [PStr(key), PInt(drop_id)], [ColStr, ColInt, ColStr, ColInt])?
+  Ok(first_map(rows, r => DropPending { key: str_at(r, 0), drop_id: int_at(r, 1), rel: str_at(r, 2), size_limit: int_at(r, 3) }))
+}
+
+## Remove a key's reservation and its orphan-ledger row. Returns how many
+## drop_pending rows went (0 or 1). The caller holds the transaction.
+pub fn release_key(c: DbConn, key: String, drop_id: Int) -> Result[Int, String] !io = {
+  let _t = require_tx(c, "drop key release")?
+  let n = exec(c, "delete from drop_pending where key = ? and drop_id = ?", [PStr(key), PInt(drop_id)])?
+  let _l = exec(c, "delete from pending_uploads where key = ?", [PStr(key)])?
+  Ok(n)
+}
+
+## Create the file row for an upload that arrived through a drop. A plain
+## insert, never an upsert: a drop can only add files, and the unique index on
+## files.path turns any race the caller's checks missed into an error instead of
+## an overwrite.
+pub fn insert_drop_file(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Unit, String] !io = {
+  let _t = require_tx(c, "drop file insert ${full(rel)}")?
+  let n = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, ?, ?, datetime('now'), datetime('now'))",
+    [PStr(rel), PStr(key), PStr(content_type), PInt(size)])?
+  if n == 1 { Ok(()) } else { Err("drop file insert count changed: ${full(rel)}") }
+}
+
+## Count one accepted file against the link's quota.
+pub fn charge(c: DbConn, id: Int, size: Int) -> Result[Unit, String] !io = {
+  let _t = require_tx(c, "drop charge")?
+  let n = exec(c, "update upload_drops set used_files = used_files + 1, used_bytes = used_bytes + ?, last_used_at = datetime('now') where id = ?", [PInt(size), PInt(id)])?
+  if n == 1 { Ok(()) } else { Err("drop charge found no row: ${to_string(id)}") }
+}
+
+# ---- tests ----
+
+fn drop_test_db() -> DbConn !io = {
+  let c = open("jdbc:sqlite::memory:")
+  let _t = exec(c, "create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null)", [])
+  let _p = exec(c, "create table pending_uploads (key text primary key, path text not null, created_at text not null)", [])
+  let _s = ensure_schema(c)
+  c
+}
+
+test "the schema is created once and creating it again is a no-op" {
+  let c = drop_test_db()
+  assert ensure_schema(c) == Ok(())
+  assert scalar_int(c, "select count(*) from sqlite_master where name in ('upload_drops', 'drop_pending')", []) == Ok(2)
+}
+
+test "a reservation is visible only to the drop that made it" {
+  let c = drop_test_db()
+  let _b = exec(c, "begin immediate", [])
+  let _r = reserve_key(c, "k1", 7, "in/a.txt", 100)
+  let _e = exec(c, "commit", [])
+  match pending_for(c, "k1", 7) {
+    Ok(Some(p)) -> {
+      assert p.rel == "in/a.txt"
+      assert p.size_limit == 100
+    }
+    _ -> { assert false }
+  }
+  assert pending_for(c, "k1", 8) == Ok(None)
+  assert pending_for(c, "other", 7) == Ok(None)
+  # the orphan ledger sees it too, under the full path
+  assert scalar_int(c, "select count(*) from pending_uploads where key = 'k1' and path = 'qiniu://in/a.txt'", []) == Ok(1)
+}
+
+test "a reserved name is not free for another key, but is for its own" {
+  let c = drop_test_db()
+  let _b = exec(c, "begin immediate", [])
+  let _r = reserve_key(c, "k1", 7, "in/a.txt", 100)
+  let _e = exec(c, "commit", [])
+  assert rel_free(c, "in/a.txt", "k2") == Ok(false)
+  assert rel_free(c, "in/a.txt", "k1") == Ok(true)
+  # an orphan descendant blocks the name as surely as a row at it
+  let _o = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('in/b.txt/x', 0, 'kx', 'text/plain', 1, 'now', 'now')", [])
+  assert rel_free(c, "in/b.txt", "") == Ok(false)
+  assert rel_free(c, "in/c.txt", "") == Ok(true)
+}

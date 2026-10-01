@@ -1,0 +1,342 @@
+# Upload links ("drops"), the HTTP surface. Two audiences, two doors:
+#
+#   /api/fm/drops*   the admin creates, lists, revokes and deletes links. Every
+#                    route is `guarded` (the admin JWT), like the rest of /api/fm.
+#   /api/drop*       the anonymous uploader. These routes read the drop token
+#                    from the `X-Drop-Token` header and from nowhere else: not
+#                    the query string (it would land in access logs), not
+#                    Authorization (that is the admin's header, and the two
+#                    credentials must never be mistaken for each other), not a
+#                    cookie. An admin JWT on these routes changes nothing.
+#
+# The rules themselves are in svc/drop; this file is parsing and wire shapes.
+# Responses to the uploader carry the file's name and size and nothing else:
+# no object key (except the one upload-token hands out, which the client needs
+# to upload), no stored path, nothing about other files.
+use std/map
+use std/str
+use std/list
+use std/char
+use std/bytes
+use web/types.{Request, Response, HttpError, Handler, http_error, json_ok, json_response, body_text, headers_all, param}
+use web/router.{Route, route_get, route_post, route_put, tagged}
+use json/value.{Json, JNull, JInt, JStr, JObj, JArr}
+use util/jsonx.{obj, jstr, jint, jbool, jdatetime}
+use util/jsonread.{body_obj}
+use util/clock.{Clock, system_ms}
+use util/http.{Upstream, with_upstream}
+use util/errkind.{KConflict, KUpstream, KTimeout, split_kind}
+use util/paths.{fm_split, full, basename}
+use svc/auth.{Auth, guarded}
+use repo/repo_drop.{DropRow}
+use svc/drop.{Refusal, NotFound, Gone, TooLarge, Invalid, Unprocessable, LengthRequired, NoFreeName,
+  DropErr, Refused, Failed, DropStatus, DropSpec, drop_info, grant_direct, register_direct, put_file,
+  create_drop, list_all, revoke, remove, status_text, drop_status,
+  DEFAULT_EXPIRES_S, DEFAULT_MAX_FILES, DEFAULT_MAX_FILE_BYTES, DEFAULT_MAX_TOTAL_BYTES}
+
+# ---- error mapping ----
+
+fn refusal_error(r: Refusal) -> HttpError =
+  match r {
+    NotFound(m) -> http_error(404, m)
+    Gone(m) -> http_error(410, m)
+    TooLarge(m) -> http_error(413, m)
+    Invalid(m) -> http_error(400, m)
+    Unprocessable(m) -> http_error(422, m)
+    LengthRequired(m) -> http_error(411, m)
+    NoFreeName(m) -> http_error(409, m)
+  }
+
+fn drop_error(e: DropErr) -> HttpError =
+  match e {
+    Refused(r) -> refusal_error(r)
+    Failed(msg) -> {
+      let (k, t) = split_kind(msg)
+      match k {
+        KConflict -> http_error(409, t)
+        KUpstream -> http_error(502, t)
+        KTimeout -> http_error(504, t)
+        _ -> http_error(500, t)
+      }
+    }
+  }
+
+fn lift[T](r: Result[T, DropErr]) -> Result[T, HttpError] =
+  match r {
+    Ok(v) -> Ok(v)
+    Err(e) -> Err(drop_error(e))
+  }
+
+# ---- the uploader's door ----
+
+# The drop token, from its one header. A missing or empty header is the same
+# answer as an unknown token (svc/drop.known_drop says 404), so a client that
+# put the token somewhere else learns nothing more than that it is not here.
+# Two copies of the header are a malformed request, not a choice to make.
+fn drop_token(req: Request) -> Result[String, HttpError] =
+  match headers_all(req, "x-drop-token") {
+    [] -> Ok("")
+    [t] -> Ok(t)
+    _ -> Err(http_error(400, "X-Drop-Token 只能出现一次"))
+  }
+
+# A route closure is the innermost thing that owns a whole unit of work, so the
+# production Clock and Upstream handlers are installed here (util/clock and
+# util/http say why they cannot go in main).
+fn public(a: Auth, body: fn(Request) -> Result[Response, HttpError] !Clock !Upstream !io) -> Handler =
+  req =>
+  with_upstream(a.http, () => {
+    with handle Clock { now_ms() => system_ms() }
+    body(req)
+  })
+
+## GET /api/drop: what the upload page shows. The directory is reported by its
+## last segment only.
+pub fn info(a: Auth) -> Handler =
+  public(a, req => {
+    let token = drop_token(req)?
+    let d = lift(drop_info(a, token))?
+    Ok(json_ok(obj([
+      ("label", jstr(d.label)),
+      ("dir_name", jstr(basename(d.dir))),
+      ("expires_at", jint(d.expires_at)),
+      ("max_files", jint(d.max_files)),
+      ("max_file_bytes", jint(d.max_file_bytes)),
+      ("max_total_bytes", jint(d.max_total_bytes)),
+      ("used_files", jint(d.used_files)),
+      ("used_bytes", jint(d.used_bytes)),
+    ])))
+  })
+
+## POST /api/drop/upload-token {name, size}: a direct-upload credential for one
+## file, in the same shape the admin's /api/fm/upload-token hands the browser
+## (token, key, up_host), with the server-chosen `name` in place of `path`.
+pub fn upload_token(a: Auth) -> Handler =
+  public(a, req => {
+    let token = drop_token(req)?
+    let m = body_map(req)?
+    let name = req_str(m, "name")?
+    let size = req_int(m, "size")?
+    let g = lift(grant_direct(a, token, name, size))?
+    Ok(json_ok(obj([
+      ("token", jstr(g.token)),
+      ("key", jstr(g.key)),
+      ("name", jstr(g.name)),
+      ("up_host", jstr(a.qiniu.up_host)),
+    ])))
+  })
+
+## POST /api/drop/register {key}: record a direct upload. 201 {name, size}.
+pub fn register(a: Auth) -> Handler =
+  public(a, req => {
+    let token = drop_token(req)?
+    let m = body_map(req)?
+    let key = req_str(m, "key")?
+    let done = lift(register_direct(a, token, key))?
+    let (name, size) = done
+    Ok(receipt(name, size))
+  })
+
+## PUT /api/drop/files/{name}: the one-step upload, `curl -T file -H
+## "X-Drop-Token: ..." .../api/drop/files/<name>`. 201 {name, size}.
+pub fn put(a: Auth) -> Handler =
+  public(a, req => {
+    let token = drop_token(req)?
+    let name = param(req, "name")?
+    let done = lift(put_file(a, token, name, declared_length(req), req.body_file))?
+    let (stored, size) = done
+    Ok(receipt(stored, size))
+  })
+
+fn receipt(name: String, size: Int) -> Response =
+  json_response(201, obj([("name", jstr(name)), ("size", jint(size))]))
+
+# The request's Content-Length, when it has exactly one that is a plain decimal
+# number and no Transfer-Encoding. Anything else is None, which put_file answers
+# with 411: a chunked body has no length to judge before it arrives.
+fn declared_length(req: Request) -> Option[Int] =
+  match headers_all(req, "transfer-encoding") {
+    [] ->
+      match headers_all(req, "content-length") {
+        [v] -> if is_decimal(v) { parse_int(v) } else { None }
+        _ -> None
+      }
+    _ -> None
+  }
+
+fn is_decimal(s: String) -> Bool =
+  s != "" && str.len(s) <= 18 && list.all(code_points(s), c => char.code(c) >= 0x30 && char.code(c) <= 0x39)
+
+fn body_map(req: Request) -> Result[Map[String, Json], HttpError] !io =
+  match body_obj(body_text(req)?) {
+    Ok(m) -> Ok(m)
+    Err(e) -> Err(http_error(422, e))
+  }
+
+fn req_str(m: Map[String, Json], key: String) -> Result[String, HttpError] =
+  match map.get(m, key) {
+    Some(JStr(s)) -> Ok(s)
+    _ -> Err(http_error(422, "${key} 必须是字符串"))
+  }
+
+fn req_int(m: Map[String, Json], key: String) -> Result[Int, HttpError] =
+  match map.get(m, key) {
+    Some(JInt(n)) -> Ok(n)
+    _ -> Err(http_error(422, "${key} 必须是整数"))
+  }
+
+# An optional integer: absent or null takes the default, anything but an
+# integer literal is a 422 (1.5 or "20" is not a count).
+fn opt_int_or(m: Map[String, Json], key: String, dflt: Int) -> Result[Int, HttpError] =
+  match map.get(m, key) {
+    None -> Ok(dflt)
+    Some(JNull) -> Ok(dflt)
+    Some(JInt(n)) -> Ok(n)
+    _ -> Err(http_error(422, "${key} 必须是整数"))
+  }
+
+fn opt_str_or(m: Map[String, Json], key: String, dflt: String) -> Result[String, HttpError] =
+  match map.get(m, key) {
+    None -> Ok(dflt)
+    Some(JNull) -> Ok(dflt)
+    Some(JStr(s)) -> Ok(s)
+    _ -> Err(http_error(422, "${key} 必须是字符串"))
+  }
+
+# ---- the admin's door ----
+
+fn drop_json(d: DropRow, status: DropStatus) -> Json =
+  obj([
+    ("id", jint(d.id)),
+    ("label", jstr(d.label)),
+    ("dir", jstr(full(d.dir))),
+    ("expires_at", jint(d.expires_at)),
+    ("max_files", jint(d.max_files)),
+    ("max_file_bytes", jint(d.max_file_bytes)),
+    ("max_total_bytes", jint(d.max_total_bytes)),
+    ("used_files", jint(d.used_files)),
+    ("used_bytes", jint(d.used_bytes)),
+    ("status", jstr(status_text(status))),
+    ("created_at", jdatetime(d.created_at)),
+  ])
+
+fn with_token(j: Json, token: String) -> Json =
+  match j {
+    JObj(m) -> JObj(map.insert(m, "token", JStr(token)))
+    other -> other
+  }
+
+## POST /api/fm/drops: create a link. 201 with the token, which is never shown
+## again.
+pub fn create_ep(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () => {
+    with handle Clock { now_ms() => system_ms() }
+    let m = body_map(req)?
+    let dir = req_str(m, "dir")?
+    let s = DropSpec {
+      dir: fm_split(dir),
+      label: opt_str_or(m, "label", "")?,
+      expires_in_s: opt_int_or(m, "expires_in_s", DEFAULT_EXPIRES_S)?,
+      max_files: opt_int_or(m, "max_files", DEFAULT_MAX_FILES)?,
+      max_file_bytes: opt_int_or(m, "max_file_bytes", DEFAULT_MAX_FILE_BYTES)?,
+      max_total_bytes: opt_int_or(m, "max_total_bytes", DEFAULT_MAX_TOTAL_BYTES)?,
+    }
+    let made = lift(create_drop(a, s))?
+    let (d, token) = made
+    let status = lift(drop_status(a, d))?
+    Ok(json_response(201, with_token(drop_json(d, status), token)))
+  })
+
+## GET /api/fm/drops: every link with its state, newest first. No tokens.
+pub fn list_ep(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () => {
+    with handle Clock { now_ms() => system_ms() }
+    let rows = lift(list_all(a))?
+    Ok(json_ok(obj([("items", JArr(map(rows, pair => {
+      let (d, status) = pair
+      drop_json(d, status)
+    })))])))
+  })
+
+## POST /api/fm/drops/revoke {id}.
+pub fn revoke_ep(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () => {
+    let m = body_map(req)?
+    let id = req_int(m, "id")?
+    let _r = lift(revoke(a, id))?
+    Ok(json_ok(obj([("ok", jbool(true))])))
+  })
+
+## POST /api/fm/drops/delete {id}.
+pub fn delete_ep(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () => {
+    let m = body_map(req)?
+    let id = req_int(m, "id")?
+    let _r = lift(remove(a, id))?
+    Ok(json_ok(obj([("ok", jbool(true))])))
+  })
+
+pub fn routes(a: Auth) -> List[Route] =
+  [
+    route_get("/api/fm/drops", list_ep(a)),
+    route_post("/api/fm/drops", create_ep(a)),
+    route_post("/api/fm/drops/revoke", revoke_ep(a)),
+    route_post("/api/fm/drops/delete", delete_ep(a)),
+    route_get("/api/drop", info(a)),
+    route_post("/api/drop/upload-token", upload_token(a)),
+    route_post("/api/drop/register", register(a)),
+    # stream-body: the server spills the body to a temp file and deletes it when
+    # the handler returns, so a file never sits in the heap. raw-body: the JSON
+    # ceiling does not apply; the drop's own quota does (svc/drop.put_file), and
+    # nginx's client_max_body_size bounds what is spilled before that.
+    tagged(route_put("/api/drop/files/{name}", put(a)), ["raw-body", "stream-body"]),
+  ]
+
+test "the drop token is read from its header only, and once" {
+  let none: Map[String, List[String]] = map.empty()
+  let base = Request {
+    method: "GET", path: "/api/drop", raw_path: "/api/drop", params: none,
+    query: map.from([("token", ["t"])]),
+    headers: map.from([("authorization", ["Bearer t"])]),
+    body: bytes.utf8(""), body_file: None, route: None,
+  }
+  # neither the query string nor Authorization counts
+  assert drop_token(base) == Ok("")
+  assert drop_token(Request { ..base, headers: map.from([("x-drop-token", ["t"])]) }) == Ok("t")
+  match drop_token(Request { ..base, headers: map.from([("x-drop-token", ["t", "u"])]) }) {
+    Err(e) -> { assert e.status == 400 }
+    Ok(_) -> { assert false }
+  }
+}
+
+test "Content-Length is required exactly once, plain decimal, and never with chunking" {
+  let none: Map[String, List[String]] = map.empty()
+  let base = Request {
+    method: "PUT", path: "/", raw_path: "/", params: none, query: none, headers: none,
+    body: bytes.utf8(""), body_file: None, route: None,
+  }
+  let req_with = (hs: List[(String, List[String])]) => Request { ..base, headers: map.from(hs) }
+  assert declared_length(req_with([("content-length", ["12"])])) == Some(12)
+  assert declared_length(req_with([("content-length", ["0"])])) == Some(0)
+  assert declared_length(base) == None
+  assert declared_length(req_with([("content-length", ["12", "12"])])) == None
+  assert declared_length(req_with([("content-length", ["-1"])])) == None
+  assert declared_length(req_with([("content-length", ["1e3"])])) == None
+  assert declared_length(req_with([("content-length", ["12"]), ("transfer-encoding", ["chunked"])])) == None
+  assert declared_length(req_with([("transfer-encoding", ["chunked"])])) == None
+}
+
+test "each refusal kind has its own status" {
+  assert refusal_error(NotFound("x")).status == 404
+  assert refusal_error(Gone("x")).status == 410
+  assert refusal_error(TooLarge("x")).status == 413
+  assert refusal_error(Invalid("x")).status == 400
+  assert refusal_error(Unprocessable("x")).status == 422
+  assert refusal_error(LengthRequired("x")).status == 411
+  assert refusal_error(NoFreeName("x")).status == 409
+  assert drop_error(Failed("database is locked")).status == 500
+}

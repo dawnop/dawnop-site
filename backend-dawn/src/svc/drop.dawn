@@ -1,0 +1,817 @@
+# Upload links ("drops"): a capability an admin hands to someone without an
+# account, letting them add files to exactly one directory until the link
+# expires, is revoked, or runs out of quota.
+#
+# Threat model, which every function below is written against: whoever holds a
+# drop token is anonymous and untrusted. They may add new files to the one
+# directory the drop is bound to, and nothing else. They may not list, read,
+# sign, overwrite, rename or delete anything, may not write anywhere but that
+# directory, may not exceed the file and byte quota, and may not get an
+# arbitrary object key recorded in the files table.
+#
+# How that is held:
+#   * The token is 256 CSPRNG bits. Only sha256(token) is stored; lookups are an
+#     exact match on the digest. It is read from `X-Drop-Token` and nowhere else
+#     (api/api_drop), and the admin guards never look at that header, so the two
+#     credentials cannot stand in for each other.
+#   * Every request re-judges the drop from the database against the Clock:
+#     known, not revoked, not expired, quota left, directory still a directory.
+#   * The client names a file but never a path. The name has to be one segment,
+#     and the server joins it under the drop's directory; a taken name gets a
+#     ` (n)` suffix instead of overwriting.
+#   * A direct upload can only be registered with a key this drop signed: the
+#     reservation in drop_pending is the only thing register reads, the path
+#     comes from it and never from the request, and it is consumed on success.
+#   * Quota is re-checked and charged inside the immediate transaction that
+#     writes the file row, so concurrent uploads cannot overshoot it; an upload
+#     refused at that point has its object deleted.
+use std/str
+use std/char
+use std/list
+use std/map
+use std/bytes
+use db/sql.{DbConn, with_immediate_tx, open, exec, scalar_int}
+use db/db.{with_db}
+use svc/auth.{Auth}
+use svc/files.{gc_unreferenced}
+use repo/repo_drop.{DropRow, DropPending, ensure_schema, insert_drop, drop_by_hash, drop_by_id, list_drops, revoke_drop, delete_drop, dir_present, rel_free, reserve_key, pending_for, release_key, insert_drop_file, charge}
+use repo/repo_fm.{key_referenced}
+use util/paths.{fm_join, basename, ext, guess_mime, safe_persisted_mime, name_verdict, NameAccepted, NameAllBlank, NameEdgeBlank, NameDotSegment}
+use util/crypto.{random_token, sha256_hex, uuid_hex}
+use util/clock.{Clock, now_s}
+use util/ferr.{catch_text}
+use util/errkind.{upstream}
+use util/http.{Upstream, as_outbound, tag_outbound}
+use qiniu/sign.{upload_token_limited}
+use qiniu/rs.{stat, upload_file}
+use json/value.{JObj, JInt, JNum, JStr}
+use json/parser.{parse}
+use java "java.io.File"
+
+# ---- limits ----
+
+pub const DEFAULT_EXPIRES_S: Int = 86400
+pub const MIN_EXPIRES_S: Int = 60
+pub const MAX_EXPIRES_S: Int = 2592000 # 30 days
+pub const DEFAULT_MAX_FILES: Int = 20
+pub const MAX_MAX_FILES: Int = 1000
+pub const DEFAULT_MAX_FILE_BYTES: Int = 104857600 # 100 MiB
+pub const MAX_MAX_FILE_BYTES: Int = 5368709120 # 5 GiB
+pub const DEFAULT_MAX_TOTAL_BYTES: Int = 1073741824 # 1 GiB
+pub const MAX_MAX_TOTAL_BYTES: Int = 53687091200 # 50 GiB
+pub const MAX_LABEL_CHARS: Int = 100
+pub const MAX_NAME_BYTES: Int = 255
+
+# A header value longer than this cannot be a token this backend minted (43
+# characters), so it is answered as unknown without being hashed.
+pub const MAX_TOKEN_CHARS: Int = 256
+
+# The longest a direct-upload credential lives, whatever QINIU_TOKEN_EXPIRES
+# says: the credential outlives any revocation of the drop, so it is kept short.
+const DIRECT_TOKEN_MAX_S: Int = 3600
+
+# How many ` (n)` suffixes are tried before giving up on a name. A drop holds at
+# most MAX_MAX_FILES files, so this is never the binding limit for an honest
+# uploader, and it bounds the work one request can make the write lock do.
+const MAX_RENAMES: Int = 1000
+
+# ---- outcomes ----
+
+## A refusal the uploader or admin is told about, by kind. api/api_drop maps
+## each kind to its status code; the detail text goes out as-is.
+pub type Refusal =
+  | NotFound(detail: String)
+  | Gone(detail: String)
+  | TooLarge(detail: String)
+  | Invalid(detail: String)
+  | Unprocessable(detail: String)
+  | LengthRequired(detail: String)
+  | NoFreeName(detail: String)
+
+## Either a refusal, or something broke (a database error, an object store that
+## failed; the message keeps its errkind tag so the edge can tell 502 from 504).
+pub type DropErr =
+  | Refused(r: Refusal)
+  | Failed(msg: String)
+
+pub type DropStatus =
+  | Active
+  | Expired
+  | Revoked
+  | Exhausted
+  | DirMissing
+
+## What an admin asked for when creating a link, after the edge applied the
+## defaults. `dir` is relative ("" is the root).
+pub type DropSpec = {
+  dir: String,
+  label: String,
+  expires_in_s: Int,
+  max_files: Int,
+  max_file_bytes: Int,
+  max_total_bytes: Int,
+}
+
+## A direct-upload grant: the qiniu credential, the key it is scoped to, and
+## the name the file will be registered under (the server's choice).
+pub type DirectGrant = { token: String, key: String, name: String }
+
+fn db[T](r: Result[T, String]) -> Result[T, DropErr] =
+  match r {
+    Ok(v) -> Ok(v)
+    Err(m) -> Err(Failed(m))
+  }
+
+# A transaction body answers Ok(Err(refusal)) for a refusal, so that an
+# immediate transaction which wrote nothing still commits cleanly and the
+# refusal travels out typed; only a real failure is an Err that rolls back.
+fn settle[T](r: Result[Result[T, Refusal], String]) -> Result[T, DropErr] =
+  match r {
+    Ok(Ok(v)) -> Ok(v)
+    Ok(Err(x)) -> Err(Refused(x))
+    Err(m) -> Err(Failed(m))
+  }
+
+fn min_int(a: Int, b: Int) -> Int = if a < b { a } else { b }
+
+fn refuse_if(r: Option[Refusal]) -> Result[Unit, DropErr] =
+  match r {
+    Some(x) -> Err(Refused(x))
+    None -> Ok(())
+  }
+
+fn name_ok(name: String) -> Result[Unit, DropErr] =
+  match name_refusal(name) {
+    Some(m) -> Err(Refused(Invalid(m)))
+    None -> Ok(())
+  }
+
+fn spec_ok(s: DropSpec) -> Result[Unit, DropErr] =
+  match spec_refusal(s) {
+    Some(m) -> Err(Refused(Unprocessable(m)))
+    None -> Ok(())
+  }
+
+fn required_length(declared: Option[Int]) -> Result[Int, DropErr] =
+  match declared {
+    Some(n) -> Ok(n)
+    None -> Err(Refused(LengthRequired("需要 Content-Length（不接受 chunked 请求体）")))
+  }
+
+fn spilled(body_path: Option[String]) -> Result[String, DropErr] =
+  match body_path {
+    Some(p) -> Ok(p)
+    None -> Err(Failed("请求体未落盘"))
+  }
+
+# The size of what actually arrived, read off the spilled file rather than
+# taken from the header that announced it.
+fn file_length(path: String) -> Result[Int, DropErr] !io = {
+  let n: Result[Int, String] = catch_text(() => File.new(path).length())
+  db(n)
+}
+
+# ---- pure rules ----
+
+## The state of a link at `now`. Revocation is reported first because it is an
+## admin's decision; expiry, quota and the directory follow.
+pub fn status_of(d: DropRow, now: Int, dir_ok: Bool) -> DropStatus =
+  if d.revoked {
+    Revoked
+  } else if now >= d.expires_at {
+    Expired
+  } else if d.used_files >= d.max_files || d.used_bytes >= d.max_total_bytes {
+    Exhausted
+  } else if not dir_ok {
+    DirMissing
+  } else {
+    Active
+  }
+
+pub fn status_text(s: DropStatus) -> String =
+  match s {
+    Active -> "active"
+    Expired -> "expired"
+    Revoked -> "revoked"
+    Exhausted -> "exhausted"
+    DirMissing -> "dir_missing"
+  }
+
+# The refusal an unusable link answers with. Every one of them is a 410: the
+# link is known, and it no longer admits uploads.
+fn unusable(s: DropStatus) -> Option[Refusal] =
+  match s {
+    Active -> None
+    Expired -> Some(Gone("上传链接已过期"))
+    Revoked -> Some(Gone("上传链接已被吊销"))
+    Exhausted -> Some(Gone("上传链接的额度已用尽"))
+    DirMissing -> Some(Gone("上传目录已不存在"))
+  }
+
+## Whether one more file of `size` bytes fits in the link.
+pub fn quota_refusal(d: DropRow, size: Int) -> Option[Refusal] =
+  if size < 0 {
+    Some(Unprocessable("size 不能为负数"))
+  } else if size > d.max_file_bytes {
+    Some(TooLarge("文件超过单文件上限（${to_string(d.max_file_bytes)} 字节）"))
+  } else if d.used_files + 1 > d.max_files {
+    Some(Gone("上传链接的文件数已达上限"))
+  } else if d.used_bytes + size > d.max_total_bytes {
+    Some(TooLarge("超出上传链接的总额度（剩余 ${to_string(d.max_total_bytes - d.used_bytes)} 字节）"))
+  } else {
+    None
+  }
+
+## Why `name` cannot be a file name in a drop, or None when it can. A drop name
+## is exactly one path segment, so this asks more than the write guard
+## (`util/paths.name_verdict`) does, and runs that guard as its last step.
+##
+## The dot check here duplicates one inside the guard on purpose. The guard's
+## dot rule exists so that WebDAV can address every row; this one exists
+## because a drop must never name anything but a new child of its directory,
+## which is a security boundary of its own and has to hold even if the guard's
+## rule is ever relaxed. It also keeps each layer's mutant uniquely owned (see
+## scripts/fm-ancestor-contract).
+pub fn name_refusal(name: String) -> Option[String] =
+  if name == "" {
+    Some("文件名不能为空")
+  } else if name == "." || name == ".." {
+    Some("文件名不能是 . 或 ..")
+  } else if str.contains(name, "/") || str.contains(name, "\\") {
+    Some("文件名不能包含 / 或 \\")
+  } else if list.any(code_points(name), c => is_control(char.code(c))) {
+    Some("文件名不能包含控制字符")
+  } else if bytes.len(bytes.utf8(name)) > MAX_NAME_BYTES {
+    Some("文件名不能超过 ${to_string(MAX_NAME_BYTES)} 字节")
+  } else {
+    match name_verdict(name) {
+      NameAccepted -> None
+      NameAllBlank -> Some("名称不能只由空白组成")
+      NameEdgeBlank -> Some("名称不能以空白开头或结尾")
+      NameDotSegment -> Some("文件名不能是 . 或 ..")
+    }
+  }
+
+# C0, DEL and C1. A file name has no use for any of them, and several are
+# syntax somewhere downstream (a header, a log line, a terminal).
+fn is_control(n: Int) -> Bool = n < 0x20 || (n >= 0x7F && n <= 0x9F)
+
+## The i-th name tried for an upload called `name`: the name itself, then
+## `stem (1).ext`, `stem (2).ext`, ... A leading-dot name has no extension
+## (`util/paths.ext`), so `.env` becomes `.env (1)`.
+pub fn candidate_name(name: String, i: Int) -> String =
+  if i == 0 {
+    name
+  } else {
+    let e = ext(name)
+    if e == "" {
+      "${name} (${to_string(i)})"
+    } else {
+      let stem = str.slice(name, 0, str.len(name) - str.len(e) - 1)
+      "${stem} (${to_string(i)}).${e}"
+    }
+  }
+
+# Only a short alphanumeric extension is carried into the object key; anything
+# else gets a bare uuid. The key is ours, and the name is the uploader's.
+fn key_ext_ok(e: String) -> Bool =
+  e != "" && str.len(e) <= 16 && list.all(code_points(e), c => {
+    let n = char.code(c)
+    (n >= 0x30 && n <= 0x39) || (n >= 0x41 && n <= 0x5A) || (n >= 0x61 && n <= 0x7A)
+  })
+
+fn mint_key(name: String) -> String !io = {
+  let e = ext(name)
+  if key_ext_ok(e) { "${uuid_hex()}.${e}" } else { uuid_hex() }
+}
+
+## The deadline of a direct-upload credential: the configured window, at most an
+## hour, and never past the link's own expiry.
+pub fn direct_deadline(now: Int, expires_at: Int, configured_s: Int) -> Int =
+  min_int(now + min_int(configured_s, DIRECT_TOKEN_MAX_S), expires_at)
+
+## The largest object a direct-upload credential admits (qiniu's fsizeLimit):
+## one file's cap, or what is left of the total, whichever is smaller.
+pub fn direct_size_limit(d: DropRow) -> Int =
+  min_int(d.max_file_bytes, d.max_total_bytes - d.used_bytes)
+
+## Why an admin's request cannot become a link, or None.
+pub fn spec_refusal(s: DropSpec) -> Option[String] =
+  if s.expires_in_s < MIN_EXPIRES_S || s.expires_in_s > MAX_EXPIRES_S {
+    Some("expires_in_s 必须在 ${to_string(MIN_EXPIRES_S)}~${to_string(MAX_EXPIRES_S)} 之间")
+  } else if s.max_files < 1 || s.max_files > MAX_MAX_FILES {
+    Some("max_files 必须在 1~${to_string(MAX_MAX_FILES)} 之间")
+  } else if s.max_file_bytes < 1 || s.max_file_bytes > MAX_MAX_FILE_BYTES {
+    Some("max_file_bytes 必须在 1~${to_string(MAX_MAX_FILE_BYTES)} 之间")
+  } else if s.max_total_bytes < 1 || s.max_total_bytes > MAX_MAX_TOTAL_BYTES {
+    Some("max_total_bytes 必须在 1~${to_string(MAX_MAX_TOTAL_BYTES)} 之间")
+  } else if len(code_points(s.label)) > MAX_LABEL_CHARS {
+    Some("label 不能超过 ${to_string(MAX_LABEL_CHARS)} 个字符")
+  } else {
+    None
+  }
+
+# ---- resolving a token ----
+
+fn known_drop(c: DbConn, token: String) -> Result[DropRow, DropErr] !io = {
+  let _s = db(ensure_schema(c))?
+  let found: Option[DropRow] = if token == "" || str.len(token) > MAX_TOKEN_CHARS {
+    None
+  } else {
+    db(drop_by_hash(c, sha256_hex(token)))?
+  }
+  match found {
+    Some(d) -> Ok(d)
+    None -> Err(Refused(NotFound("上传链接不存在")))
+  }
+}
+
+fn usable(c: DbConn, d: DropRow) -> Result[Unit, DropErr] !Clock !io = {
+  let dir_ok = db(dir_present(c, d.dir))?
+  match unusable(status_of(d, now_s(), dir_ok)) {
+    Some(r) -> Err(Refused(r))
+    None -> Ok(())
+  }
+}
+
+fn active_drop(c: DbConn, token: String) -> Result[DropRow, DropErr] !Clock !io = {
+  let d = known_drop(c, token)?
+  let _u = usable(c, d)?
+  Ok(d)
+}
+
+## GET /api/drop: the link, when it still admits uploads.
+pub fn drop_info(a: Auth, token: String) -> Result[DropRow, DropErr] !Clock !io =
+  with_db(a.db.path, a.db.ext, c => active_drop(c, token))
+
+# ---- naming ----
+
+# The first free candidate for `name` under `dir`, as (rel, final name). Runs
+# inside the caller's transaction so the answer holds until it commits.
+fn pick_rel(c: DbConn, dir: String, name: String, own_key: String, i: Int) -> Result[Result[(String, String), Refusal], String] !io =
+  if i > MAX_RENAMES {
+    Ok(Err(NoFreeName("同名文件过多，请换个文件名")))
+  } else {
+    let cand = candidate_name(name, i)
+    match name_refusal(cand) {
+      Some(_m) -> Ok(Err(NoFreeName("无法为同名文件生成新名字，请换个短一些的文件名")))
+      None -> {
+        let rel = fm_join(dir, cand)
+        if rel_free(c, rel, own_key)? {
+          Ok(Ok((rel, cand)))
+        } else {
+          pick_rel(c, dir, name, own_key, i + 1)
+        }
+      }
+    }
+  }
+
+# ---- direct upload: grant ----
+
+## POST /api/drop/upload-token: reserve a fresh key and a free name for one file,
+## and sign a credential the bucket itself limits (insertOnly, fsizeLimit).
+pub fn grant_direct(a: Auth, token: String, name: String, size: Int) -> Result[DirectGrant, DropErr] !Clock !io = {
+  let d = with_db(a.db.path, a.db.ext, c => active_drop(c, token))?
+  let _n = name_ok(name)?
+  let _q = refuse_if(quota_refusal(d, size))?
+  let key = mint_key(name)
+  let now = now_s()
+  let chosen = with_db(a.db.path, a.db.ext, c => settle(with_immediate_tx(c, () => reserve_tx(c, d, name, key))))?
+  let deadline = direct_deadline(now, d.expires_at, a.qiniu.expires)
+  Ok(DirectGrant {
+    token: upload_token_limited(a.qiniu, key, deadline, direct_size_limit(d)),
+    key: key,
+    name: chosen,
+  })
+}
+
+fn reserve_tx(c: DbConn, d: DropRow, name: String, key: String) -> Result[Result[String, Refusal], String] !io =
+  match pick_rel(c, d.dir, name, key, 0)? {
+    Err(r) -> Ok(Err(r))
+    Ok(pair) -> {
+      let (rel, chosen) = pair
+      let _r = reserve_key(c, key, d.id, rel, direct_size_limit(d))?
+      Ok(Ok(chosen))
+    }
+  }
+
+# ---- direct upload: register ----
+
+## POST /api/drop/register: record an object the uploader put in the bucket with
+## a credential from `grant_direct`. Only the key is read from the request; the
+## name comes from this drop's own reservation, and a key the drop did not sign
+## is unknown here whoever signed it.
+pub fn register_direct(a: Auth, token: String, key: String) -> Result[(String, Int), DropErr] !Clock !Upstream !io = {
+  let claimed = with_db(a.db.path, a.db.ext, c => claim(c, token, key))?
+  let (d, p) = claimed
+  match with_db(a.db.path, a.db.ext, c => usable(c, d)) {
+    Err(Refused(r)) -> {
+      # the link stopped admitting uploads after it signed this key; whatever
+      # landed under the key is not going to be registered, so it goes now
+      discard(a, key, d.id)
+      Err(Refused(r))
+    }
+    Err(f) -> Err(f)
+    Ok(_u) -> {
+      let r = db(as_outbound(stat(a.qiniu, key)))?
+      if r.status == 612 {
+        # not uploaded yet (or not finished): the reservation stays for a retry
+        Err(Refused(Invalid("对象未在七牛找到，请先完成上传")))
+      } else if r.status != 200 {
+        Err(Failed(upstream("七牛 stat 返回 ${to_string(r.status)}")))
+      } else {
+        let size = stat_int(r.body, "fsize")
+        let mime = safe_persisted_mime(nonblank_or(stat_str(r.body, "mimeType"), guess_mime(p.rel)))
+        commit(a, d.id, basename(p.rel), key, Some(p), mime, size)
+      }
+    }
+  }
+}
+
+fn claim(c: DbConn, token: String, key: String) -> Result[(DropRow, DropPending), DropErr] !io = {
+  let d = known_drop(c, token)?
+  let found: Option[DropPending] = if key == "" { None } else { db(pending_for(c, key, d.id))? }
+  match found {
+    Some(p) -> Ok((d, p))
+    None -> Err(Refused(NotFound("上传凭证不存在或已登记")))
+  }
+}
+
+fn nonblank_or(s: String, fallback: String) -> String = if s == "" { fallback } else { s }
+
+fn stat_int(body: String, field: String) -> Int !io =
+  match parse(body) {
+    Ok(JObj(m)) ->
+      match map.get(m, field) {
+        Some(JInt(n)) -> n
+        Some(JNum(x)) -> to_int(x)
+        _ -> 0
+      }
+    _ -> 0
+  }
+
+fn stat_str(body: String, field: String) -> String !io =
+  match parse(body) {
+    Ok(JObj(m)) ->
+      match map.get(m, field) {
+        Some(JStr(s)) -> s
+        _ -> ""
+      }
+    _ -> ""
+  }
+
+# ---- one-step upload (curl -T) ----
+
+## PUT /api/drop/files/{name}: the body was spilled to a temp file by the
+## server (route tag "stream-body"); it is uploaded from there, constant memory.
+## `declared` is the request's Content-Length (None when it had none, or sent a
+## chunked body). The quota is judged on the declared length before anything is
+## uploaded, and again on the actual length in the final transaction.
+pub fn put_file(a: Auth, token: String, name: String, declared: Option[Int], body_path: Option[String]) -> Result[(String, Int), DropErr] !Clock !Upstream !io = {
+  let d = with_db(a.db.path, a.db.ext, c => active_drop(c, token))?
+  let _n = name_ok(name)?
+  let length = required_length(declared)?
+  let _q = refuse_if(quota_refusal(d, length))?
+  let path = spilled(body_path)?
+  let actual = file_length(path)?
+  if actual != length {
+    Err(Refused(Invalid("请求体长度与 Content-Length 不符")))
+  } else {
+    let key = mint_key(name)
+    let mime = safe_persisted_mime(guess_mime(name))
+    match upload_file(a.qiniu, key, path, mime, now_s() + a.qiniu.expires) {
+      Err(m) -> {
+        gc_unreferenced(a, Some(key))
+        Err(Failed(tag_outbound(m)))
+      }
+      Ok(_u) -> commit(a, d.id, name, key, None, mime, actual)
+    }
+  }
+}
+
+# ---- the final write, shared by both upload paths ----
+
+# `reserved` is the direct upload's reservation; the one-step PUT has none (its
+# key never left this process). On a refusal the object is deleted; on a plain
+# failure a reserved key keeps its reservation so the uploader can retry, and an
+# unreserved one is collected.
+fn commit(a: Auth, drop_id: Int, name: String, key: String, reserved: Option[DropPending], mime: String, size: Int) -> Result[(String, Int), DropErr] !Clock !Upstream !io = {
+  let now = now_s()
+  let out = with_db(a.db.path, a.db.ext, c => settle(with_immediate_tx(c, () => commit_tx(c, drop_id, name, key, reserved, mime, size, now))))
+  match out {
+    Ok(v) -> Ok(v)
+    Err(Refused(r)) -> {
+      discard(a, key, drop_id)
+      Err(Refused(r))
+    }
+    Err(Failed(m)) -> {
+      match reserved {
+        Some(_p) -> ()
+        None -> gc_unreferenced(a, Some(key))
+      }
+      Err(Failed(m))
+    }
+  }
+}
+
+## The final transaction: re-judge the link, re-check the reservation and the
+## quota with the real size, pick a free name, insert the row, consume the
+## reservation, charge the quota. Every check comes before the first write, so a
+## refusal commits an empty transaction.
+fn commit_tx(c: DbConn, drop_id: Int, name: String, key: String, reserved: Option[DropPending], mime: String, size: Int, now: Int) -> Result[Result[(String, Int), Refusal], String] !io =
+  match drop_by_id(c, drop_id)? {
+    None -> Ok(Err(Gone("上传链接已被删除")))
+    Some(d) -> {
+      let dir_ok = dir_present(c, d.dir)?
+      match unusable(status_of(d, now, dir_ok)) {
+        Some(r) -> Ok(Err(r))
+        None -> {
+          let claim_ok = match reserved {
+            Some(_p) -> pending_for(c, key, d.id)? != None
+            None -> true
+          }
+          let limit = match reserved {
+            Some(p) -> p.size_limit
+            None -> d.max_file_bytes
+          }
+          if not claim_ok || key_referenced(c, key)? {
+            Ok(Err(NotFound("上传凭证不存在或已登记")))
+          } else if size > limit {
+            Ok(Err(TooLarge("文件超过上传凭证允许的大小")))
+          } else {
+            match quota_refusal(d, size) {
+              Some(r) -> Ok(Err(r))
+              None ->
+                match pick_rel(c, d.dir, name, key, 0)? {
+                  Err(r) -> Ok(Err(r))
+                  Ok(pair) -> {
+                    let (rel, chosen) = pair
+                    let _i = insert_drop_file(c, rel, key, mime, size)?
+                    let _r = consume(c, key, d.id, reserved)?
+                    let _q = charge(c, d.id, size)?
+                    Ok(Ok((chosen, size)))
+                  }
+                }
+            }
+          }
+        }
+      }
+    }
+  }
+
+fn consume(c: DbConn, key: String, drop_id: Int, reserved: Option[DropPending]) -> Result[Unit, String] !io =
+  match reserved {
+    None -> Ok(())
+    Some(_p) -> {
+      let n = release_key(c, key, drop_id)?
+      if n == 1 { Ok(()) } else { Err("drop reservation consume count changed: ${key}") }
+    }
+  }
+
+# Drop a key's reservation and collect its object. Best effort: the orphan
+# ledger row goes with the reservation, so the reference-aware GC is then free
+# to delete the object, and if anything here fails the sweeper still has it.
+fn discard(a: Auth, key: String, drop_id: Int) -> Unit !Upstream !io = {
+  let _r: Result[Int, String] = with_db(a.db.path, a.db.ext, c => with_immediate_tx(c, () => release_key(c, key, drop_id)))
+  gc_unreferenced(a, Some(key))
+}
+
+# ---- admin ----
+
+## POST /api/fm/drops: create a link. The plaintext token is returned here and
+## never again.
+pub fn create_drop(a: Auth, s: DropSpec) -> Result[(DropRow, String), DropErr] !Clock !io = {
+  let _v = spec_ok(s)?
+  let token = random_token()
+  let expires_at = now_s() + s.expires_in_s
+  let d = with_db(a.db.path, a.db.ext, c => create_on(c, s, sha256_hex(token), expires_at))?
+  Ok((d, token))
+}
+
+fn create_on(c: DbConn, s: DropSpec, token_hash: String, expires_at: Int) -> Result[DropRow, DropErr] !io = {
+  let _s = db(ensure_schema(c))?
+  settle(with_immediate_tx(c, () => create_tx(c, s, token_hash, expires_at)))
+}
+
+fn create_tx(c: DbConn, s: DropSpec, token_hash: String, expires_at: Int) -> Result[Result[DropRow, Refusal], String] !io =
+  if not dir_present(c, s.dir)? {
+    Ok(Err(NotFound("目录不存在")))
+  } else {
+    let d = insert_drop(c, token_hash, s.label, s.dir, expires_at, s.max_files, s.max_file_bytes, s.max_total_bytes)?
+    Ok(Ok(d))
+  }
+
+## The state of a link right now, for the admin view.
+pub fn drop_status(a: Auth, d: DropRow) -> Result[DropStatus, DropErr] !Clock !io = {
+  let dir_ok = with_db(a.db.path, a.db.ext, c => db(dir_present(c, d.dir)))?
+  Ok(status_of(d, now_s(), dir_ok))
+}
+
+## GET /api/fm/drops: every link with its state, newest first.
+pub fn list_all(a: Auth) -> Result[List[(DropRow, DropStatus)], DropErr] !Clock !io = {
+  let now = now_s()
+  with_db(a.db.path, a.db.ext, c => list_on(c, now))
+}
+
+fn list_on(c: DbConn, now: Int) -> Result[List[(DropRow, DropStatus)], DropErr] !io = {
+  let _s = db(ensure_schema(c))?
+  let rows = db(list_drops(c))?
+  with_status(c, rows, now, 0, [])
+}
+
+fn with_status(c: DbConn, rows: List[DropRow], now: Int, i: Int, acc: List[(DropRow, DropStatus)]) -> Result[List[(DropRow, DropStatus)], DropErr] !io =
+  if i >= len(rows) {
+    Ok(acc)
+  } else {
+    let dir_ok = db(dir_present(c, rows[i].dir))?
+    with_status(c, rows, now, i + 1, acc ++ [(rows[i], status_of(rows[i], now, dir_ok))])
+  }
+
+## POST /api/fm/drops/revoke. Keys it already signed stay reserved; register
+## refuses them (410) and collects their objects.
+pub fn revoke(a: Auth, id: Int) -> Result[Unit, DropErr] !io =
+  with_db(a.db.path, a.db.ext, c => revoke_on(c, id))
+
+fn revoke_on(c: DbConn, id: Int) -> Result[Unit, DropErr] !io = {
+  let _s = db(ensure_schema(c))?
+  if db(revoke_drop(c, id))? { Ok(()) } else { Err(Refused(NotFound("上传链接不存在"))) }
+}
+
+## POST /api/fm/drops/delete. Files already uploaded stay where they are.
+pub fn remove(a: Auth, id: Int) -> Result[Unit, DropErr] !io =
+  with_db(a.db.path, a.db.ext, c => remove_on(c, id))
+
+fn remove_on(c: DbConn, id: Int) -> Result[Unit, DropErr] !io = {
+  let _s = db(ensure_schema(c))?
+  let gone = db(with_immediate_tx(c, () => delete_drop(c, id)))?
+  if gone { Ok(()) } else { Err(Refused(NotFound("上传链接不存在"))) }
+}
+
+## Startup: create the tables if this database has never seen them.
+pub fn init_schema(a: Auth) -> Result[Unit, String] !io =
+  with_db(a.db.path, a.db.ext, c => ensure_schema(c))
+
+# ---- tests ----
+
+fn row(used_files: Int, used_bytes: Int) -> DropRow =
+  DropRow {
+    id: 1, label: "", dir: "in", created_at: "2026-10-01 00:00:00", expires_at: 1000,
+    revoked: false, max_files: 3, max_file_bytes: 100, max_total_bytes: 250,
+    used_files: used_files, used_bytes: used_bytes,
+  }
+
+test "a link is judged revoked, then expired, then exhausted, then by its directory" {
+  let fresh = row(0, 0)
+  assert status_of(fresh, 999, true) == Active
+  # expiry is inclusive of the instant itself
+  assert status_of(fresh, 1000, true) == Expired
+  assert status_of(DropRow { ..fresh, revoked: true }, 0, true) == Revoked
+  assert status_of(DropRow { ..fresh, revoked: true }, 5000, false) == Revoked
+  assert status_of(row(3, 0), 0, true) == Exhausted
+  assert status_of(row(0, 250), 0, true) == Exhausted
+  assert status_of(fresh, 0, false) == DirMissing
+  assert status_text(DirMissing) == "dir_missing"
+}
+
+test "quota admits a file only when it fits every limit" {
+  assert quota_refusal(row(0, 0), 100) == None
+  assert quota_refusal(row(0, 0), 0) == None
+  assert quota_refusal(row(0, 0), 101) == Some(TooLarge("文件超过单文件上限（100 字节）"))
+  assert quota_refusal(row(0, 0), -1) == Some(Unprocessable("size 不能为负数"))
+  assert quota_refusal(row(2, 200), 50) == None
+  assert quota_refusal(row(2, 200), 51) == Some(TooLarge("超出上传链接的总额度（剩余 50 字节）"))
+  assert quota_refusal(row(3, 0), 1) == Some(Gone("上传链接的文件数已达上限"))
+}
+
+fn cp(n: Int) -> String =
+  match char.of(n) {
+    Some(c) -> from_code_points([c])
+    None -> ""
+  }
+
+test "a drop name is one plain path segment" {
+  assert name_refusal("report.pdf") == None
+  assert name_refusal("报告 v2.pdf") == None
+  assert name_refusal(".hidden") == None
+  assert name_refusal("") == Some("文件名不能为空")
+  assert name_refusal(".") == Some("文件名不能是 . 或 ..")
+  assert name_refusal("..") == Some("文件名不能是 . 或 ..")
+  assert name_refusal("../x") == Some("文件名不能包含 / 或 \\")
+  assert name_refusal("a/b") == Some("文件名不能包含 / 或 \\")
+  assert name_refusal("a\\b") == Some("文件名不能包含 / 或 \\")
+  assert name_refusal("a" ++ cp(0x00) ++ "b") == Some("文件名不能包含控制字符")
+  assert name_refusal("a" ++ cp(0x0A) ++ "b") == Some("文件名不能包含控制字符")
+  assert name_refusal("a" ++ cp(0x7F)) == Some("文件名不能包含控制字符")
+  assert name_refusal("a" ++ cp(0x85) ++ "b") == Some("文件名不能包含控制字符")
+  # the write guard still runs: edge whitespace is refused there
+  assert name_refusal(" a.txt") == Some("名称不能以空白开头或结尾")
+  assert name_refusal("   ") == Some("名称不能只由空白组成")
+  # 255 bytes is the cap, counted in UTF-8 (each 中 is three)
+  assert name_refusal(join(map(range(0, 85), _i => "中"), "")) == None
+  assert name_refusal(join(map(range(0, 86), _i => "中"), "")) == Some("文件名不能超过 255 字节")
+}
+
+test "a taken name is retried with a counter before the extension" {
+  assert candidate_name("a.txt", 0) == "a.txt"
+  assert candidate_name("a.txt", 1) == "a (1).txt"
+  assert candidate_name("a.tar.gz", 2) == "a.tar (2).gz"
+  assert candidate_name("README", 3) == "README (3)"
+  assert candidate_name(".env", 1) == ".env (1)"
+}
+
+test "only a short alphanumeric extension reaches the object key" {
+  assert key_ext_ok("pdf")
+  assert key_ext_ok("JPG")
+  assert not key_ext_ok("")
+  assert not key_ext_ok("p f")
+  assert not key_ext_ok("中文")
+  assert not key_ext_ok("abcdefghijklmnopq")
+}
+
+test "a direct credential lives at most an hour and never past the link" {
+  assert direct_deadline(1000, 100000, 3600) == 4600
+  assert direct_deadline(1000, 100000, 86400) == 4600
+  assert direct_deadline(1000, 100000, 60) == 1060
+  assert direct_deadline(1000, 2000, 3600) == 2000
+  assert direct_size_limit(row(0, 0)) == 100
+  assert direct_size_limit(row(1, 200)) == 50
+}
+
+fn spec() -> DropSpec =
+  DropSpec {
+    dir: "in", label: "", expires_in_s: DEFAULT_EXPIRES_S, max_files: DEFAULT_MAX_FILES,
+    max_file_bytes: DEFAULT_MAX_FILE_BYTES, max_total_bytes: DEFAULT_MAX_TOTAL_BYTES,
+  }
+
+test "link parameters are held to their ranges" {
+  assert spec_refusal(spec()) == None
+  assert spec_refusal(DropSpec { ..spec(), expires_in_s: 59 }) != None
+  assert spec_refusal(DropSpec { ..spec(), expires_in_s: 60 }) == None
+  assert spec_refusal(DropSpec { ..spec(), expires_in_s: 2592001 }) != None
+  assert spec_refusal(DropSpec { ..spec(), max_files: 0 }) != None
+  assert spec_refusal(DropSpec { ..spec(), max_files: 1001 }) != None
+  assert spec_refusal(DropSpec { ..spec(), max_file_bytes: 5368709121 }) != None
+  assert spec_refusal(DropSpec { ..spec(), max_total_bytes: 53687091201 }) != None
+  assert spec_refusal(DropSpec { ..spec(), label: join(map(range(0, 100), _i => "标"), "") }) == None
+  assert spec_refusal(DropSpec { ..spec(), label: join(map(range(0, 101), _i => "标"), "") }) != None
+}
+
+fn commit_test_db() -> DbConn !io = {
+  let c = open("jdbc:sqlite::memory:")
+  let _t = exec(c, "create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null)", [])
+  let _p = exec(c, "create table pending_uploads (key text primary key, path text not null, created_at text not null)", [])
+  let _s = ensure_schema(c)
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('in', 1, null, '', 0, 'now', 'now')", [])
+  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('in/a.txt', 0, 'old-key', 'text/plain', 3, 'now', 'now')", [])
+  let _l = exec(c, "insert into upload_drops (id, token_hash, dir, created_at, expires_at, max_files, max_file_bytes, max_total_bytes) values (1, 'h', 'in', 'now', 1000, 3, 100, 250)", [])
+  c
+}
+
+fn committed(r: Result[Result[(String, Int), Refusal], String]) -> Option[String] =
+  match r {
+    Ok(Ok(pair)) -> {
+      let (name, _size) = pair
+      Some(name)
+    }
+    _ -> None
+  }
+
+test "the final write never overwrites: a taken name gets the next counter" {
+  let c = commit_test_db()
+  let r = with_immediate_tx(c, () => commit_tx(c, 1, "a.txt", "k1", None, "text/plain", 10, 0))
+  assert committed(r) == Some("a (1).txt")
+  # the original row is untouched
+  assert scalar_int(c, "select count(*) from files where path = 'in/a.txt' and key = 'old-key' and size = 3", []) == Ok(1)
+  assert scalar_int(c, "select count(*) from files where path = 'in/a (1).txt' and key = 'k1'", []) == Ok(1)
+  assert scalar_int(c, "select used_files * 1000 + used_bytes from upload_drops where id = 1", []) == Ok(1010)
+}
+
+test "the final write re-checks quota with the real size and writes nothing on refusal" {
+  let c = commit_test_db()
+  let _u = exec(c, "update upload_drops set used_files = 2, used_bytes = 200 where id = 1", [])
+  let r = with_immediate_tx(c, () => commit_tx(c, 1, "b.txt", "k2", None, "text/plain", 51, 0))
+  assert r == Ok(Err(TooLarge("超出上传链接的总额度（剩余 50 字节）")))
+  assert scalar_int(c, "select count(*) from files where key = 'k2'", []) == Ok(0)
+  assert scalar_int(c, "select used_files * 1000 + used_bytes from upload_drops where id = 1", []) == Ok(2200)
+}
+
+test "the final write consumes a reservation once and refuses its replay" {
+  let c = commit_test_db()
+  let p = DropPending { key: "k3", drop_id: 1, rel: "in/c.txt", size_limit: 100 }
+  let _r = with_immediate_tx(c, () => reserve_key(c, "k3", 1, "in/c.txt", 100))
+  let first = with_immediate_tx(c, () => commit_tx(c, 1, "c.txt", "k3", Some(p), "text/plain", 5, 0))
+  assert committed(first) == Some("c.txt")
+  assert scalar_int(c, "select count(*) from drop_pending", []) == Ok(0)
+  assert scalar_int(c, "select count(*) from pending_uploads", []) == Ok(0)
+  let replay = with_immediate_tx(c, () => commit_tx(c, 1, "c.txt", "k3", Some(p), "text/plain", 5, 0))
+  assert replay == Ok(Err(NotFound("上传凭证不存在或已登记")))
+  assert scalar_int(c, "select count(*) from files where key = 'k3'", []) == Ok(1)
+}
+
+test "the final write refuses an expired or revoked link" {
+  let c = commit_test_db()
+  assert with_immediate_tx(c, () => commit_tx(c, 1, "d.txt", "k4", None, "text/plain", 1, 1000)) == Ok(Err(Gone("上传链接已过期")))
+  let _v = exec(c, "update upload_drops set revoked = 1 where id = 1", [])
+  assert with_immediate_tx(c, () => commit_tx(c, 1, "d.txt", "k4", None, "text/plain", 1, 0)) == Ok(Err(Gone("上传链接已被吊销")))
+  assert scalar_int(c, "select count(*) from files where key = 'k4'", []) == Ok(0)
+}
