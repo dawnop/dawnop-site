@@ -41,6 +41,26 @@ pub fn upload_token(q: Qiniu, key: String, deadline: Int) -> String !io = {
   "${q.ak}:${sign}:${encoded_policy}"
 }
 
+## Upload token for an anonymous uploader (the drop links, svc/drop). Same scope
+## and signature as `upload_token`, plus the two putPolicy fields that make the
+## bucket itself enforce what the token may do:
+##
+##   insertOnly=1      the key can only be created, never overwritten, so a
+##                     token cannot be replayed to replace bytes already
+##                     registered under that key
+##   fsizeLimit=<n>    qiniu refuses (413) an upload larger than n bytes
+##
+## A separate function rather than optional fields on `upload_token`, so the
+## admin token's bytes (and every golden that spends one) stay exactly what
+## they were. Field order follows the SDK's dict order: scope and deadline
+## first, extra policy fields after.
+pub fn upload_token_limited(q: Qiniu, key: String, deadline: Int, fsize_limit: Int) -> String !io = {
+  let policy = "{\"scope\":\"${q.bucket}:${key}\",\"deadline\":${deadline},\"insertOnly\":1,\"fsizeLimit\":${fsize_limit}}"
+  let encoded_policy = b64url_encode(policy)
+  let sign = hmac_sha1_b64url(q.sk, encoded_policy)
+  "${q.ak}:${sign}:${encoded_policy}"
+}
+
 ## A private download URL: append ?e=<deadline>, sign the whole thing, append
 ## &token=ak:sign. `base_url` is the full https URL (with any imageView2 fop).
 pub fn private_url(q: Qiniu, base_url: String, deadline: Int) -> String !io = {
@@ -87,4 +107,23 @@ test "signatures match the qiniu SDK byte-for-byte" {
     "Qiniu AKtest:NkIHWnHFAVdnaXMKYl-2OE1foYk="
   assert qiniu_mac(q, "GET", "/billing-api/v1/respack/list", "api.qiniu.com", "application/json", "") ==
     "Qiniu AKtest:0ymmWdvrL7R-Ru70v3DT0glRFic="
+}
+
+test "a limited upload token carries insertOnly and fsizeLimit after scope and deadline" {
+  # expected bytes computed with Python hmac/base64 over the literal policy
+  # {"scope":"mybucket:path/to/key.jpg","deadline":1783976183,"insertOnly":1,"fsizeLimit":1048576}
+  let q = Qiniu {
+    ak: "AKtest",
+    sk: "SKtest",
+    bucket: "mybucket",
+    domain: "",
+    expires: 3600,
+    rs_host: "",
+    up_host: "",
+  }
+  assert upload_token_limited(q, "path/to/key.jpg", 1783976183, 1048576) ==
+    "AKtest:6zGYQhyncrYVUlKVvSiVDuIgP0Q=:eyJzY29wZSI6Im15YnVja2V0OnBhdGgvdG8va2V5LmpwZyIsImRlYWRsaW5lIjoxNzgzOTc2MTgzLCJpbnNlcnRPbmx5IjoxLCJmc2l6ZUxpbWl0IjoxMDQ4NTc2fQ=="
+  # the admin token is untouched by the new function: same policy as before
+  assert upload_token(q, "path/to/key.jpg", 1783976183) ==
+    "AKtest:LdlhAwhBCGjF3a-wmS6FRzyLyik=:eyJzY29wZSI6Im15YnVja2V0OnBhdGgvdG8va2V5LmpwZyIsImRlYWRsaW5lIjoxNzgzOTc2MTgzfQ=="
 }

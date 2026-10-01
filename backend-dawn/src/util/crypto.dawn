@@ -7,6 +7,7 @@ use std/bytes
 use sha2/sha256
 use util/ferr.{catch_text}
 use java "java.security.MessageDigest"
+use java "java.security.SecureRandom"
 use java "java.util.Base64"
 use java "java.util.UUID"
 use java "javax.crypto.Mac"
@@ -81,6 +82,19 @@ pub fn uuid() -> String !io =
 ## keys in (an opaque 32-hex name, optionally suffixed with the file extension).
 pub fn uuid_hex() -> String !io = join(str.split(uuid(), "-"), "")
 
+## `n` bytes from the platform CSPRNG (SecureRandom; NativePRNG on Linux, which
+## reads /dev/urandom and does not block). One byte per call keeps the Java side
+## to an Int return: a byte[] filled in place by `nextBytes` would be a Dawn
+## `Bytes` mutated behind its back.
+pub fn random_bytes(n: Int) -> Bytes !io = {
+  let rng = SecureRandom.new()
+  bytes.freeze(fold(range(0, n), bytes.buf(), (b, _i) => bytes.put(b, rng.nextInt(256))))
+}
+
+## A bearer secret for a capability link: 32 CSPRNG bytes (256 bits) as
+## unpadded base64url, 43 characters, safe in a URL fragment and a header.
+pub fn random_token() -> String !io = bytes.to_base64_url(random_bytes(32))
+
 # ---- tests (vectors cross-checked against Python hashlib/hmac) ----
 
 test "sha256 known vector" {
@@ -123,4 +137,15 @@ test "uuid shape" {
   let u = uuid()
   assert str.len(u) == 36
   assert u != uuid()
+}
+
+test "random tokens are 256-bit base64url and do not repeat" {
+  let t = random_token()
+  assert str.len(t) == 43
+  assert bytes.len(random_bytes(32)) == 32
+  assert t != random_token()
+  # base64url alphabet only: nothing that needs escaping in a header or a URL
+  assert not str.contains(t, "+")
+  assert not str.contains(t, "/")
+  assert not str.contains(t, "=")
 }
