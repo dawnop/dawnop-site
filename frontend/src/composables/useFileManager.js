@@ -195,6 +195,7 @@ export function useFileManager() {
     selectedPath,
     actions: {
       newFolder,
+      createDrop: (rel) => openDropDialog(rel ?? cwd.value),
       pickFiles: transfers.pickFiles,
       pickFolder: transfers.pickFolder,
       loadCwd,
@@ -300,6 +301,7 @@ export function useFileManager() {
     else if (action === 'move') startMoveCopy('move', [row])
     else if (action === 'copy') startMoveCopy('copy', [row])
     else if (action === 'delete') doDelete(row)
+    else if (action === 'drop' && row.is_dir) openDropDialog(row.path)
   }
 
   async function newFolder() {
@@ -395,6 +397,13 @@ export function useFileManager() {
     if (cmd === '下载') transfers.doDownload(row)
     else if (cmd === '重命名') doRename(row)
     else if (cmd === '删除') doDelete(row)
+  }
+
+  // ---------- 上传链接（drop）：对话框本体是 components/DropCreateDialog.vue ----------
+  const dropDlg = reactive({ show: false, dir: '' })
+  function openDropDialog(rel) {
+    dropDlg.dir = rel
+    dropDlg.show = true
   }
 
   // ---------- 移动 / 复制（目标目录选择弹窗） ----------
@@ -520,6 +529,8 @@ export function useFileManager() {
     openSheet,
     sheetDo,
     newFolder,
+    dropDlg,
+    openDropDialog,
     doRename,
     doDeleteMany,
     onRowCommand,

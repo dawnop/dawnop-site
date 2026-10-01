@@ -13,6 +13,7 @@ import {
   Setting,
   Odometer,
   MoreFilled,
+  Link,
 } from '@element-plus/icons-vue'
 import { auth } from '../store/auth'
 import { useIsMobile } from '../composables/useIsMobile'
@@ -63,7 +64,10 @@ const groups = [
   },
   {
     label: '存储',
-    items: [{ to: '/admin/files', label: '文件管理', icon: FolderOpened }],
+    items: [
+      { to: '/admin/files', label: '文件管理', icon: FolderOpened },
+      { to: '/admin/drops', label: '上传链接', icon: Link },
+    ],
   },
   {
     label: '系统',
@@ -81,6 +85,7 @@ const navTos = [
   '/admin/pages',
   '/admin/viz',
   '/admin/files',
+  '/admin/drops',
   '/admin/monitor',
   '/admin/settings',
 ]
@@ -109,6 +114,7 @@ const crumbs = computed(() => {
     'admin-viz-new': [home, { label: '可视化', to: '/admin/viz' }, { label: '新建可视化' }],
     'admin-viz-edit': [home, { label: '可视化', to: '/admin/viz' }, { label: '编辑可视化' }],
     'admin-files': [home, { label: '文件管理' }],
+    'admin-drops': [home, { label: '文件管理', to: '/admin/files' }, { label: '上传链接' }],
     'admin-monitor': [home, { label: '监控' }],
     'admin-settings': [home, { label: '全局设置' }],
   }

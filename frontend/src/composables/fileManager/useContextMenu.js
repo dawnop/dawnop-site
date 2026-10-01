@@ -4,7 +4,7 @@
 //   selPaths / selRows / selectedPath  归 useSelection 所有：右键落在已多选的行上 →
 //                                      对整个选中集操作，否则改成单选那一行
 //   actions   菜单项真正要跑的动作，全部由 core / 其余子模块提供：
-//             newFolder / pickFiles / pickFolder / loadCwd / goto / selectFile /
+//             newFolder / createDrop(rel?) / pickFiles / pickFolder / loadCwd / goto / selectFile /
 //             doDownload / doDownloadMany / doRename / startMoveCopy / doDelete / doDeleteMany
 //
 // 输出：menu（reactive：show / x / y / rows）、items（computed 菜单项）、
@@ -22,6 +22,7 @@ import {
   Right,
   CopyDocument,
   Delete,
+  Link,
 } from '@element-plus/icons-vue'
 
 export function useContextMenu({ selPaths, selRows, selectedPath, actions }) {
@@ -69,14 +70,17 @@ export function useContextMenu({ selPaths, selRows, selectedPath, actions }) {
         { label: '新建文件夹', icon: FolderAdd, run: actions.newFolder },
         { label: '上传文件', icon: Files, run: actions.pickFiles },
         { label: '上传文件夹', icon: FolderOpened, run: actions.pickFolder },
+        { label: '为当前目录创建上传链接', icon: Link, run: () => actions.createDrop() },
         { label: '刷新', icon: RefreshRight, divided: true, run: actions.loadCwd },
       ]
     }
     if (rows.length === 1) {
       const r = rows[0]
       const one = []
-      if (r.is_dir) one.push({ label: '打开', icon: FolderOpened, run: () => actions.goto(r.path) })
-      else {
+      if (r.is_dir) {
+        one.push({ label: '打开', icon: FolderOpened, run: () => actions.goto(r.path) })
+        one.push({ label: '创建上传链接', icon: Link, run: () => actions.createDrop(r.path) })
+      } else {
         one.push({ label: '预览', icon: View, run: () => actions.selectFile(r) })
         one.push({ label: '下载', icon: Download, run: () => actions.doDownload(r) })
       }

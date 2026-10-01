@@ -24,8 +24,10 @@ import {
   ArrowUp,
   Plus,
   Select,
+  Link,
 } from '@element-plus/icons-vue'
 import { useFileManager } from '../../composables/useFileManager'
+import DropCreateDialog from '../../components/DropCreateDialog.vue'
 
 const {
   fm,
@@ -65,6 +67,8 @@ const {
   openSheet,
   sheetDo,
   newFolder,
+  dropDlg,
+  openDropDialog,
   doRename,
   doDeleteMany,
   onRowCommand,
@@ -189,6 +193,7 @@ const {
             </template>
             <template v-else>
               <el-button :icon="FolderAdd" text @click="newFolder">新建文件夹</el-button>
+              <el-button :icon="Link" text @click="openDropDialog(cwd)">创建上传链接</el-button>
             </template>
           </div>
           <div class="fm-tb-right">
@@ -630,7 +635,9 @@ const {
             ? transfers.pickFiles()
             : c === 'folder'
               ? transfers.pickFolder()
-              : newFolder()
+              : c === 'drop'
+                ? openDropDialog(cwd)
+                : newFolder()
       "
     >
       <el-button type="primary" circle :icon="Plus" class="fm-fab-btn" />
@@ -641,6 +648,7 @@ const {
           <el-dropdown-item command="newfolder" :icon="FolderAdd" divided
             >新建文件夹</el-dropdown-item
           >
+          <el-dropdown-item command="drop" :icon="Link">创建上传链接</el-dropdown-item>
         </el-dropdown-menu>
       </template>
     </el-dropdown>
@@ -696,12 +704,18 @@ const {
           <button class="fm-sheet-btn" @click="sheetDo('copy')">
             <el-icon><CopyDocument /></el-icon><span>复制</span>
           </button>
+          <button v-if="sheet.row.is_dir" class="fm-sheet-btn" @click="sheetDo('drop')">
+            <el-icon><Link /></el-icon><span>上传链接</span>
+          </button>
           <button class="fm-sheet-btn danger" @click="sheetDo('delete')">
             <el-icon><Delete /></el-icon><span>删除</span>
           </button>
         </div>
       </div>
     </el-drawer>
+
+    <!-- 创建上传链接（文件夹右键 / 工具栏 / 移动端 + 菜单） -->
+    <DropCreateDialog v-model="dropDlg.show" :dir="dropDlg.dir" />
   </div>
 </template>
 

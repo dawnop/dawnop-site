@@ -124,6 +124,11 @@ const routes = [
         name: 'admin-files',
         component: () => import('../views/admin/FilesLabView.vue'),
       },
+      {
+        path: 'drops',
+        name: 'admin-drops',
+        component: () => import('../views/admin/DropsAdminView.vue'),
+      },
       // 自建文件管理器试用期的旧地址，保留跳转
       { path: 'files-lab', redirect: { name: 'admin-files' } },
       {
