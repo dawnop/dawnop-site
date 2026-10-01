@@ -25,7 +25,7 @@ use util/jsonx.{obj, jstr, jint, jbool, jdatetime}
 use util/jsonread.{body_obj}
 use util/clock.{Clock, system_ms}
 use util/http.{Upstream, with_upstream}
-use util/errkind.{KConflict, KUpstream, KTimeout, split_kind}
+use util/errkind.{KConflict, KUpstream, KTimeout, split_kind, upstream, timeout}
 use util/paths.{fm_split, full, basename}
 use svc/auth.{Auth, guarded}
 use repo/repo_drop.{DropRow}
@@ -67,6 +67,40 @@ fn lift[T](r: Result[T, DropErr]) -> Result[T, HttpError] =
     Err(e) -> Err(drop_error(e))
   }
 
+# The uploader's version of `drop_error`. A refusal is worded for the uploader
+# already; a failure is not. Its text is whatever broke (a SQLite message, an
+# outbound error naming the qiniu entry, a guard quoting an object key) and the
+# uploader is the one party that must not read it, so it goes to the log and
+# the response keeps only the status and a fixed sentence per status.
+fn public_error(e: DropErr) -> HttpError =
+  match e {
+    Refused(r) -> refusal_error(r)
+    Failed(_msg) -> {
+      let status = drop_error(e).status
+      http_error(status, if status == 502 {
+        "对象存储暂时不可用，请稍后重试"
+      } else if status == 504 {
+        "对象存储没有响应，请稍后重试"
+      } else if status == 409 {
+        "上传冲突，请重试"
+      } else {
+        "服务器内部错误"
+      })
+    }
+  }
+
+fn lift_public[T](r: Result[T, DropErr]) -> Result[T, HttpError] !io =
+  match r {
+    Ok(v) -> Ok(v)
+    Err(e) -> {
+      match e {
+        Failed(msg) -> println("drop request failed: ${msg}")
+        Refused(_r) -> ()
+      }
+      Err(public_error(e))
+    }
+  }
+
 # ---- the uploader's door ----
 
 # The drop token, from its one header. A missing or empty header is the same
@@ -95,7 +129,7 @@ fn public(a: Auth, body: fn(Request) -> Result[Response, HttpError] !Clock !Upst
 pub fn info(a: Auth) -> Handler =
   public(a, req => {
     let token = drop_token(req)?
-    let d = lift(drop_info(a, token))?
+    let d = lift_public(drop_info(a, token))?
     Ok(json_ok(obj([
       ("label", jstr(d.label)),
       ("dir_name", jstr(basename(d.dir))),
@@ -117,7 +151,7 @@ pub fn upload_token(a: Auth) -> Handler =
     let m = body_map(req)?
     let name = req_str(m, "name")?
     let size = req_int(m, "size")?
-    let g = lift(grant_direct(a, token, name, size))?
+    let g = lift_public(grant_direct(a, token, name, size))?
     Ok(json_ok(obj([
       ("token", jstr(g.token)),
       ("key", jstr(g.key)),
@@ -132,7 +166,7 @@ pub fn register(a: Auth) -> Handler =
     let token = drop_token(req)?
     let m = body_map(req)?
     let key = req_str(m, "key")?
-    let done = lift(register_direct(a, token, key))?
+    let done = lift_public(register_direct(a, token, key))?
     let (name, size) = done
     Ok(receipt(name, size))
   })
@@ -143,7 +177,7 @@ pub fn put(a: Auth) -> Handler =
   public(a, req => {
     let token = drop_token(req)?
     let name = param(req, "name")?
-    let done = lift(put_file(a, token, name, declared_length(req), req.body_file))?
+    let done = lift_public(put_file(a, token, name, declared_length(req), req.body_file))?
     let (stored, size) = done
     Ok(receipt(stored, size))
   })
@@ -339,4 +373,16 @@ test "each refusal kind has its own status" {
   assert refusal_error(LengthRequired("x")).status == 411
   assert refusal_error(NoFreeName("x")).status == 409
   assert drop_error(Failed("database is locked")).status == 500
+}
+
+test "the uploader is told the status of a failure, never its text" {
+  let leaky = Failed("drop reservation consume count changed: 0123abcd.txt")
+  assert public_error(leaky).status == 500
+  assert public_error(leaky).message == "服务器内部错误"
+  let upstream_fail = Failed(upstream("stat http://rs/stat/YnVja2V0OmtleQ== refused"))
+  assert public_error(upstream_fail).status == 502
+  assert not str.contains(public_error(upstream_fail).message, "YnVja2V0")
+  assert public_error(Failed(timeout("outbound HTTP timed out after 10s: x"))).status == 504
+  # refusals are the uploader's to read and pass through as written
+  assert public_error(Refused(Gone("上传链接已过期"))).message == "上传链接已过期"
 }
