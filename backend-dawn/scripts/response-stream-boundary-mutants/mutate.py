@@ -87,17 +87,29 @@ def main() -> int:
             "use db/sql.{DbConn}\n",
             "use db/sql.{DbConn}\nuse web/types as bypass_types # owner bypass alias\n",
         )
+        # web5 made Response opaque, so the bypass reads the body seam through
+        # the public accessor and re-wraps the raw stream itself with the sized
+        # constructor (not `streaming`, which another assertion owns), carrying
+        # status, content type and headers across: the same owner bypass the
+        # web4 record literal spelled.
         append_once(
             api_fm,
             "pub fn bypassed_owner_adapter(response: Response) -> Response =\n"
-            "  match response.body {\n"
-            "    bypass_types.Stream(raw_stream) ->\n"
-            "      Response {\n"
-            "        status: response.status,\n"
-            "        content_type: response.content_type,\n"
-            "        headers: response.headers,\n"
-            "        body: bypass_types.Stream(raw_stream),\n"
-            "      }\n"
+            "  match bypass_types.response_body(response) {\n"
+            "    bypass_types.Stream(raw_stream, Some(length)) ->\n"
+            "      fold(\n"
+            "        bypass_types.response_headers(response),\n"
+            "        bypass_types.streaming_sized(\n"
+            "          bypass_types.response_status(response),\n"
+            "          bypass_types.response_content_type(response),\n"
+            "          raw_stream,\n"
+            "          length,\n"
+            "        ),\n"
+            "        (r, h) => {\n"
+            "          let (k, v) = h\n"
+            "          bypass_types.with_header(r, k, v)\n"
+            "        },\n"
+            "      )\n"
             "    _ -> response\n"
             "  }",
         )
