@@ -3,8 +3,8 @@
 // 只在跟后端通信时转成 qiniu:// 形式，组件里不必关心存储前缀。
 // 约定：本层一律**返回解包后的响应体**（不是 axios 的 res），调用方不用再 `.data`。
 // 其余 xxxApi 返回 res 是历史写法，这一层自成一体，就在这里统一掉。
-import * as qiniuJs from 'qiniu-js'
 import client from './client'
+import { directUpload } from './qiniuUpload'
 import { auth } from '../store/auth'
 
 const STORAGE = 'qiniu'
@@ -150,30 +150,13 @@ export const copy = async (rel, destRel, srcRels) =>
     })
   ).data
 
-// 上传 = 前端直传七牛：要凭证 → qiniu-js 直传 → 登记。
-// qiniu-js 自动按文件大小选通道：≤4MB 表单直传，>4MB 分片上传（v2，4MB/片、
-// 分片并发、localStorage 断点续传），大文件不再受表单上传 1GB 上限约束。
+// 上传 = 前端直传七牛：要凭证 → qiniu-js 直传（api/qiniuUpload.js，与公开上传链接页共用）→ 登记。
 // 文件夹上传时把相对子路径塞进 name（后端 _ensure_dirs 会重建目录）。
 // nameOverride：拖拽文件夹上传时 File 没有 webkitRelativePath，由调用方遍历目录树后显式传入。
 export async function uploadFile(rel, file, onProgress, nameOverride) {
   const name = nameOverride || file.webkitRelativePath || file.name
   const { data: tk } = await client.post('/fm/upload-token', { path: toFull(rel), name })
-  await new Promise((resolve, reject) => {
-    const observable = qiniuJs.upload(
-      file,
-      tk.key,
-      tk.token,
-      { fname: name.split('/').pop() },
-      { useCdnDomain: true },
-    )
-    observable.subscribe({
-      next: (res) => {
-        if (onProgress && res?.total) onProgress(res.total.percent / 100)
-      },
-      error: (err) => reject(new Error(err?.message || '上传失败')),
-      complete: () => resolve(),
-    })
-  })
+  await directUpload(file, tk.key, tk.token, name.split('/').pop(), onProgress)
   await client.post('/fm/register', {
     path: tk.path,
     key: tk.key,
@@ -187,3 +170,20 @@ export async function stats() {
   const { data } = await client.get('/fm/stats')
   return data
 }
+
+// ---- 上传链接（drop）管理：创建 / 列表 / 吊销 / 删除 ----
+// 后端 dir 用 qiniu:// 形式，这里转成 rel（根为空串），与本层其余接口一致。
+const mapDrop = (d) => ({ ...d, dir: relOf(d.dir) })
+
+// opts: { label, expires_in_s, max_files, max_file_bytes, max_total_bytes }。
+// 返回体含明文 token，只此一次；调用方展示完即丢。
+export async function createDrop(rel, opts) {
+  const { data } = await client.post('/fm/drops', { dir: toFull(rel), ...opts })
+  return mapDrop(data)
+}
+export async function listDrops() {
+  const { data } = await client.get('/fm/drops')
+  return (data.items || []).map(mapDrop)
+}
+export const revokeDrop = async (id) => (await client.post('/fm/drops/revoke', { id })).data
+export const deleteDrop = async (id) => (await client.post('/fm/drops/delete', { id })).data

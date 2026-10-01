@@ -18,6 +18,29 @@ export function fmtDate(s) {
   return new Date(s).toLocaleDateString('zh-CN')
 }
 
+// 时间值归一为毫秒：unix 秒（< 1e12）、毫秒、ISO 字符串（日期与时间之间是空格也行）都接受；
+// 解析不了返回 NaN。上传链接的 expires_at 是 unix 秒、created_at 是字符串，两种都走这里。
+export function toMs(v) {
+  if (v === null || v === undefined || v === '') return NaN
+  if (typeof v === 'number') return v < 1e12 ? v * 1000 : v
+  if (/^\d+$/.test(String(v))) return toMs(Number(v))
+  return Date.parse(String(v).replace(' ', 'T'))
+}
+
+// 时间值 → 本地「2026/10/1 14:05」，空值或解析失败 → "—"。
+export function fmtDateTime(v) {
+  const ms = toMs(v)
+  if (!Number.isFinite(ms)) return '—'
+  return new Date(ms).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
 // 时间戳（ms）→ 简短「X月Y日」，空值 → "—"。文件列表/预览用。
 export function fmtMonthDay(ms) {
   if (!ms) return '—'

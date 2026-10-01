@@ -43,6 +43,14 @@ const routes = [
     ],
   },
 
+  // 公开上传链接页：匿名访客用，token 在 #片段里。独立页面，不套前台导航，也不需要登录
+  {
+    path: '/drop',
+    name: 'drop',
+    meta: { title: '上传文件' },
+    component: () => import('../views/DropView.vue'),
+  },
+
   // 后台登录：独立，无侧边栏布局
   {
     path: '/admin/login',
