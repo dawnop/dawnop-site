@@ -33,6 +33,10 @@
 # v0.78.0 于 2026-09-25 同法三处一致：fetch-dawn.sh 下载实测、release 的
 # dawn-selfhost.jar.sha256 资产、dawn-lang 的 seed-checksums.txt；先故意写错末位，
 # 确认硬失败并打出实测值。
+# v0.81.0 于 2026-10-01 三处一致：fetch-dawn.sh 下载实测、release 的
+# dawn-selfhost.jar.sha256 资产、GitHub release API 给该资产的 digest 字段（本机
+# dawn-lang 的 seed-checksums.txt 还停在 v0.77.0，故换成 API 这一处）；先故意写错
+# 末位，确认硬失败并打出实测值。
 # 其余（v0.1.0–v0.7.0，Kotlin 时期的 `dawn.jar`）只有本机 `.dawn/` 缓存这一个来源，
 # 是 trust-on-first-use：它能挡住此后的篡改与损坏，不能证明当初上传的就对应源码。
 # 真正的来源证明要 release 签名 + 可复现构建，那是 dawn-lang 侧的事。
@@ -64,3 +68,4 @@ fbbcd435766e2cbf923affa750711257925d8bc8b3cf6d34f02c952007dce69f  v0.67.0
 c49e900d0e0dd9d6e0b0e77f6ad97bd005f42d61c0a0aced028a8f01347e8cbf  v0.69.0
 8fe4b88ed4a7109fc0942b1f9cd05270fcf1e6e51a7608d382aa17ac70e8f501  v0.72.0
 102db87302744856753050664b5b7160c6462263475d370c9322cf800d801b65  v0.78.0
+e23b4c462d0d8ef9f8406492db2cc7d682c518bec736dee06ee651da9f9285bb  v0.81.0

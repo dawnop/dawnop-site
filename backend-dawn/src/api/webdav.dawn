@@ -27,7 +27,7 @@ use java "java.text.SimpleDateFormat"
 use java "java.util.Date"
 use java "java.util.Locale"
 use java "java.util.TimeZone"
-use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, text, raw, binary, redirect, with_header, header, headers_all, param_segs}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, text, raw, binary, redirect, with_header, header, headers_all, param_segs, response_headers}
 use web/router.{Route, route_method_of, tagged}
 use db/db.{with_db}
 use svc/auth.{Auth, check_basic, scheme_param}
@@ -1548,7 +1548,7 @@ test "OPTIONS advertises DAV class 1,2 and an Allow matching the routed verbs" {
   # Note the wire spelling is `Dav: 1, 2`: the JDK http server title-cases header
   # names on emission. Field names are case-insensitive (RFC 9110 §5.1), so that
   # is conforming, but a case-sensitive `grep '^DAV:'` will miss it.
-  assert options_response().headers ==
+  assert response_headers(options_response()) ==
     [("DAV", "1, 2"), ("Allow", ALLOW), ("MS-Author-Via", "DAV"), ("Content-Length", "0")]
   # Allow cannot drift from the verbs dav_routes actually registers.
   assert ALLOW == fold(DAV_VERBS, "", (acc, v) => if acc == "" { v } else { acc ++ ", " ++ v })
