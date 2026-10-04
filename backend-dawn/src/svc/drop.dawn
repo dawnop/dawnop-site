@@ -36,7 +36,7 @@ use svc/auth.{Auth}
 use svc/files.{gc_unreferenced}
 use repo/repo_drop.{DropRow, DropPending, ensure_schema, insert_drop, drop_by_hash, drop_by_id, list_drops, revoke_drop, delete_drop, dir_present, rel_free, reserve_key, pending_for, release_key, insert_drop_file, charge}
 use repo/repo_fm.{key_referenced}
-use util/paths.{fm_join, basename, ext, guess_mime, safe_persisted_mime, name_verdict, NameAccepted, NameAllBlank, NameEdgeBlank, NameDotSegment}
+use util/paths.{fm_join, basename, ext, key_ext_ok, guess_mime, safe_persisted_mime, name_verdict, NameAccepted, NameAllBlank, NameEdgeBlank, NameDotSegment}
 use util/crypto.{random_token, sha256_hex, uuid_hex}
 use util/clock.{Clock, now_s}
 use util/ferr.{catch_text}
@@ -273,13 +273,7 @@ pub fn candidate_name(name: String, i: Int) -> String =
   }
 
 # Only a short alphanumeric extension is carried into the object key; anything
-# else gets a bare uuid. The key is ours, and the name is the uploader's.
-fn key_ext_ok(e: String) -> Bool =
-  e != "" && str.len(e) <= 16 && list.all(code_points(e), c => {
-    let n = char.code(c)
-    (n >= 0x30 && n <= 0x39) || (n >= 0x41 && n <= 0x5A) || (n >= 0x61 && n <= 0x7A)
-  })
-
+# else gets a bare uuid (util/paths `key_ext_ok`, shared with the text save).
 fn mint_key(name: String) -> String !io = {
   let e = ext(name)
   if key_ext_ok(e) { "${uuid_hex()}.${e}" } else { uuid_hex() }

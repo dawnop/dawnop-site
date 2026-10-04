@@ -20,7 +20,7 @@ use db/sql.{DbConn, with_immediate_tx, open, exec}
 use svc/auth.{Auth}
 use qiniu/creds.{Qiniu}
 use db/db.{with_db}
-use util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime, safe_persisted_mime, strip_slashes, strip_trailing_slash}
+use util/paths.{fm_split, parent_rel, basename, ext, key_ext_ok, fm_join, full, guess_mime, safe_persisted_mime, strip_slashes, strip_trailing_slash}
 use repo/repo_fm.{FileRow, ReplaceOutcome, MovePlan, CopiedRow, CopyTree, fs_data, taken, insert_folder, replace_file, replace_file_receipt, create_file_once, reparent_allow_missing, prepare_fm_move, commit_fm_moves, get_row, delete_subtrees, entry_json, key_referenced, key_pending, validate_fm_ancestors, validate_fm_file_target, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}
 use util/crypto.{uuid_hex}
 use qiniu/sign.{private_url}
@@ -440,9 +440,16 @@ fn save_mime(existing: Option[FileRow], rel: String) -> String =
     None -> guess_mime(rel)
   })
 
-fn save_key(rel: String) -> String !io = {
+# The new object key for a text save: a fresh uuid, plus the file's extension
+# only when key_ext_ok admits it (the rule drop's mint_key uses). The key reaches
+# a 302 `Location` through signed_url, and the extension used to be copied
+# verbatim, so a name ending in ".p<U+010A>x" put a raw LF into that header on
+# web 5.1 (the JDK writes a char's low byte) and is a 500 on web 6.1.
+fn save_key(rel: String) -> String !io = key_for_save(uuid_hex(), rel)
+
+fn key_for_save(id: String, rel: String) -> String = {
   let e = ext(basename(rel))
-  if e == "" { uuid_hex() } else { "${uuid_hex()}.${e}" }
+  if key_ext_ok(e) { "${id}.${e}" } else { id }
 }
 
 # ---- proxy upload ----
@@ -516,6 +523,26 @@ test "upload-token path joins the filename (not the bare dir)" {
   assert ext(sanitize_name("sub/b.md")) == "md"
   # extensionless file: no dot appended (caller uses a bare uuid key)
   assert ext(sanitize_name("README")) == ""
+}
+
+test "a text save carries only a short alphanumeric extension into the key" {
+  let id = "0123456789abcdef0123456789abcdef"
+  # ordinary extensions survive, case kept, from the last segment only
+  assert key_for_save(id, "docs/a.txt") == "${id}.txt"
+  assert key_for_save(id, "a.MD") == "${id}.MD"
+  assert key_for_save(id, "a.tar.gz") == "${id}.gz"
+  # no extension, or a leading-dot name: a bare uuid, no trailing dot
+  assert key_for_save(id, "docs/README") == id
+  assert key_for_save(id, ".env") == id
+  # U+010A and U+010D are the JDK low-byte aliases of LF and CR: on web 5.1 they
+  # reached the 302 Location as a real line break
+  assert key_for_save(id, "a.p\u{010A}x") == id
+  assert key_for_save(id, "a.p\u{010D}x") == id
+  # non-ASCII, punctuation, and more than 16 characters
+  assert key_for_save(id, "a.中文") == id
+  assert key_for_save(id, "a.p f") == id
+  assert key_for_save(id, "a.abcdefghijklmnopq") == id
+  assert key_for_save(id, "a.abcdefghijklmnop") == "${id}.abcdefghijklmnop"
 }
 
 test "rebase moves a subtree row onto its new root" {

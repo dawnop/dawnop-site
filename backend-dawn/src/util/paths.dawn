@@ -180,6 +180,16 @@ pub fn ext(name: String) -> String =
     None -> ""
   }
 
+## Whether an extension may be carried into an object key. Only a short ASCII
+## alphanumeric one is; anything else gets a bare uuid. The key is ours, and the
+## name is the uploader's. The key ends up in a 302 `Location`, so a character
+## outside this set is never something to encode, only something to leave out.
+pub fn key_ext_ok(e: String) -> Bool =
+  e != "" && str.len(e) <= 16 && list.all(code_points(e), c => {
+    let n = char.code(c)
+    (n >= 0x30 && n <= 0x39) || (n >= 0x41 && n <= 0x5A) || (n >= 0x61 && n <= 0x7A)
+  })
+
 ## Best-effort content type for a name or relative path, mirroring the server's
 ## `mimetypes.guess_type` for the extensions this site actually stores, with
 ## mimetypes' application/octet-stream default for everything else.
