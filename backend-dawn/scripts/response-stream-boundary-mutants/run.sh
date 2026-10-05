@@ -109,7 +109,8 @@ for index in "${!mutants[@]}"; do
   printf 'PASS  %s fully builds\n' "$mutant"
 
   version="$("$DAWN" --version)"
-  if [[ ! "$version" =~ ^dawn\ [0-9]+\.[0-9]+\.[0-9]+\ \(selfhost\)$ ]]; then
+  # From v0.84.0 the release jar appends its build id (` b1:<hex>`).
+  if [[ ! "$version" =~ ^dawn\ [0-9]+\.[0-9]+\.[0-9]+\ \(selfhost\)(\ b1:[0-9a-f]+)?$ ]]; then
     printf 'FAIL  %s compiler returned an invalid version: %s\n' \
       "$mutant" "$version" >&2
     exit 1

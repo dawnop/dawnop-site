@@ -3,7 +3,7 @@
 # (create/update). Writes run on a connection with the FTS extension loaded.
 use std/str
 use db/sql.{DbConn}
-use web/types.{Request, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text, raw, with_header, param_segs, query, query_int_bounded_with, body_text}
+use web/types.{Request, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text, raw, with_header, param_segs, query, query_int_bounded, body_text}
 use svc/export.{export_markdown, url_encode}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json}
@@ -35,8 +35,8 @@ fn opt_query_int(req: Request, name: String) -> Result[Option[Int], HttpError] =
 pub fn list_admin(a: Auth) -> Handler =
   req =>
   guarded(a, req, () => {
-    let page = query_int_bounded_with(fastapi_errors(), req, "page", 1, 1, -1)?
-    let size = query_int_bounded_with(fastapi_errors(), req, "size", 10, 1, 100)?
+    let page = query_int_bounded(req, "page", 1, 1, -1, fmt: fastapi_errors())?
+    let size = query_int_bounded(req, "size", 10, 1, 100, fmt: fastapi_errors())?
     let pub_filter: Option[Bool] = match query(req, "published") {
       Some("true") -> Some(true)
       Some("false") -> Some(false)

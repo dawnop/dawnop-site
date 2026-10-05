@@ -70,6 +70,8 @@ def main() -> int:
             "raw_response_stream(s)\n",
         )
     elif args.mutant == "break-owner-adapter":
+        # web6 gave `streaming` a defaulted `length`; a function value does not
+        # carry defaults, so calls through `forward` pass `None` explicitly.
         replace_once(
             http,
             "pub fn stream_response(status: Int, content_type: String, "
@@ -78,7 +80,7 @@ def main() -> int:
             "pub fn stream_response(status: Int, content_type: String, "
             "stream: ResponseStream) -> Response = {\n"
             "  let forward = streaming\n"
-            "  forward(status, content_type, raw_response_stream(stream))\n"
+            "  forward(status, content_type, raw_response_stream(stream), None)\n"
             "}\n",
         )
     elif args.mutant == "bypass-owner-adapter":
@@ -88,28 +90,18 @@ def main() -> int:
             "use db/sql.{DbConn}\nuse web/types as bypass_types # owner bypass alias\n",
         )
         # web5 made Response opaque, so the bypass reads the body seam through
-        # the public accessor and re-wraps the raw stream itself with the sized
-        # constructor (not `streaming`, which another assertion owns), carrying
-        # status, content type and headers across: the same owner bypass the
-        # web4 record literal spelled.
+        # the public accessor. web6 removed the sized constructor the web5 port
+        # re-wrapped the raw stream with, which leaves `streaming` as the only
+        # way to build a stream body, and another assertion owns that symbol.
+        # So the bypass acts on what it read from the seam without rebuilding:
+        # it lifts the sized stream's length into a Content-Length header,
+        # framing the body behind the owner adapter's back.
         append_once(
             api_fm,
             "pub fn bypassed_owner_adapter(response: Response) -> Response =\n"
             "  match bypass_types.response_body(response) {\n"
-            "    bypass_types.Stream(raw_stream, Some(length)) ->\n"
-            "      fold(\n"
-            "        bypass_types.response_headers(response),\n"
-            "        bypass_types.streaming_sized(\n"
-            "          bypass_types.response_status(response),\n"
-            "          bypass_types.response_content_type(response),\n"
-            "          raw_stream,\n"
-            "          length,\n"
-            "        ),\n"
-            "        (r, h) => {\n"
-            "          let (k, v) = h\n"
-            "          bypass_types.with_header(r, k, v)\n"
-            "        },\n"
-            "      )\n"
+            "    bypass_types.Stream(_, Some(length)) ->\n"
+            '      bypass_types.with_header(response, "Content-Length", "${length}")\n'
             "    _ -> response\n"
             "  }",
         )
@@ -132,7 +124,7 @@ def main() -> int:
             "pub fn bypassed_owner_forward() -> Response !io = {\n"
             "  let forward = streaming\n"
             '  let raw_stream = URL.new("http://127.0.0.1").openStream()!\n'
-            '  forward(200, "application/octet-stream", raw_stream)\n'
+            '  forward(200, "application/octet-stream", raw_stream, None)\n'
             "}",
         )
     else:
