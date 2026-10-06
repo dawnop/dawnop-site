@@ -7,6 +7,7 @@
 | `articles/` | 文章的 Markdown 源码，顶部带 YAML frontmatter（`title` / `summary` / `tags`），可从后台「导入 .md」直接建文章、与导出对称。已发布文章的正文也留一份在这里做版本管理。 |
 | `viz/` | 可视化组件（`\`\`\`viz <slug>\`\`\`` 围栏内嵌的交互组件）的 Vue SFC 源码。真正的编译产物存在数据库里（后台可视化编辑器就地编译），这里保留可读的源码。 |
 | `search.md` | 全站搜索（SQLite FTS5 + simple 分词）的选型与设计文档。 |
+| `paste.md` | 公开 Paste 与文件管理中私人记录的功能、数据与实现方案（尚未实现）。 |
 | `memory/` | 指向 Claude Code 记忆目录的软链接，**已 gitignore、不入库**（含真实服务器信息）。 |
 
 > 部署相关文档（nginx / HTTPS / systemd / Vaultwarden）与配置放在一起，见 `../deploy/`。
