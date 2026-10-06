@@ -89,7 +89,7 @@ dawnop-site/
 │   ├── requirements.txt requirements-dev.txt  .env.example  scripts/seed_admin.py
 ├── frontend/                   # Vue 3 + Vite
 │   ├── src/
-│   │   ├── views/              # Home, Article, Page(内容/列表), Drop(公开上传链接页); admin/{Login,Dashboard,Articles,Pages,Tags,Viz,FilesLab,Drops,Settings,Monitor}
+│   │   ├── views/              # Home, Article, Page(内容/列表), Drop(公开上传链接页), NotFound(404 提示页); admin/{Login,Dashboard,Articles,Pages,Tags,Viz,FilesLab,Drops,Settings,Monitor}
 │   │   ├── components/         # PublicLayout, AdminLayout, SiteHeader, MarkdownView(md+katex), SearchModal; monitor/
 │   │   ├── composables/        # useFileManager / useUnsavedGuard / useIsMobile
 │   │   ├── viz/                # 文章内嵌 Vue 可视化组件的 SFC 编译 + island 运行时
@@ -192,7 +192,7 @@ dawnop-site/
   （QuickLook/流媒体/续传要分段读）。
   **唯一入口 = 专用子域名 `dav.dawnop.com`**（根挂载，客户端只填 `https://dav.dawnop.com`，比子路径更兼容
   iOS/内核挂载器）。**后端路由内部仍是 `/dav`**（FastAPI `prefix="/dav"`），子域名 vhost 把 `/` 反代到后端
-  `/dav/`；主域 `dawnop.com/dav` 已下线（落 SPA）。href 前缀**跟随请求**（`_dav_prefix` 读 `X-Dav-Prefix`，
+  `/dav/`；主域 `dawnop.com/dav` 已下线（404）。href 前缀**跟随请求**（`_dav_prefix` 读 `X-Dav-Prefix`，
   默认 `/dav`；子域名 vhost 由 nginx 传 `X-Dav-Prefix: /` 归一化为空串，让 href 出 `/foo.txt` 而非 `/dav/foo.txt`，
   避免子域名下 `/dav/dav/...` 双前缀 404）。生产 nginx 的 `server dav.dawnop.com` 块在私有运维笔记里：
   DNS A 记录（备案随主域继承）、复用通配符证书 `*.dawnop.com`（acme.sh 自动续、续期钩子 reload nginx）、必须 HTTPS。
@@ -202,11 +202,12 @@ dawnop-site/
   管理端 `POST/GET /api/fm/drops`、`POST /api/fm/drops/revoke|delete`（需鉴权）；公开端只认请求头
   `X-Drop-Token`（不读 query / Authorization / cookie）：`GET /api/drop`、`POST /api/drop/upload-token`
   + `POST /api/drop/register`（前端直传，凭证带 `insertOnly` 与 `fsizeLimit`）、`PUT /api/drop/files/{name}`
-  （`curl -T` 一步式，流式落盘，必须带 Content-Length）。库里只存 `sha256(token)`；名字只当单个路径段，
+  （`curl -T` 一步式，流式落盘，必须带 Content-Length）。库里保存完整 token 与 `sha256(token)`（鉴权查摘要，管理列表带 token 供再次复制）；名字只当单个路径段，
   同名自动 `name (1).ext` 不覆盖；register 只收本 drop 签发过的 key（`drop_pending` 账本，同时照写
   `pending_uploads` 供孤儿治理）；额度在写文件行的即时事务里复核并扣减，超额删对象回 413。
   未知 token 404，过期/吊销/用尽/目录没了 410。两张表 `upload_drops`/`drop_pending` 是 Dawn 自己
-  `create table if not exists` 建的（FastAPI 冻结，回滚时这组端点不存在）。分享链接形如 `/drop#<token>`。
+  `create table if not exists` 建的（FastAPI 冻结，回滚时这组端点不存在）。分享链接形如 `/drop#<token>`。切换为保存 token 时，旧的仅摘要链接及其
+  `drop_pending` 记录在一次事务内清除（用户明确要求不保留），已上传文件与 `pending_uploads` 孤儿账本保留。
   一步式 PUT 挂了路由 guard（web 5.1，dawn v0.81.0 起）：token、链接状态、名字、Content-Length（缺或
   chunked 411）与声明长度的额度（413）都在**读请求体之前**判完，被拒不建临时文件（dawn-lang#310 已修）；
   后端落盘上限 5GiB。生产上 curl 一步式的实际单文件上限由 nginx 的 `client_max_body_size` 决定，

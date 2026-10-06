@@ -1,6 +1,6 @@
 <script setup>
 // 上传链接（drop）管理：列出全部链接，可吊销或删除。创建入口在文件管理器（文件夹右键 / 工具栏），
-// 因为链接总是绑定到某个目录。明文 token 只在创建时显示一次，这里拿不到，也不展示。
+// 因为链接总是绑定到某个目录。管理员可随时查看、复制已保存的分享链接。
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { RefreshRight, MoreFilled } from '@element-plus/icons-vue'
@@ -15,6 +15,18 @@ const isMobile = useIsMobile()
 
 const items = ref([])
 const loading = ref(true)
+const sharing = ref(null)
+const shareLink = (row) => `${location.origin}/drop#${row.token}`
+
+async function copyLink(row) {
+  try {
+    await navigator.clipboard.writeText(shareLink(row))
+    ElMessage.success('链接已复制')
+  } catch {
+    sharing.value = row
+    ElMessage.info('请在窗口中手动复制链接')
+  }
+}
 
 // 状态由后端算（active | expired | revoked | exhausted | dir_missing），这里只管文案与颜色
 const STATUS = {
@@ -72,7 +84,9 @@ async function remove(row) {
 }
 
 function rowCmd(cmd, row) {
-  if (cmd === 'revoke') revoke(row)
+  if (cmd === 'share') sharing.value = row
+  else if (cmd === 'copy') copyLink(row)
+  else if (cmd === 'revoke') revoke(row)
   else if (cmd === 'delete') remove(row)
 }
 
@@ -129,8 +143,16 @@ onMounted(load)
         <el-table-column label="创建时间" :width="colW['创建时间'] || 140">
           <template #default="{ row }">{{ fmtDateTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" :width="colW['操作'] || 120" fixed="right">
+        <el-table-column label="操作" :width="colW['操作'] || 230" fixed="right">
           <template #default="{ row }">
+            <el-button link type="primary" @click="sharing = row">查看链接</el-button>
+            <el-button
+              link
+              type="primary"
+              :disabled="row.status !== 'active'"
+              @click="copyLink(row)"
+              >复制</el-button
+            >
             <el-button link type="primary" :disabled="row.status === 'revoked'" @click="revoke(row)"
               >吊销</el-button
             >
@@ -161,6 +183,10 @@ onMounted(load)
             <el-button size="small" :icon="MoreFilled" />
             <template #dropdown>
               <el-dropdown-menu>
+                <el-dropdown-item command="share">查看链接</el-dropdown-item>
+                <el-dropdown-item command="copy" :disabled="row.status !== 'active'"
+                  >复制链接</el-dropdown-item
+                >
                 <el-dropdown-item command="revoke" :disabled="row.status === 'revoked'"
                   >吊销</el-dropdown-item
                 >
@@ -171,10 +197,44 @@ onMounted(load)
         </div>
       </div>
     </el-card>
+    <el-dialog
+      :model-value="!!sharing"
+      title="分享上传链接"
+      :width="isMobile ? '94%' : '560px'"
+      @close="sharing = null"
+    >
+      <template v-if="sharing">
+        <p>{{ sharing.label || '未命名' }} · {{ dirText(sharing.dir) }}</p>
+        <el-alert
+          v-if="sharing.status !== 'active'"
+          type="warning"
+          :closable="false"
+          :title="`此链接${statusOf(sharing.status).text}，无法继续上传。`"
+          class="share-warning"
+        />
+        <el-input :model-value="shareLink(sharing)" readonly @focus="$event.target.select()" />
+        <p class="muted share-tip">持有链接的人可以上传文件，请发给需要投递的人。</p>
+      </template>
+      <template #footer>
+        <el-button @click="sharing = null">关闭</el-button>
+        <el-button
+          type="primary"
+          :disabled="sharing?.status !== 'active'"
+          @click="copyLink(sharing)"
+          >复制链接</el-button
+        >
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <style scoped>
+.share-warning {
+  margin-bottom: 14px;
+}
+.share-tip {
+  font-size: 12px;
+}
 .toolbar {
   display: flex;
   align-items: center;

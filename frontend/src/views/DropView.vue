@@ -11,6 +11,10 @@ import {
   WarningFilled,
   Loading,
   Folder,
+  Document,
+  Lock,
+  ArrowRight,
+  RefreshRight,
 } from '@element-plus/icons-vue'
 import * as dropApi from '../api/dropApi'
 import { fmtBytes, fmtDateTime, fmtDuration, toMs } from '../utils/format'
@@ -123,6 +127,23 @@ const canAdd = computed(
 )
 const busy = computed(() => reserved.value.files > 0)
 const dirLabel = computed(() => drop.value?.dir_name || '根目录')
+const doneCount = computed(() => items.value.filter((it) => it.status === 'done').length)
+const finishedCount = computed(() => items.value.length - reserved.value.files)
+const queuedBytes = computed(() => items.value.reduce((sum, it) => sum + it.size, 0))
+const progress = computed(() => {
+  if (!items.value.length) return 0
+  const total = items.value.reduce(
+    (sum, it) => sum + (it.status === 'done' ? 100 : it.status === 'active' ? it.pct : 0),
+    0,
+  )
+  return Math.round(total / items.value.length)
+})
+const hasFinished = computed(() => finishedCount.value > 0)
+const availability = computed(
+  () =>
+    linkLost.value ||
+    (expired.value ? '链接已过期' : exhausted.value ? '上传额度已用完' : '可以上传'),
+)
 
 // 预检：单文件上限 → 文件数 → 剩余总字节，顺序与服务端一致；不通过的直接标为「未上传」
 function precheck(file) {
@@ -273,345 +294,546 @@ onUnmounted(() => {
 
 <template>
   <div class="drop-page">
-    <main class="drop-card">
-      <!-- 加载中 -->
-      <div v-if="phase === 'loading'" class="state">
-        <el-icon class="state-ico spin"><Loading /></el-icon>
-        <p class="state-text">正在读取上传链接…</p>
-      </div>
+    <header class="page-nav">
+      <RouterLink to="/" class="brand" aria-label="dawnop 首页">
+        <img src="/logo.svg" alt="" width="26" height="26" />
+        <span
+          >dawnop<span class="brand-divider">/</span><span class="brand-product">drop</span></span
+        >
+      </RouterLink>
+      <span class="nav-note"
+        ><el-icon><Lock /></el-icon> 文件投递</span
+      >
+    </header>
 
-      <!-- 地址里没有 token -->
-      <div v-else-if="phase === 'missing'" class="state">
-        <el-icon class="state-ico warn"><WarningFilled /></el-icon>
-        <h1 class="state-title">链接不完整</h1>
-        <p class="state-text">
-          请使用分享者发给你的完整上传链接打开本页，链接中 <code>#</code> 后面的部分不能缺少。
-        </p>
-      </div>
-
-      <!-- 404 / 410 -->
-      <div v-else-if="phase === 'dead'" class="state">
-        <el-icon class="state-ico bad"><CircleCloseFilled /></el-icon>
-        <h1 class="state-title">{{ deadTitle }}</h1>
-        <p class="state-text">{{ deadMsg }}</p>
-      </div>
-
-      <!-- 网络等其他错误 -->
-      <div v-else-if="phase === 'error'" class="state">
-        <el-icon class="state-ico warn"><WarningFilled /></el-icon>
-        <h1 class="state-title">暂时无法读取上传链接</h1>
-        <p class="state-text">{{ loadErr }}</p>
-        <el-button @click="load()">重试</el-button>
-      </div>
-
-      <!-- 正常 -->
-      <template v-else-if="drop">
-        <header class="head">
-          <h1 class="title">{{ drop.label || '上传文件' }}</h1>
-          <p class="dest">
-            <el-icon><Folder /></el-icon>
-            <span
-              >文件将上传到 <b>{{ dirLabel }}</b></span
-            >
-          </p>
+    <main class="drop-shell">
+      <template v-if="phase === 'ready' && drop">
+        <header class="intro">
+          <span class="eyebrow">文件收集</span>
+          <h1>{{ drop.label || '把文件放在这里。' }}</h1>
+          <p>选择文件，剩下的交给我们。无需注册，上传即送达。</p>
         </header>
 
-        <dl class="facts">
-          <div>
-            <dt>剩余文件数</dt>
-            <dd>{{ filesLeft }} / {{ drop.max_files }}</dd>
-          </div>
-          <div>
-            <dt>剩余总额度</dt>
-            <dd>{{ fmtBytes(bytesLeft) }} / {{ fmtBytes(drop.max_total_bytes) }}</dd>
-          </div>
-          <div>
-            <dt>单个文件上限</dt>
-            <dd>{{ fmtBytes(drop.max_file_bytes) }}</dd>
-          </div>
-          <div>
-            <dt>有效期至</dt>
-            <dd :title="leftText">
-              {{ fmtDateTime(drop.expires_at) }}
-              <span class="sub">{{ leftText }}</span>
-            </dd>
-          </div>
-        </dl>
-
-        <el-alert
-          v-if="linkLost"
-          type="error"
-          :title="`上传链接已不可用：${linkLost}`"
-          :closable="false"
-          show-icon
-          class="notice"
-        />
-        <el-alert
-          v-else-if="expired"
-          type="warning"
-          title="上传链接已过期，无法继续上传。"
-          :closable="false"
-          show-icon
-          class="notice"
-        />
-        <el-alert
-          v-else-if="exhausted"
-          type="warning"
-          title="上传额度已用完，无法继续上传。"
-          :closable="false"
-          show-icon
-          class="notice"
-        />
-
-        <div
-          class="zone"
-          :class="{ over: dragging && canAdd, off: !canAdd }"
-          role="button"
-          :tabindex="canAdd ? 0 : -1"
-          :aria-disabled="!canAdd"
-          @click="pick"
-          @keydown.enter.prevent="pick"
-          @keydown.space.prevent="pick"
-          @dragenter.prevent="onDragEnter"
-          @dragover.prevent
-          @dragleave="onDragLeave"
-          @drop.prevent="onDrop"
-        >
-          <el-icon class="zone-ico"><UploadFilled /></el-icon>
-          <p class="zone-main">拖拽文件到这里，或<span class="zone-link">点击选择文件</span></p>
-          <p class="zone-sub">可一次选择多个文件；同名文件不会覆盖，会自动改名保存</p>
-          <input ref="fileInput" type="file" multiple hidden @change="onPicked" />
-        </div>
-
-        <section v-if="items.length" class="list">
-          <div class="list-head">
-            <span>本次上传</span>
-            <el-button v-if="!busy" link type="primary" @click="clearFinished">清空列表</el-button>
-          </div>
-          <ul>
-            <li v-for="it in items" :key="it.id" class="row" :class="it.status">
-              <div class="row-top">
-                <el-icon class="row-ico">
-                  <CircleCheckFilled v-if="it.status === 'done'" />
-                  <CircleCloseFilled
-                    v-else-if="it.status === 'error' || it.status === 'rejected'"
-                  />
-                  <Loading v-else-if="it.status === 'active'" class="spin" />
-                  <UploadFilled v-else />
-                </el-icon>
-                <span class="row-name" :title="it.name">{{ it.name }}</span>
-                <span class="row-size">{{ fmtBytes(it.size) }}</span>
+        <div class="workspace">
+          <div class="upload-panel">
+            <div class="panel-heading">
+              <h2>上传文件</h2>
+              <span class="status-pill" :class="{ unavailable: !canAdd }">
+                <i></i>{{ canAdd ? '可以上传' : '暂停接收' }}
+              </span>
+            </div>
+            <p v-if="!canAdd" class="notice" role="status">
+              {{ availability }}，无法继续添加文件。
+            </p>
+            <div
+              class="zone"
+              :class="{ over: dragging && canAdd, off: !canAdd }"
+              role="button"
+              :tabindex="canAdd ? 0 : -1"
+              :aria-disabled="!canAdd"
+              aria-label="选择要上传的文件，也可以拖拽文件到这里"
+              @click="pick"
+              @keydown.enter.prevent="pick"
+              @keydown.space.prevent="pick"
+              @dragenter.prevent="onDragEnter"
+              @dragover.prevent
+              @dragleave="onDragLeave"
+              @drop.prevent="onDrop"
+            >
+              <div class="upload-art" aria-hidden="true">
+                <span class="paper paper-back"
+                  ><el-icon><Document /></el-icon
+                ></span>
+                <span class="paper paper-front"
+                  ><el-icon><UploadFilled /></el-icon
+                ></span>
               </div>
-              <el-progress
-                v-if="it.status === 'active'"
-                :percentage="it.pct"
-                :stroke-width="4"
-                :show-text="false"
-                class="row-bar"
-              />
-              <p class="row-msg">
-                <template v-if="it.status === 'queued'">等待上传</template>
-                <template v-else-if="it.status === 'active'"
-                  >{{ stageText[it.stage] || '上传中' }}
-                  <template v-if="it.stage === 'upload'">{{ it.pct }}%</template></template
-                >
-                <template v-else-if="it.status === 'done'"
-                  >已上传<template v-if="it.savedAs">，保存为 {{ it.savedAs }}</template></template
-                >
-                <template v-else-if="it.status === 'rejected'">未上传：{{ it.msg }}</template>
-                <template v-else>上传失败：{{ it.msg }}</template>
+              <h3>{{ dragging && canAdd ? '松开，开始上传' : '拖拽文件到这里' }}</h3>
+              <p class="zone-sub">或点击下方按钮，从设备中选择</p>
+              <span class="choose-button"
+                >选择文件 <el-icon><ArrowRight /></el-icon
+              ></span>
+              <p class="zone-caption">
+                支持多文件 · 单个不超过 {{ fmtBytes(drop.max_file_bytes) }}
               </p>
-            </li>
-          </ul>
-        </section>
+              <input ref="fileInput" type="file" multiple hidden @change="onPicked" />
+            </div>
+            <p class="upload-note">
+              <el-icon><Lock /></el-icon> 上传后的文件仅接收方可见，同名文件会自动改名。
+            </p>
+
+            <section class="list" aria-label="本次上传">
+              <div class="list-head">
+                <h2>
+                  本次上传 <span v-if="items.length" class="count">{{ items.length }}</span>
+                </h2>
+                <button v-if="hasFinished" class="text-button" @click="clearFinished">
+                  清除已结束
+                </button>
+              </div>
+              <div v-if="!items.length" class="empty-list">
+                <el-icon><Document /></el-icon>
+                <span>添加文件后，可在这里查看上传进度</span>
+              </div>
+              <template v-else>
+                <div class="queue-summary" role="status" aria-live="polite">
+                  <span>{{
+                    busy ? '正在投递' : doneCount === items.length ? '全部送达' : '本次上传已结束'
+                  }}</span>
+                  <span
+                    >{{ doneCount }} / {{ items.length }} 个已送达 ·
+                    {{ fmtBytes(queuedBytes) }}</span
+                  >
+                </div>
+                <el-progress
+                  v-if="busy"
+                  :percentage="progress"
+                  :stroke-width="3"
+                  :show-text="false"
+                  color="#237b68"
+                />
+                <ul>
+                  <li v-for="it in items" :key="it.id" class="row" :class="it.status">
+                    <div class="file-icon">
+                      <el-icon><Document /></el-icon>
+                    </div>
+                    <div class="file-detail">
+                      <div class="row-top">
+                        <span class="row-name" :title="it.name">{{ it.name }}</span>
+                        <span class="row-size">{{ fmtBytes(it.size) }}</span>
+                      </div>
+                      <el-progress
+                        v-if="it.status === 'active'"
+                        :percentage="it.pct"
+                        :stroke-width="3"
+                        :show-text="false"
+                        color="#237b68"
+                        class="row-bar"
+                      />
+                      <p class="row-msg">
+                        <template v-if="it.status === 'queued'">等待上传</template>
+                        <template v-else-if="it.status === 'active'"
+                          >{{ stageText[it.stage] || '上传中'
+                          }}<template v-if="it.stage === 'upload'">
+                            · {{ it.pct }}%</template
+                          ></template
+                        >
+                        <template v-else-if="it.status === 'done'"
+                          >已送达<template v-if="it.savedAs">
+                            · 保存为 {{ it.savedAs }}</template
+                          ></template
+                        >
+                        <template v-else-if="it.status === 'rejected'"
+                          >未上传：{{ it.msg }}</template
+                        >
+                        <template v-else>上传失败：{{ it.msg }}</template>
+                      </p>
+                    </div>
+                    <el-icon class="row-status">
+                      <CircleCheckFilled v-if="it.status === 'done'" />
+                      <CircleCloseFilled
+                        v-else-if="it.status === 'error' || it.status === 'rejected'"
+                      />
+                      <Loading v-else-if="it.status === 'active'" class="spin" />
+                      <UploadFilled v-else />
+                    </el-icon>
+                  </li>
+                </ul>
+              </template>
+            </section>
+          </div>
+
+          <aside class="details-panel" aria-label="上传链接信息">
+            <div class="destination-icon">
+              <el-icon><Folder /></el-icon>
+            </div>
+            <span class="eyebrow">接收文件夹</span>
+            <h2 class="destination-name">{{ dirLabel }}</h2>
+            <p class="details-note">你的文件会直接送到这里。</p>
+            <dl class="facts">
+              <div class="quota-fact">
+                <dt>还可上传</dt>
+                <dd>
+                  <strong>{{ filesLeft }}</strong
+                  ><span> / {{ drop.max_files }} 个文件</span>
+                </dd>
+              </div>
+              <div class="quota-fact">
+                <dt>剩余空间</dt>
+                <dd>
+                  <strong>{{ fmtBytes(bytesLeft) }}</strong>
+                </dd>
+                <p>总额度 {{ fmtBytes(drop.max_total_bytes) }}</p>
+              </div>
+              <div>
+                <dt>单个文件上限</dt>
+                <dd>{{ fmtBytes(drop.max_file_bytes) }}</dd>
+              </div>
+              <div>
+                <dt>有效期至</dt>
+                <dd>
+                  {{ fmtDateTime(drop.expires_at) }}<span class="sub">{{ leftText }}</span>
+                </dd>
+              </div>
+            </dl>
+            <div class="privacy-note">
+              <el-icon><Lock /></el-icon>
+              <p>本链接用于接收文件，上传者无法查看文件夹中的内容。</p>
+            </div>
+          </aside>
+        </div>
       </template>
+
+      <section v-else class="state-card" aria-live="polite">
+        <span class="eyebrow">文件投递</span>
+        <template v-if="phase === 'loading'">
+          <el-icon class="state-ico spin"><Loading /></el-icon>
+          <h1>正在准备上传空间</h1>
+          <p>稍等片刻，正在确认链接与可用额度。</p>
+        </template>
+        <template v-else-if="phase === 'missing'">
+          <el-icon class="state-ico"><Folder /></el-icon>
+          <h1>还差一个完整链接</h1>
+          <p>请打开接收方分享的上传链接，即可选择文件并投递。</p>
+          <p class="state-hint">如果链接被截断，请让接收方重新复制发送。</p>
+        </template>
+        <template v-else-if="phase === 'dead'">
+          <el-icon class="state-ico bad"><CircleCloseFilled /></el-icon>
+          <h1>{{ deadTitle }}</h1>
+          <p>{{ deadMsg }}</p>
+        </template>
+        <template v-else>
+          <el-icon class="state-ico warn"><WarningFilled /></el-icon>
+          <h1>暂时无法打开上传空间</h1>
+          <p>{{ loadErr }}</p>
+          <button class="choose-button" @click="load()">
+            重新加载 <el-icon><RefreshRight /></el-icon>
+          </button>
+        </template>
+        <RouterLink to="/" class="home-link">返回首页 <span aria-hidden="true">↗</span></RouterLink>
+      </section>
     </main>
-    <p class="foot">上传后的文件仅分享者可见，本页不会显示目录中的已有文件。</p>
+    <footer class="page-footer"><span>dawnop drop</span><span>文件送达，简单一点。</span></footer>
   </div>
 </template>
 
 <style scoped>
 .drop-page {
-  min-height: 100vh;
+  --drop-ink: #253e36;
+  --drop-green: #237b68;
+  --drop-muted: #75817b;
   min-height: 100dvh;
-  background: #f5f6f8;
-  padding: 48px 16px 32px;
+  background: #f7f8f5;
+  color: var(--drop-ink);
+  padding: 0 32px;
   display: flex;
   flex-direction: column;
-  align-items: center;
 }
-.drop-card {
+.page-nav,
+.page-footer {
   width: 100%;
-  max-width: 560px;
-  background: #fff;
-  border: 1px solid #ebedf0;
-  border-radius: 12px;
+  max-width: 1040px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.page-nav {
+  height: 88px;
+  border-bottom: 1px solid #e4e8e1;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--drop-ink);
+  font-weight: 650;
+  font-size: 20px;
+  text-decoration: none;
+  letter-spacing: -0.5px;
+}
+.brand-divider {
+  margin: 0 12px;
+  color: #aab4ab;
+  font-weight: 400;
+}
+.brand-product {
+  font-weight: 450;
+}
+.nav-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--drop-muted);
+  font-size: 12px;
+}
+.drop-shell {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  flex: 1;
+  padding: 54px 0 64px;
+}
+.eyebrow {
+  display: block;
+  color: var(--drop-green);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 2px;
+}
+.intro {
+  margin-bottom: 32px;
+}
+.intro h1 {
+  margin: 10px 0 12px;
+  font-size: clamp(26px, 3.3vw, 36px);
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: -0.8px;
+  color: var(--drop-ink);
+  overflow-wrap: anywhere;
+}
+.intro p {
+  margin: 0;
+  color: var(--drop-muted);
+  font-size: 14px;
+}
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 270px;
+  gap: 24px;
+  align-items: start;
+}
+.upload-panel {
   padding: 28px;
+  background: #fff;
+  border: 1px solid #e2e7e1;
+  border-radius: 16px;
+  box-shadow: 0 6px 24px #243d3204;
 }
-.foot {
-  max-width: 560px;
-  margin: 16px 0 0;
-  font-size: 0.8rem;
-  color: #8c8c8c;
-  text-align: center;
+.panel-heading,
+.list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
-
-/* 状态页（加载 / 无 token / 失效 / 出错） */
-.state {
-  text-align: center;
-  padding: 24px 0 8px;
+.panel-heading {
+  margin-bottom: 22px;
 }
-.state-ico {
-  font-size: 44px;
-  color: #8c8c8c;
+h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--drop-ink);
 }
-.state-ico.warn {
-  color: var(--el-color-warning);
-}
-.state-ico.bad {
-  color: var(--el-color-danger);
-}
-.state-title {
-  font-size: 1.2rem;
-  margin: 12px 0 6px;
-}
-.state-text {
-  color: #57606a;
-  margin: 8px 0 16px;
-  line-height: 1.7;
-  word-break: break-word;
-}
-.state-text code {
-  background: #f0f1f3;
-  padding: 0 4px;
-  border-radius: 4px;
-}
-
-.head {
-  margin-bottom: 18px;
-}
-.title {
-  font-size: 1.35rem;
-  margin: 0 0 6px;
-  word-break: break-word;
-}
-.dest {
+.status-pill {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 0;
-  color: #57606a;
-  font-size: 0.92rem;
-  word-break: break-all;
+  padding: 4px 9px;
+  border-radius: 20px;
+  background: #edf5ee;
+  color: #437e52;
+  font-size: 10px;
+  white-space: nowrap;
 }
-
-.facts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 16px;
-  margin: 0 0 18px;
-  padding: 14px 16px;
-  background: #fafbfc;
-  border: 1px solid #f0f0f0;
-  border-radius: 8px;
+.status-pill i {
+  width: 5px;
+  height: 5px;
+  background: currentColor;
+  border-radius: 50%;
 }
-.facts dt {
-  font-size: 0.78rem;
-  color: #8c8c8c;
+.status-pill.unavailable {
+  color: #99682d;
+  background: #faf1e5;
 }
-.facts dd {
-  margin: 2px 0 0;
-  font-size: 0.95rem;
-  font-variant-numeric: tabular-nums;
-}
-.facts .sub {
-  display: block;
-  font-size: 0.78rem;
-  color: #8c8c8c;
-}
-
 .notice {
-  margin-bottom: 14px;
+  padding: 12px;
+  background: #fff5e8;
+  color: #936324;
+  font-size: 12px;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
 }
-
 .zone {
-  border: 1.5px dashed #d9d9d9;
-  border-radius: 10px;
-  padding: 28px 16px;
+  border: 1.5px dashed #bdcdc1;
+  border-radius: 12px;
+  padding: 36px 16px 25px;
   text-align: center;
   cursor: pointer;
+  background: #f9fbf8;
   transition:
-    border-color 0.15s,
-    background 0.15s;
-  outline: none;
+    border-color 0.18s,
+    background 0.18s;
 }
 .zone:hover,
-.zone:focus-visible,
 .zone.over {
-  border-color: var(--accent);
-  background: #f5f9ff;
+  border-color: var(--drop-green);
+  background: #f0f7f1;
+}
+.zone:focus-visible {
+  outline: 3px solid #237b6860;
+  outline-offset: 4px;
 }
 .zone.off {
   cursor: not-allowed;
   opacity: 0.55;
-  border-color: #d9d9d9;
-  background: transparent;
 }
-.zone-ico {
-  font-size: 40px;
-  color: var(--accent);
+.upload-art {
+  position: relative;
+  height: 76px;
+  width: 110px;
+  margin: 0 auto 24px;
 }
-.zone-main {
-  margin: 8px 0 4px;
+.paper {
+  position: absolute;
+  top: 0;
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 72px;
+  border-radius: 9px;
+  font-size: 29px;
+  border: 1px solid #d7e5d8;
 }
-.zone-link {
-  color: var(--accent);
-  margin-left: 2px;
+.paper-back {
+  left: 15px;
+  background: #edf2e9;
+  color: #9bb292;
+  transform: rotate(-13deg);
+}
+.paper-front {
+  left: 44px;
+  top: 8px;
+  background: #fff;
+  color: var(--drop-green);
+  transform: rotate(9deg);
+  box-shadow: 0 6px 10px #2448300a;
+}
+.zone h3 {
+  margin: 0 0 5px;
+  font-weight: 550;
+  font-size: 18px;
+  color: var(--drop-ink);
 }
 .zone-sub {
   margin: 0;
-  font-size: 0.8rem;
-  color: #8c8c8c;
+  color: var(--drop-muted);
+  font-size: 12px;
 }
-
+.choose-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 11px 20px;
+  margin-top: 22px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--drop-green);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+button.choose-button:hover {
+  background: #1d6757;
+}
+.zone-caption {
+  color: #8a968d;
+  font-size: 10px;
+  margin: 16px 0 0;
+}
+.upload-note {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 15px 0 28px;
+  color: #88918b;
+  font-size: 10px;
+  line-height: 1.8;
+}
+.upload-note .el-icon {
+  flex-shrink: 0;
+}
 .list {
-  margin-top: 20px;
+  border-top: 1px solid #edf0eb;
+  padding-top: 20px;
 }
 .list-head {
+  margin-bottom: 16px;
+}
+.count {
+  margin-left: 6px;
+  color: #8c978f;
+  font-size: 11px;
+  font-weight: 400;
+}
+.text-button {
+  border: 0;
+  padding: 4px 0;
+  background: none;
+  color: var(--drop-green);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.empty-list {
   display: flex;
-  justify-content: space-between;
+  gap: 9px;
   align-items: center;
-  font-size: 0.85rem;
-  color: #8c8c8c;
-  margin-bottom: 6px;
+  padding: 18px 0 7px;
+  color: #949e97;
+  font-size: 12px;
+}
+.empty-list .el-icon {
+  font-size: 18px;
+}
+.queue-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 12px;
+  color: var(--drop-muted);
+  font-size: 11px;
 }
 .list ul {
-  list-style: none;
   margin: 0;
   padding: 0;
+  list-style: none;
 }
 .row {
-  padding: 10px 0;
-  border-top: 1px solid #f0f0f0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 0;
+  border-bottom: 1px solid #f0f2ed;
+}
+.row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.file-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 42px;
+  background: #f2f5ef;
+  color: #829480;
+  border-radius: 6px;
+  font-size: 19px;
+}
+.file-detail {
+  flex: 1;
+  min-width: 0;
 }
 .row-top {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 8px;
-}
-.row-ico {
-  flex: none;
-  color: #8c8c8c;
-}
-.row.done .row-ico {
-  color: var(--el-color-success);
-}
-.row.error .row-ico,
-.row.rejected .row-ico {
-  color: var(--el-color-danger);
-}
-.row.active .row-ico {
-  color: var(--accent);
 }
 .row-name {
   flex: 1;
@@ -619,27 +841,176 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12px;
 }
 .row-size {
   flex: none;
-  font-size: 0.8rem;
-  color: #8c8c8c;
+  color: #8b968e;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
 .row-bar {
-  margin: 6px 0 0 24px;
+  margin-top: 7px;
 }
 .row-msg {
-  margin: 2px 0 0 24px;
-  font-size: 0.8rem;
-  color: #8c8c8c;
-  word-break: break-word;
+  margin: 3px 0 0;
+  color: var(--drop-muted);
+  font-size: 10px;
+  overflow-wrap: anywhere;
 }
+.row-status {
+  flex: none;
+  color: #9ba59c;
+}
+.row.done .row-status,
+.row.done .row-msg,
+.row.active .row-status {
+  color: var(--drop-green);
+}
+.row.error .row-status,
+.row.rejected .row-status,
 .row.error .row-msg,
 .row.rejected .row-msg {
-  color: var(--el-color-danger);
+  color: #bd6659;
 }
-
+.details-panel {
+  padding: 26px 24px;
+  background: #eff3eb;
+  border: 1px solid #e1e7da;
+  border-radius: 16px;
+}
+.destination-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 20px;
+  background: #e0e9d9;
+  border-radius: 10px;
+  color: #64805a;
+  font-size: 24px;
+}
+.details-panel .eyebrow {
+  color: #77856e;
+  font-size: 10px;
+}
+.destination-name {
+  font-size: 20px;
+  margin: 8px 0 6px;
+  overflow-wrap: anywhere;
+}
+.details-note {
+  margin: 0 0 23px;
+  color: #839079;
+  font-size: 11px;
+}
+.facts {
+  margin: 0;
+}
+.facts > div {
+  padding: 15px 0;
+  border-top: 1px solid #dce4d6;
+}
+.facts dt {
+  color: #7e8b76;
+  font-size: 10px;
+}
+.facts dd {
+  margin: 5px 0 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.quota-fact strong {
+  font-size: 24px;
+  font-weight: 550;
+  letter-spacing: -0.6px;
+}
+.quota-fact dd span,
+.quota-fact p {
+  font-size: 10px;
+  color: #839079;
+}
+.quota-fact p {
+  margin: 3px 0 0;
+}
+.sub {
+  display: block;
+  margin-top: 4px;
+  color: #84917c;
+  font-size: 10px;
+}
+.privacy-note {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding-top: 16px;
+  border-top: 1px solid #dce4d6;
+  color: #8a957f;
+  font-size: 10px;
+}
+.privacy-note .el-icon {
+  flex-shrink: 0;
+}
+.privacy-note p {
+  margin: 0;
+}
+.page-footer {
+  padding: 20px 0 26px;
+  border-top: 1px solid #e4e8e1;
+  color: #929a91;
+  font-size: 10px;
+}
+.page-footer > span:first-child {
+  letter-spacing: 0.6px;
+}
+.state-card {
+  max-width: 540px;
+  margin: 42px auto 0;
+  padding: 40px 32px;
+  border: 1px solid #e2e7e1;
+  background: #fff;
+  border-radius: 16px;
+  text-align: center;
+}
+.state-ico {
+  display: block;
+  margin: 28px auto 18px;
+  font-size: 42px;
+  color: #8da28b;
+}
+.state-ico.bad {
+  color: #bd6659;
+}
+.state-ico.warn {
+  color: #b69357;
+}
+.state-card h1 {
+  font-size: 24px;
+  margin: 0 0 12px;
+  line-height: 1.4;
+  color: var(--drop-ink);
+}
+.state-card p {
+  font-size: 13px;
+  color: var(--drop-muted);
+  overflow-wrap: anywhere;
+}
+.state-card .state-hint {
+  font-size: 11px;
+  color: #98a097;
+}
+.home-link {
+  display: block;
+  width: fit-content;
+  margin: 28px auto 0;
+  color: var(--drop-green);
+  font-size: 12px;
+  text-decoration: none;
+}
+.home-link span {
+  margin-left: 10px;
+}
 .spin {
   animation: drop-spin 1s linear infinite;
 }
@@ -648,16 +1019,72 @@ onUnmounted(() => {
     transform: rotate(360deg);
   }
 }
-
-@media (max-width: 640px) {
+@media (max-width: 760px) {
   .drop-page {
-    padding-top: 16px;
+    padding: 0 20px;
   }
-  .drop-card {
+  .page-nav {
+    height: 70px;
+  }
+  .drop-shell {
+    padding: 32px 0 40px;
+  }
+  .intro {
+    margin-bottom: 24px;
+  }
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+  .upload-panel {
+    padding: 22px 20px;
+  }
+  .details-panel {
+    padding: 22px 20px;
+  }
+  .destination-icon {
+    display: none;
+  }
+  .details-note {
+    margin-bottom: 18px;
+  }
+  .facts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 20px;
+  }
+  .state-card {
+    margin: 16px auto 0;
+    padding: 32px 20px;
+  }
+}
+@media (max-width: 380px) {
+  .drop-page {
+    padding: 0 12px;
+  }
+  .nav-note {
+    font-size: 10px;
+  }
+  .upload-panel {
     padding: 20px 16px;
   }
   .zone {
-    padding: 24px 12px;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  .row-top {
+    flex-wrap: wrap;
+  }
+  .row-size {
+    width: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+  .zone {
+    transition: none;
   }
 }
 </style>

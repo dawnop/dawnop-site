@@ -341,6 +341,11 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   结构在**字节层**定位（`byte_index_of`/`byte_slice`），每个 part 的正文原样留作 `Bytes`，
   只有 ASCII 头块解成字符串取字段：文件字节不经过一次 String 往返，二进制上传才不会被改写。
 
+**前端动态路由的存在性检查**
+- `api/api_public.site_route` — `/api/site-route/{kind}/{slug}`，存在 204，不存在 403（Nginx `auth_request` 的拒绝约定，浏览器主请求转为 404）；
+  kind 为 `article` / `p` / `tag`，文章只允许已发布或携管理员鉴权的草稿。只读，不增加阅读数。
+  Nginx 用内部子请求判断动态路由，未知路径与缺失资源以 HTTP 404 加载前端提示页，服务故障保留 5xx。
+
 **上传链接（drop）**
 - `api/api_drop.dawn` — 两扇门。`/api/fm/drops*` 是管理端（`guarded`，管理员 JWT）：建、列、吊销、删。
   `/api/drop*` 是匿名上传方：token **只从 `X-Drop-Token` 头读**（`drop_token`），不读 query（会进访问
@@ -368,10 +373,11 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   **读体之前拒绝**：web 5.1 之前，框架对 `stream-body` 路由是先把整个请求体落盘、再进处理函数
   （dawn-lang#310），落盘大小只能靠 nginx 封顶。现在靠路由 guard 与 `body_limit` 在后端做到；
   契约 `drop.put.refused-unread` 用「声明 100MB、只发几个字节」的请求钉住（不读体才能在超时内答复）。
-- `repo/repo_drop.dawn` — `upload_drops`（token 只存 sha256）与 `drop_pending` 两张表的 SQL，以及
+- `repo/repo_drop.dawn` — `upload_drops`（完整 token 供管理员再次分享，鉴权查 sha256）与 `drop_pending` 两张表的 SQL，以及
   `ensure_schema`。这是本后端**第一次自己建表**（其余都是 FastAPI `create_all` 建的）：启动时建一次，
   每个 drop 请求在自己的连接上再 `create table if not exists` 一次（表已在时 SQLite 不拿写锁，实测），
-  因为库文件可能在进程运行中被换掉（恢复备份、契约 harness 重播 fixture）。
+  因为库文件可能在进程运行中被换掉（恢复备份、契约 harness 重播 fixture）。旧的仅摘要链接
+  在升级事务内清除，同时清其 `drop_pending`；已上传文件与 `pending_uploads` 孤儿账本保留。
 - `qiniu/sign.upload_token_limited` 与 `util/crypto.random_token`（32 字节 SecureRandom，base64url 43 字符）
   是它新加的两块地基；管理端的 `upload_token` 逐字节不变。
 

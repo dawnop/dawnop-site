@@ -10,8 +10,8 @@
 # arbitrary object key recorded in the files table.
 #
 # How that is held:
-#   * The token is 256 CSPRNG bits. Only sha256(token) is stored; lookups are an
-#     exact match on the digest. It is read from `X-Drop-Token` and nowhere else
+#   * The token is 256 CSPRNG bits. Lookups match sha256(token); the plaintext
+#     is stored for authenticated admin sharing. It is read from `X-Drop-Token` and nowhere else
 #     (api/api_drop), and the admin guards never look at that header, so the two
 #     credentials cannot stand in for each other.
 #   * Every request re-judges the drop from the database against the Clock:
@@ -586,26 +586,25 @@ fn discard(a: Auth, key: String, drop_id: Int) -> Unit !Upstream !io = {
 
 # ---- admin ----
 
-## POST /api/fm/drops: create a link. The plaintext token is returned here and
-## never again.
+## POST /api/fm/drops: create a link, saving its token for the admin list.
 pub fn create_drop(a: Auth, s: DropSpec) -> Result[(DropRow, String), DropErr] !Clock !io = {
   let _v = spec_ok(s)?
   let token = random_token()
   let expires_at = now_s() + s.expires_in_s
-  let d = with_db(a.db.path, a.db.ext, c => create_on(c, s, sha256_hex(token), expires_at))?
+  let d = with_db(a.db.path, a.db.ext, c => create_on(c, s, token, expires_at))?
   Ok((d, token))
 }
 
-fn create_on(c: DbConn, s: DropSpec, token_hash: String, expires_at: Int) -> Result[DropRow, DropErr] !io = {
+fn create_on(c: DbConn, s: DropSpec, token: String, expires_at: Int) -> Result[DropRow, DropErr] !io = {
   let _s = db(ensure_schema(c))?
-  settle(with_immediate_tx(c, () => create_tx(c, s, token_hash, expires_at)))
+  settle(with_immediate_tx(c, () => create_tx(c, s, token, expires_at)))
 }
 
-fn create_tx(c: DbConn, s: DropSpec, token_hash: String, expires_at: Int) -> Result[Result[DropRow, Refusal], String] !io =
+fn create_tx(c: DbConn, s: DropSpec, token: String, expires_at: Int) -> Result[Result[DropRow, Refusal], String] !io =
   if not dir_present(c, s.dir)? {
     Ok(Err(NotFound("目录不存在")))
   } else {
-    let d = insert_drop(c, token_hash, s.label, s.dir, expires_at, s.max_files, s.max_file_bytes, s.max_total_bytes)?
+    let d = insert_drop(c, sha256_hex(token), s.label, s.dir, expires_at, s.max_files, s.max_file_bytes, s.max_total_bytes, token)?
     Ok(Ok(d))
   }
 
@@ -663,7 +662,7 @@ pub fn init_schema(a: Auth) -> Result[Unit, String] !io =
 
 fn row(used_files: Int, used_bytes: Int) -> DropRow =
   DropRow {
-    id: 1, label: "", dir: "in", created_at: "2026-10-01 00:00:00", expires_at: 1000,
+    id: 1, token: "", label: "", dir: "in", created_at: "2026-10-01 00:00:00", expires_at: 1000,
     revoked: false, max_files: 3, max_file_bytes: 100, max_total_bytes: 250,
     used_files: used_files, used_bytes: used_bytes,
   }

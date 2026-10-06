@@ -69,6 +69,11 @@ rsync -az --delete frontend/dist/ <user>@<server>:/var/www/dawnop/dist/
 # 静态资源带哈希、index.html 不缓存，发完即时生效
 ```
 
+**404 与 SPA 路由**：私有运维仓的主站配置只给已知前端路由回退 `index.html`；未知路径
+以 HTTP 404 加载前端壳。文章、内容页和标签页通过 `/api/site-route/{kind}/{slug}` 做只读存在性检查，
+缺失资源同样返回 404，后端故障保留 5xx。上线顺序：先部署含存在性接口的 Dawn 后端，再上传前端，
+最后更新 Nginx 配置。旧的仅摘要上传链接按用户要求在后端启动升级时清除，已上传文件保留。
+
 **改了 Nginx/gzip 配置**：`sudo nginx -t && sudo systemctl reload nginx`。
 
 **紧急回滚到 FastAPI**（从本地把脚本 pipe 过去跑，别跑服务器上的副本，理由见下）：

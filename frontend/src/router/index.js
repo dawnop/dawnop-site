@@ -51,6 +51,14 @@ const routes = [
     component: () => import('../views/DropView.vue'),
   },
 
+  // 未知路径独立显示 404，避免没有匹配路由时出现空白页面
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'not-found',
+    meta: { title: '404 · 页面不存在' },
+    component: () => import('../views/NotFoundView.vue'),
+  },
+
   // 后台登录：独立，无侧边栏布局
   {
     path: '/admin/login',

@@ -2,7 +2,7 @@
 # a connection per request via with_db. Errors map to the FastAPI JSON shape
 # {"detail": ...} through the web framework's Err branch.
 use db/sql.{DbConn}
-use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, param_segs, query, query_int_bounded}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, text, param_segs, query, query_int_bounded}
 use web/router.{Route, route_get}
 use json/value.{Json, JArr}
 use util/jsonx.{paginated, obj, jstr, fastapi_errors}
@@ -19,6 +19,30 @@ pub fn health(req: Request) -> Result[Response, HttpError] !io =
   Ok(json_ok(mk_health()))
 
 fn mk_health() -> Json = obj([("status", jstr("ok")), ("app", jstr("dawnop-site"))])
+
+## A read-only existence probe for nginx's dynamic SPA routes. Unlike article
+## detail it never bumps views. A missing resource is denied with 403 as
+## required by auth_request; nginx serves the SPA with HTTP 404.
+pub fn site_route(db: Db, a: Auth) -> Handler =
+  req => {
+    let kind = map_get_or(req, "kind", "")
+    let slug = map_get_or(req, "slug", "")
+    let authed = is_authed(a, req)
+    let exists = as_http(with_db(db.path, db.ext, c => site_exists(c, kind, slug, authed)), 500)?
+    if exists { Ok(text(204, "")) } else { Err(http_error(403, "页面不存在")) }
+  }
+
+fn site_exists(c: DbConn, kind: String, slug: String, authed: Bool) -> Result[Bool, String] !io =
+  if kind == "article" {
+    match published_of(c, slug)? {
+      Some(published) -> Ok(published || authed)
+      None -> Ok(false)
+    }
+  } else if kind == "p" {
+    match repo_page.by_slug(c, slug)? { Some(_) -> Ok(true), None -> Ok(false) }
+  } else if kind == "tag" {
+    match repo_tag.by_slug(c, slug)? { Some(_) -> Ok(true), None -> Ok(false) }
+  } else { Ok(false) }
 
 ## GET /api/articles — published list, paginated, optional ?tag= filter.
 pub fn list_articles(db: Db) -> Handler =
@@ -149,6 +173,7 @@ pub fn get_viz(db: Db) -> Handler =
 pub fn routes(db: Db, a: Auth) -> List[Route] =
   [
     route_get("/api/health", health),
+    route_get("/api/site-route/{kind}/{slug}", site_route(db, a)),
     route_get("/api/search", search(db)),
     route_get("/api/viz/{slug}", get_viz(db)),
     route_get("/api/articles", list_articles(db)),

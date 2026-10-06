@@ -20,7 +20,7 @@ use std/char
 use std/bytes
 use web/types.{Request, Response, HttpError, Handler, Guard, http_error, json_ok, json_response, body_text, headers_all, param}
 use web/router.{Route, route_get, route_post, route_put, tagged, body_limit, guarded as route_guarded}
-use json/value.{Json, JNull, JInt, JStr, JObj, JArr}
+use json/value.{Json, JNull, JInt, JStr, JArr}
 use util/jsonx.{obj, jstr, jint, jbool, jdatetime}
 use util/jsonread.{body_obj}
 use util/clock.{Clock, system_ms}
@@ -258,6 +258,7 @@ fn opt_str_or(m: Map[String, Json], key: String, dflt: String) -> Result[String,
 fn drop_json(d: DropRow, status: DropStatus) -> Json =
   obj([
     ("id", jint(d.id)),
+    ("token", jstr(d.token)),
     ("label", jstr(d.label)),
     ("dir", jstr(full(d.dir))),
     ("expires_at", jint(d.expires_at)),
@@ -270,14 +271,7 @@ fn drop_json(d: DropRow, status: DropStatus) -> Json =
     ("created_at", jdatetime(d.created_at)),
   ])
 
-fn with_token(j: Json, token: String) -> Json =
-  match j {
-    JObj(m) -> JObj(map.insert(m, "token", JStr(token)))
-    other -> other
-  }
-
-## POST /api/fm/drops: create a link. 201 with the token, which is never shown
-## again.
+## POST /api/fm/drops: create a link. 201 with its reusable sharing token.
 pub fn create_ep(a: Auth) -> Handler =
   req =>
   guarded(a, req, () => {
@@ -293,12 +287,12 @@ pub fn create_ep(a: Auth) -> Handler =
       max_total_bytes: opt_int_or(m, "max_total_bytes", DEFAULT_MAX_TOTAL_BYTES)?,
     }
     let made = lift(create_drop(a, s))?
-    let (d, token) = made
+    let (d, _token) = made
     let status = lift(drop_status(a, d))?
-    Ok(json_response(201, with_token(drop_json(d, status), token)))
+    Ok(json_response(201, drop_json(d, status)))
   })
 
-## GET /api/fm/drops: every link with its state, newest first. No tokens.
+## GET /api/fm/drops: every link with its state and token, newest first. Admin only.
 pub fn list_ep(a: Auth) -> Handler =
   req =>
   guarded(a, req, () => {

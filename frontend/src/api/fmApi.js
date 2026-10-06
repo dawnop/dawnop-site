@@ -176,7 +176,7 @@ export async function stats() {
 const mapDrop = (d) => ({ ...d, dir: relOf(d.dir) })
 
 // opts: { label, expires_in_s, max_files, max_file_bytes, max_total_bytes }。
-// 返回体含明文 token，只此一次；调用方展示完即丢。
+// 创建与管理列表均含完整 token，供管理员再次分享。
 export async function createDrop(rel, opts) {
   const { data } = await client.post('/fm/drops', { dir: toFull(rel), ...opts })
   return mapDrop(data)

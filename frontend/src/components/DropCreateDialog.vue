@@ -1,7 +1,6 @@
 <script setup>
 // 「创建上传链接」对话框：先填表（标签 / 有效期 / 文件数 / 单文件上限 / 总上限），
-// 创建成功后同一对话框切到结果页，展示分享链接与 curl 示例。明文 token 只在这次响应里出现，
-// 关掉对话框即丢弃，之后无处可查（后端只存哈希）。
+// 创建成功后同一对话框切到结果页，展示分享链接与 curl 示例，也可在管理页再次复制。
 import { ref, reactive, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CopyDocument } from '@element-plus/icons-vue'
@@ -134,7 +133,7 @@ async function copy(text) {
   ElMessage.success('已复制')
 }
 
-// 每次打开都从空白表单开始；关闭时丢弃明文 token
+// 每次打开都从空白表单开始；关闭时清理本地结果
 watch(show, (v) => {
   if (v) {
     resetForm()
@@ -234,11 +233,11 @@ watch(show, (v) => {
     <!-- 结果 -->
     <template v-else>
       <el-alert
-        type="warning"
+        type="success"
         :closable="false"
         show-icon
-        title="链接只显示这一次"
-        description="关闭本窗口后无法再次查看，请现在复制保存。之后可在「上传链接」页吊销或删除。"
+        title="链接已保存"
+        description="之后可在「上传链接」管理页随时查看、复制，也可以吊销或删除。"
         class="once"
       />
       <div class="out">
@@ -279,7 +278,7 @@ watch(show, (v) => {
         <router-link to="/admin/drops" class="manage" @click="show = false"
           >管理上传链接</router-link
         >
-        <el-button type="primary" @click="show = false">我已保存，关闭</el-button>
+        <el-button type="primary" @click="show = false">完成</el-button>
       </template>
     </template>
   </el-dialog>

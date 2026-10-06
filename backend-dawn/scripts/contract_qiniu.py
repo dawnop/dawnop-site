@@ -517,7 +517,7 @@ def drop_cases(g, B, token, auth, fake, fake_base, db_path):  # noqa: C901 - a c
             and abs(row[1] - int(time.time()) - 86400) <= 5,
             "stored_hash_is_sha256_of_token": row is not None
             and row[0] == hashlib.sha256(t_main.encode()).hexdigest(),
-            "plaintext_token_not_in_database": t_main != "" and t_main not in dump,
+            "plaintext_token_saved_in_database": t_main != "" and t_main in dump,
         },
     )
 
@@ -940,9 +940,10 @@ def drop_cases(g, B, token, auth, fake, fake_base, db_path):  # noqa: C901 - a c
         {
             "status": st,
             "items": [shown(i) for i in items],
-            "no_token_fields": all(
-                "token" not in i and "token_hash" not in i for i in items
+            "admin_can_recopy_token": any(
+                i.get("id") == main_id and i.get("token") == t_main for i in items
             ),
+            "no_hash_fields": all("token_hash" not in i for i in items),
             "ids_descending": [i.get("id") for i in items]
             == sorted((i.get("id") for i in items), reverse=True),
         },

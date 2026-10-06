@@ -156,6 +156,21 @@ def main():
     case("pages.nav", "/api/pages/nav")
     case("tags.list", "/api/tags")
 
+    print("\n== SPA route existence (no view-count writes) ==")
+    for kind, slug in (
+        ("article", "dawn-selfhost"),
+        ("article", "draft-only"),
+        ("article", "does-not-exist"),
+        ("p", "about"),
+        ("p", "home"),
+        ("p", "does-not-exist"),
+        ("tag", "dawn"),
+        ("tag", "does-not-exist"),
+        ("invalid", "dawn"),
+    ):
+        case(f"site-route:{kind}:{slug}", f"/api/site-route/{kind}/{slug}")
+    case("site-route:draft:admin", "/api/site-route/article/draft-only", tok)
+
     print("\n== search (multiple queries) ==")
     for q in ("dawn", "后端", "latex", "zzz-no-such-term", "a"):
         case(f"search[{q}]", "/api/search?q=" + urllib.parse.quote(q) + "&size=10")

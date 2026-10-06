@@ -1593,6 +1593,7 @@
    "status": 201,
    "body": {
     "id": 1,
+    "token": "<43-char token>",
     "label": "合同 inbox",
     "dir": "qiniu://dav-test/drop-inbox",
     "expires_at": "WALL-CLOCK",
@@ -1602,12 +1603,11 @@
     "used_files": 0,
     "used_bytes": 0,
     "status": "active",
-    "created_at": "WALL-CLOCK",
-    "token": "<43-char token>"
+    "created_at": "WALL-CLOCK"
    },
    "expires_in_about_a_day": true,
    "stored_hash_is_sha256_of_token": true,
-   "plaintext_token_not_in_database": true
+   "plaintext_token_saved_in_database": true
   },
   "drop.create.refusals": {
    "expires_in_s.below": {
@@ -2284,6 +2284,7 @@
    "items": [
     {
      "id": 8,
+     "token": "<43-char token>",
      "label": "",
      "dir": "qiniu://dav-test/drop-gone",
      "expires_at": "WALL-CLOCK",
@@ -2297,6 +2298,7 @@
     },
     {
      "id": 7,
+     "token": "<43-char token>",
      "label": "",
      "dir": "qiniu://dav-test/drop-inbox",
      "expires_at": "WALL-CLOCK",
@@ -2310,6 +2312,7 @@
     },
     {
      "id": 6,
+     "token": "<43-char token>",
      "label": "",
      "dir": "qiniu://dav-test/drop-inbox",
      "expires_at": "WALL-CLOCK",
@@ -2323,6 +2326,7 @@
     },
     {
      "id": 5,
+     "token": "<43-char token>",
      "label": "",
      "dir": "qiniu://dav-test/drop-inbox",
      "expires_at": "WALL-CLOCK",
@@ -2336,6 +2340,7 @@
     },
     {
      "id": 4,
+     "token": "<43-char token>",
      "label": "",
      "dir": "qiniu://dav-test/drop-inbox",
      "expires_at": "WALL-CLOCK",
@@ -2349,6 +2354,7 @@
     },
     {
      "id": 3,
+     "token": "<43-char token>",
      "label": "",
      "dir": "qiniu://dav-test/drop-inbox",
      "expires_at": "WALL-CLOCK",
@@ -2362,6 +2368,7 @@
     },
     {
      "id": 2,
+     "token": "<43-char token>",
      "label": "other",
      "dir": "qiniu://dav-test/drop-inbox",
      "expires_at": "WALL-CLOCK",
@@ -2375,6 +2382,7 @@
     },
     {
      "id": 1,
+     "token": "<43-char token>",
      "label": "合同 inbox",
      "dir": "qiniu://dav-test/drop-inbox",
      "expires_at": "WALL-CLOCK",
@@ -2387,7 +2395,8 @@
      "created_at": "WALL-CLOCK"
     }
    ],
-   "no_token_fields": true,
+   "admin_can_recopy_token": true,
+   "no_hash_fields": true,
    "ids_descending": true
   },
   "drop.delete": {

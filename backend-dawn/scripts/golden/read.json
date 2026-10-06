@@ -392,6 +392,68 @@
     }
    ]
   },
+  "site-route:article:dawn-selfhost": {
+   "path": "/api/site-route/article/dawn-selfhost",
+   "status": 204,
+   "body": ""
+  },
+  "site-route:article:draft-only": {
+   "path": "/api/site-route/article/draft-only",
+   "status": 403,
+   "body": {
+    "detail": "页面不存在"
+   }
+  },
+  "site-route:article:does-not-exist": {
+   "path": "/api/site-route/article/does-not-exist",
+   "status": 403,
+   "body": {
+    "detail": "页面不存在"
+   }
+  },
+  "site-route:p:about": {
+   "path": "/api/site-route/p/about",
+   "status": 204,
+   "body": ""
+  },
+  "site-route:p:home": {
+   "path": "/api/site-route/p/home",
+   "status": 403,
+   "body": {
+    "detail": "页面不存在"
+   }
+  },
+  "site-route:p:does-not-exist": {
+   "path": "/api/site-route/p/does-not-exist",
+   "status": 403,
+   "body": {
+    "detail": "页面不存在"
+   }
+  },
+  "site-route:tag:dawn": {
+   "path": "/api/site-route/tag/dawn",
+   "status": 204,
+   "body": ""
+  },
+  "site-route:tag:does-not-exist": {
+   "path": "/api/site-route/tag/does-not-exist",
+   "status": 403,
+   "body": {
+    "detail": "页面不存在"
+   }
+  },
+  "site-route:invalid:dawn": {
+   "path": "/api/site-route/invalid/dawn",
+   "status": 403,
+   "body": {
+    "detail": "页面不存在"
+   }
+  },
+  "site-route:draft:admin": {
+   "path": "/api/site-route/article/draft-only",
+   "status": 204,
+   "body": ""
+  },
   "search[dawn]": {
    "path": "/api/search?q=dawn&size=10",
    "status": 200,

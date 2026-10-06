@@ -7,13 +7,14 @@
 # frozen, so these two get `create table if not exists` here instead. A rollback
 # to FastAPI simply ignores them (its routes do not exist there, so /api/drop
 # answers 404), which is the accepted cost.
-use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Cell, open, query, exec, require_tx, scalar_int, int_at, str_at, bool_at, first_map, first_bool_or}
+use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Cell, open, query, exec, with_immediate_tx, require_tx, scalar_int, int_at, str_at, bool_at, first_map, first_bool_or}
 use repo/repo_fm.{get_row, subtree_rows, ledger_insert}
 use util/paths.{full}
 
-## One upload link as stored. The token itself is never here: only its sha256.
+## One upload link as stored. Only admin responses include the plaintext token.
 pub type DropRow = {
   id: Int,
+  token: String,
   label: String,
   dir: String,
   created_at: String,
@@ -30,7 +31,7 @@ pub type DropRow = {
 ## land and the largest object the signed token admits.
 pub type DropPending = { key: String, drop_id: Int, rel: String, size_limit: Int }
 
-const DDL_DROPS: String = "create table if not exists upload_drops (id integer primary key, token_hash text not null unique, label text not null default '', dir text not null, created_at text not null, expires_at integer not null, revoked integer not null default 0, max_files integer not null, max_file_bytes integer not null, max_total_bytes integer not null, used_files integer not null default 0, used_bytes integer not null default 0, last_used_at text)"
+const DDL_DROPS: String = "create table if not exists upload_drops (id integer primary key, token text not null default '', token_hash text not null unique, label text not null default '', dir text not null, created_at text not null, expires_at integer not null, revoked integer not null default 0, max_files integer not null, max_file_bytes integer not null, max_total_bytes integer not null, used_files integer not null default 0, used_bytes integer not null default 0, last_used_at text)"
 
 const DDL_PENDING: String = "create table if not exists drop_pending (key text primary key, drop_id integer not null, rel text not null, size_limit integer not null, created_at text not null)"
 
@@ -44,16 +45,33 @@ const DDL_PENDING: String = "create table if not exists drop_pending (key text p
 pub fn ensure_schema(c: DbConn) -> Result[Unit, String] !io = {
   let _d = exec(c, DDL_DROPS, [])?
   let _p = exec(c, DDL_PENDING, [])?
+  # The user explicitly chose to discard hash-only links. Upgrade atomically;
+  # uploaded files and the pending_uploads orphan ledger are left untouched.
+  if scalar_int(c, "select count(*) from pragma_table_info('upload_drops') where name = 'token'", [])? == 0 {
+    let upgraded: Result[Unit, String] = with_immediate_tx(c, () => upgrade_tokens(c))
+    upgraded?
+  }
   Ok(())
 }
 
-const DROP_COLS: String = "id, label, dir, created_at, expires_at, revoked, max_files, max_file_bytes, max_total_bytes, used_files, used_bytes"
+fn upgrade_tokens(c: DbConn) -> Result[Unit, String] !io = {
+  # A second connection may have completed the upgrade while we waited.
+  if scalar_int(c, "select count(*) from pragma_table_info('upload_drops') where name = 'token'", [])? == 0 {
+    let _r = exec(c, "delete from drop_pending", [])?
+    let _d = exec(c, "delete from upload_drops", [])?
+    let _a = exec(c, "alter table upload_drops add column token text not null default ''", [])?
+    Ok(())
+  } else { Ok(()) }
+}
 
-fn drop_cols() -> List[Col] = [ColInt, ColStr, ColStr, ColStr, ColInt, ColInt, ColInt, ColInt, ColInt, ColInt, ColInt]
+const DROP_COLS: String = "id, label, dir, created_at, expires_at, revoked, max_files, max_file_bytes, max_total_bytes, used_files, used_bytes, token"
+
+fn drop_cols() -> List[Col] = [ColInt, ColStr, ColStr, ColStr, ColInt, ColInt, ColInt, ColInt, ColInt, ColInt, ColInt, ColStr]
 
 fn drop_of(r: List[Cell]) -> DropRow =
   DropRow {
     id: int_at(r, 0),
+    token: str_at(r, 11),
     label: str_at(r, 1),
     dir: str_at(r, 2),
     created_at: str_at(r, 3),
@@ -68,10 +86,10 @@ fn drop_of(r: List[Cell]) -> DropRow =
 
 ## Insert a link and read it back. The caller holds the immediate transaction,
 ## so the id read through last_insert_rowid is this insert's.
-pub fn insert_drop(c: DbConn, token_hash: String, label: String, dir: String, expires_at: Int, max_files: Int, max_file_bytes: Int, max_total_bytes: Int) -> Result[DropRow, String] !io = {
+pub fn insert_drop(c: DbConn, token_hash: String, label: String, dir: String, expires_at: Int, max_files: Int, max_file_bytes: Int, max_total_bytes: Int, token: String = "") -> Result[DropRow, String] !io = {
   let _t = require_tx(c, "drop insert")?
-  let _i = exec(c, "insert into upload_drops (token_hash, label, dir, created_at, expires_at, max_files, max_file_bytes, max_total_bytes) values (?, ?, ?, datetime('now'), ?, ?, ?, ?)",
-    [PStr(token_hash), PStr(label), PStr(dir), PInt(expires_at), PInt(max_files), PInt(max_file_bytes), PInt(max_total_bytes)])?
+  let _i = exec(c, "insert into upload_drops (token_hash, token, label, dir, created_at, expires_at, max_files, max_file_bytes, max_total_bytes) values (?, ?, ?, ?, datetime('now'), ?, ?, ?, ?)",
+    [PStr(token_hash), PStr(token), PStr(label), PStr(dir), PInt(expires_at), PInt(max_files), PInt(max_file_bytes), PInt(max_total_bytes)])?
   let id = scalar_int(c, "select last_insert_rowid()", [])?
   match drop_by_id(c, id)? {
     Some(d) -> Ok(d)
@@ -80,7 +98,7 @@ pub fn insert_drop(c: DbConn, token_hash: String, label: String, dir: String, ex
 }
 
 ## The link whose token hashes to `token_hash`, whatever its state. An exact
-## match on a fixed-length digest: there is no plaintext to compare.
+## match on a fixed-length digest; plaintext is reserved for admin sharing.
 pub fn drop_by_hash(c: DbConn, token_hash: String) -> Result[Option[DropRow], String] !io = {
   let rows = query(c, "select ${DROP_COLS} from upload_drops where token_hash = ?", [PStr(token_hash)], drop_cols())?
   Ok(first_map(rows, r => drop_of(r)))
@@ -197,6 +215,28 @@ test "the schema is created once and creating it again is a no-op" {
   let c = drop_test_db()
   assert ensure_schema(c) == Ok(())
   assert scalar_int(c, "select count(*) from sqlite_master where name in ('upload_drops', 'drop_pending')", []) == Ok(2)
+}
+
+test "upgrading hash-only links discards capabilities but preserves files and orphan accounting" {
+  let c = drop_test_db()
+  let _old = exec(c, "alter table upload_drops drop column token", [])
+  let _link = exec(c, "insert into upload_drops (id, token_hash, dir, created_at, expires_at, max_files, max_file_bytes, max_total_bytes) values (1, 'old-hash', '', '2026-10-01', 9999999999, 10, 100, 1000)", [])
+  let _pending = exec(c, "insert into drop_pending values ('old-key', 1, 'old.txt', 100, '2026-10-01')", [])
+  let _ledger = exec(c, "insert into pending_uploads values ('old-key', 'qiniu://old.txt', '2026-10-01')", [])
+  let _file = exec(c, "insert into files values (1, 'saved.txt', 0, 'saved-key', 'text/plain', 5, '2026-10-01', '2026-10-01')", [])
+  assert ensure_schema(c) == Ok(())
+  assert scalar_int(c, "select count(*) from upload_drops", []) == Ok(0)
+  assert scalar_int(c, "select count(*) from drop_pending", []) == Ok(0)
+  assert scalar_int(c, "select count(*) from pending_uploads", []) == Ok(1)
+  assert scalar_int(c, "select count(*) from files", []) == Ok(1)
+  let _b = exec(c, "begin immediate", [])
+  let _new = insert_drop(c, "new-hash", "new", "", 9999999999, 10, 100, 1000, "saved-token")
+  let _e = exec(c, "commit", [])
+  assert ensure_schema(c) == Ok(())
+  match drop_by_hash(c, "new-hash") {
+    Ok(Some(d)) -> { assert d.token == "saved-token" }
+    _ -> { assert false }
+  }
 }
 
 test "a reservation is visible only to the drop that made it" {
