@@ -166,6 +166,9 @@ jobs:
       - name: contract goldens (read / edge / webdav / qiniu)
         run: python3 backend-dawn/scripts/contract_run.py
 
+      - name: public Markdown and durable submission limits
+        run: python3 backend-dawn/scripts/check-paste.py
+
       # The deployable artifact. The jar is deliberately NOT in git: a build
       # output committed by hand drifts from src/ silently, and its lib/ is
       # gitignored anyway, so the in-repo jar could never run from a checkout.
@@ -483,6 +486,10 @@ jobs:
       # disagree, which is the whole point of having the lockfile committed.
       - name: install
         run: npm ci
+        working-directory: frontend
+
+      - name: public Markdown isolation and imports
+        run: node scripts/check-paste.mjs
         working-directory: frontend
 
       - name: lint

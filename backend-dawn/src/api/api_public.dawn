@@ -9,6 +9,8 @@ use util/jsonx.{paginated, obj, jstr, fastapi_errors}
 use db/db.{Db, with_db}
 use svc/auth.{Auth, is_authed}
 use repo/repo_article.{list_published, list_by_page, by_slug_any, published_of, bump_views}
+use repo/repo_paste
+use util/clock.{system_s}
 use repo/repo_page
 use repo/repo_tag
 use repo/repo_viz
@@ -42,6 +44,8 @@ fn site_exists(c: DbConn, kind: String, slug: String, authed: Bool) -> Result[Bo
     match repo_page.by_slug(c, slug)? { Some(_) -> Ok(true), None -> Ok(false) }
   } else if kind == "tag" {
     match repo_tag.by_slug(c, slug)? { Some(_) -> Ok(true), None -> Ok(false) }
+  } else if kind == "paste" {
+    repo_paste.active_exists(c,slug,system_s())
   } else { Ok(false) }
 
 ## GET /api/articles — published list, paginated, optional ?tag= filter.

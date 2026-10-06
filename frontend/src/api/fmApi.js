@@ -122,6 +122,8 @@ export async function downloadBlob(rel, onProgress, sizeHint) {
 }
 
 // 增删改（后端都返回当前目录的新 FsData，这里不用它，调用方自行刷新）
+export const createFile = async (rel, name) =>
+  (await client.post('/fm/create-file', { path: toFull(rel), name })).data
 export const createFolder = async (rel, name) =>
   (await client.post('/fm/create-folder', { path: toFull(rel), name })).data
 export const rename = async (rel, itemRel, name) =>

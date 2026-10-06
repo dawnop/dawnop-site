@@ -51,6 +51,31 @@ const routes = [
     component: () => import('../views/DropView.vue'),
   },
 
+  {
+    path: '/paste',
+    component: () => import('../views/paste/PasteLayout.vue'),
+    children: [
+      {
+        path: '',
+        name: 'paste',
+        meta: { title: 'Paste' },
+        component: () => import('../views/paste/PasteListView.vue'),
+      },
+      {
+        path: 'new',
+        name: 'paste-new',
+        meta: { title: '新建 Paste' },
+        component: () => import('../views/paste/PasteNewView.vue'),
+      },
+      {
+        path: ':id',
+        name: 'paste-detail',
+        meta: { title: 'Paste' },
+        component: () => import('../views/paste/PasteDetailView.vue'),
+      },
+    ],
+  },
+
   // 未知路径独立显示 404，避免没有匹配路由时出现空白页面
   {
     path: '/:pathMatch(.*)*',
@@ -72,6 +97,11 @@ const routes = [
     component: AdminLayout,
     meta: { requiresAuth: true },
     children: [
+      {
+        path: 'pastes',
+        name: 'admin-pastes',
+        component: () => import('../views/admin/PastesAdminView.vue'),
+      },
       {
         path: '',
         name: 'admin-home',

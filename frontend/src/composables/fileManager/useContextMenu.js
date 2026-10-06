@@ -13,6 +13,7 @@
 import { reactive, computed, onMounted, onUnmounted } from 'vue'
 import {
   FolderAdd,
+  DocumentAdd,
   FolderOpened,
   Files,
   RefreshRight,
@@ -67,6 +68,7 @@ export function useContextMenu({ selPaths, selRows, selectedPath, actions }) {
     const rows = menu.rows
     if (!rows.length) {
       return [
+        { label: '新建文件', icon: DocumentAdd, run: actions.newFile },
         { label: '新建文件夹', icon: FolderAdd, run: actions.newFolder },
         { label: '上传文件', icon: Files, run: actions.pickFiles },
         { label: '上传文件夹', icon: FolderOpened, run: actions.pickFolder },

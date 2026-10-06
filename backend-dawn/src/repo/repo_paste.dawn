@@ -1,0 +1,94 @@
+# Public Markdown and short-lived anonymous submission budgets. No reader log.
+use std/map
+use std/str
+use db/sql.{DbConn, SqlV, PInt, PStr, ColInt, ColStr, Cell, exec, query, scalar_int, str_at, int_at, opt_int_at, first_map}
+use json/value.{Json}
+use util/jsonx.{obj, jint, jstr, jopt_int, paginated}
+
+pub type Paste = { id: String, title: String, content: String, created_at: Int, expires_at: Option[Int], size_bytes: Int }
+# key, default, maximum. Config changes never lift the hard body/wire ceiling.
+pub const LIMITS: List[(String, Int, Int)] = [
+  ("max_bytes", 262144, 262144), ("source_minute", 5, 60),
+  ("source_day", 30, 10000), ("source_day_bytes", 2097152, 104857600),
+  ("global_day", 1000, 100000), ("global_day_bytes", 10485760, 1073741824),
+  ("stored_count", 20000, 100000), ("stored_bytes", 104857600, 1073741824),
+]
+
+pub fn ensure_schema(c: DbConn) -> Result[Unit, String] !io = {
+  let _a = exec(c, "create table if not exists pastes (id text primary key, title text not null, content text not null, created_at integer not null, expires_at integer, size_bytes integer not null)", [])?
+  let _b = exec(c, "create index if not exists pastes_created on pastes(created_at desc, id desc)", [])?
+  let _e = exec(c, "create index if not exists pastes_expiry on pastes(expires_at)", [])?
+  let _fts = exec(c, "create virtual table if not exists paste_fts using fts5(title,content,content='pastes',content_rowid='rowid',tokenize='trigram')", [])?
+  let _ai = exec(c, "create trigger if not exists paste_fts_insert after insert on pastes begin insert into paste_fts(rowid,title,content) values(new.rowid,new.title,new.content); end", [])?
+  let _ad = exec(c, "create trigger if not exists paste_fts_delete after delete on pastes begin insert into paste_fts(paste_fts,rowid,title,content) values('delete',old.rowid,old.title,old.content); end", [])?
+  let _q = exec(c, "create table if not exists paste_budgets (day integer not null, source text not null, count integer not null, bytes integer not null, minute integer not null, minute_count integer not null, primary key(day,source))", [])?
+  let _s = exec(c, "create table if not exists paste_settings (key text primary key, value integer not null)", [])?
+  Ok(())
+}
+
+pub fn limits(c: DbConn) -> Result[Map[String, Int], String] !io = {
+  let rows = query(c, "select key,value from paste_settings", [], [ColStr, ColInt])?
+  let saved = map.from(map(rows, r => (str_at(r, 0), int_at(r, 1))))
+  Ok(map.from(map(LIMITS, spec => {
+    let (key, fallback, _max) = spec
+    (key, unwrap_or(map.get(saved, key), fallback))
+  })))
+}
+
+pub fn limits_json(m: Map[String, Int]) -> Json = obj(map(LIMITS, spec => {
+  let (key, fallback, _max) = spec
+  (key, jint(unwrap_or(map.get(m, key), fallback)))
+}))
+
+fn row(r: List[Cell]) -> Paste = Paste { id: str_at(r, 0), title: str_at(r, 1), content: str_at(r, 2), created_at: int_at(r, 3), expires_at: opt_int_at(r, 4), size_bytes: int_at(r, 5) }
+
+pub fn as_json(p: Paste) -> Json = obj([
+  ("id", jstr(p.id)), ("title", jstr(p.title)), ("content", jstr(p.content)),
+  ("created_at", jint(p.created_at)), ("expires_at", jopt_int(p.expires_at)), ("size_bytes", jint(p.size_bytes)),
+])
+
+pub fn by_id(c: DbConn, id: String, now: Int, admin: Bool) -> Result[Option[Paste], String] !io = {
+  let rs = query(c, "select id,title,content,created_at,expires_at,size_bytes from pastes where id=? and (?=1 or expires_at is null or expires_at>?)", [PStr(id), PInt(if admin { 1 } else { 0 }), PInt(now)], [ColStr, ColStr, ColStr, ColInt, ColInt, ColInt])?
+  Ok(first_map(rs, r => row(r)))
+}
+
+pub fn listing(c: DbConn, now: Int, admin: Bool, q: String, status: String, after: Int, before: Int, page: Int, size: Int) -> Result[Json, String] !io = {
+  let where = " where (?=1 or expires_at is null or expires_at>?) and (?='' or instr(lower(title),lower(?))>0 or instr(lower(content),lower(?))>0) and (?='' or (?='active' and (expires_at is null or expires_at>?)) or (?='expired' and expires_at<=?) or (?='permanent' and expires_at is null)) and (?=0 or created_at>=?) and (?=0 or created_at<=?)"
+  let ps: List[SqlV] = [PInt(if admin { 1 } else { 0 }), PInt(now), PStr(q), PStr(q), PStr(q), PStr(status), PStr(status), PInt(now), PStr(status), PInt(now), PStr(status), PInt(after), PInt(after), PInt(before), PInt(before)]
+  let indexed = len(code_points(q)) >= 3
+  let filter = where ++ (if indexed { " and rowid in (select rowid from paste_fts where paste_fts match ?)" } else { "" })
+  let empty: List[SqlV] = []
+  let params: List[SqlV] = ps ++ (if indexed { [PStr("\"" ++ join(str.split(q, "\""), "\"\"") ++ "\"")] } else { empty })
+  let total = scalar_int(c, "select count(*) from pastes" ++ filter, params)?
+  # Never fetch full bodies for a listing. Search inputs and result pages are bounded.
+  let rs = query(c, "select id,title,substr(content,1,160),created_at,expires_at,size_bytes from pastes" ++ filter ++ " order by created_at desc,id desc limit ? offset ?", params ++ [PInt(size), PInt((page - 1) * size)], [ColStr, ColStr, ColStr, ColInt, ColInt, ColInt])?
+  Ok(paginated(total, page, size, map(rs, r => {
+    let p = row(r)
+    obj([("id", jstr(p.id)), ("title", jstr(p.title)), ("summary", jstr(p.content)), ("created_at", jint(p.created_at)), ("expires_at", jopt_int(p.expires_at)), ("size_bytes", jint(p.size_bytes))])
+  })))
+}
+
+pub fn stats(c: DbConn, now: Int) -> Result[Json, String] !io = {
+  let count = scalar_int(c, "select count(*) from pastes", [])?
+  let size = scalar_int(c, "select coalesce(sum(size_bytes),0) from pastes", [])?
+  let expired = scalar_int(c, "select count(*) from pastes where expires_at<=?", [PInt(now)])?
+  Ok(obj([("count", jint(count)), ("bytes", jint(size)), ("expired", jint(expired))]))
+}
+
+pub fn cleanup(c: DbConn, now: Int) -> Result[Int, String] !io = {
+  let n = exec(c, "delete from pastes where expires_at<=?", [PInt(now)])?
+  let _b = exec(c, "delete from paste_budgets where day<?", [PInt(now / 86400 - 1)])?
+  Ok(n)
+}
+
+# Timer entry also works before the first anonymous submission.
+pub fn cleanup_existing(c: DbConn, now: Int) -> Result[Int, String] !io = {
+  ensure_schema(c)?
+  cleanup(c, now)
+}
+
+pub fn active_exists(c: DbConn, id: String, now: Int) -> Result[Bool, String] !io = {
+  ensure_schema(c)?
+  let count = scalar_int(c, "select count(*) from pastes where id=? and (expires_at is null or expires_at>?)", [PStr(id), PInt(now)])?
+  Ok(count > 0)
+}

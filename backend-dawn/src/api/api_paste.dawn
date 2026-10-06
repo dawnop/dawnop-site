@@ -1,0 +1,161 @@
+# Public read/create endpoints and JWT-guarded management only.
+use std/map
+use web/types.{Request, Response, HttpError, Handler, http_error, body_text, headers_all, json_ok, json_response, raw, with_header, param, query, query_int_bounded}
+use web/router.{Route, route_get, route_post, route_put, body_limit}
+use json/value.{Json, JStr, JInt, JArr}
+use util/jsonread.{body_obj}
+use util/jsonx.{obj, jint, jbool, fastapi_errors}
+use util/clock.{system_s}
+use db/db.{with_db}
+use db/sql.{DbConn, PInt, PStr, exec, with_immediate_tx}
+use svc/auth.{Auth, guarded}
+use svc/paste
+use repo/repo_paste
+
+fn db[T](a: Auth, body: fn(DbConn) -> Result[T, String] !io) -> Result[T, HttpError] !io = {
+  let run: fn(DbConn) -> Result[T, String] !io = c => {
+    repo_paste.ensure_schema(c)?
+    body(c)
+  }
+  let r = with_db(a.db.path, a.db.ext, run)
+  match r { Ok(v) -> Ok(v)
+    Err(e) -> { println("paste failed: ${e}")
+      Err(http_error(500, "服务器内部错误")) } }
+}
+fn body(req: Request) -> Result[Map[String, Json], HttpError] !io =
+  match body_obj(body_text(req)?) { Ok(m) -> Ok(m)
+    Err(e) -> Err(http_error(422, e)) }
+fn string(m: Map[String, Json], k: String, dflt: String) -> Result[String, HttpError] =
+  match map.get(m, k) { None -> Ok(dflt)
+    Some(JStr(s)) -> Ok(s)
+    _ -> Err(http_error(422, "${k} 必须是字符串")) }
+fn integer(m: Map[String, Json], k: String, dflt: Int) -> Result[Int, HttpError] =
+  match map.get(m, k) { None -> Ok(dflt)
+    Some(JInt(n)) -> Ok(n)
+    _ -> Err(http_error(422, "${k} 必须是整数")) }
+
+fn list(a: Auth, req: Request, admin: Bool) -> Result[Response, HttpError] !io = {
+  let q = unwrap_or(query(req, "q"), "")
+  if len(code_points(q)) > 120 { return Err(http_error(422, "搜索最多 120 字")) }
+  let status = if admin { unwrap_or(query(req, "status"), "") } else { "" }
+  if status != "" && status != "active" && status != "expired" && status != "permanent" { return Err(http_error(422, "状态无效")) }
+  let after = if admin { query_int_bounded(req, "after", 0, 0, 4102444800, fmt: fastapi_errors())? } else { 0 }
+  let before = if admin { query_int_bounded(req, "before", 0, 0, 4102444800, fmt: fastapi_errors())? } else { 0 }
+  let page = query_int_bounded(req, "page", 1, 1, 1000000, fmt: fastapi_errors())?
+  let size = query_int_bounded(req, "size", 20, 1, 50, fmt: fastapi_errors())?
+  let now = system_s()
+  Ok(json_ok(db(a, c => repo_paste.listing(c, now, admin, q, status, after, before, page, size))?))
+}
+fn detail(a: Auth, req: Request, admin: Bool, source: Bool) -> Result[Response, HttpError] !io = {
+  let id = param(req, "id")?
+  let now = system_s()
+  match db(a, c => repo_paste.by_id(c, id, now, admin))? {
+    None -> Err(http_error(404, "Paste 不存在"))
+    Some(p) -> Ok(if source {
+      with_header(raw(200, "text/plain; charset=utf-8", p.content), "X-Content-Type-Options", "nosniff")
+    } else { json_ok(repo_paste.as_json(p)) })
+  }
+}
+fn create(a: Auth) -> Handler = req => {
+  let m = body(req)?
+  let title = string(m, "title", "")?
+  let content = string(m, "content", "")?
+  let days = integer(m, "days", 7)?
+  let ip = match headers_all(req, "x-real-ip") { [] -> ""
+    [v] -> v
+    _ -> return Err(http_error(400, "来源地址只能出现一次")) }
+  let source = match paste.source_group(ip) { Ok(s) -> s
+    Err(e) -> return Err(http_error(400, e)) }
+  let now = system_s()
+  match db(a, c => paste.create(c, a.secret, source, title, content, days, now))? {
+    Ok(p) -> Ok(json_response(201, repo_paste.as_json(p)))
+    Err(e) -> Err(if e.retry > 0 { HttpError { ..http_error(e.status, e.message), headers: [("Retry-After", to_string(e.retry))] } } else { http_error(e.status, e.message) })
+  }
+}
+fn config(a: Auth, admin: Bool) -> Handler = req => {
+  let read: fn() -> Result[Response, HttpError] !io = () => {
+    let conf = db(a, c => repo_paste.limits(c))?
+    Ok(json_ok(if admin { repo_paste.limits_json(conf) } else { obj([("max_bytes", jint(unwrap_or(map.get(conf, "max_bytes"), 262144)))]) }))
+  }
+  if admin { guarded(a, req, read) } else { read() }
+}
+fn settings(a: Auth) -> Handler = req => guarded(a, req, () => {
+  let m = body(req)?
+  if len(map.keys(m)) != len(repo_paste.LIMITS) { return Err(http_error(422, "请提供全部额度字段")) }
+  for (k, _d, _max) in repo_paste.LIMITS {
+    if not map.has(m, k) { return Err(http_error(422, "缺少额度字段 ${k}")) }
+  }
+  let values = map(repo_paste.LIMITS, spec => {
+    let (k, dflt, max) = spec
+    (k, integer(m, k, dflt), max)
+  })
+  for (_k, r, max) in values {
+    let n = r?
+    if n < 1 || n > max { return Err(http_error(422, "额度超出允许范围")) }
+  }
+  let _saved = db(a, c => with_immediate_tx(c, () => write_settings(c, values)))?
+
+  Ok(json_ok(obj([("ok", jbool(true))])))
+})
+fn remove(a: Auth) -> Handler = req => guarded(a, req, () => {
+  let m = body(req)?
+  let ids = match map.get(m, "ids") { Some(JArr(xs)) -> xs
+    _ -> return Err(http_error(422, "ids 必须是数组")) }
+  if len(ids) < 1 || len(ids) > 100 { return Err(http_error(422, "每次删除 1 至 100 条")) }
+  let ss: List[Result[String, HttpError]] = map(ids, j => match j { JStr(s) -> Ok(s)
+    _ -> Err(http_error(422, "id 必须是字符串")) })
+  for s in ss { let _s = s? }
+  let n = db(a, c => with_immediate_tx(c, () => delete_ids(c, ss)))?
+
+  Ok(json_ok(obj([("deleted", jint(n))])))
+})
+fn retain(a: Auth) -> Handler = req => guarded(a, req, () => {
+  let id = param(req, "id")?
+  let n = db(a, c => exec(c, "update pastes set expires_at=null where id=?", [PStr(id)]))?
+  if n == 0 { Err(http_error(404, "Paste 不存在")) } else { Ok(json_ok(obj([("ok", jbool(true))]))) }
+})
+fn clean(a: Auth) -> Handler = req => guarded(a, req, () => {
+  let now = system_s()
+  let n = db(a, c => with_immediate_tx(c, () => repo_paste.cleanup(c, now)))?
+  Ok(json_ok(obj([("deleted", jint(n))])))
+})
+fn stats(a: Auth) -> Handler = req => guarded(a, req, () => {
+  let now = system_s()
+  Ok(json_ok(db(a, c => repo_paste.stats(c, now))?))
+})
+
+pub fn routes(a: Auth) -> List[Route] = [
+  route_get("/api/pastes/admin", req => guarded(a, req, () => list(a, req, true))),
+  route_get("/api/pastes/admin/settings", config(a, true)),
+  route_put("/api/pastes/admin/settings", settings(a)),
+  route_get("/api/pastes/admin/stats", stats(a)),
+  route_post("/api/pastes/admin/delete", remove(a)),
+  route_post("/api/pastes/admin/cleanup", clean(a)),
+  route_get("/api/pastes/admin/{id}", req => guarded(a, req, () => detail(a, req, true, false))),
+  route_post("/api/pastes/admin/{id}/retain", retain(a)),
+  route_get("/api/pastes/config", config(a, false)),
+  route_get("/api/pastes", req => list(a, req, false)),
+  body_limit(route_post("/api/pastes", create(a)), 1700000),
+  route_get("/api/pastes/{id}/raw", req => detail(a, req, false, true)),
+  route_get("/api/pastes/{id}", req => detail(a, req, false, false)),
+]
+
+fn write_settings(c: DbConn, values: List[(String, Result[Int, HttpError], Int)]) -> Result[Unit, String] !io = {
+  for (k, r, _max) in values {
+    let n = match r { Ok(v) -> v
+      Err(_) -> return Err("invalid validated paste setting") }
+    let _w = exec(c, "insert into paste_settings(key,value) values(?,?) on conflict(key) do update set value=excluded.value", [PStr(k), PInt(n)])?
+  }
+  Ok(())
+}
+fn delete_ids(c: DbConn, ss: List[Result[String, HttpError]]) -> Result[Int, String] !io =
+  match ss {
+    [] -> Ok(0)
+    [s, ..rest] -> {
+      let id = match s { Ok(v) -> v
+        Err(_) -> return Err("invalid validated paste id") }
+      let n = exec(c, "delete from pastes where id=?", [PStr(id)])?
+      let more = delete_ids(c, rest)?
+      Ok(n + more)
+    }
+  }

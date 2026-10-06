@@ -1,0 +1,106 @@
+# Validation, source grouping and durable budgets for public Markdown.
+use std/str
+use std/map
+use std/bytes
+use std/char
+use db/sql.{DbConn, PStr, PInt, ColInt, query, exec, scalar_int, int_at, first_row, with_immediate_tx}
+use repo/repo_paste.{Paste, limits, cleanup}
+use util/crypto.{uuid_hex, hmac_sha256_hex}
+use util/ferr.{catch_text}
+use java "java.net.InetAddress"
+
+pub type Refusal = { status: Int, message: String, retry: Int }
+fn no(status: Int, message: String, retry: Int) -> Refusal = Refusal { status: status, message: message, retry: retry }
+
+# Parse literals only: getByName must never resolve attacker-supplied DNS names.
+# No header falls into ONE shared direct-call bucket, never an unlimited path.
+pub fn source_group(ip: String) -> Result[String, String] !io =
+  if ip == "" { Ok("direct") }
+  else if str.len(ip) > 45 || not fold(code_points(ip), true, (ok, c) => ok && (str.contains("0123456789abcdefABCDEF:.", to_string(c)))) {
+    Err("来源地址无效")
+  } else if not str.contains(ip, ":") && (len(str.split(ip, ".")) != 4 || not fold(str.split(ip, "."), true, (ok, s) => ok && valid_octet(s))) {
+    Err("来源地址无效")
+  } else {
+    match catch_text(() => InetAddress.getByName(ip)!.getAddress()!) {
+      Err(_) -> Err("来源地址无效")
+      Ok(b) -> Ok(if bytes.len(b) == 16 { "v6:" ++ bytes.to_hex(bytes.slice(b, 0, 8)) } else { "v4:" ++ bytes.to_hex(b) })
+    }
+  }
+
+fn valid_octet(s: String) -> Bool =
+  s != "" && str.len(s) <= 3 && fold(code_points(s), true, (ok, c) => ok && c >= '0' && c <= '9') &&
+  (match parse_int(s) { Some(n) -> n >= 0 && n <= 255
+    None -> false })
+
+pub fn valid_text(s: String) -> Bool = fold(code_points(s), true, (ok, c) => {
+  let n = char.code(c)
+  ok && (n >= 32 || n == 9 || n == 10 || n == 13) && n != 127
+})
+
+pub fn validate(title: String, content: String, days: Int) -> Result[Int, Refusal] =
+  if len(code_points(title)) > 120 || not valid_text(title) { Err(no(422, "标题最多 120 字，不能含控制字符", 0)) }
+  else if str.trim(content) == "" || not valid_text(content) { Err(no(422, "请输入 Markdown 正文，不能含二进制控制字符", 0)) }
+  else if days != 1 && days != 7 && days != 30 { Err(no(422, "保存期限只能是 1、7 或 30 天", 0)) }
+  else { Ok(bytes.len(bytes.utf8(content))) }
+
+fn budget(c: DbConn, day: Int, source: String) -> Result[(Int, Int, Int, Int), String] !io = {
+  let rs = query(c, "select count,bytes,minute,minute_count from paste_budgets where day=? and source=?", [PInt(day), PStr(source)], [ColInt, ColInt, ColInt, ColInt])?
+  Ok(match first_row(rs) { Some(r) -> (int_at(r, 0), int_at(r, 1), int_at(r, 2), int_at(r, 3))
+    None -> (0, 0, 0, 0) })
+}
+fn charge(c: DbConn, day: Int, source: String, size: Int, minute: Int) -> Result[Unit, String] !io = {
+  let _n = exec(c, "insert into paste_budgets(day,source,count,bytes,minute,minute_count) values(?,?,1,?,?,1) on conflict(day,source) do update set count=count+1,bytes=bytes+excluded.bytes,minute_count=case when minute=excluded.minute then minute_count+1 else 1 end,minute=excluded.minute", [PInt(day), PStr(source), PInt(size), PInt(minute)])?
+  Ok(())
+}
+
+pub fn create(c: DbConn, secret: String, source: String, title: String, content: String, days: Int, now: Int) -> Result[Result[Paste, Refusal], String] !io = {
+  match validate(title, content, days) {
+    Err(e) -> Ok(Err(e))
+    Ok(size) -> {
+      let day = now / 86400
+      let minute = now / 60
+      let key = hmac_sha256_hex(secret, "paste-source-key-v1")
+      let digest = hmac_sha256_hex(key, "${day}:${source}")
+      with_immediate_tx(c, () => {
+        let conf = limits(c)?
+        let limit = (k: String) => unwrap_or(map.get(conf, k), 0)
+        # Housekeeping shares the transaction; deleting never refunds daily budgets.
+        let _clean = cleanup(c, now)?
+        let (sc, sb, sm, mc) = budget(c, day, digest)?
+        let (gc, gb, _gm, _gmc) = budget(c, day, "global")?
+        let count = scalar_int(c, "select count(*) from pastes", [])?
+        let stored = scalar_int(c, "select coalesce(sum(size_bytes),0) from pastes", [])?
+        if size > limit("max_bytes") { Ok(Err(no(413, "正文超过大小限制", 0))) }
+        else if sm == minute && mc >= limit("source_minute") { Ok(Err(no(429, "提交过于频繁，请稍后重试", 60 - now % 60))) }
+        else if sc >= limit("source_day") || sb + size > limit("source_day_bytes") { Ok(Err(no(429, "今日提交额度已用完", 86400 - now % 86400))) }
+        else if gc >= limit("global_day") || gb + size > limit("global_day_bytes") { Ok(Err(no(503, "今日提交已暂停，请明日重试", 86400 - now % 86400))) }
+        else if count >= limit("stored_count") || stored + size > limit("stored_bytes") { Ok(Err(no(503, "存储已满，暂时无法发布", 300))) }
+        else {
+          let p = Paste { id: uuid_hex(), title: title, content: content, created_at: now, expires_at: Some(now + days * 86400), size_bytes: size }
+          let _i = exec(c, "insert into pastes(id,title,content,created_at,expires_at,size_bytes) values(?,?,?,?,?,?)", [PStr(p.id), PStr(title), PStr(content), PInt(now), PInt(now + days * 86400), PInt(size)])?
+          charge(c, day, digest, size, minute)?
+          charge(c, day, "global", size, minute)?
+          Ok(Ok(p))
+        }
+      })
+    }
+  }
+}
+
+test "Markdown validation counts UTF-8 bytes and preserves source" {
+  assert validate("", "你好\n", 7) == Ok(7)
+  match validate("", " \n", 7) { Err(e) -> { assert e.status == 422 }
+    _ -> { assert false } }
+  match validate("", "x\u{0}", 7) { Err(e) -> { assert e.status == 422 }
+    _ -> { assert false } }
+  match validate("", "x", 0) { Err(e) -> { assert e.status == 422 }
+    _ -> { assert false } }
+}
+test "source grouping accepts literals only and aggregates IPv6 /64" {
+  assert source_group("2001:db8:1:2::1") == source_group("2001:0db8:1:2::ffff")
+  assert source_group("::ffff:192.0.2.1") == source_group("192.0.2.1")
+  assert source_group("") == Ok("direct")
+  assert source_group("dead.beef.1.2") == Err("来源地址无效")
+  assert source_group("localhost") == Err("来源地址无效")
+  assert source_group("127.1") == Err("来源地址无效")
+}

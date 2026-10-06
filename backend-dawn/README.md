@@ -381,6 +381,20 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `qiniu/sign.upload_token_limited` 与 `util/crypto.random_token`（32 字节 SecureRandom，base64url 43 字符）
   是它新加的两块地基；管理端的 `upload_token` 逐字节不变。
 
+**公开 Markdown 与私人记录**
+- `api/api_paste.dawn` — `/api/pastes` 的公开列表/搜索/创建、详情/原文和正文上限配置；
+  `/api/pastes/admin*` 的列表/统计/查看/删除/保留/清理/额度设置全部要求管理员 JWT。
+- `svc/paste.dawn` — Markdown/Unicode/UTF-8 字节边界，纯 IP 字面量解析（IPv6 /64），
+  域分离 HMAC 与按 UTC 日/分钟的来源及全站持久额度；容量、扣额、插入在一个即时事务内。
+- `repo/repo_paste.dawn` — `pastes`、`paste_budgets`、`paste_settings` 与 FTS5 trigram/同步触发器；
+  列表仅取摘要，到期内容立即从公开读取中排除。存在性探测不取正文、不记阅读数据。
+- `main --cleanup-pastes` 与 `deploy/dawnop-paste-cleanup.{service,timer}` — 每小时物理清理到期正文和
+  超期预算，和创建时/管理员清理共用 SQL，不退还当日额度。首次部署需安装并启用定时器。
+- `scripts/check-paste.py` — 隔离 JVM/SQLite 的公开与管理权限、输入边界、来源/全站/容量额度、
+  IPv6、并发、重启、删除/过期及 CLI 清理验证；CI backend job 在发布 artifact 前执行。
+- 私人记录复用现有 `/api/fm/create-file` 和 `/api/fm/save`，七牛私有正文不进入公开 Paste。
+  产品与部署细节见 [`../docs/paste.md`](../docs/paste.md)。
+
 **监控（刀 12）**
 - `api/api_monitor.dawn` — `/api/monitor`，120s TTL + `?refresh`，配额从 settings 表实时注入。
 - `svc/monitor.dawn` — 四块容错聚合：server（/proc，回落 JMX）、lighthouse（TC3）、qiniu（kodo+CDN+respack）、vault 探活。

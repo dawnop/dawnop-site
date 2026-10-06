@@ -195,6 +195,7 @@ export function useFileManager() {
     selectedPath,
     actions: {
       newFolder,
+      newFile,
       createDrop: (rel) => openDropDialog(rel ?? cwd.value),
       pickFiles: transfers.pickFiles,
       pickFolder: transfers.pickFolder,
@@ -302,6 +303,29 @@ export function useFileManager() {
     else if (action === 'copy') startMoveCopy('copy', [row])
     else if (action === 'delete') doDelete(row)
     else if (action === 'drop' && row.is_dir) openDropDialog(row.path)
+  }
+
+  async function newFile() {
+    const directory = cwd.value
+    try {
+      const { value } = await ElMessageBox.prompt('文件名', '新建文件', {
+        confirmButtonText: '创建',
+        cancelButtonText: '取消',
+        inputValue: '未命名.md',
+        inputPattern: /.+/,
+        inputErrorMessage: '名称不能为空',
+      })
+      const name = createName(/\.md$/i.test(value) ? value : `${value}.md`)
+      await fm.createFile(directory, name)
+      ElMessage.success('已创建')
+      const rows = await fm.listDir(directory)
+      if (cwd.value === directory) await loadCwd()
+      reloadTree()
+      const row = rows.find((item) => item.name === name)
+      if (row && cwd.value === directory && (await preview.openModal(row))) preview.startEdit()
+    } catch (e) {
+      if (e instanceof FmNameError) ElMessage.error(e.message)
+    }
   }
 
   async function newFolder() {
@@ -529,6 +553,7 @@ export function useFileManager() {
     openSheet,
     sheetDo,
     newFolder,
+    newFile,
     dropDlg,
     openDropDialog,
     doRename,

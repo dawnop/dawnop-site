@@ -1,0 +1,11 @@
+[Unit]
+Description=Clean expired public Markdown hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=60
+Unit=dawnop-paste-cleanup.service
+
+[Install]
+WantedBy=timers.target

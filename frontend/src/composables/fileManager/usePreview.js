@@ -10,7 +10,8 @@
 //
 // 输出：previewText / previewErr / imgViewer / modal / selectFile / openImgViewer /
 //   openModal / startEdit / saveEdit / beforeCloseModal。
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed, toRaw, onBeforeUnmount } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 export function usePreview({
@@ -64,11 +65,16 @@ export function usePreview({
     editing: false,
     draft: '',
     saving: false,
+    view: '正文',
+    saved: false,
   })
   async function openModal(row) {
+    if (modal.saving || !(await confirmDiscard())) return false
     selectedPath.value = row.path
     if (isImage(row)) return openImgViewer(row)
     modal.row = row
+    modal.view = '正文'
+    modal.saved = false
     modal.text = ''
     modal.err = ''
     modal.loaded = false
@@ -85,48 +91,87 @@ export function usePreview({
         // 开 A（大文件，还在飞）→ Esc/点遮罩关掉 → 开 B（小文件，秒回）→ A 才回来。
         // 若不认领，A 的正文就落进标题是 B 的弹窗里；再「编辑 → 保存」写的是 modal.row.path，
         // 即把 A 的内容存进 B——静默覆盖。认领一下，过期响应直接丢。
-        if (modal.row !== row) return
+        if (toRaw(modal.row) !== toRaw(row)) return
         modal.text = text
         modal.loaded = true
+        return true
       } catch (e) {
-        if (modal.row !== row) return
+        if (toRaw(modal.row) !== toRaw(row)) return
         modal.err = e.message || '预览失败'
       }
     }
   }
   function startEdit() {
+    if (!modal.loaded || modal.saving) return
+    modal.saved = false
     modal.draft = modal.text
     modal.editing = true
   }
+  const dirty = computed(() => modal.show && modal.editing && modal.draft !== modal.text)
+  const saveState = computed(() =>
+    modal.saving ? '保存中…' : dirty.value ? '未保存' : modal.saved ? '已保存' : '',
+  )
   async function saveEdit() {
+    if (modal.saving || !modal.loaded || !modal.editing) return
+    const row = modal.row,
+      content = modal.draft
     modal.saving = true
     try {
-      await fm.saveText(modal.row.path, modal.draft)
-      modal.text = modal.draft
-      modal.editing = false
+      await fm.saveText(row.path, content)
+      if (toRaw(modal.row) !== toRaw(row)) return
+      modal.text = content
+      modal.saved = true
       ElMessage.success('已保存')
-      if (selectedPath.value === modal.row.path) previewText.value = modal.text
-      loadCwd() // 大小变了，刷新列表
+      if (selectedPath.value === row.path) previewText.value = content
+      loadCwd()
     } catch {
-      // 失败已由 axios 拦截器统一提示
+      // 请求失败保留草稿，由接口层提示。
     } finally {
       modal.saving = false
     }
   }
-  // 编辑中有未保存改动时，关弹窗先确认
-  function beforeCloseModal(done) {
-    if (modal.editing && modal.draft !== modal.text) {
-      ElMessageBox.confirm('有未保存的修改，确定关闭？', '关闭预览', {
-        type: 'warning',
-        confirmButtonText: '关闭',
+  async function confirmDiscard() {
+    if (modal.saving) return false
+    if (!dirty.value) return true
+    try {
+      await ElMessageBox.confirm('有未保存的修改，确定放弃？', '未保存', {
+        confirmButtonText: '放弃',
         cancelButtonText: '继续编辑',
+        type: 'warning',
       })
-        .then(done)
-        .catch(() => {})
-    } else {
+      return true
+    } catch {
+      return false
+    }
+  }
+  async function cancelEdit() {
+    if (await confirmDiscard()) {
+      modal.draft = modal.text
+      modal.editing = false
+    }
+  }
+  async function beforeCloseModal(done) {
+    if (await confirmDiscard()) {
+      modal.row = null
+      modal.editing = false
       done()
     }
   }
+  function editKey(event) {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+      event.preventDefault()
+      saveEdit()
+    }
+  }
+  function beforeUnload(event) {
+    if (dirty.value || modal.saving) {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+  }
+  window.addEventListener('beforeunload', beforeUnload)
+  onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
+  onBeforeRouteLeave(confirmDiscard)
 
   return {
     previewText,
@@ -139,5 +184,8 @@ export function usePreview({
     startEdit,
     saveEdit,
     beforeCloseModal,
+    cancelEdit,
+    editKey,
+    saveState,
   }
 }

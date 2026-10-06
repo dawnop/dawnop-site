@@ -56,6 +56,7 @@ const groups = [
   {
     label: '内容',
     items: [
+      { to: '/admin/pastes', label: 'Paste', icon: Document },
       { to: '/admin/articles', label: '文章管理', icon: Document },
       { to: '/admin/tags', label: '标签管理', icon: PriceTag },
       { to: '/admin/pages', label: '页面管理', icon: Collection },
@@ -80,6 +81,7 @@ const groups = [
 
 // 当前高亮项：首页精确匹配，其余匹配前缀（子路由如 /admin/articles/new 仍高亮文章管理）
 const navTos = [
+  '/admin/pastes',
   '/admin/articles',
   '/admin/tags',
   '/admin/pages',
@@ -99,6 +101,7 @@ const crumbs = computed(() => {
   const home = { label: '首页', to: '/admin' }
   const map = {
     'admin-home': [{ label: '首页' }],
+    'admin-pastes': [home, { label: 'Paste' }],
     'admin-articles': [home, { label: '文章管理' }],
     'admin-article-new': [home, { label: '文章管理', to: '/admin/articles' }, { label: '写文章' }],
     'admin-article-edit': [

@@ -8,6 +8,7 @@ import {
   Folder,
   FolderOpened,
   FolderAdd,
+  DocumentAdd,
   Files,
   Upload,
   Search,
@@ -27,6 +28,7 @@ import {
   Link,
 } from '@element-plus/icons-vue'
 import { useFileManager } from '../../composables/useFileManager'
+import MarkdownDocument from '../../components/MarkdownDocument.vue'
 import DropCreateDialog from '../../components/DropCreateDialog.vue'
 
 const {
@@ -67,6 +69,7 @@ const {
   openSheet,
   sheetDo,
   newFolder,
+  newFile,
   dropDlg,
   openDropDialog,
   doRename,
@@ -192,6 +195,7 @@ const {
               <el-button text :icon="Close" @click="sel.clearSel">取消选择</el-button>
             </template>
             <template v-else>
+              <el-button :icon="DocumentAdd" text @click="newFile">新建文件</el-button>
               <el-button :icon="FolderAdd" text @click="newFolder">新建文件夹</el-button>
               <el-button :icon="Link" text @click="openDropDialog(cwd)">创建上传链接</el-button>
             </template>
@@ -450,19 +454,41 @@ const {
       :top="isMobile ? '4vh' : '6vh'"
       append-to-body
       :before-close="preview.beforeCloseModal"
+      :close-on-press-escape="!preview.modal.saving"
+      :close-on-click-modal="!preview.modal.saving"
     >
-      <div v-if="preview.modal.row" class="fm-modal-body">
+      <div
+        v-if="preview.modal.row"
+        class="fm-modal-body"
+        :class="{ 'fm-note-body': isText(preview.modal.row) }"
+      >
         <template v-if="isText(preview.modal.row)">
+          <div class="fm-note-toolbar" @keydown="preview.editKey">
+            <el-radio-group
+              v-if="/\.md$/i.test(preview.modal.row.name)"
+              v-model="preview.modal.view"
+              size="small"
+              ><el-radio-button label="正文" /><el-radio-button label="预览"
+            /></el-radio-group>
+            <span>{{ preview.saveState }}</span>
+          </div>
+          <MarkdownDocument
+            v-if="preview.modal.view === '预览' && preview.modal.loaded"
+            :source="preview.modal.editing ? preview.modal.draft : preview.modal.text"
+            @keydown="preview.editKey"
+          />
           <el-input
-            v-if="preview.modal.editing"
+            v-else-if="preview.modal.editing"
             v-model="preview.modal.draft"
             type="textarea"
             :rows="22"
             resize="none"
             class="fm-modal-edit"
+            :disabled="preview.modal.saving"
+            @keydown="preview.editKey"
           />
           <pre v-else class="fm-modal-text">{{
-            preview.modal.err || preview.modal.text || '加载中…'
+            preview.modal.err || (preview.modal.loaded ? preview.modal.text : '加载中…')
           }}</pre>
         </template>
         <div v-else class="fm-modal-file">
@@ -480,7 +506,7 @@ const {
       </div>
       <template v-if="preview.modal.row && isText(preview.modal.row)" #footer>
         <template v-if="preview.modal.editing">
-          <el-button @click="preview.modal.editing = false">取消</el-button>
+          <el-button :disabled="preview.modal.saving" @click="preview.cancelEdit">取消</el-button>
           <el-button type="primary" :loading="preview.modal.saving" @click="preview.saveEdit"
             >保存</el-button
           >
@@ -635,9 +661,11 @@ const {
             ? transfers.pickFiles()
             : c === 'folder'
               ? transfers.pickFolder()
-              : c === 'drop'
-                ? openDropDialog(cwd)
-                : newFolder()
+              : c === 'newfile'
+                ? newFile()
+                : c === 'drop'
+                  ? openDropDialog(cwd)
+                  : newFolder()
       "
     >
       <el-button type="primary" circle :icon="Plus" class="fm-fab-btn" />
@@ -645,6 +673,9 @@ const {
         <el-dropdown-menu>
           <el-dropdown-item command="file" :icon="Files">上传文件</el-dropdown-item>
           <el-dropdown-item command="folder" :icon="FolderOpened">上传文件夹</el-dropdown-item>
+          <el-dropdown-item command="newfile" :icon="DocumentAdd" divided
+            >新建文件</el-dropdown-item
+          >
           <el-dropdown-item command="newfolder" :icon="FolderAdd" divided
             >新建文件夹</el-dropdown-item
           >
@@ -1501,5 +1532,24 @@ const {
     bottom: 8px;
     width: auto;
   }
+}
+</style>
+
+<style scoped>
+.fm-note-body {
+  display: block;
+}
+.fm-note-body .markdown-document {
+  max-height: 72vh;
+  overflow: auto;
+}
+.fm-note-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  color: var(--muted);
+  font-size: 12px;
 }
 </style>

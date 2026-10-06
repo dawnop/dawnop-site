@@ -1,0 +1,18 @@
+[Unit]
+Description=Remove expired public Markdown and submission budgets
+After=dawnop-dawn.service
+
+[Service]
+Type=oneshot
+User=dawnop
+Group=dawnop
+WorkingDirectory=/opt/dawnop-dawn
+Environment=DAWNOP_ENV=/opt/dawnop/backend/.env
+Environment=DAWN_DB_PATH=/opt/dawnop/data/dawnop.db
+Environment=DAWN_SIMPLE_EXT=/opt/dawnop/backend/extensions/libsimple
+ExecStart=/usr/bin/java -Xmx128m -jar /opt/dawnop-dawn/backend-dawn.jar --cleanup-pastes
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/dawnop/data
+ProtectHome=true
+PrivateTmp=true

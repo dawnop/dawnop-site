@@ -59,9 +59,9 @@ dawnop-site/
 │   ├── src/                    # 按层分目录，依赖单向向下：util → db → qiniu → repo → tencent → svc → api → 根
 │   │   ├── main.dawn           # 入口：读 config、装路由/中间件、绑 127.0.0.1:8001
 │   │   ├── config.dawn         # 根只留这两个
-│   │   ├── api/                # HTTP 表面：api_public/articles/settings/tags/pages/viz/fm/drop/monitor + webdav
-│   │   ├── svc/                # 服务层：auth search export monitor files（文件树操作，api_fm 与 webdav 共用）drop（上传链接）
-│   │   ├── repo/               # 数据层：repo_article/page/tag/pagetag/viz/settings/fm/drop/write
+│   │   ├── api/                # HTTP 表面：api_public/articles/settings/tags/pages/viz/fm/drop/paste/monitor + webdav
+│   │   ├── svc/                # 服务层：auth search export monitor files（文件树操作，api_fm 与 webdav 共用）drop（上传链接）paste（公开 Markdown 与额度）
+│   │   ├── repo/               # 数据层：repo_article/page/tag/pagetag/viz/settings/fm/drop/paste/write
 │   │   ├── db/                 # db（每请求一连接）sql（JDBC 薄包装）
 │   │   ├── qiniu/              # 对象存储（丢前缀）：creds 凭据记录 / sign 签名 / rs 管理 REST / stats 用量统计
 │   │   ├── tencent/            # 腾讯云（丢前缀）：sign TC3 签名 / client v3 请求装配
@@ -89,8 +89,8 @@ dawnop-site/
 │   ├── requirements.txt requirements-dev.txt  .env.example  scripts/seed_admin.py
 ├── frontend/                   # Vue 3 + Vite
 │   ├── src/
-│   │   ├── views/              # Home, Article, Page(内容/列表), Drop(公开上传链接页), NotFound(404 提示页); admin/{Login,Dashboard,Articles,Pages,Tags,Viz,FilesLab,Drops,Settings,Monitor}
-│   │   ├── components/         # PublicLayout, AdminLayout, SiteHeader, MarkdownView(md+katex), SearchModal; monitor/
+│   │   ├── views/              # Home, Article, Page(内容/列表), Drop(公开上传链接页), paste/{Layout,List,New,Detail}, NotFound(404 提示页); admin/{Login,Dashboard,Articles,Pages,Tags,Viz,FilesLab,Drops,Pastes,Settings,Monitor}
+│   │   ├── components/         # PublicLayout, AdminLayout, SiteHeader, MarkdownView(md+katex), SearchModal, MarkdownDocument(安全预览); monitor/
 │   │   ├── composables/        # useFileManager / useUnsavedGuard / useIsMobile
 │   │   ├── viz/                # 文章内嵌 Vue 可视化组件的 SFC 编译 + island 运行时
 │   │   ├── utils/              # frontmatter / markdownTitle / format / colWidths

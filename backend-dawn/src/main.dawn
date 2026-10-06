@@ -3,7 +3,10 @@
 # during the gradual cutover from the FastAPI backend.
 use std/io
 use config.{load, get_or, require_int_in_range}
-use db/db.{Db}
+use db/db.{Db, with_db}
+use db/sql.{with_immediate_tx}
+use repo/repo_paste
+use util/clock.{system_s}
 use web/server.{serve_app_with, ServerConfig, DEFAULT_MAX_BODY}
 use util/jsonx.{fastapi_errors}
 use web/middleware.{with_logging, with_cors, with_body_limit}
@@ -14,6 +17,7 @@ use api/api_tags
 use api/api_pages
 use api/api_viz
 use api/api_fm
+use api/api_paste
 use api/api_drop
 use api/api_monitor.{MonCfg, mon_routes}
 use svc/auth.{Auth, routes}
@@ -37,6 +41,15 @@ pub fn main() -> Unit !io = {
   let db_path = get_or(cfg, "DAWN_DB_PATH", "backend/dawnop.db")
   let db_ext = get_or(cfg, "DAWN_SIMPLE_EXT", "backend/extensions/libsimple")
   let db = Db { path: db_path, ext: db_ext }
+  # The hourly timer runs this mode with the same database/environment as the server.
+  # It exits without binding a port; expired bodies and old budgets are removed atomically.
+  if unwrap_or(get(args(),0),"")=="--cleanup-pastes" {
+    let now = system_s()
+    let run = with_db(db.path,db.ext,c => with_immediate_tx(c,() => repo_paste.cleanup_existing(c,now)))
+    match run { Ok(n) -> println("expired pastes removed: ${n}")
+      Err(e) -> panic("paste cleanup failed: ${e}") }
+    return ()
+  }
   let port = parse_or(get_or(cfg, "DAWN_PORT", "8001"), 8001)
   let origin = get_or(cfg, "DAWN_CORS_ORIGIN", "https://dawnop.com")
   let secret = get_or(cfg, "SECRET_KEY", "dev-insecure-secret-change-me-before-deploying-to-production")
@@ -101,7 +114,7 @@ pub fn main() -> Unit !io = {
   # static /admin, /reorder, /merge, /cleanup paths win over the {slug} capture
   serve_app_with(ServerConfig {
     host: "127.0.0.1", port: port, max_body: DEFAULT_MAX_BODY, errors: fastapi_errors(),
-  }, api_articles.routes(a) ++ api_settings.routes(a) ++ api_tags.routes(a) ++ api_pages.routes(a) ++ api_viz.routes(a) ++ api_fm.routes(a, space_cell, respack_cell) ++ api_drop.routes(a) ++ mon_routes(a, moncfg, mon_cell, respack_cell, cpu_cell) ++ api_public.routes(db, a) ++ routes(a) ++ dav_routes(a, dav_cell), [
+  }, api_articles.routes(a) ++ api_settings.routes(a) ++ api_tags.routes(a) ++ api_pages.routes(a) ++ api_viz.routes(a) ++ api_fm.routes(a, space_cell, respack_cell) ++ api_drop.routes(a) ++ api_paste.routes(a) ++ mon_routes(a, moncfg, mon_cell, respack_cell, cpu_cell) ++ api_public.routes(db, a) ++ routes(a) ++ dav_routes(a, dav_cell), [
     with_logging,
     next => with_cors(origin, next),
     next => with_body_limit(2000000, next),
