@@ -15,11 +15,11 @@
   align-items: center;
   justify-content: center;
   padding: 40px 20px;
-  background: #f7f8f5;
+  background: var(--bg);
   text-align: center;
 }
 .code {
-  color: #b8c6bc;
+  color: var(--accent);
   font-size: clamp(80px, 20vw, 140px);
   font-weight: 600;
   line-height: 1;
@@ -37,9 +37,12 @@ p {
 a {
   display: inline-block;
   margin-top: 24px;
-  color: #237b68;
+  color: var(--accent);
   text-decoration: none;
   font-size: 14px;
+}
+a:hover {
+  color: var(--accent-hover);
 }
 a span {
   margin-left: 16px;
