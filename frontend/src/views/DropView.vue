@@ -295,23 +295,16 @@ onUnmounted(() => {
 <template>
   <div class="drop-page">
     <header class="page-nav">
-      <RouterLink to="/" class="brand" aria-label="dawnop 首页">
+      <div class="brand">
         <img src="/logo.svg" alt="" width="26" height="26" />
-        <span
-          >dawnop<span class="brand-divider">/</span><span class="brand-product">drop</span></span
-        >
-      </RouterLink>
-      <span class="nav-note"
-        ><el-icon><Lock /></el-icon> 文件投递</span
-      >
+        <span>dawnop</span>
+      </div>
     </header>
 
     <main class="drop-shell">
       <template v-if="phase === 'ready' && drop">
-        <header class="intro">
-          <span class="eyebrow">文件收集</span>
-          <h1>{{ drop.label || '把文件放在这里。' }}</h1>
-          <p>选择文件，剩下的交给我们。无需注册，上传即送达。</p>
+        <header v-if="drop.label" class="intro">
+          <h1>{{ drop.label }}</h1>
         </header>
 
         <div class="workspace">
@@ -349,95 +342,83 @@ onUnmounted(() => {
                 ></span>
               </div>
               <h3>{{ dragging && canAdd ? '松开，开始上传' : '拖拽文件到这里' }}</h3>
-              <p class="zone-sub">或点击下方按钮，从设备中选择</p>
               <span class="choose-button"
                 >选择文件 <el-icon><ArrowRight /></el-icon
               ></span>
-              <p class="zone-caption">
-                支持多文件 · 单个不超过 {{ fmtBytes(drop.max_file_bytes) }}
-              </p>
+              <p class="zone-caption">单个文件不超过 {{ fmtBytes(drop.max_file_bytes) }}</p>
               <input ref="fileInput" type="file" multiple hidden @change="onPicked" />
             </div>
             <p class="upload-note">
-              <el-icon><Lock /></el-icon> 上传后的文件仅接收方可见，同名文件会自动改名。
+              <el-icon><Lock /></el-icon> 仅接收方可见，同名文件自动改名。
             </p>
 
-            <section class="list" aria-label="本次上传">
+            <section v-if="items.length" class="list" aria-label="本次上传">
               <div class="list-head">
                 <h2>
-                  本次上传 <span v-if="items.length" class="count">{{ items.length }}</span>
+                  本次上传 <span class="count">{{ items.length }}</span>
                 </h2>
                 <button v-if="hasFinished" class="text-button" @click="clearFinished">
                   清除已结束
                 </button>
               </div>
-              <div v-if="!items.length" class="empty-list">
-                <el-icon><Document /></el-icon>
-                <span>添加文件后，可在这里查看上传进度</span>
+              <div class="queue-summary" role="status" aria-live="polite">
+                <span>{{
+                  busy ? '上传中' : doneCount === items.length ? '上传完成' : '上传已结束'
+                }}</span>
+                <span
+                  >{{ doneCount }} / {{ items.length }} 个已完成 · {{ fmtBytes(queuedBytes) }}</span
+                >
               </div>
-              <template v-else>
-                <div class="queue-summary" role="status" aria-live="polite">
-                  <span>{{
-                    busy ? '正在投递' : doneCount === items.length ? '全部送达' : '本次上传已结束'
-                  }}</span>
-                  <span
-                    >{{ doneCount }} / {{ items.length }} 个已送达 ·
-                    {{ fmtBytes(queuedBytes) }}</span
-                  >
-                </div>
-                <el-progress
-                  v-if="busy"
-                  :percentage="progress"
-                  :stroke-width="3"
-                  :show-text="false"
-                />
-                <ul>
-                  <li v-for="it in items" :key="it.id" class="row" :class="it.status">
-                    <div class="file-icon">
-                      <el-icon><Document /></el-icon>
+              <el-progress
+                v-if="busy"
+                :percentage="progress"
+                :stroke-width="3"
+                :show-text="false"
+              />
+              <ul>
+                <li v-for="it in items" :key="it.id" class="row" :class="it.status">
+                  <div class="file-icon">
+                    <el-icon><Document /></el-icon>
+                  </div>
+                  <div class="file-detail">
+                    <div class="row-top">
+                      <span class="row-name" :title="it.name">{{ it.name }}</span>
+                      <span class="row-size">{{ fmtBytes(it.size) }}</span>
                     </div>
-                    <div class="file-detail">
-                      <div class="row-top">
-                        <span class="row-name" :title="it.name">{{ it.name }}</span>
-                        <span class="row-size">{{ fmtBytes(it.size) }}</span>
-                      </div>
-                      <el-progress
-                        v-if="it.status === 'active'"
-                        :percentage="it.pct"
-                        :stroke-width="3"
-                        :show-text="false"
-                        class="row-bar"
-                      />
-                      <p class="row-msg">
-                        <template v-if="it.status === 'queued'">等待上传</template>
-                        <template v-else-if="it.status === 'active'"
-                          >{{ stageText[it.stage] || '上传中'
-                          }}<template v-if="it.stage === 'upload'">
-                            · {{ it.pct }}%</template
-                          ></template
-                        >
-                        <template v-else-if="it.status === 'done'"
-                          >已送达<template v-if="it.savedAs">
-                            · 保存为 {{ it.savedAs }}</template
-                          ></template
-                        >
-                        <template v-else-if="it.status === 'rejected'"
-                          >未上传：{{ it.msg }}</template
-                        >
-                        <template v-else>上传失败：{{ it.msg }}</template>
-                      </p>
-                    </div>
-                    <el-icon class="row-status">
-                      <CircleCheckFilled v-if="it.status === 'done'" />
-                      <CircleCloseFilled
-                        v-else-if="it.status === 'error' || it.status === 'rejected'"
-                      />
-                      <Loading v-else-if="it.status === 'active'" class="spin" />
-                      <UploadFilled v-else />
-                    </el-icon>
-                  </li>
-                </ul>
-              </template>
+                    <el-progress
+                      v-if="it.status === 'active'"
+                      :percentage="it.pct"
+                      :stroke-width="3"
+                      :show-text="false"
+                      class="row-bar"
+                    />
+                    <p class="row-msg">
+                      <template v-if="it.status === 'queued'">等待上传</template>
+                      <template v-else-if="it.status === 'active'"
+                        >{{ stageText[it.stage] || '上传中'
+                        }}<template v-if="it.stage === 'upload'">
+                          · {{ it.pct }}%</template
+                        ></template
+                      >
+                      <template v-else-if="it.status === 'done'"
+                        >已上传<template v-if="it.savedAs">
+                          · 保存为 {{ it.savedAs }}</template
+                        ></template
+                      >
+                      <template v-else-if="it.status === 'rejected'">未上传：{{ it.msg }}</template>
+                      <template v-else>上传失败：{{ it.msg }}</template>
+                    </p>
+                  </div>
+                  <el-icon class="row-status">
+                    <CircleCheckFilled v-if="it.status === 'done'" />
+                    <CircleCloseFilled
+                      v-else-if="it.status === 'error' || it.status === 'rejected'"
+                    />
+                    <Loading v-else-if="it.status === 'active'" class="spin" />
+                    <UploadFilled v-else />
+                  </el-icon>
+                </li>
+              </ul>
             </section>
           </div>
 
@@ -447,7 +428,6 @@ onUnmounted(() => {
             </div>
             <span class="eyebrow">接收文件夹</span>
             <h2 class="destination-name">{{ dirLabel }}</h2>
-            <p class="details-note">你的文件会直接送到这里。</p>
             <dl class="facts">
               <div class="quota-fact">
                 <dt>还可上传</dt>
@@ -474,26 +454,19 @@ onUnmounted(() => {
                 </dd>
               </div>
             </dl>
-            <div class="privacy-note">
-              <el-icon><Lock /></el-icon>
-              <p>本链接用于接收文件，上传者无法查看文件夹中的内容。</p>
-            </div>
           </aside>
         </div>
       </template>
 
       <section v-else class="state-card" aria-live="polite">
-        <span class="eyebrow">文件投递</span>
         <template v-if="phase === 'loading'">
           <el-icon class="state-ico spin"><Loading /></el-icon>
-          <h1>正在准备上传空间</h1>
-          <p>稍等片刻，正在确认链接与可用额度。</p>
+          <h1>加载中</h1>
         </template>
         <template v-else-if="phase === 'missing'">
           <el-icon class="state-ico"><Folder /></el-icon>
-          <h1>还差一个完整链接</h1>
-          <p>请打开接收方分享的上传链接，即可选择文件并投递。</p>
-          <p class="state-hint">如果链接被截断，请让接收方重新复制发送。</p>
+          <h1>链接不完整</h1>
+          <p>请使用接收方提供的完整上传链接。</p>
         </template>
         <template v-else-if="phase === 'dead'">
           <el-icon class="state-ico bad"><CircleCloseFilled /></el-icon>
@@ -502,16 +475,14 @@ onUnmounted(() => {
         </template>
         <template v-else>
           <el-icon class="state-ico warn"><WarningFilled /></el-icon>
-          <h1>暂时无法打开上传空间</h1>
+          <h1>加载失败</h1>
           <p>{{ loadErr }}</p>
           <button class="choose-button" @click="load()">
-            重新加载 <el-icon><RefreshRight /></el-icon>
+            重试 <el-icon><RefreshRight /></el-icon>
           </button>
         </template>
-        <RouterLink to="/" class="home-link">返回首页 <span aria-hidden="true">↗</span></RouterLink>
       </section>
     </main>
-    <footer class="page-footer"><span>dawnop drop</span><span>文件送达，简单一点。</span></footer>
   </div>
 </template>
 
@@ -524,8 +495,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
 }
-.page-nav,
-.page-footer {
+.page-nav {
   width: 100%;
   max-width: 1040px;
   margin: 0 auto;
@@ -547,21 +517,6 @@ onUnmounted(() => {
   text-decoration: none;
   letter-spacing: -0.5px;
 }
-.brand-divider {
-  margin: 0 12px;
-  color: var(--el-text-color-placeholder);
-  font-weight: 400;
-}
-.brand-product {
-  font-weight: 450;
-}
-.nav-note {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: 12px;
-}
 .drop-shell {
   width: 100%;
   max-width: 960px;
@@ -580,18 +535,13 @@ onUnmounted(() => {
   margin-bottom: 32px;
 }
 .intro h1 {
-  margin: 10px 0 12px;
+  margin: 0;
   font-size: clamp(26px, 3.3vw, 36px);
   line-height: 1.35;
   font-weight: 600;
   letter-spacing: -0.8px;
   color: var(--fg);
   overflow-wrap: anywhere;
-}
-.intro p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 14px;
 }
 .workspace {
   display: grid;
@@ -710,11 +660,6 @@ h2 {
   font-size: 18px;
   color: var(--fg);
 }
-.zone-sub {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-}
 .choose-button {
   display: inline-flex;
   align-items: center;
@@ -773,17 +718,6 @@ button.choose-button:hover {
   font: inherit;
   font-size: var(--el-font-size-extra-small);
   cursor: pointer;
-}
-.empty-list {
-  display: flex;
-  gap: 9px;
-  align-items: center;
-  padding: 18px 0 7px;
-  color: var(--muted);
-  font-size: 12px;
-}
-.empty-list .el-icon {
-  font-size: 18px;
 }
 .queue-summary {
   display: flex;
@@ -891,13 +825,8 @@ button.choose-button:hover {
 }
 .destination-name {
   font-size: 20px;
-  margin: 8px 0 6px;
+  margin: 8px 0 20px;
   overflow-wrap: anywhere;
-}
-.details-note {
-  margin: 0 0 23px;
-  color: var(--muted);
-  font-size: var(--el-font-size-extra-small);
 }
 .facts {
   margin: 0;
@@ -935,30 +864,6 @@ button.choose-button:hover {
   color: var(--muted);
   font-size: var(--el-font-size-extra-small);
 }
-.privacy-note {
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-  font-size: var(--el-font-size-extra-small);
-}
-.privacy-note .el-icon {
-  flex-shrink: 0;
-}
-.privacy-note p {
-  margin: 0;
-}
-.page-footer {
-  padding: 20px 0 26px;
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-  font-size: var(--el-font-size-extra-small);
-}
-.page-footer > span:first-child {
-  letter-spacing: 0.6px;
-}
 .state-card {
   max-width: 540px;
   margin: 42px auto 0;
@@ -990,21 +895,6 @@ button.choose-button:hover {
   font-size: 13px;
   color: var(--muted);
   overflow-wrap: anywhere;
-}
-.state-card .state-hint {
-  font-size: var(--el-font-size-extra-small);
-  color: var(--el-text-color-secondary);
-}
-.home-link {
-  display: block;
-  width: fit-content;
-  margin: 28px auto 0;
-  color: var(--accent);
-  font-size: 12px;
-  text-decoration: none;
-}
-.home-link span {
-  margin-left: 10px;
 }
 .spin {
   animation: drop-spin 1s linear infinite;
@@ -1040,9 +930,6 @@ button.choose-button:hover {
   .destination-icon {
     display: none;
   }
-  .details-note {
-    margin-bottom: 18px;
-  }
   .facts {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1056,9 +943,6 @@ button.choose-button:hover {
 @media (max-width: 380px) {
   .drop-page {
     padding: 0 12px;
-  }
-  .nav-note {
-    font-size: var(--el-font-size-extra-small);
   }
   .upload-panel {
     padding: 20px 16px;
