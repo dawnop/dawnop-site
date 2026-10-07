@@ -77,7 +77,7 @@ function duplicate() {
     <div v-if="loading" class="detail-loading" aria-busy="true" aria-label="加载中">
       <el-skeleton :rows="8" animated />
     </div>
-    <div v-else-if="error" class="paste-state" role="alert">
+    <div v-else-if="error" class="paste-state tool-state tool-panel" role="alert">
       <el-icon><Warning /></el-icon>
       <h2>{{ error }}</h2>
       <RouterLink v-if="error.startsWith('404')" to="/paste">查看列表</RouterLink>
@@ -85,7 +85,7 @@ function duplicate() {
     </div>
     <article v-else-if="paste" aria-label="Paste 正文">
       <header class="detail-heading">
-        <h1 v-if="paste.title" class="paste-heading">{{ paste.title }}</h1>
+        <h1 v-if="paste.title" class="tool-heading">{{ paste.title }}</h1>
         <div class="detail-meta paste-meta">
           <time :datetime="new Date(paste.created_at * 1000).toISOString()">{{
             fmtDateTime(paste.created_at * 1000)
@@ -96,7 +96,7 @@ function duplicate() {
           }}</span>
         </div>
       </header>
-      <div class="detail-document">
+      <div class="detail-document tool-panel">
         <div class="detail-toolbar">
           <div class="paste-tabs" role="group" aria-label="阅读视图">
             <button
@@ -142,11 +142,10 @@ function duplicate() {
 </template>
 <style scoped>
 .paste-detail {
-  max-width: 900px;
-  margin: 0 auto;
+  width: 100%;
 }
 .detail-heading {
-  margin-bottom: 28px;
+  margin-bottom: var(--tool-heading-gap);
 }
 .detail-heading h1 {
   overflow-wrap: anywhere;
@@ -156,10 +155,6 @@ function duplicate() {
   flex-wrap: wrap;
   gap: 8px 18px;
   margin-top: 14px;
-}
-.detail-document {
-  border: 1px solid var(--border);
-  border-radius: var(--el-border-radius-base);
 }
 .detail-toolbar {
   display: flex;
@@ -186,7 +181,7 @@ function duplicate() {
 }
 .detail-body {
   min-height: 320px;
-  padding: 32px 36px 40px;
+  padding: var(--tool-panel-padding);
 }
 .detail-body :deep(.markdown-document) {
   font-size: 15px;

@@ -90,7 +90,7 @@ dawnop-site/
 ├── frontend/                   # Vue 3 + Vite
 │   ├── src/
 │   │   ├── views/              # Home, Article, Page(内容/列表), Drop(公开上传链接页), paste/{Layout,List,New,Detail}, NotFound(404 提示页); admin/{Login,Dashboard,Articles,Pages,Tags,Viz,FilesLab,Drops,Pastes,Settings,Monitor}
-│   │   ├── components/         # PublicLayout, AdminLayout, SiteHeader, MarkdownView(md+katex), SearchModal, MarkdownDocument(安全预览); monitor/
+│   │   ├── components/         # PublicLayout, AdminLayout, ToolLayout(Drop/Paste 共用), SiteHeader, MarkdownView(md+katex), SearchModal, MarkdownDocument(安全预览); monitor/
 │   │   ├── composables/        # useFileManager / useUnsavedGuard / useIsMobile
 │   │   ├── viz/                # 文章内嵌 Vue 可视化组件的 SFC 编译 + island 运行时
 │   │   ├── utils/              # frontmatter / markdownTitle / format / colWidths

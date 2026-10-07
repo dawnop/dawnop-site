@@ -67,7 +67,7 @@ watch(() => route.fullPath, load, { immediate: true })
   <section class="paste-index">
     <div class="paste-index-head">
       <div class="paste-index-heading">
-        <h1 class="paste-heading">{{ query ? '搜索结果' : '公开记录' }}</h1>
+        <h1 class="tool-heading">{{ query ? '搜索结果' : '公开记录' }}</h1>
         <span v-if="!loading && !error" class="paste-meta">{{ total }} 条</span>
       </div>
       <form class="paste-search" role="search" @submit.prevent="navigate()">
@@ -82,7 +82,7 @@ watch(() => route.fullPath, load, { immediate: true })
         <el-button native-type="submit" aria-label="搜索" :icon="ArrowRight" />
       </form>
     </div>
-    <div v-if="error" class="paste-state" role="alert">
+    <div v-if="error" class="paste-state tool-state tool-panel" role="alert">
       <el-icon><Warning /></el-icon>
       <p>{{ error }}</p>
       <el-button @click="load">重试</el-button>
@@ -95,7 +95,7 @@ watch(() => route.fullPath, load, { immediate: true })
         /></template>
       </el-skeleton>
     </div>
-    <div v-else-if="!items.length" class="paste-state">
+    <div v-else-if="!items.length" class="paste-state tool-state tool-panel">
       <el-icon><component :is="query ? Search : Document" /></el-icon>
       <h2>{{ query ? '没有找到内容' : '还没有内容' }}</h2>
       <el-button v-if="query" @click="clearSearch">清除搜索</el-button>
@@ -103,7 +103,7 @@ watch(() => route.fullPath, load, { immediate: true })
         >新建 Paste <el-icon><ArrowRight /></el-icon
       ></RouterLink>
     </div>
-    <ul v-else class="paste-list">
+    <ul v-else class="paste-list tool-panel">
       <li v-for="item in items" :key="item.id">
         <RouterLink :to="`/paste/${item.id}`" class="paste-row">
           <div class="paste-row-main">
@@ -136,15 +136,14 @@ watch(() => route.fullPath, load, { immediate: true })
 </template>
 <style scoped>
 .paste-index {
-  max-width: 840px;
-  margin: 0 auto;
+  width: 100%;
 }
 .paste-index-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 24px;
-  margin-bottom: 32px;
+  margin-bottom: var(--tool-heading-gap);
 }
 .paste-index-heading {
   display: flex;
@@ -181,9 +180,11 @@ watch(() => route.fullPath, load, { immediate: true })
 }
 .paste-list {
   list-style: none;
-  padding: 0;
+  padding: 0 var(--tool-panel-padding);
   margin: 0;
-  border-top: 1px solid var(--border);
+}
+.paste-list > li:last-child {
+  border-bottom: 0;
 }
 .paste-row {
   display: flex;

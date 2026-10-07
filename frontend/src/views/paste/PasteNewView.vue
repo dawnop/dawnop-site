@@ -121,7 +121,7 @@ function drop(event) {
     @drop="drop"
   >
     <div class="compose-heading">
-      <h1 class="paste-heading">新建</h1>
+      <h1 class="tool-heading">新建</h1>
       <el-button
         text
         :icon="Upload"
@@ -138,7 +138,7 @@ function drop(event) {
         @change="importFile($event.target.files[0])"
       />
     </div>
-    <div class="compose-document">
+    <div class="compose-document tool-panel">
       <div class="compose-title">
         <input
           v-model="title"
@@ -217,7 +217,7 @@ function drop(event) {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 28px;
+  margin-bottom: var(--tool-heading-gap);
 }
 .compose-heading .el-button {
   margin-right: -12px;
@@ -225,12 +225,10 @@ function drop(event) {
 }
 .compose-document {
   position: relative;
-  border: 1px solid var(--border);
-  border-radius: var(--el-border-radius-base);
   overflow: hidden;
 }
 .compose-title {
-  padding: 24px 28px;
+  padding: 24px var(--tool-panel-padding);
 }
 .compose-title input {
   display: block;
@@ -276,7 +274,7 @@ function drop(event) {
   border-radius: 0;
   resize: none;
   outline: none;
-  padding: 26px 28px;
+  padding: 26px var(--tool-panel-padding);
   color: var(--fg);
   background: var(--bg);
   font:
@@ -295,7 +293,7 @@ function drop(event) {
 .compose-preview {
   min-width: 0;
   min-height: 0;
-  padding: 26px 28px;
+  padding: 26px var(--tool-panel-padding);
   overflow: auto;
 }
 .is-split .compose-preview {
@@ -356,10 +354,10 @@ function drop(event) {
   width: 100px;
 }
 .publish-actions :deep(.el-select__wrapper) {
-  min-height: 38px;
+  min-height: 40px;
 }
 .publish-actions .el-button {
-  height: 38px;
+  height: 40px;
   min-width: 88px;
   gap: 8px;
 }

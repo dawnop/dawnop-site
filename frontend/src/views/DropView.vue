@@ -16,6 +16,7 @@ import {
   ArrowRight,
   RefreshRight,
 } from '@element-plus/icons-vue'
+import ToolLayout from '../components/ToolLayout.vue'
 import * as dropApi from '../api/dropApi'
 import { fmtBytes, fmtDateTime, fmtDuration, toMs } from '../utils/format'
 
@@ -293,237 +294,182 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="drop-page">
-    <header class="page-nav">
-      <div class="brand">
-        <img src="/logo.svg" alt="" width="26" height="26" />
-        <span>dawnop</span>
-      </div>
-    </header>
+  <ToolLayout name="drop" class="drop-page">
+    <template v-if="phase === 'ready' && drop">
+      <header v-if="drop.label" class="intro">
+        <h1 class="tool-heading">{{ drop.label }}</h1>
+      </header>
 
-    <main class="drop-shell">
-      <template v-if="phase === 'ready' && drop">
-        <header v-if="drop.label" class="intro">
-          <h1>{{ drop.label }}</h1>
-        </header>
-
-        <div class="workspace">
-          <div class="upload-panel">
-            <div class="panel-heading">
-              <h2>上传文件</h2>
-              <span class="status-pill" :class="{ unavailable: !canAdd }">
-                <i></i>{{ canAdd ? '可以上传' : '暂停接收' }}
-              </span>
-            </div>
-            <p v-if="!canAdd" class="notice" role="status">
-              {{ availability }}，无法继续添加文件。
-            </p>
-            <div
-              class="zone"
-              :class="{ over: dragging && canAdd, off: !canAdd }"
-              role="button"
-              :tabindex="canAdd ? 0 : -1"
-              :aria-disabled="!canAdd"
-              aria-label="选择要上传的文件，也可以拖拽文件到这里"
-              @click="pick"
-              @keydown.enter.prevent="pick"
-              @keydown.space.prevent="pick"
-              @dragenter.prevent="onDragEnter"
-              @dragover.prevent
-              @dragleave="onDragLeave"
-              @drop.prevent="onDrop"
-            >
-              <div class="upload-art" aria-hidden="true">
-                <span class="paper paper-back"
-                  ><el-icon><Document /></el-icon
-                ></span>
-                <span class="paper paper-front"
-                  ><el-icon><UploadFilled /></el-icon
-                ></span>
-              </div>
-              <h3>{{ dragging && canAdd ? '松开，开始上传' : '拖拽文件到这里' }}</h3>
-              <span class="choose-button"
-                >选择文件 <el-icon><ArrowRight /></el-icon
-              ></span>
-              <p class="zone-caption">单个文件不超过 {{ fmtBytes(drop.max_file_bytes) }}</p>
-              <input ref="fileInput" type="file" multiple hidden @change="onPicked" />
-            </div>
-            <p class="upload-note">
-              <el-icon><Lock /></el-icon> 仅接收方可见，同名文件自动改名。
-            </p>
-
-            <section v-if="items.length" class="list" aria-label="本次上传">
-              <div class="list-head">
-                <h2>
-                  本次上传 <span class="count">{{ items.length }}</span>
-                </h2>
-                <button v-if="hasFinished" class="text-button" @click="clearFinished">
-                  清除已结束
-                </button>
-              </div>
-              <div class="queue-summary" role="status" aria-live="polite">
-                <span>{{
-                  busy ? '上传中' : doneCount === items.length ? '上传完成' : '上传已结束'
-                }}</span>
-                <span
-                  >{{ doneCount }} / {{ items.length }} 个已完成 · {{ fmtBytes(queuedBytes) }}</span
-                >
-              </div>
-              <el-progress
-                v-if="busy"
-                :percentage="progress"
-                :stroke-width="3"
-                :show-text="false"
-              />
-              <ul>
-                <li v-for="it in items" :key="it.id" class="row" :class="it.status">
-                  <div class="file-icon">
-                    <el-icon><Document /></el-icon>
-                  </div>
-                  <div class="file-detail">
-                    <div class="row-top">
-                      <span class="row-name" :title="it.name">{{ it.name }}</span>
-                      <span class="row-size">{{ fmtBytes(it.size) }}</span>
-                    </div>
-                    <el-progress
-                      v-if="it.status === 'active'"
-                      :percentage="it.pct"
-                      :stroke-width="3"
-                      :show-text="false"
-                      class="row-bar"
-                    />
-                    <p class="row-msg">
-                      <template v-if="it.status === 'queued'">等待上传</template>
-                      <template v-else-if="it.status === 'active'"
-                        >{{ stageText[it.stage] || '上传中'
-                        }}<template v-if="it.stage === 'upload'">
-                          · {{ it.pct }}%</template
-                        ></template
-                      >
-                      <template v-else-if="it.status === 'done'"
-                        >已上传<template v-if="it.savedAs">
-                          · 保存为 {{ it.savedAs }}</template
-                        ></template
-                      >
-                      <template v-else-if="it.status === 'rejected'">未上传：{{ it.msg }}</template>
-                      <template v-else>上传失败：{{ it.msg }}</template>
-                    </p>
-                  </div>
-                  <el-icon class="row-status">
-                    <CircleCheckFilled v-if="it.status === 'done'" />
-                    <CircleCloseFilled
-                      v-else-if="it.status === 'error' || it.status === 'rejected'"
-                    />
-                    <Loading v-else-if="it.status === 'active'" class="spin" />
-                    <UploadFilled v-else />
-                  </el-icon>
-                </li>
-              </ul>
-            </section>
+      <div class="workspace">
+        <div class="upload-panel tool-panel">
+          <div class="panel-heading">
+            <h2>上传文件</h2>
+            <span class="status-pill" :class="{ unavailable: !canAdd }">
+              <i></i>{{ canAdd ? '可以上传' : '暂停接收' }}
+            </span>
           </div>
-
-          <aside class="details-panel" aria-label="上传链接信息">
-            <div class="destination-icon">
-              <el-icon><Folder /></el-icon>
+          <p v-if="!canAdd" class="notice" role="status">{{ availability }}，无法继续添加文件。</p>
+          <div
+            class="zone"
+            :class="{ over: dragging && canAdd, off: !canAdd }"
+            role="button"
+            :tabindex="canAdd ? 0 : -1"
+            :aria-disabled="!canAdd"
+            aria-label="选择要上传的文件，也可以拖拽文件到这里"
+            @click="pick"
+            @keydown.enter.prevent="pick"
+            @keydown.space.prevent="pick"
+            @dragenter.prevent="onDragEnter"
+            @dragover.prevent
+            @dragleave="onDragLeave"
+            @drop.prevent="onDrop"
+          >
+            <div class="upload-art" aria-hidden="true">
+              <span class="paper paper-back"
+                ><el-icon><Document /></el-icon
+              ></span>
+              <span class="paper paper-front"
+                ><el-icon><UploadFilled /></el-icon
+              ></span>
             </div>
-            <span class="eyebrow">接收文件夹</span>
-            <h2 class="destination-name">{{ dirLabel }}</h2>
-            <dl class="facts">
-              <div class="quota-fact">
-                <dt>还可上传</dt>
-                <dd>
-                  <strong>{{ filesLeft }}</strong
-                  ><span> / {{ drop.max_files }} 个文件</span>
-                </dd>
-              </div>
-              <div class="quota-fact">
-                <dt>剩余空间</dt>
-                <dd>
-                  <strong>{{ fmtBytes(bytesLeft) }}</strong>
-                </dd>
-                <p>总额度 {{ fmtBytes(drop.max_total_bytes) }}</p>
-              </div>
-              <div>
-                <dt>单个文件上限</dt>
-                <dd>{{ fmtBytes(drop.max_file_bytes) }}</dd>
-              </div>
-              <div>
-                <dt>有效期至</dt>
-                <dd>
-                  {{ fmtDateTime(drop.expires_at) }}<span class="sub">{{ leftText }}</span>
-                </dd>
-              </div>
-            </dl>
-          </aside>
-        </div>
-      </template>
+            <h3>{{ dragging && canAdd ? '松开，开始上传' : '拖拽文件到这里' }}</h3>
+            <span class="choose-button tool-primary"
+              >选择文件 <el-icon><ArrowRight /></el-icon
+            ></span>
+            <p class="zone-caption">单个文件不超过 {{ fmtBytes(drop.max_file_bytes) }}</p>
+            <input ref="fileInput" type="file" multiple hidden @change="onPicked" />
+          </div>
+          <p class="upload-note">
+            <el-icon><Lock /></el-icon> 仅接收方可见，同名文件自动改名。
+          </p>
 
-      <section v-else class="state-card" aria-live="polite">
-        <template v-if="phase === 'loading'">
-          <el-icon class="state-ico spin"><Loading /></el-icon>
-          <h1>加载中</h1>
-        </template>
-        <template v-else-if="phase === 'missing'">
-          <el-icon class="state-ico"><Folder /></el-icon>
-          <h1>链接不完整</h1>
-          <p>请使用接收方提供的完整上传链接。</p>
-        </template>
-        <template v-else-if="phase === 'dead'">
-          <el-icon class="state-ico bad"><CircleCloseFilled /></el-icon>
-          <h1>{{ deadTitle }}</h1>
-          <p>{{ deadMsg }}</p>
-        </template>
-        <template v-else>
-          <el-icon class="state-ico warn"><WarningFilled /></el-icon>
-          <h1>加载失败</h1>
-          <p>{{ loadErr }}</p>
-          <button class="choose-button" @click="load()">
-            重试 <el-icon><RefreshRight /></el-icon>
-          </button>
-        </template>
-      </section>
-    </main>
-  </div>
+          <section v-if="items.length" class="list" aria-label="本次上传">
+            <div class="list-head">
+              <h2>
+                本次上传 <span class="count">{{ items.length }}</span>
+              </h2>
+              <button v-if="hasFinished" class="text-button" @click="clearFinished">
+                清除已结束
+              </button>
+            </div>
+            <div class="queue-summary" role="status" aria-live="polite">
+              <span>{{
+                busy ? '上传中' : doneCount === items.length ? '上传完成' : '上传已结束'
+              }}</span>
+              <span
+                >{{ doneCount }} / {{ items.length }} 个已完成 · {{ fmtBytes(queuedBytes) }}</span
+              >
+            </div>
+            <el-progress v-if="busy" :percentage="progress" :stroke-width="3" :show-text="false" />
+            <ul>
+              <li v-for="it in items" :key="it.id" class="row" :class="it.status">
+                <div class="file-icon">
+                  <el-icon><Document /></el-icon>
+                </div>
+                <div class="file-detail">
+                  <div class="row-top">
+                    <span class="row-name" :title="it.name">{{ it.name }}</span>
+                    <span class="row-size">{{ fmtBytes(it.size) }}</span>
+                  </div>
+                  <el-progress
+                    v-if="it.status === 'active'"
+                    :percentage="it.pct"
+                    :stroke-width="3"
+                    :show-text="false"
+                    class="row-bar"
+                  />
+                  <p class="row-msg">
+                    <template v-if="it.status === 'queued'">等待上传</template>
+                    <template v-else-if="it.status === 'active'"
+                      >{{ stageText[it.stage] || '上传中'
+                      }}<template v-if="it.stage === 'upload'"> · {{ it.pct }}%</template></template
+                    >
+                    <template v-else-if="it.status === 'done'"
+                      >已上传<template v-if="it.savedAs">
+                        · 保存为 {{ it.savedAs }}</template
+                      ></template
+                    >
+                    <template v-else-if="it.status === 'rejected'">未上传：{{ it.msg }}</template>
+                    <template v-else>上传失败：{{ it.msg }}</template>
+                  </p>
+                </div>
+                <el-icon class="row-status">
+                  <CircleCheckFilled v-if="it.status === 'done'" />
+                  <CircleCloseFilled
+                    v-else-if="it.status === 'error' || it.status === 'rejected'"
+                  />
+                  <Loading v-else-if="it.status === 'active'" class="spin" />
+                  <UploadFilled v-else />
+                </el-icon>
+              </li>
+            </ul>
+          </section>
+        </div>
+
+        <aside class="details-panel tool-panel" aria-label="上传链接信息">
+          <div class="destination-icon">
+            <el-icon><Folder /></el-icon>
+          </div>
+          <span class="eyebrow">接收文件夹</span>
+          <h2 class="destination-name">{{ dirLabel }}</h2>
+          <dl class="facts">
+            <div class="quota-fact">
+              <dt>还可上传</dt>
+              <dd>
+                <strong>{{ filesLeft }}</strong
+                ><span> / {{ drop.max_files }} 个文件</span>
+              </dd>
+            </div>
+            <div class="quota-fact">
+              <dt>剩余空间</dt>
+              <dd>
+                <strong>{{ fmtBytes(bytesLeft) }}</strong>
+              </dd>
+              <p>总额度 {{ fmtBytes(drop.max_total_bytes) }}</p>
+            </div>
+            <div>
+              <dt>单个文件上限</dt>
+              <dd>{{ fmtBytes(drop.max_file_bytes) }}</dd>
+            </div>
+            <div>
+              <dt>有效期至</dt>
+              <dd>
+                {{ fmtDateTime(drop.expires_at) }}<span class="sub">{{ leftText }}</span>
+              </dd>
+            </div>
+          </dl>
+        </aside>
+      </div>
+    </template>
+
+    <section v-else class="state-card tool-state tool-panel" aria-live="polite">
+      <template v-if="phase === 'loading'">
+        <el-icon class="state-ico spin"><Loading /></el-icon>
+        <h1>加载中</h1>
+      </template>
+      <template v-else-if="phase === 'missing'">
+        <el-icon class="state-ico"><Folder /></el-icon>
+        <h1>链接不完整</h1>
+        <p>请使用接收方提供的完整上传链接。</p>
+      </template>
+      <template v-else-if="phase === 'dead'">
+        <el-icon class="state-ico bad"><CircleCloseFilled /></el-icon>
+        <h1>{{ deadTitle }}</h1>
+        <p>{{ deadMsg }}</p>
+      </template>
+      <template v-else>
+        <el-icon class="state-ico warn"><WarningFilled /></el-icon>
+        <h1>加载失败</h1>
+        <p>{{ loadErr }}</p>
+        <button class="choose-button tool-primary" @click="load()">
+          重试 <el-icon><RefreshRight /></el-icon>
+        </button>
+      </template>
+    </section>
+  </ToolLayout>
 </template>
 
 <style scoped>
-.drop-page {
-  min-height: 100dvh;
-  background: var(--bg);
-  color: var(--fg);
-  padding: 0 32px;
-  display: flex;
-  flex-direction: column;
-}
-.page-nav {
-  width: 100%;
-  max-width: 1040px;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.page-nav {
-  height: 88px;
-  border-bottom: 1px solid var(--border);
-}
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--fg);
-  font-weight: 650;
-  font-size: 20px;
-  text-decoration: none;
-  letter-spacing: -0.5px;
-}
-.drop-shell {
-  width: 100%;
-  max-width: 960px;
-  margin: 0 auto;
-  flex: 1;
-  padding: 54px 0 64px;
-}
 .eyebrow {
   display: block;
   color: var(--accent);
@@ -532,16 +478,7 @@ onUnmounted(() => {
   letter-spacing: 2px;
 }
 .intro {
-  margin-bottom: 32px;
-}
-.intro h1 {
-  margin: 0;
-  font-size: clamp(26px, 3.3vw, 36px);
-  line-height: 1.35;
-  font-weight: 600;
-  letter-spacing: -0.8px;
-  color: var(--fg);
-  overflow-wrap: anywhere;
+  margin-bottom: var(--tool-heading-gap);
 }
 .workspace {
   display: grid;
@@ -550,10 +487,7 @@ onUnmounted(() => {
   align-items: start;
 }
 .upload-panel {
-  padding: 28px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--el-border-radius-base);
+  padding: var(--tool-panel-padding);
 }
 .panel-heading,
 .list-head {
@@ -661,19 +595,7 @@ h2 {
   color: var(--fg);
 }
 .choose-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 9px 15px;
   margin-top: 22px;
-  border: 0;
-  border-radius: var(--el-border-radius-base);
-  background: var(--accent);
-  color: var(--bg);
-  font: inherit;
-  font-size: var(--el-font-size-base);
-  cursor: pointer;
 }
 .zone:hover .choose-button,
 .zone.over .choose-button,
@@ -804,9 +726,6 @@ button.choose-button:hover {
 }
 .details-panel {
   padding: 26px 24px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--el-border-radius-base);
 }
 .destination-icon {
   display: grid;
@@ -864,37 +783,11 @@ button.choose-button:hover {
   color: var(--muted);
   font-size: var(--el-font-size-extra-small);
 }
-.state-card {
-  max-width: 540px;
-  margin: 42px auto 0;
-  padding: 40px 32px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  border-radius: var(--el-border-radius-base);
-  text-align: center;
-}
-.state-ico {
-  display: block;
-  margin: 28px auto 18px;
-  font-size: 42px;
-  color: var(--accent);
-}
 .state-ico.bad {
   color: var(--el-color-danger);
 }
 .state-ico.warn {
   color: var(--el-color-warning);
-}
-.state-card h1 {
-  font-size: 24px;
-  margin: 0 0 12px;
-  line-height: 1.4;
-  color: var(--fg);
-}
-.state-card p {
-  font-size: 13px;
-  color: var(--muted);
-  overflow-wrap: anywhere;
 }
 .spin {
   animation: drop-spin 1s linear infinite;
@@ -905,24 +798,9 @@ button.choose-button:hover {
   }
 }
 @media (max-width: 760px) {
-  .drop-page {
-    padding: 0 20px;
-  }
-  .page-nav {
-    height: 70px;
-  }
-  .drop-shell {
-    padding: 32px 0 40px;
-  }
-  .intro {
-    margin-bottom: 24px;
-  }
   .workspace {
     grid-template-columns: minmax(0, 1fr);
     gap: 20px;
-  }
-  .upload-panel {
-    padding: 22px 20px;
   }
   .details-panel {
     padding: 22px 20px;
@@ -935,18 +813,8 @@ button.choose-button:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0 20px;
   }
-  .state-card {
-    margin: 16px auto 0;
-    padding: 32px 20px;
-  }
 }
 @media (max-width: 380px) {
-  .drop-page {
-    padding: 0 12px;
-  }
-  .upload-panel {
-    padding: 20px 16px;
-  }
   .zone {
     padding-left: 10px;
     padding-right: 10px;
