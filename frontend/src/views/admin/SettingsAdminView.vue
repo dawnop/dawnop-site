@@ -1,6 +1,6 @@
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ref, reactive, watch, nextTick, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { settingsApi } from '../../api'
 import * as pasteApi from '../../api/pasteAdminApi'
@@ -8,12 +8,12 @@ import { adminSettings, loadAdminSettings, applyAdminSettings } from '../../stor
 import { useUnsavedGuard } from '../../composables/useUnsavedGuard'
 
 const route = useRoute()
-const router = useRouter()
+const layout = ref(null)
 const sections = [
   {
     key: 'admin',
     title: '后台',
-    hint: '文章与剪贴板 的分页，以及后台列表的显示密度。',
+    hint: '文章与剪贴板的分页，以及后台列表的显示密度。',
     fields: [
       { key: 'admin_page_size', label: '每页条数', min: 10, max: 50, unit: '条' },
       { key: 'admin_compact', label: '紧凑列表', switch: true },
@@ -92,7 +92,6 @@ const sections = [
     ],
   },
 ]
-const active = computed(() => sections.find((s) => s.key === route.query.section) || sections[0])
 const form = reactive({ ...adminSettings.values })
 const ready = reactive({})
 const errors = reactive({})
@@ -161,44 +160,45 @@ async function save(section) {
     saving.value = ''
   }
 }
-onMounted(() => {
-  load()
-  load(true)
+async function scrollToSection() {
+  const section = sections.find((s) => s.key === route.query.section)
+  if (!section) return
+  await nextTick()
+  layout.value?.querySelector(`#settings-${section.key}`)?.scrollIntoView({ block: 'start' })
+}
+watch(() => route.query.section, scrollToSection)
+onMounted(async () => {
+  await Promise.all([load(), load(true)])
+  scrollToSection()
 })
 </script>
 
 <template>
-  <div class="settings-layout">
-    <nav class="settings-nav" aria-label="设置分组">
-      <button
-        v-for="s in sections"
-        :key="s.key"
-        type="button"
-        :class="{ selected: active.key === s.key }"
-        :aria-current="active.key === s.key ? 'page' : undefined"
-        @click="router.replace({ query: { ...route.query, section: s.key } })"
-      >
-        {{ s.title }}<span v-if="dirty(s)" class="dirty-dot" aria-label="未保存" />
-      </button>
-    </nav>
-    <section class="settings-panel card" :aria-labelledby="`settings-${active.key}`">
+  <div ref="layout" class="settings-layout">
+    <section
+      v-for="section in sections"
+      :id="`settings-${section.key}`"
+      :key="section.key"
+      class="settings-panel card"
+      :aria-labelledby="`settings-${section.key}-title`"
+    >
       <header class="section-head">
-        <h2 :id="`settings-${active.key}`">{{ active.title }}</h2>
-        <p>{{ active.hint }}</p>
+        <h2 :id="`settings-${section.key}-title`">{{ section.title }}</h2>
+        <p>{{ section.hint }}</p>
       </header>
-      <div v-if="errors[active.key]" class="load-error" role="alert">
-        加载失败，重试后可编辑。<el-button @click="load(active.key === 'paste')">重试</el-button>
+      <div v-if="errors[section.key]" class="load-error" role="alert">
+        加载失败，重试后可编辑。<el-button @click="load(section.key === 'paste')">重试</el-button>
       </div>
       <el-form
         novalidate
-        v-else-if="ready[active.key]"
-        v-loading="loading[active.key]"
+        v-else-if="ready[section.key]"
+        v-loading="loading[section.key]"
         label-position="top"
-        :disabled="!ready[active.key] || !!saving"
-        @submit.prevent="save(active)"
+        :disabled="!ready[section.key] || !!saving"
+        @submit.prevent="save(section)"
       >
         <div class="settings-fields">
-          <el-form-item v-for="field in active.fields" :key="field.key" :label="field.label">
+          <el-form-item v-for="field in section.fields" :key="field.key" :label="field.label">
             <el-switch
               v-if="field.switch"
               v-model="form[field.key]"
@@ -226,19 +226,19 @@ onMounted(() => {
           </el-form-item>
         </div>
         <footer class="settings-footer">
-          <span class="save-state">{{
-            dirty(active) ? '未保存' : ready[active.key] ? '已保存' : '加载中'
+          <span class="save-state" :class="{ 'is-dirty': dirty(section) }">{{
+            dirty(section) ? '未保存' : ready[section.key] ? '已保存' : '加载中'
           }}</span>
           <el-button
-            :disabled="!dirty(active) || !!saving"
-            @click="hydrate(active, JSON.parse(saved[active.key]))"
+            :disabled="!dirty(section) || !!saving"
+            @click="hydrate(section, JSON.parse(saved[section.key]))"
             >还原</el-button
           >
           <el-button
             type="primary"
             native-type="submit"
-            :loading="saving === active.key"
-            :disabled="!dirty(active) || !!saving"
+            :loading="saving === section.key"
+            :disabled="!dirty(section) || !!saving"
             >保存</el-button
           >
         </footer>
@@ -253,45 +253,13 @@ onMounted(() => {
 <style scoped>
 .settings-layout {
   display: grid;
-  grid-template-columns: 160px minmax(0, 760px);
-  gap: 24px;
-  align-items: start;
+  gap: 16px;
+  width: 100%;
+  max-width: 880px;
 }
-.settings-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.settings-nav button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  text-align: left;
-  font: inherit;
-  font-size: 14px;
-  padding: 12px 16px;
-  cursor: pointer;
-}
-.settings-nav button:hover {
-  background: #eef2f7;
-}
-.settings-nav button.selected {
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 600;
-}
-.settings-nav button:focus-visible {
-  outline: 2px solid var(--accent);
-}
-.dirty-dot {
-  width: 5px;
-  height: 5px;
-  background: var(--accent);
-  border-radius: 50%;
+.settings-panel {
+  min-width: 0;
+  scroll-margin-top: 80px;
 }
 .section-head {
   border-bottom: 1px solid var(--border);
@@ -356,6 +324,9 @@ onMounted(() => {
   color: var(--muted);
   margin-right: auto;
 }
+.save-state.is-dirty {
+  color: var(--accent);
+}
 .load-error {
   display: flex;
   flex-wrap: wrap;
@@ -364,37 +335,19 @@ onMounted(() => {
   font-size: 13px;
   color: var(--muted);
 }
-@media (max-width: 1100px) {
-  .settings-layout {
-    grid-template-columns: 120px minmax(0, 1fr);
-    gap: 16px;
-  }
+@media (max-width: 900px) {
   .settings-fields {
     column-gap: 16px;
   }
 }
-@media (max-width: 900px) {
+@media (min-width: 769px) and (max-width: 900px) {
   .settings-fields {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 @media (max-width: 768px) {
-  .settings-layout {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 16px;
-  }
-  .settings-nav {
-    flex-direction: row;
-  }
-  .settings-nav button {
-    flex: 1;
-    justify-content: center;
-    padding: 10px 4px;
-    white-space: nowrap;
-    font-size: 13px;
-  }
-  .settings-fields {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .settings-panel {
+    padding: 20px;
   }
   .number-field {
     flex-wrap: wrap;
