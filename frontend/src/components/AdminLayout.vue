@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { RouterView, useRouter, useRoute } from 'vue-router'
 import {
   Fold,
@@ -18,6 +18,9 @@ import {
 import { auth } from '../store/auth'
 import { useIsMobile } from '../composables/useIsMobile'
 
+import { adminSettings, loadAdminSettings } from '../store/adminSettings'
+
+onMounted(() => loadAdminSettings().catch(() => {}))
 const router = useRouter()
 const route = useRoute()
 const isMobile = useIsMobile()
@@ -52,7 +55,7 @@ function onTopCmd(cmd) {
 
 // 分组导航（icon 用按需导入的图标组件引用）
 const groups = [
-  { label: '总览', items: [{ to: '/admin', label: '首页', icon: House }] },
+  { label: '总览', items: [{ to: '/admin', label: '总览', icon: House }] },
   {
     label: '内容',
     items: [
@@ -98,9 +101,9 @@ const activeMenu = computed(() => {
 
 // 面包屑：带 to 的可点击跳转，末项为当前页不带链接
 const crumbs = computed(() => {
-  const home = { label: '首页', to: '/admin' }
+  const home = { label: '总览', to: '/admin' }
   const map = {
-    'admin-home': [{ label: '首页' }],
+    'admin-home': [{ label: '总览' }],
     'admin-pastes': [home, { label: 'Paste' }],
     'admin-articles': [home, { label: '文章管理' }],
     'admin-article-new': [home, { label: '文章管理', to: '/admin/articles' }, { label: '写文章' }],
@@ -127,6 +130,11 @@ const crumbs = computed(() => {
 // 文件管理满铺（无面包屑、无内边距）
 const fluid = computed(() => route.name === 'admin-files')
 
+const pageTitle = computed(() => {
+  if (fluid.value || /-(new|edit)$/.test(String(route.name))) return ''
+  return crumbs.value.at(-1)?.label || ''
+})
+
 function logout() {
   auth.logout()
   router.push({ name: 'admin-login' })
@@ -134,21 +142,23 @@ function logout() {
 </script>
 
 <template>
-  <el-container class="admin">
+  <el-container class="admin" :class="{ compact: adminSettings.values.admin_compact === 1 }">
     <!-- 顶栏 -->
     <el-header class="topbar">
       <div class="left">
-        <el-icon
+        <button
+          type="button"
           class="toggle"
+          :aria-label="isMobile ? '菜单' : collapsed ? '展开导航' : '收起导航'"
+          :aria-expanded="isMobile ? drawerOpen : !collapsed"
           :title="isMobile ? '菜单' : collapsed ? '展开' : '收起'"
           @click="toggle"
         >
-          <Expand v-if="isMobile || collapsed" />
-          <Fold v-else />
-        </el-icon>
+          <el-icon><Expand v-if="isMobile || collapsed" /><Fold v-else /></el-icon>
+        </button>
         <span class="brand"
           ><img src="/logo.svg" alt="" class="brand-logo" /><span class="brand-text"
-            >dawnop 控制台</span
+            >dawnop</span
           ></span
         >
         <el-breadcrumb v-if="crumbs.length" class="topbar-crumb" separator="/">
@@ -164,7 +174,9 @@ function logout() {
           <el-button size="small" @click="logout">退出登录</el-button>
         </template>
         <el-dropdown v-else trigger="click" @command="onTopCmd">
-          <el-icon class="topbar-more"><MoreFilled /></el-icon>
+          <button type="button" class="topbar-more" aria-label="账户菜单">
+            <el-icon><MoreFilled /></el-icon>
+          </button>
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item command="site">查看站点 ↗</el-dropdown-item>
@@ -197,6 +209,9 @@ function logout() {
       <!-- 主区 -->
       <el-main class="main" :class="{ fluid }">
         <div class="view" :class="{ fluid }">
+          <header v-if="pageTitle" class="admin-page-title">
+            <h1>{{ pageTitle }}</h1>
+          </header>
           <RouterView />
         </div>
       </el-main>
@@ -225,7 +240,7 @@ function logout() {
 
 <style scoped>
 .admin {
-  height: 100vh;
+  height: 100dvh;
   background: var(--layout-bg);
 }
 
@@ -246,6 +261,8 @@ function logout() {
   min-width: 0;
 }
 .toggle {
+  border: 0;
+  background: transparent;
   font-size: 22px;
   color: #595959;
   cursor: pointer;
@@ -304,7 +321,7 @@ function logout() {
 }
 
 .body {
-  height: calc(100vh - 56px);
+  height: calc(100dvh - 56px);
 }
 
 /* 侧栏 */
@@ -312,7 +329,7 @@ function logout() {
   background: #fff;
   border-right: 1px solid var(--border);
   transition: width 0.2s ease;
-  overflow: hidden;
+  overflow-y: auto;
 }
 .sidebar .el-menu {
   border-right: none;
@@ -341,6 +358,10 @@ function logout() {
 
 /* 顶栏右上「更多」图标（移动端） */
 .topbar-more {
+  border: 0;
+  background: transparent;
+  width: 40px;
+  height: 40px;
   font-size: 20px;
   color: #595959;
   cursor: pointer;
@@ -374,5 +395,36 @@ function logout() {
   .view.fluid {
     padding: 12px 12px 16px;
   }
+}
+
+.sidebar :deep(.el-menu-item) {
+  margin: 3px 10px;
+  border-radius: 6px;
+  height: 42px;
+}
+.sidebar :deep(.el-menu-item.is-active) {
+  background: var(--accent-soft);
+}
+.sidebar :deep(.el-menu-item-group__title) {
+  padding-top: 20px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.sidebar :deep(.el-menu--collapse .el-menu-item) {
+  margin-inline: 0;
+}
+.toggle:focus-visible,
+.topbar-more:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.admin-page-title {
+  margin-bottom: 20px;
+}
+.admin-page-title h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.4px;
 }
 </style>

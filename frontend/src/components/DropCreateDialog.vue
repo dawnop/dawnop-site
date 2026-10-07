@@ -6,6 +6,7 @@ import { ElMessage } from 'element-plus'
 import { CopyDocument } from '@element-plus/icons-vue'
 import { fmApi } from '../api'
 import { useIsMobile } from '../composables/useIsMobile'
+import { adminSettings, loadAdminSettings } from '../store/adminSettings'
 
 const props = defineProps({
   // 目标目录的相对路径，根为空串
@@ -23,12 +24,18 @@ const LIMITS = {
   max_file_bytes: [1, 5 * GB],
   max_total_bytes: [1, 50 * GB],
 }
-const expiryOptions = [
+const expiryPresets = [
   { label: '1 小时', value: 3600 },
   { label: '1 天', value: 86400 },
   { label: '7 天', value: 7 * 86400 },
   { label: '30 天', value: 30 * 86400 },
 ]
+const expiryOptions = computed(() => {
+  const value = adminSettings.values.drop_expiry_hours * 3600
+  return expiryPresets.some((o) => o.value === value)
+    ? expiryPresets
+    : [...expiryPresets, { label: `${value / 3600} 小时`, value }].sort((a, b) => a.value - b.value)
+})
 const unitOptions = [
   { label: 'MB', value: MB },
   { label: 'GB', value: GB },
@@ -37,18 +44,24 @@ const unitOptions = [
 const formRef = ref(null)
 const form = reactive({})
 function resetForm() {
+  const defaults = adminSettings.values
   Object.assign(form, {
     label: '',
-    expires_in_s: 86400,
-    max_files: 20,
-    fileSize: 100,
+    expires_in_s: defaults.drop_expiry_hours * 3600,
+    max_files: defaults.drop_max_files,
+    fileSize: defaults.drop_file_max_mb,
     fileUnit: MB,
-    totalSize: 1,
-    totalUnit: GB,
+    totalSize:
+      defaults.drop_total_max_mb % 1024 === 0
+        ? defaults.drop_total_max_mb / 1024
+        : defaults.drop_total_max_mb,
+    totalUnit: defaults.drop_total_max_mb % 1024 === 0 ? GB : MB,
   })
 }
 resetForm()
 
+const defaultsLoading = ref(false)
+const defaultsError = ref(false)
 const busy = ref(false)
 const result = ref(null) // 创建成功后的响应（含明文 token）
 
@@ -86,6 +99,7 @@ const rules = {
 }
 
 async function submit() {
+  if (busy.value || defaultsLoading.value || defaultsError.value) return
   try {
     await formRef.value.validate()
   } catch {
@@ -134,14 +148,26 @@ async function copy(text) {
 }
 
 // 每次打开都从空白表单开始；关闭时清理本地结果
-watch(show, (v) => {
-  if (v) {
+let generation = 0
+async function prepare() {
+  const ticket = ++generation
+  defaultsLoading.value = true
+  defaultsError.value = false
+  try {
+    await loadAdminSettings()
+    if (ticket !== generation || !show.value) return
     resetForm()
-    result.value = null
     formRef.value?.clearValidate()
-  } else {
-    result.value = null
+  } catch {
+    if (ticket === generation) defaultsError.value = true
+  } finally {
+    if (ticket === generation) defaultsLoading.value = false
   }
+}
+watch(show, (v) => {
+  result.value = null
+  if (v) prepare()
+  else generation++
 })
 </script>
 
@@ -150,7 +176,9 @@ watch(show, (v) => {
     v-model="show"
     :title="result ? '上传链接已创建' : '创建上传链接'"
     :width="isMobile ? '94%' : '520px'"
-    :close-on-click-modal="!result"
+    :close-on-click-modal="!result && !busy"
+    :close-on-press-escape="!busy"
+    :show-close="!busy"
     append-to-body
   >
     <!-- 表单 -->
@@ -159,7 +187,13 @@ watch(show, (v) => {
         持有链接的任何人都能往 <b>{{ dirLabel }}</b> 里新增文件（不能查看、覆盖或删除已有文件），
         直到过期、被吊销或额度用完。
       </p>
+      <p v-if="defaultsError" class="hint">
+        默认额度加载失败 <el-button @click="prepare">重试</el-button>
+      </p>
+      <el-skeleton v-if="defaultsLoading" :rows="4" animated />
       <el-form
+        v-if="!defaultsLoading && !defaultsError"
+        :disabled="defaultsLoading || defaultsError || busy"
         ref="formRef"
         :model="form"
         :rules="rules"
@@ -271,8 +305,14 @@ watch(show, (v) => {
 
     <template #footer>
       <template v-if="!result">
-        <el-button @click="show = false">取消</el-button>
-        <el-button type="primary" :loading="busy" @click="submit">创建</el-button>
+        <el-button :disabled="busy" @click="show = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="busy"
+          :disabled="defaultsLoading || defaultsError"
+          @click="submit"
+          >创建</el-button
+        >
       </template>
       <template v-else>
         <router-link to="/admin/drops" class="manage" @click="show = false"

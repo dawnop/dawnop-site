@@ -14,7 +14,8 @@
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { Folder, Document, Picture, Files, Grid, List } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { fmApi as fm, settingsApi } from '../api'
+import { fmApi as fm } from '../api'
+import { adminSettings, loadAdminSettings } from '../store/adminSettings'
 import { useIsMobile } from './useIsMobile'
 import { fmtBytes, fmtMonthDay } from '../utils/format'
 import { confirmDanger } from '../utils/confirm'
@@ -53,11 +54,7 @@ export function useFileManager() {
 
   // 存储用量（侧栏用量条）与全局配置（并发数、文本预览上限）
   const drive = ref(null)
-  const conf = reactive({
-    upload_concurrency: 3,
-    download_concurrency: 3,
-    text_preview_max_kb: 512,
-  })
+  const conf = adminSettings.values
   const drivePct = computed(() =>
     drive.value?.quota
       ? Math.min(100, Math.round((drive.value.used / drive.value.quota) * 100))
@@ -72,7 +69,7 @@ export function useFileManager() {
   }
   async function loadConf() {
     try {
-      Object.assign(conf, (await settingsApi.get()).data)
+      await loadAdminSettings()
     } catch {
       /* 用默认值 */
     }

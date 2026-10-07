@@ -1457,7 +1457,13 @@
     "upload_concurrency": 5,
     "download_concurrency": 3,
     "storage_quota_gb": 10,
-    "text_preview_max_kb": 256
+    "text_preview_max_kb": 256,
+    "admin_page_size": 20,
+    "admin_compact": 0,
+    "drop_expiry_hours": 24,
+    "drop_max_files": 20,
+    "drop_file_max_mb": 100,
+    "drop_total_max_mb": 1024
    }
   },
   "fm.root": {

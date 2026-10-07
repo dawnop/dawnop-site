@@ -1,20 +1,26 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { Edit, Collection, FolderOpened, TopRight } from '@element-plus/icons-vue'
+import { Edit, Document, FolderOpened, Link, Setting } from '@element-plus/icons-vue'
 import { articlesApi, pagesApi } from '../../api'
-
-const router = useRouter()
-const stats = ref({ articles: null, drafts: null, pages: null, views: null })
-
+const stats = ref({})
+const loading = ref(false)
+const error = ref(false)
 const cards = [
-  { key: 'articles', label: '文章总数', to: '/admin/articles' },
+  { key: 'articles', label: '文章', to: '/admin/articles' },
   { key: 'drafts', label: '草稿', to: '/admin/articles' },
   { key: 'pages', label: '页面', to: '/admin/pages' },
-  { key: 'views', label: '总浏览量', to: '/admin/articles' },
+  { key: 'views', label: '浏览量', to: '/admin/articles' },
 ]
-
-onMounted(async () => {
+const links = [
+  { label: '写文章', to: '/admin/articles/new', icon: Edit },
+  { label: 'Paste', to: '/admin/pastes', icon: Document },
+  { label: '文件', to: '/admin/files', icon: FolderOpened },
+  { label: '上传链接', to: '/admin/drops', icon: Link },
+  { label: '全局设置', to: '/admin/settings', icon: Setting },
+]
+async function load() {
+  loading.value = true
+  error.value = false
   try {
     const [s, pages] = await Promise.all([articlesApi.stats(), pagesApi.listAll()])
     stats.value = {
@@ -23,80 +29,117 @@ onMounted(async () => {
       pages: pages.data.length,
       views: s.data.total_views,
     }
-  } catch (e) {
-    /* 拉取失败也不影响首页展示 */
+  } catch {
+    error.value = true
+  } finally {
+    loading.value = false
   }
-})
+}
+onMounted(load)
 </script>
-
 <template>
   <div>
-    <el-card class="welcome" shadow="never">
-      <h2>欢迎回来 👋</h2>
-      <p class="muted">这里是 dawnop 控制台，可在左侧管理文章、页面与文件。</p>
-    </el-card>
-
-    <el-row :gutter="16" class="stat-row">
-      <el-col v-for="c in cards" :key="c.label" :xs="12" :sm="12" :md="6">
-        <el-card class="stat" shadow="hover" @click="router.push(c.to)">
-          <el-statistic :value="stats[c.key] ?? 0" :title="c.label" />
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <el-card class="quick" shadow="never">
-      <template #header><span class="quick-title">快捷入口</span></template>
+    <div v-loading="loading" class="stat-grid">
+      <router-link v-for="card in cards" :key="card.key" :to="card.to" class="stat-card card">
+        <span class="stat-label">{{ card.label }}</span>
+        <strong>{{ stats[card.key]?.toLocaleString() ?? '—' }}</strong>
+      </router-link>
+    </div>
+    <p v-if="error" role="alert" class="load-error">
+      统计加载失败 <el-button text @click="load">重试</el-button>
+    </p>
+    <section class="card quick">
+      <h2>快捷入口</h2>
       <div class="links">
-        <el-button :icon="Edit" @click="router.push('/admin/articles/new')">写文章</el-button>
-        <el-button :icon="Collection" @click="router.push('/admin/pages')">页面管理</el-button>
-        <el-button :icon="FolderOpened" @click="router.push('/admin/files')">文件管理</el-button>
-        <el-button :icon="TopRight" tag="a" href="/" target="_blank" rel="noopener"
-          >查看站点</el-button
-        >
+        <router-link v-for="link in links" :key="link.to" :to="link.to">
+          <el-icon><component :is="link.icon" /></el-icon><span>{{ link.label }}</span
+          ><span class="arrow" aria-hidden="true">↗</span>
+        </router-link>
       </div>
-    </el-card>
+    </section>
   </div>
 </template>
-
 <style scoped>
-.page-head {
-  margin-bottom: 16px;
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
 }
-.page-head h1 {
-  margin: 0;
-  font-size: 1.3rem;
-  font-weight: 600;
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  text-decoration: none;
+  color: var(--fg);
+  transition: border-color 0.15s;
 }
-.welcome {
-  margin-bottom: 16px;
+.stat-card:hover {
+  border-color: var(--accent);
 }
-.welcome h2 {
-  margin: 0 0 6px;
-  font-size: 1.15rem;
-}
-.welcome p {
-  margin: 0;
-}
-.muted {
+.stat-label {
   color: var(--muted);
+  font-size: 13px;
 }
-.stat-row {
-  margin-bottom: 4px;
-}
-/* 换行时（手机 2×2）列之间留纵向间距 */
-.stat-row .el-col {
-  margin-bottom: 12px;
-}
-.stat {
-  cursor: pointer;
-  height: 100%;
-}
-.quick-title {
+.stat-card strong {
+  font-size: 30px;
+  line-height: 1.2;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.quick h2 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 16px;
 }
 .links {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.links a {
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--fg);
+  font-size: 14px;
+}
+.links a:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: #bae0ff;
+}
+.links .el-icon {
+  color: var(--accent);
+  font-size: 18px;
+}
+.arrow {
+  margin-left: auto;
+  color: var(--muted);
+}
+.load-error {
+  color: var(--muted);
+  font-size: 13px;
+}
+@media (max-width: 1000px) {
+  .links {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 768px) {
+  .stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .stat-card strong {
+    font-size: 26px;
+  }
+  .links {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>

@@ -30,7 +30,7 @@ async function copyLink(row) {
 
 // 状态由后端算（active | expired | revoked | exhausted | dir_missing），这里只管文案与颜色
 const STATUS = {
-  active: { text: '有效', type: 'success' },
+  active: { text: '有效', type: 'primary' },
   expired: { text: '已过期', type: 'info' },
   revoked: { text: '已吊销', type: 'info' },
   exhausted: { text: '额度用完', type: 'warning' },
@@ -99,6 +99,7 @@ onMounted(load)
       <div class="toolbar">
         <span class="muted total">共 {{ items.length }} 个上传链接</span>
         <span class="muted tip">在「文件管理」里右键文件夹即可创建</span>
+        <router-link to="/admin/settings?section=drop" class="defaults-link">默认额度</router-link>
         <el-button class="tb-refresh" :icon="RefreshRight" @click="load">刷新</el-button>
       </div>
 
@@ -296,5 +297,11 @@ onMounted(load)
   .tip {
     display: none;
   }
+}
+
+.defaults-link {
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
 }
 </style>

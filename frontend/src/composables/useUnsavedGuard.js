@@ -4,18 +4,18 @@
 //   takeSnapshot()—— 记录当前状态为「已保存基线」（加载完数据 / 保存成功后调用）
 //   markSaved()   —— 标记刚保存过，随后跳转不再被拦截
 // 内部接管 window.beforeunload 与路由 onBeforeRouteLeave（脏则弹「放弃修改」确认框）。
-import { computed, onBeforeUnmount } from 'vue'
+import { computed, ref, onBeforeUnmount } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 
 export function useUnsavedGuard(serialize) {
-  let snapshot = serialize()
+  const snapshot = ref(serialize())
   let justSaved = false
 
-  const dirty = computed(() => serialize() !== snapshot)
+  const dirty = computed(() => serialize() !== snapshot.value)
 
   function takeSnapshot() {
-    snapshot = serialize()
+    snapshot.value = serialize()
     justSaved = false
   }
   function markSaved() {

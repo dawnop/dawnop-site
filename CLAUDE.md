@@ -95,7 +95,7 @@ dawnop-site/
 │   │   ├── viz/                # 文章内嵌 Vue 可视化组件的 SFC 编译 + island 运行时
 │   │   ├── utils/              # frontmatter / markdownTitle / format / colWidths
 │   │   ├── api/                # axios 封装(统一带 token) + fmApi.js(文件管理对接层) + dropApi.js(公开上传页，独立实例) + qiniuUpload.js(直传共用)
-│   │   ├── router/ store/      # 公开+受保护路由 / 登录态
+│   │   ├── router/ store/      # 公开+受保护路由 / 登录态与共享后台配置
 │   │   └── hljs.js setupMdEditor.js  # 按需高亮语言 / 编辑器初始化
 │   ├── package.json vite.config.js
 ├── deploy/                     # nginx 配置不在本仓库，在 ~/workspace/dawnop-ops/（私有，不推送）
@@ -215,7 +215,8 @@ dawnop-site/
   WebDAV 除 OPTIONS 外同样先鉴权再读体，PUT 后端上限 512MiB。
 
 - 全局设置：`GET/PUT /api/settings`（需鉴权）→ key-value 存 `settings` 表与 DEFAULTS 合并；
-  现有项：上传/下载并发、存储配额(GB, 用量条展示)、文本预览大小上限(KB)。后台「系统 → 全局设置」页编辑。
+  项目包括后台分页/密度、上传/下载并发、存储配额(GB, 用量条展示)、文本预览大小上限(KiB)、
+  上传链接创建默认值；Paste 额度也集中到此页，仍走独立设置 API。见 `docs/admin-settings.md`。
 
 - 页面：`GET /api/pages/nav`（公开，导航项）、`GET /api/pages/{slug}`（公开）、
   `GET /api/pages/{slug}/articles`（公开，列表页文章分页）、`GET /api/pages/admin`（需鉴权，全部）、

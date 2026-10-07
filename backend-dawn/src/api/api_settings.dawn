@@ -2,7 +2,7 @@
 # GET returns the DEFAULTS-merged table; PUT validates every key before writing
 # any of them, so an invalid key persists nothing.
 use std/map
-use db/sql.{DbConn}
+use db/sql.{DbConn, with_immediate_tx}
 use web/types.{Handler, as_http, json_ok, body_text}
 use web/router.{Route, route_get, route_put}
 use json/value.{Json, JInt}
@@ -26,17 +26,26 @@ pub fn put_settings(a: Auth) -> Handler =
         Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, c => write_settings(c, m, a.storage_quota)), 400)?))
       })
 
-fn write_settings(c: DbConn, m: Map[String, Json], storage_quota: Int) -> Result[Json, String] !io = {
-  let _w = apply_settings(c, map.keys(m), m, 0)?
-  repo_settings.read_all(c, storage_quota)
-}
+# Validate the prospective pair and write in one transaction, including partial PUTs.
+fn write_settings(c: DbConn, m: Map[String, Json], storage_quota: Int) -> Result[Json, String] !io =
+  with_immediate_tx(c, () => {
+    let keys = map.keys(m)
+    let _v = validate_settings(keys, m, 0)?
+    let file_max = prospective(c, m, "drop_file_max_mb", 100)?
+    let total_max = prospective(c, m, "drop_total_max_mb", 1024)?
+    if total_max < file_max {
+      Err("总上限不能小于单个文件上限")
+    } else {
+      let _w = write_all_settings(c, keys, m, 0)?
+      repo_settings.read_all(c, storage_quota)
+    }
+  })
 
-# FastAPI validates every key then commits once: an invalid key persists nothing.
-# Pass 1 validates all (unknown key / non-int value / out-of-range), pass 2 writes.
-fn apply_settings(c: DbConn, keys: List[String], m: Map[String, Json], i: Int) -> Result[Bool, String] !io = {
-  let _v = validate_settings(keys, m, 0)?
-  write_all_settings(c, keys, m, 0)
-}
+fn prospective(c: DbConn, m: Map[String, Json], key: String, dflt: Int) -> Result[Int, String] !io =
+  match strict_int(m, key) {
+    Some(n) -> Ok(n)
+    None -> repo_settings.setting_int(c, key, dflt)
+  }
 
 fn validate_settings(keys: List[String], m: Map[String, Json], i: Int) -> Result[Bool, String] !io =
   if i == len(keys) {

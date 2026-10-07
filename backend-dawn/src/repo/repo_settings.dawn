@@ -1,6 +1,5 @@
-# Global settings (M6 knife 9): four integer keys stored JSON-encoded in the
-# settings table, merged over defaults on read. Unknown keys and out-of-range
-# values are rejected on write (matching app/api/settings.py).
+# Global integer settings: stored rows override defaults. New Drop defaults only
+# prefill administrator forms; issued links keep their own limits.
 use db/sql.{DbConn, PStr, ColStr, query, exec, first_str_or}
 use json/value.{Json}
 use util/jsonx.{obj, jint}
@@ -12,6 +11,12 @@ pub fn defaults(storage_quota_gb: Int) -> List[(String, Int)] =
     ("download_concurrency", 3),
     ("storage_quota_gb", storage_quota_gb),
     ("text_preview_max_kb", 512),
+    ("admin_page_size", 20),
+    ("admin_compact", 0),
+    ("drop_expiry_hours", 24),
+    ("drop_max_files", 20),
+    ("drop_file_max_mb", 100),
+    ("drop_total_max_mb", 1024),
   ]
 
 pub fn range_of(key: String) -> Option[(Int, Int)] =
@@ -20,6 +25,12 @@ pub fn range_of(key: String) -> Option[(Int, Int)] =
     "download_concurrency" -> Some((1, 8))
     "storage_quota_gb" -> Some((1, 1024))
     "text_preview_max_kb" -> Some((16, 10240))
+    "admin_page_size" -> Some((10, 50))
+    "admin_compact" -> Some((0, 1))
+    "drop_expiry_hours" -> Some((1, 720))
+    "drop_max_files" -> Some((1, 1000))
+    "drop_file_max_mb" -> Some((1, 5120))
+    "drop_total_max_mb" -> Some((1, 51200))
     _ -> None
   }
 
@@ -93,4 +104,14 @@ test "check_setting rejects unknown keys and out-of-range values" {
   # validation and then be refused mid-write
   assert range_of("upload_concurrency") == Some((1, 8))
   assert range_of("nope") == None
+}
+
+test "administrator defaults reject invalid limits" {
+  assert check_setting("admin_page_size", 50) == Ok(true)
+  assert check_setting("admin_page_size", 51) == Err("admin_page_size 应为 10~50 的整数")
+  assert check_setting("admin_compact", 2) == Err("admin_compact 应为 0~1 的整数")
+  assert check_setting("drop_expiry_hours", 0) == Err("drop_expiry_hours 应为 1~720 的整数")
+  assert check_setting("drop_max_files", 1001) == Err("drop_max_files 应为 1~1000 的整数")
+  assert check_setting("drop_file_max_mb", 5121) == Err("drop_file_max_mb 应为 1~5120 的整数")
+  assert check_setting("drop_total_max_mb", 51201) == Err("drop_total_max_mb 应为 1~51200 的整数")
 }

@@ -8,10 +8,10 @@
   --accent-active: #0958d9;
   --accent-soft: #e6f4ff; /* 选中项浅蓝底 */
   --fg: #1f2329;
-  --muted: #8c8c8c;
-  --border: #f0f0f0; /* 分隔线 */
+  --muted: #667085;
+  --border: #e9edf2; /* 分隔线 */
   --border-strong: #d9d9d9; /* 控件边框 */
-  --layout-bg: #f0f2f5; /* 内容区底色 */
+  --layout-bg: #f7f9fc; /* 内容区底色 */
   --container: #ffffff;
   --radius: 8px;
   --radius-sm: 6px;
@@ -103,9 +103,9 @@
 }
 .admin .badge.on,
 .admin .badge.pub {
-  background: #f6ffed;
-  color: var(--success);
-  border-color: #b7eb8f;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: #bae0ff;
 }
 .admin .badge.off,
 .admin .badge.draft {
@@ -268,11 +268,10 @@
    el-table 只有开 border 才能拖表头分隔线调列宽。border 附带的正文竖线/外框
    与极简观感冲突，这里保留功能、只留表头的竖向分界：表头单元格边界清晰
    （也是「可拖拽」的提示），正文竖线隐藏，表格外框线去掉。
-   表头文字：居中、加粗、比正文略大。 */
-.admin .el-table--border .el-table__header .cell {
-  text-align: center;
-  font-weight: 700;
-  font-size: 15px;
+   表头与正文左对齐，轻量分隔保留拖拽提示。 */
+.admin .el-table .el-table__header .cell {
+  font-weight: 600;
+  font-size: 13px;
   color: var(--el-text-color-primary);
 }
 .admin .el-table--border th.el-table__cell {
@@ -290,4 +289,30 @@
 }
 .admin .el-table--border .el-table__inner-wrapper {
   border: none;
+}
+
+/* 所有后台列表共用密度；编辑器和公开页面不受影响。 */
+.admin .el-card {
+  border-radius: 8px;
+}
+.admin .el-table {
+  --el-table-header-bg-color: #f8fafc;
+  --el-table-row-hover-bg-color: #f4f8ff;
+}
+.admin .el-table td.el-table__cell {
+  padding-block: 12px;
+}
+.admin.compact .el-table td.el-table__cell {
+  padding-block: 6px;
+}
+.admin.compact .m-card .el-card__body {
+  padding-block: 8px;
+}
+.admin .page-head {
+  flex-wrap: wrap;
+}
+@media (max-width: 768px) {
+  .admin .card {
+    padding: 16px;
+  }
 }

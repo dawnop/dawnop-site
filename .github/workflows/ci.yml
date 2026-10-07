@@ -166,6 +166,9 @@ jobs:
       - name: contract goldens (read / edge / webdav / qiniu)
         run: python3 backend-dawn/scripts/contract_run.py
 
+      - name: administrator settings and atomic updates
+        run: python3 backend-dawn/scripts/check-settings.py
+
       - name: public Markdown and durable submission limits
         run: python3 backend-dawn/scripts/check-paste.py
 

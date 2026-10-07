@@ -7,7 +7,9 @@
 - **WebDAV**：`dav.dawnop.com` 可挂载读写，供 Finder / rclone / RaiDrive 等直接访问网盘。
 - **前后端分离**：后端为纯 JSON API，便于后续接入其他客户端。
 
-公开 Markdown 入口为 `/paste`（列表、搜索、匿名发布与 `.md` 导入），管理员在 `/admin/pastes` 管理期限和额度。私人记录在文件管理中“新建文件”，统一为 `.md`，仍存放在私有空间。详见 [功能与部署说明](docs/paste.md)。
+公开 Markdown 入口为 `/paste`（列表、搜索、匿名发布与 `.md` 导入），管理员在 `/admin/pastes` 管理记录，提交额度集中到 `/admin/settings?section=paste`。私人记录在文件管理中“新建文件”，统一为 `.md`，仍存放在私有空间。详见 [功能与部署说明](docs/paste.md)。
+
+后台 UI 与分组全局配置见 [后台设置](docs/admin-settings.md)。
 
 ## 技术栈
 

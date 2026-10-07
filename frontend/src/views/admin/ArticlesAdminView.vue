@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { fmtDate } from '../../utils/format'
 import { useRouter } from 'vue-router'
 import { Search, Upload, EditPen, MoreFilled } from '@element-plus/icons-vue'
@@ -10,6 +10,8 @@ import { saveBlob } from '../../utils/saveBlob'
 import { useColWidths } from '../../composables/useColWidths'
 import { useIsMobile } from '../../composables/useIsMobile'
 import ListPager from '../../components/ListPager.vue'
+
+import { adminSettings, loadAdminSettings } from '../../store/adminSettings'
 
 const { colW, onHeaderDrag } = useColWidths('dawnop_colw_articles')
 
@@ -26,7 +28,7 @@ function rowCmd(cmd, row) {
 const items = ref([])
 const total = ref(0)
 const page = ref(1)
-const size = 12
+const size = computed(() => adminSettings.values.admin_page_size)
 const loading = ref(true)
 const fileInput = ref(null)
 const pageMap = ref({}) // page_id -> title
@@ -49,12 +51,13 @@ function articleUrl(slug) {
 async function load() {
   loading.value = true
   try {
+    await loadAdminSettings().catch(() => {})
     const filters = {}
     if (fStatus.value) filters.published = fStatus.value === 'published'
     if (fPageId.value) filters.page_id = Number(fPageId.value)
     if (fq.value.trim()) filters.q = fq.value.trim()
     const [arts, pages, tags] = await Promise.all([
-      articlesApi.listAll(page.value, size, filters),
+      articlesApi.listAll(page.value, size.value, filters),
       pagesApi.listAll(),
       tagsApi.listAll(),
     ])
@@ -153,6 +156,9 @@ function goPage(p) {
   load()
 }
 
+watch(size, () => {
+  page.value = 1
+})
 onMounted(load)
 </script>
 
@@ -247,7 +253,7 @@ onMounted(load)
         </el-table-column>
         <el-table-column label="状态" :width="colW['状态'] || 80">
           <template #default="{ row }">
-            <el-tag :type="row.published ? 'success' : 'info'" size="small" effect="light">
+            <el-tag :type="row.published ? 'primary' : 'info'" size="small" effect="light">
               {{ row.published ? '已发布' : '草稿' }}
             </el-tag>
           </template>
@@ -293,7 +299,7 @@ onMounted(load)
           <a :href="articleUrl(row.slug)" target="_blank" rel="noopener" class="m-title">{{
             row.title
           }}</a>
-          <el-tag :type="row.published ? 'success' : 'info'" size="small" effect="light">
+          <el-tag :type="row.published ? 'primary' : 'info'" size="small" effect="light">
             {{ row.published ? '已发布' : '草稿' }}
           </el-tag>
         </div>

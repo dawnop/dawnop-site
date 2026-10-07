@@ -258,6 +258,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 **后台写（刀 9/10）**
 - `api/api_articles.dawn` — 文章 CRUD + Markdown 导出。
+- 全局设置的后台分页/密度、文件参数、上传链接创建默认值见 [`../docs/admin-settings.md`](../docs/admin-settings.md)；
+  `scripts/check-settings.py` 在 CI 验证部分更新、事务回滚、并发约束与持久化。
 - `api/api_settings.dawn` / `api/api_tags.dawn` / `api/api_pages.dawn` / `api/api_viz.dawn` — 一文件一后台页面。
   （曾是一个 `api_admin2.dawn`：它不是从 `api_admin` 拆出来的，是刀 9 的新功能进了新文件、
   名字随手叫了 `2`，于是文件名记的是写作顺序而非内容。2026-07-19 按内部已有的分区注释拆开。）
