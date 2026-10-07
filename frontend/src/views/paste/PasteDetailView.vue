@@ -1,10 +1,18 @@
 <script setup>
 import { ref, watch } from 'vue'
+import {
+  CopyDocument,
+  Link,
+  MoreFilled,
+  Download,
+  DocumentCopy,
+  Warning,
+} from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import MarkdownDocument from '../../components/MarkdownDocument.vue'
 import { getPaste, errorText } from '../../api/pasteApi'
-import { fmtDateTime } from '../../utils/format'
+import { fmtDateTime, fmtBytes } from '../../utils/format'
 import { setTitle } from '../../utils/title'
 const route = useRoute(),
   router = useRouter()
@@ -52,6 +60,11 @@ function download() {
   link.click()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
+function action(command) {
+  if (command === 'link') copy(`${origin}/paste/${paste.value.id}`)
+  if (command === 'download') download()
+  if (command === 'duplicate') duplicate()
+}
 function duplicate() {
   router.push({
     path: '/paste/new',
@@ -60,43 +73,163 @@ function duplicate() {
 }
 </script>
 <template>
-  <div v-loading="loading">
-    <div v-if="error" class="paste-error" role="alert">
-      {{ error }} <el-button v-if="!error.startsWith('404')" text @click="load">重试</el-button>
+  <section class="paste-detail">
+    <div v-if="loading" class="detail-loading" aria-busy="true" aria-label="加载中">
+      <el-skeleton :rows="8" animated />
     </div>
-    <article v-if="paste">
-      <h1 v-if="paste.title">{{ paste.title }}</h1>
-      <p class="paste-meta">
-        {{ fmtDateTime(paste.created_at * 1000) }} ·
-        {{ paste.expires_at ? `${fmtDateTime(paste.expires_at * 1000)} 到期` : '永久' }}
-      </p>
-      <div class="paste-toolbar">
-        <el-radio-group v-model="mode" size="small"
-          ><el-radio-button label="预览" /><el-radio-button label="原文" /></el-radio-group
-        ><el-button text @click="copy(paste.content)">复制正文</el-button
-        ><el-button text @click="copy(`${origin}/paste/${paste.id}`)">复制链接</el-button
-        ><el-button text @click="download">下载 .md</el-button
-        ><el-button text @click="duplicate">复制为新条目</el-button>
+    <div v-else-if="error" class="paste-state" role="alert">
+      <el-icon><Warning /></el-icon>
+      <h2>{{ error }}</h2>
+      <RouterLink v-if="error.startsWith('404')" to="/paste">查看列表</RouterLink>
+      <el-button v-else @click="load">重试</el-button>
+    </div>
+    <article v-else-if="paste" aria-label="Paste 正文">
+      <header class="detail-heading">
+        <h1 v-if="paste.title" class="paste-heading">{{ paste.title }}</h1>
+        <div class="detail-meta paste-meta">
+          <time :datetime="new Date(paste.created_at * 1000).toISOString()">{{
+            fmtDateTime(paste.created_at * 1000)
+          }}</time>
+          <span>{{ fmtBytes(paste.size_bytes) }}</span>
+          <span>{{
+            paste.expires_at ? `${fmtDateTime(paste.expires_at * 1000)} 到期` : '永久'
+          }}</span>
+        </div>
+      </header>
+      <div class="detail-document">
+        <div class="detail-toolbar">
+          <div class="paste-tabs" role="group" aria-label="阅读视图">
+            <button
+              v-for="tab in ['预览', '原文']"
+              :key="tab"
+              type="button"
+              :aria-pressed="mode === tab"
+              @click="mode = tab"
+            >
+              {{ tab }}
+            </button>
+          </div>
+          <div class="detail-actions">
+            <el-button
+              text
+              :icon="Link"
+              class="detail-copy-link"
+              @click="copy(`${origin}/paste/${paste.id}`)"
+              >复制链接</el-button
+            >
+            <el-button text :icon="CopyDocument" @click="copy(paste.content)">复制正文</el-button>
+            <el-dropdown trigger="click" @command="action">
+              <el-button text :icon="MoreFilled" aria-label="更多操作" class="detail-more" />
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="link" :icon="Link">复制链接</el-dropdown-item>
+                  <el-dropdown-item command="download" :icon="Download">下载 .md</el-dropdown-item>
+                  <el-dropdown-item command="duplicate" :icon="DocumentCopy" divided
+                    >复制为新条目</el-dropdown-item
+                  >
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
+        </div>
+        <div class="detail-body">
+          <MarkdownDocument v-if="mode === '预览'" :source="paste.content" />
+          <pre v-else class="paste-source">{{ paste.content }}</pre>
+        </div>
       </div>
-      <MarkdownDocument v-if="mode === '预览'" :source="paste.content" />
-      <pre v-else class="paste-source">{{ paste.content }}</pre>
     </article>
-  </div>
+  </section>
 </template>
 <style scoped>
-h1 {
-  font-size: 24px;
-  font-weight: 600;
-  margin: 0 0 12px;
+.paste-detail {
+  max-width: 900px;
+  margin: 0 auto;
+}
+.detail-heading {
+  margin-bottom: 28px;
+}
+.detail-heading h1 {
   overflow-wrap: anywhere;
 }
-.paste-meta {
-  margin: 0 0 24px;
+.detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 14px;
 }
-.paste-toolbar {
-  gap: 8px;
+.detail-document {
+  border: 1px solid var(--border);
+  border-radius: var(--el-border-radius-base);
 }
-.paste-toolbar .el-button + .el-button {
+.detail-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.detail-actions .el-button + .el-button {
   margin-left: 0;
+}
+.detail-actions .el-button {
+  padding: 8px 10px;
+  font-size: 13px;
+}
+.detail-actions .detail-more {
+  padding: 8px;
+}
+.detail-body {
+  min-height: 320px;
+  padding: 32px 36px 40px;
+}
+.detail-body :deep(.markdown-document) {
+  font-size: 15px;
+  line-height: 1.9;
+}
+.detail-loading {
+  padding: 24px 0;
+}
+@media (max-width: 600px) {
+  .detail-heading {
+    margin-bottom: 24px;
+  }
+  .detail-meta {
+    gap: 6px 14px;
+  }
+  .detail-toolbar {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .detail-copy-link {
+    display: none;
+  }
+  .detail-body {
+    padding: 24px 20px 32px;
+  }
+  .detail-actions {
+    gap: 0;
+  }
+  .detail-actions .el-button {
+    padding: 8px 6px;
+  }
+}
+@media (max-width: 380px) {
+  .detail-toolbar {
+    padding: 10px 8px;
+  }
+  .detail-body {
+    padding: 22px 16px 28px;
+  }
+  .paste-tabs button {
+    min-width: 48px;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
 }
 </style>
