@@ -13,7 +13,7 @@ const cards = [
 ]
 const links = [
   { label: '写文章', to: '/admin/articles/new', icon: Edit },
-  { label: 'Paste', to: '/admin/pastes', icon: Document },
+  { label: '剪贴板', to: '/admin/pastes', icon: Document },
   { label: '文件', to: '/admin/files', icon: FolderOpened },
   { label: '上传链接', to: '/admin/drops', icon: Link },
   { label: '全局设置', to: '/admin/settings', icon: Setting },

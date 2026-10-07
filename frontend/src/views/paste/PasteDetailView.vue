@@ -32,10 +32,10 @@ async function load() {
     const data = await getPaste(route.params.id)
     if (ticket !== revision) return
     paste.value = data
-    setTitle(data.title || 'Paste')
+    setTitle(data.title || '剪贴板')
   } catch (e) {
     if (ticket === revision)
-      error.value = e.response?.status === 404 ? '404 · Paste 不存在' : errorText(e)
+      error.value = e.response?.status === 404 ? '404 · 剪贴板不存在' : errorText(e)
   } finally {
     if (ticket === revision) loading.value = false
   }
@@ -83,7 +83,7 @@ function duplicate() {
       <RouterLink v-if="error.startsWith('404')" to="/paste">查看列表</RouterLink>
       <el-button v-else @click="load">重试</el-button>
     </div>
-    <article v-else-if="paste" aria-label="Paste 正文">
+    <article v-else-if="paste" aria-label="剪贴板正文">
       <header class="detail-heading">
         <h1 v-if="paste.title" class="tool-heading">{{ paste.title }}</h1>
         <div class="detail-meta paste-meta">

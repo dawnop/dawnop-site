@@ -59,7 +59,7 @@ const groups = [
   {
     label: '内容',
     items: [
-      { to: '/admin/pastes', label: 'Paste', icon: Document },
+      { to: '/admin/pastes', label: '剪贴板', icon: Document },
       { to: '/admin/articles', label: '文章管理', icon: Document },
       { to: '/admin/tags', label: '标签管理', icon: PriceTag },
       { to: '/admin/pages', label: '页面管理', icon: Collection },
@@ -104,7 +104,7 @@ const crumbs = computed(() => {
   const home = { label: '总览', to: '/admin' }
   const map = {
     'admin-home': [{ label: '总览' }],
-    'admin-pastes': [home, { label: 'Paste' }],
+    'admin-pastes': [home, { label: '剪贴板' }],
     'admin-articles': [home, { label: '文章管理' }],
     'admin-article-new': [home, { label: '文章管理', to: '/admin/articles' }, { label: '写文章' }],
     'admin-article-edit': [

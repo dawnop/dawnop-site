@@ -58,19 +58,19 @@ const routes = [
       {
         path: '',
         name: 'paste',
-        meta: { title: 'Paste' },
+        meta: { title: '剪贴板' },
         component: () => import('../views/paste/PasteListView.vue'),
       },
       {
         path: 'new',
         name: 'paste-new',
-        meta: { title: '新建 Paste' },
+        meta: { title: '新建剪贴板' },
         component: () => import('../views/paste/PasteNewView.vue'),
       },
       {
         path: ':id',
         name: 'paste-detail',
-        meta: { title: 'Paste' },
+        meta: { title: '剪贴板' },
         component: () => import('../views/paste/PasteDetailView.vue'),
       },
     ],

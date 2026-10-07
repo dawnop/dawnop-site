@@ -4,9 +4,9 @@ import ToolLayout from '../../components/ToolLayout.vue'
 </script>
 
 <template>
-  <ToolLayout name="paste" class="paste-shell">
+  <ToolLayout name="剪贴板" class="paste-shell">
     <template #nav>
-      <nav class="paste-nav" aria-label="Paste">
+      <nav class="paste-nav" aria-label="剪贴板">
         <RouterLink to="/paste" class="paste-nav-link">列表</RouterLink>
         <RouterLink to="/paste/new" class="tool-primary"
           ><el-icon><Plus /></el-icon>新建</RouterLink

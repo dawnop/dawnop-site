@@ -90,7 +90,7 @@ async function show(item) {
 async function action(operation, message) {
   if (busy.value) return
   try {
-    await ElMessageBox.confirm(message, 'Paste', {
+    await ElMessageBox.confirm(message, '剪贴板', {
       confirmButtonText: '确定',
       cancelButtonText: '取消',
       type: 'warning',
@@ -106,7 +106,7 @@ async function action(operation, message) {
   }
 }
 function remove(ids) {
-  action(() => api.remove(ids), `删除 ${ids.length} 条 Paste？`)
+  action(() => api.remove(ids), `删除 ${ids.length} 条记录？`)
 }
 watch(size, () => {
   page.value = 1
@@ -119,44 +119,52 @@ onMounted(load)
 </script>
 <template>
   <div class="pastes-admin">
-    <el-card class="toolbar-card" shadow="never"
-      ><div class="admin-toolbar">
-        <el-input
-          v-model="search"
-          placeholder="搜索"
-          maxlength="120"
-          clearable
-          @keyup.enter="filter"
-        /><el-select v-model="status" placeholder="全部" @change="filter"
-          ><el-option label="全部" value="" /><el-option label="未到期" value="active" /><el-option
-            label="已到期"
-            value="expired" /><el-option label="永久" value="permanent" /></el-select
-        ><el-date-picker
-          v-model="dates"
-          type="daterange"
-          start-placeholder="创建起日"
-          end-placeholder="创建止日"
-          @change="filter"
-        /><el-button @click="filter">搜索</el-button
-        ><router-link to="/admin/settings?section=paste" class="settings-link"
-          >提交额度</router-link
-        >
-      </div>
+    <el-card class="toolbar-card" shadow="never">
       <div class="admin-toolbar">
-        <span class="stats"
-          >{{ counts.count }} 条 · {{ fmtBytes(counts.bytes) }} · {{ counts.expired }} 条到期</span
-        ><el-button
-          :disabled="!selection.length || busy"
-          @click="remove(selection.map((row) => row.id))"
-          >删除所选</el-button
-        ><el-button
-          :disabled="!counts.expired || busy"
-          @click="action(api.cleanup, '清理所有到期 Paste？')"
-          >清理到期</el-button
-        >
+        <div class="search-controls">
+          <el-input
+            v-model="search"
+            placeholder="搜索"
+            aria-label="搜索剪贴板"
+            maxlength="120"
+            clearable
+            @keyup.enter="filter"
+          />
+          <el-select v-model="status" aria-label="记录状态" placeholder="全部" @change="filter">
+            <el-option label="全部" value="" />
+            <el-option label="未到期" value="active" />
+            <el-option label="已到期" value="expired" />
+            <el-option label="永久" value="permanent" />
+          </el-select>
+          <el-date-picker
+            v-model="dates"
+            type="daterange"
+            start-placeholder="起日"
+            end-placeholder="止日"
+            range-separator="–"
+            format="YYYY-MM-DD"
+            @change="filter"
+          />
+          <el-button @click="filter">搜索</el-button>
+        </div>
+        <div class="bulk-actions">
+          <el-button
+            :disabled="!selection.length || busy"
+            @click="remove(selection.map((row) => row.id))"
+            >删除所选</el-button
+          >
+          <el-button
+            :disabled="!counts.expired || busy"
+            @click="action(api.cleanup, '清理所有到期记录？')"
+            >清理到期</el-button
+          >
+        </div>
       </div>
     </el-card>
     <el-card class="list-card" shadow="never">
+      <p class="stats">
+        {{ counts.count }} 条 · {{ fmtBytes(counts.bytes) }} · {{ counts.expired }} 条到期
+      </p>
       <p v-if="error" role="alert">加载失败 <el-button text @click="load">重试</el-button></p>
       <el-table
         v-else-if="!isMobile"
@@ -194,7 +202,7 @@ onMounted(load)
               link
               type="primary"
               :disabled="busy"
-              @click="action(() => api.retain(row.id), '永久保留此 Paste？')"
+              @click="action(() => api.retain(row.id), '永久保留此记录？')"
               >保留</el-button
             ><el-button link :disabled="busy" @click="remove([row.id])">删除</el-button></template
           ></el-table-column
@@ -207,7 +215,7 @@ onMounted(load)
           :indeterminate="selection.length > 0 && !allSelected"
           >全选本页</el-checkbox
         >
-        <el-empty v-if="!items.length && !loading" description="没有 Paste" :image-size="64" />
+        <el-empty v-if="!items.length && !loading" description="没有记录" :image-size="64" />
         <el-checkbox-group v-model="mobileIds">
           <article v-for="row in items" :key="row.id" class="mobile-paste">
             <div class="mobile-title">
@@ -232,7 +240,7 @@ onMounted(load)
                   link
                   type="primary"
                   :disabled="busy"
-                  @click="action(() => api.retain(row.id), '永久保留此 Paste？')"
+                  @click="action(() => api.retain(row.id), '永久保留此记录？')"
                   >保留</el-button
                 ><el-button link :disabled="busy" @click="remove([row.id])">删除</el-button>
               </div>
@@ -251,7 +259,7 @@ onMounted(load)
     </el-card>
     <el-dialog
       :model-value="!!view"
-      :title="view?.title || 'Paste'"
+      :title="view?.title || '剪贴板'"
       width="min(880px, 94vw)"
       @close="view = null"
       ><template v-if="view"
@@ -264,27 +272,40 @@ onMounted(load)
   </div>
 </template>
 <style scoped>
-.admin-toolbar {
+.admin-toolbar,
+.search-controls,
+.bulk-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
   align-items: center;
-  margin-bottom: 16px;
+  gap: 8px;
 }
-.admin-toolbar .el-input {
-  width: 220px;
+.admin-toolbar {
+  align-items: flex-start;
+  gap: 16px;
 }
-.admin-toolbar .el-select {
-  width: 110px;
+.search-controls {
+  flex-wrap: wrap;
+  min-width: 0;
 }
-.admin-toolbar .el-date-editor {
-  max-width: 280px;
-  width: 280px;
-  flex: 0 1 280px;
+.search-controls .el-input {
+  width: 180px;
+}
+.search-controls .el-select {
+  width: 96px;
+}
+.search-controls :deep(.el-date-editor) {
+  width: 232px;
+  max-width: 100%;
+  flex: 0 1 232px;
+  min-width: 0;
+}
+.bulk-actions {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .stats {
   color: var(--muted);
-  margin-right: auto;
+  margin: 0 0 14px;
   font-size: 13px;
 }
 .paste-name {
@@ -313,17 +334,8 @@ onMounted(load)
 .toolbar-card {
   margin-bottom: 16px;
 }
-.admin-toolbar:last-child {
-  margin-bottom: 0;
-}
 .admin-toolbar .el-button + .el-button {
   margin-left: 0;
-}
-.settings-link {
-  color: var(--accent);
-  font-size: 13px;
-  text-decoration: none;
-  margin-left: auto;
 }
 .list-card :deep(.el-card__body) {
   padding: 16px;
@@ -371,27 +383,17 @@ onMounted(load)
 }
 @media (max-width: 768px) {
   .admin-toolbar {
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: 12px;
   }
-  .admin-toolbar .el-input {
-    width: auto;
-    flex: 1;
-    min-width: 140px;
+  .search-controls {
+    flex: 1 1 auto;
   }
-  .admin-toolbar .el-select {
-    width: 110px;
+  .search-controls .el-input {
+    width: 140px;
   }
-  .admin-toolbar .el-date-editor {
-    width: 100%;
-    max-width: 100%;
-    flex: 1 0 100%;
-    min-width: 0;
-  }
-  .stats {
-    width: 100%;
-  }
-  .settings-link {
-    padding: 8px 0;
+  .search-controls .el-select {
+    width: 88px;
   }
   .toolbar-card :deep(.el-card__body) {
     padding: 14px;

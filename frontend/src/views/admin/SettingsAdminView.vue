@@ -13,7 +13,7 @@ const sections = [
   {
     key: 'admin',
     title: '后台',
-    hint: '文章与 Paste 的分页，以及后台列表的显示密度。',
+    hint: '文章与剪贴板 的分页，以及后台列表的显示密度。',
     fields: [
       { key: 'admin_page_size', label: '每页条数', min: 10, max: 50, unit: '条' },
       { key: 'admin_compact', label: '紧凑列表', switch: true },
@@ -57,7 +57,7 @@ const sections = [
   },
   {
     key: 'paste',
-    title: 'Paste',
+    title: '剪贴板',
     hint: '匿名公开提交的频率、正文大小与存量上限。按 UTC 日期计额。',
     fields: [
       { key: 'max_bytes', label: '单条正文', min: 1, max: 262144, factor: 1024, unit: 'KiB' },

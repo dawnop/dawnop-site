@@ -76,7 +76,7 @@ watch(() => route.fullPath, load, { immediate: true })
           placeholder="搜索内容"
           maxlength="120"
           clearable
-          aria-label="搜索 Paste"
+          aria-label="搜索剪贴板"
           :prefix-icon="Search"
         />
         <el-button native-type="submit" aria-label="搜索" :icon="ArrowRight" />
@@ -100,7 +100,7 @@ watch(() => route.fullPath, load, { immediate: true })
       <h2>{{ query ? '没有找到内容' : '还没有内容' }}</h2>
       <el-button v-if="query" @click="clearSearch">清除搜索</el-button>
       <RouterLink v-else to="/paste/new"
-        >新建 Paste <el-icon><ArrowRight /></el-icon
+        >新建剪贴板 <el-icon><ArrowRight /></el-icon
       ></RouterLink>
     </div>
     <ul v-else class="paste-list tool-panel">
