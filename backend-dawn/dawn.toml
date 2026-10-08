@@ -7,7 +7,6 @@ name = "backend_dawn"
 # Set $DAWN_MAVEN_MIRROR to fetch from a closer mirror.
 [java-deps]
 sqlite = "org.xerial:sqlite-jdbc:3.36.0.3"
-bcrypt = "org.mindrot:jbcrypt:0.4"
 
 # Dawn source packages live in the dawn-lang repo (packages/), pinned to the
 # same tag as the compiler. One archive serves web, JSON, and SHA-256 through
