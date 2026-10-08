@@ -98,8 +98,8 @@ def main() -> int:
     elif args.mutant == "compare-ports-literally":
         replace_once(
             source,
-            "                effective_port(scheme, host_uri.getPort()) == effective_port(scheme, uri.getPort())\n",
-            "                host_uri.getPort() == uri.getPort()\n",
+            "                effective_port(scheme, host_uri.port) == effective_port(scheme, u.port)\n",
+            "                host_uri.port == u.port\n",
         )
     elif args.mutant == "use-http-default-for-https":
         replace_once(
@@ -116,13 +116,16 @@ def main() -> int:
     elif args.mutant == "uncatch-host-uri":
         replace_once(
             source,
-            "fn parse_destination_host_uri(scheme: String, raw_host: String) -> Option[URI] !io =\n"
-            '  match catch_text(() => URI.create("${scheme}://${raw_host}")!) {\n'
-            "    Ok(uri) -> Some(uri)\n"
+            "fn parse_destination_host_uri(scheme: String, raw_host: String) -> Option[Uri] !io =\n"
+            '  match uri.parse("${scheme}://${raw_host}") {\n'
+            "    Ok(u) -> Some(u)\n"
             "    Err(_) -> None\n"
             "  }\n",
-            "fn parse_destination_host_uri(scheme: String, raw_host: String) -> Option[URI] !io =\n"
-            '  Some(URI.create("${scheme}://${raw_host}")!)\n',
+            "fn parse_destination_host_uri(scheme: String, raw_host: String) -> Option[Uri] !io =\n"
+            '  match uri.parse("${scheme}://${raw_host}") {\n'
+            "    Ok(u) -> Some(u)\n"
+            '    Err(e) -> panic("host uri: ${e}")\n'
+            "  }\n",
         )
     elif args.mutant == "host-absent-fail-open":
         replace_once(
@@ -142,58 +145,64 @@ def main() -> int:
     elif args.mutant == "accept-non-simple-reference":
         replace_once(
             source,
-            "fn is_path_absolute_reference(raw: String, uri: URI) -> Bool !io =\n"
+            "fn is_path_absolute_reference(raw: String, u: Uri) -> Bool !io =\n"
             '  str.starts_with(raw, "/") &&\n'
             '  not str.starts_with(raw, "//") &&\n'
-            "  no_text_part(uri.getRawAuthority())\n",
-            "fn is_path_absolute_reference(raw: String, uri: URI) -> Bool !io =\n"
+            "  no_text_part(u.authority)\n",
+            "fn is_path_absolute_reference(raw: String, u: Uri) -> Bool !io =\n"
             "  true\n",
         )
     elif args.mutant == "uncatch-destination-uri":
         replace_once(
             source,
-            "fn parse_destination_uri(raw: String) -> Result[URI, HttpError] !io =\n"
-            "  match catch_text(() => URI.create(raw)!) {\n"
-            "    Ok(uri) -> Ok(uri)\n"
+            "fn parse_destination_uri(raw: String) -> Result[Uri, HttpError] !io =\n"
+            "  match uri.parse(raw) {\n"
+            "    Ok(u) -> Ok(u)\n"
             '    Err(_) -> Err(http_error(400, "非法目标"))\n'
             "  }\n",
-            "fn parse_destination_uri(raw: String) -> Result[URI, HttpError] !io =\n"
-            "  Ok(URI.create(raw)!)\n",
+            "fn parse_destination_uri(raw: String) -> Result[Uri, HttpError] !io =\n"
+            "  match uri.parse(raw) {\n"
+            "    Ok(u) -> Ok(u)\n"
+            '    Err(e) -> panic("destination uri: ${e}")\n'
+            "  }\n",
         )
     elif args.mutant == "unwrap-opaque-raw-path":
         replace_once(
             source,
-            "fn require_hierarchical_destination(uri: URI) -> Result[Unit, HttpError] !io =\n"
-            "  if uri.isOpaque() {\n"
+            "fn require_hierarchical_destination(u: Uri) -> Result[Unit, HttpError] !io =\n"
+            "  if is_opaque(u) {\n"
             '    Err(http_error(400, "Destination 必须是分层 URI"))\n'
             "  } else {\n"
             "    Ok(())\n"
             "  }\n",
-            "fn require_hierarchical_destination(uri: URI) -> Result[Unit, HttpError] !io = {\n"
-            "  let _path = uri.getRawPath()!\n"
-            "  Ok(())\n"
-            "}\n",
+            "fn require_hierarchical_destination(u: Uri) -> Result[Unit, HttpError] !io =\n"
+            "  if is_opaque(u) {\n"
+            '    let _path = u.path.expect("raw path")\n'
+            "    Ok(())\n"
+            "  } else {\n"
+            "    Ok(())\n"
+            "  }\n",
         )
     elif args.mutant == "ignore-destination-query":
         replace_once(
             source,
-            "fn reject_destination_query(uri: URI) -> Result[Unit, HttpError] !io =\n"
-            "  match uri.getRawQuery() {\n"
+            "fn reject_destination_query(u: Uri) -> Result[Unit, HttpError] !io =\n"
+            "  match u.query {\n"
             "    None -> Ok(())\n"
             '    Some(_) -> Err(http_error(400, "Destination 不支持查询参数"))\n'
             "  }\n",
-            "fn reject_destination_query(uri: URI) -> Result[Unit, HttpError] !io =\n"
+            "fn reject_destination_query(u: Uri) -> Result[Unit, HttpError] !io =\n"
             "  Ok(())\n",
         )
     elif args.mutant == "ignore-destination-fragment":
         replace_once(
             source,
-            "fn reject_destination_fragment(uri: URI) -> Result[Unit, HttpError] !io =\n"
-            "  match uri.getRawFragment() {\n"
+            "fn reject_destination_fragment(u: Uri) -> Result[Unit, HttpError] !io =\n"
+            "  match u.fragment {\n"
             "    None -> Ok(())\n"
             '    Some(_) -> Err(http_error(400, "Destination 不支持片段"))\n'
             "  }\n",
-            "fn reject_destination_fragment(uri: URI) -> Result[Unit, HttpError] !io =\n"
+            "fn reject_destination_fragment(u: Uri) -> Result[Unit, HttpError] !io =\n"
             "  Ok(())\n",
         )
     elif args.mutant == "destination-prefix-fail-open":

@@ -6,13 +6,13 @@ use std/char
 use db/sql.{DbConn, PStr, PInt, ColInt, query, exec, scalar_int, int_at, first_row, with_immediate_tx}
 use repo/repo_paste.{Paste, limits, cleanup}
 use util/crypto.{uuid_hex, hmac_sha256_hex}
-use util/ferr.{catch_text}
-use java "java.net.InetAddress"
+use util/ipaddr.{parse_literal, hex_prefix}
 
 pub type Refusal = { status: Int, message: String, retry: Int }
 fn no(status: Int, message: String, retry: Int) -> Refusal = Refusal { status: status, message: message, retry: retry }
 
-# Parse literals only: getByName must never resolve attacker-supplied DNS names.
+# Parse literals only: util/ipaddr has no resolver path, so an attacker-supplied
+# DNS name can never reach the network.
 # No header falls into ONE shared direct-call bucket, never an unlimited path.
 pub fn source_group(ip: String) -> Result[String, String] !io =
   if ip == "" { Ok("direct") }
@@ -21,9 +21,9 @@ pub fn source_group(ip: String) -> Result[String, String] !io =
   } else if not str.contains(ip, ":") && (len(str.split(ip, ".")) != 4 || not fold(str.split(ip, "."), true, (ok, s) => ok && valid_octet(s))) {
     Err("来源地址无效")
   } else {
-    match catch_text(() => InetAddress.getByName(ip)!.getAddress()!) {
-      Err(_) -> Err("来源地址无效")
-      Ok(b) -> Ok(if bytes.len(b) == 16 { "v6:" ++ bytes.to_hex(bytes.slice(b, 0, 8)) } else { "v4:" ++ bytes.to_hex(b) })
+    match parse_literal(ip) {
+      None -> Err("来源地址无效")
+      Some(b) -> Ok(if len(b) == 16 { "v6:" ++ hex_prefix(b, 8) } else { "v4:" ++ hex_prefix(b, 4) })
     }
   }
 

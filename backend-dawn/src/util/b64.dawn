@@ -1,0 +1,101 @@
+# Base64 decoding with the exact acceptance set of java.util.Base64's basic and
+# URL decoders, in Dawn (de-Java knife S10). std/bytes.from_base64 is stricter
+# on purpose (it refuses non-zero trailing bits so decoding stays injective),
+# which would turn a JWT or Basic credential that decodes today into a 401. The
+# backend must keep accepting exactly what it accepted, so this module keeps the
+# JDK rules and nothing more: only the chosen alphabet is legal (no whitespace,
+# no line breaks), padding is either absent or exactly completes the final
+# quantum, nothing may follow padding, and a final group's spare low bits are
+# not checked. Error texts are internal: the callers collapse every Err into a
+# 401 and never print it.
+use std/bytes
+use std/char
+
+fn b64_val(c: Int, url: Bool) -> Int =
+  if c >= 65 && c <= 90 { c - 65 }
+  else if c >= 97 && c <= 122 { c - 97 + 26 }
+  else if c >= 48 && c <= 57 { c - 48 + 52 }
+  else if url { if c == 45 { 62 } else if c == 95 { 63 } else { -1 } }
+  else { if c == 43 { 62 } else if c == 47 { 63 } else { -1 } }
+
+## Decode `s` as standard (`url: false`) or URL-safe (`url: true`) Base64.
+pub fn decode(s: String, url: Bool) -> Result[Bytes, String] = {
+  let cs = code_points(s)
+  let n = len(cs)
+  var out = bytes.buf()
+  var acc = 0
+  var have = 0
+  var i = 0
+  while i < n {
+    let c = char.code(cs[i])
+    if c == 61 {
+      # '=' completes a final quantum: after two symbols it must be "==", after
+      # three symbols a single "=", and in no other position.
+      if have < 2 { return Err("bad base64 padding") }
+      if have == 2 {
+        if i + 1 >= n || char.code(cs[i + 1]) != 61 { return Err("bad base64 padding") }
+        i = i + 2
+      } else {
+        i = i + 1
+      }
+      if i < n { return Err("trailing base64 bytes after padding") }
+      i = n
+    } else {
+      let v = b64_val(c, url)
+      if v < 0 { return Err("illegal base64 character") }
+      acc = acc * 64 + v
+      have = have + 1
+      if have == 4 {
+        out = bytes.put(out, acc / 65536)
+        out = bytes.put(out, (acc / 256) % 256)
+        out = bytes.put(out, acc % 256)
+        acc = 0
+        have = 0
+      }
+      i = i + 1
+    }
+  }
+  if have == 1 { return Err("truncated base64 input") }
+  if have == 2 { out = bytes.put(out, acc / 16) }
+  if have == 3 {
+    out = bytes.put(out, acc / 1024)
+    out = bytes.put(out, (acc / 4) % 256)
+  }
+  Ok(bytes.freeze(out))
+}
+
+# Expected values below were produced by java.util.Base64 itself.
+fn hex_or_err(r: Result[Bytes, String]) -> String =
+  match r {
+    Ok(b) -> bytes.to_hex(b)
+    Err(_) -> "err"
+  }
+
+test "padding is optional but must be exact" {
+  assert hex_or_err(decode("aGk=", false)) == "6869"
+  assert hex_or_err(decode("aGk", false)) == "6869"
+  assert hex_or_err(decode("aG==", false)) == "68"
+  assert hex_or_err(decode("aG", false)) == "68"
+  assert hex_or_err(decode("", false)) == ""
+  assert hex_or_err(decode("a", false)) == "err"
+  assert hex_or_err(decode("aGk==", false)) == "err"
+  assert hex_or_err(decode("aG=", false)) == "err"
+  assert hex_or_err(decode("=", false)) == "err"
+  assert hex_or_err(decode("aGk=a", false)) == "err"
+}
+
+test "spare trailing bits are not checked, as in the JDK" {
+  # std/bytes.from_base64 refuses these; the backend always accepted them
+  assert hex_or_err(decode("aGl=", false)) == "6869"
+  assert hex_or_err(decode("aH==", false)) == "68"
+}
+
+test "each decoder reads only its own alphabet and no whitespace" {
+  assert hex_or_err(decode("-_8=", true)) == "fbff"
+  assert hex_or_err(decode("-_8=", false)) == "err"
+  assert hex_or_err(decode("+/8=", false)) == "fbff"
+  assert hex_or_err(decode("+/8", true)) == "err"
+  assert hex_or_err(decode("aG k=", false)) == "err"
+  assert hex_or_err(decode("aGk=\n", false)) == "err"
+  assert hex_or_err(decode("é", false)) == "err"
+}
