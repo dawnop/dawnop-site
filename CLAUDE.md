@@ -73,7 +73,7 @@ dawnop-site/
 │   │   # 只装两处：main.dawn 罩 config.load、api_monitor 路由闭包罩 server_block（读 /proc）
 │   │   # json 与 web 已不再 vendored：dawn.toml 的 [deps.json]/[deps.web] 指向
 │   │   # dawn-lang 仓库 tag 归档（url + hash + subdir），实体在 dawn-lang/packages/
-│   ├── dawn.toml               # [java-deps]（sqlite-jdbc / jbcrypt，coursier 解析）
+│   ├── dawn.toml               # [java-deps]（sqlite-jdbc，coursier 解析；bcrypt 已是纯 Dawn 的 util/bcrypt）
 │   ├── build.sh                # 按 .dawn-version 取编译器 → dawn test → dawn build（生成 lib/）
 │   ├── scripts/contract_*.py   # 只读/边界/WebDAV/七牛 契约 golden（fixture + run + golden/*.json）
 │   │                           # contract_qiniu_fake.py = 本地假七牛桶，让对象存储路径进 CI

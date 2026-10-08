@@ -37,7 +37,7 @@ import sys
 # --- credentials -------------------------------------------------------------
 # Fixture-only admin. The hash is bcrypt cost 4 (not 12): WebDAV Basic auth
 # re-verifies on nearly every request and cost 12 turns a 20-case run into a
-# minute of key stretching. jBCrypt on the Dawn side normalizes $2b$ -> $2a$.
+# minute of key stretching. auth.dawn on the Dawn side normalizes $2b$ -> $2a$ before util/bcrypt.
 FIXTURE_USER = "contract-admin"
 FIXTURE_PW = "contract-fixture-pw"
 FIXTURE_PW_BCRYPT = "$2b$04$fBm/BBrDqZMMZXAiEDQ8M.VGIhXSwMMKQPmceHoZj3xAZXVtG7YF2"

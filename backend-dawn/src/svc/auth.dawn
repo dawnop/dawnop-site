@@ -1,8 +1,8 @@
-# Authentication (M6 knife 7): login (jBCrypt verify + JWT issue) and /me
+# Authentication (M6 knife 7): login (bcrypt verify + JWT issue) and /me
 # (JWT verify). bcrypt hashes are read as-is from the shared users table, so
 # existing passwords keep working; JWTs interoperate with PyJWT (see jwt.dawn).
 use std/str
-use java "org.mindrot.jbcrypt.BCrypt"
+use util/bcrypt.{checkpw}
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, header, body_text}
 # db/sql exports a `query` too, so web's is reached through the module name.
 use web/types as wtypes
@@ -39,30 +39,27 @@ pub type Auth = {
 
 # ---- user lookup ----
 
-# jBCrypt 0.4 only understands the $2a$/$2y$ salt revisions; Python's bcrypt
-# writes $2b$ (the revisions hash identically for passwords ≤72 bytes, differing
-# only in a long-password wraparound flag). Normalize the prefix so existing
-# $2b$ hashes verify unchanged. A malformed hash throws — caught to false, as
-# FastAPI's verify_password does, so it becomes a 401 not a 500.
+# util/bcrypt understands only the $2a$ revision; Python's bcrypt writes $2b$
+# (the revisions hash identically for passwords <= 72 bytes, differing only in a
+# long-password wraparound flag), and $2y$ is a third spelling. Normalize the
+# prefix so existing $2b$ hashes verify unchanged. A malformed hash is false,
+# as FastAPI's verify_password does, so it becomes a 401 not a 500.
 #
 # In string literals the prefixes are written `\$`, always. Bare `$2a$` happens
 # to lex the same (a digit cannot start an identifier, so the `$` falls back to
 # a literal), but that is a fallback and not a rule — comments below use the
 # bare form because a comment is not lexed at all.
-fn verify_password(plain: String, hashed: String) -> Bool !io = {
+fn verify_password(plain: String, hashed: String) -> Bool = {
   let normalized =
     if str.starts_with(hashed, "\$2b\$") || str.starts_with(hashed, "\$2y\$") {
       "\$2a\$" ++ str.slice(hashed, 4, len(hashed))
     } else {
       hashed
     }
-  match catch_fault(() => BCrypt.checkpw(plain, normalized)) {
-    Ok(b) -> b
-    Err(_) -> false
-  }
+  checkpw(plain, normalized)
 }
 
-## Verify a username/password against the users table (jBCrypt). For WebDAV's
+## Verify a username/password against the users table (bcrypt). For WebDAV's
 ## HTTP Basic auth — same credential store as JWT login. False on unknown user,
 ## wrong password, or a malformed hash (never a 500).
 pub fn check_basic(c: DbConn, username: String, password: String) -> Result[Bool, String] !io =
@@ -243,23 +240,20 @@ pub fn routes(a: Auth) -> List[Route] =
 
 test "verify_password accepts the \$2b hashes the shared users table holds" {
   # seed_admin.py hashed with Python's bcrypt, which writes the $2b revision;
-  # jBCrypt only parses $2a/$2y. The revisions are the same algorithm for
+  # util/bcrypt parses only $2a. The revisions are the same algorithm for
   # passwords <= 72 bytes, so the fix is a prefix rewrite — pinned here because
-  # getting it wrong locks every existing account out with a 401.
-  let a2 = BCrypt.hashpw("hunter2", BCrypt.gensalt(4)!)!
-  assert str.starts_with(a2, "\$2a\$")
-  let b2 = "\$2b\$" ++ str.slice(a2, 4, len(a2))
-  assert verify_password("hunter2", b2)
-  assert verify_password("hunter2", a2)
+  # getting it wrong locks every existing account out with a 401. The hash is the
+  # contract fixture's admin row (cost 4), minted by Python, not by this code.
+  let b2 = "\$2b\$04\$fBm/BBrDqZMMZXAiEDQ8M.VGIhXSwMMKQPmceHoZj3xAZXVtG7YF2"
+  let a2 = "\$2a\$" ++ str.slice(b2, 4, len(b2))
+  assert verify_password("contract-fixture-pw", b2)
+  assert verify_password("contract-fixture-pw", a2)
   assert not verify_password("wrong-password", b2)
   # $2y$ is the third spelling of the same hash
-  assert verify_password("hunter2", "\$2y\$" ++ str.slice(a2, 4, len(a2)))
-  # the trap: jBCrypt refuses the $2b revision outright rather than ignoring it,
-  # so without the rewrite this is what every login would hit
-  match catch_fault(() => BCrypt.checkpw("hunter2", b2)) {
-    Ok(_v) -> { assert false }
-    Err(_e) -> { assert true }
-  }
+  assert verify_password("contract-fixture-pw", "\$2y\$" ++ str.slice(a2, 4, len(a2)))
+  # the trap: util/bcrypt refuses the $2b revision outright rather than ignoring
+  # it, so without the rewrite this is what every login would hit
+  assert not checkpw("contract-fixture-pw", b2)
   # a malformed hash reads as "wrong password", never as a crash (401, not 500)
   assert not verify_password("hunter2", "not-a-bcrypt-hash")
   assert not verify_password("hunter2", "")

@@ -48,7 +48,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 ## 依赖与构建
 
-- 依赖：在 [`dawn.toml`](dawn.toml) 的 `[java-deps]` 里声明（`sqlite-jdbc`、`jbcrypt`——零传递依赖
+- 依赖：在 [`dawn.toml`](dawn.toml) 的 `[java-deps]` 里声明（现只剩 `sqlite-jdbc`；`jbcrypt` 已由纯 Dawn 的 `util/bcrypt` 取代——零传递依赖
   白名单，见 m6.md §2 G1）。`dawn run/test/build` 自动从 Maven 拉取并挂上 classpath；
   `dawn build` 另把它们复制进 jar 同级的 `lib/`，jar 的 manifest `Class-Path` 以相对路径引用它，
   **部署时保持 `lib/` 与 jar 同目录**（形态与从前一致）。`lib/` 是构建产物，不入库。
@@ -163,6 +163,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   那是一份没人声明的跨层契约，改一句话就悄悄改了状态码——并且已经错过一次（`qiniu/rs` 写的是
   `qiniu` 不是「七牛」，于是被对象存储拒掉的 WebDAV COPY 回 500，而 FastAPI 参照回 502）。
 - `db/db.dawn` — 每请求一连接（`with_db`）：WAL + `load_extension(libsimple)`。
+- `util/bcrypt.dawn` — 纯 Dawn 的 bcrypt（`$2a$`）校验，取代 jBCrypt；JVM 上约慢 10 倍（cost 12 约 1.9 s 对 0.18 s，见提交说明），换 cost 前先重测。
 - `util/crypto.dawn` — sha256 / hmac-sha1 / hmac-sha256 / base64url / uuid（auth、七牛、JWT、腾讯共用）。
 - `util/http.dawn` — java.net.http 出站客户端：`fetch/post` + `fetch_bytes`（二进制体，G6）；
   **出站 HTTP 是具名效果 `Upstream`**（四个操作：text / bytes / stream / 起一个不等的交换）。
@@ -239,7 +240,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `web` — **dawn-lang 的 `packages/web`**（`[deps.web]` url+hash 依赖，vendored 副本已删）：`server`（HttpServer + G6 二进制响应体 + 流式）/`router`（tags/任意动词）/`types`/`middleware`（logging/cors/body-limit）。
 
 **鉴权（刀 7）**
-- `svc/auth.dawn` — `Auth` 配置类型、`current_user`（Bearer + `?token=`）、login/me；jBCrypt 校验（`$2b$→$2a$` 归一）。
+- `svc/auth.dawn` — `Auth` 配置类型、`current_user`（Bearer + `?token=`）、login/me；bcrypt 校验走 `util/bcrypt`（`$2b$→$2a$` 归一）。
   **Authorization 头的形状由 `scheme_param` 一处说了算**（Bearer 与 WebDAV 的 Basic 共用它）：
   在**第一个空格**处切开，scheme 大小写不敏感地比，其余部分**原样**取走。三条推论都与 FastAPI
   的 `get_authorization_scheme_param` 一致：没有空格就是「全是 scheme、没有凭据」，所以裸 token
