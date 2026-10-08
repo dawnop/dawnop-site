@@ -1,0 +1,61 @@
+# HMAC (RFC 2104) over raw bytes, for the two hashes this backend signs with.
+# It replaces javax.crypto.Mac. Keys and digests stay `Bytes` end to end, so the
+# Tencent TC3 chain (each digest keys the next) needs no hex round trip. Both
+# hashes have a 64-byte block, which is the only parameter HMAC needs from them.
+use std/bytes
+use sha2/sha256
+use util/sha1
+
+const BLOCK: Int = 64
+
+## SHA-256 as raw bytes. The sha2 package only renders hex, so the digest is
+## parsed back; the hex is always 64 valid digits, so the empty arm is dead.
+fn sha256_raw(b: Bytes) -> Bytes =
+  match bytes.from_hex(sha256.hex(b)) {
+    Some(d) -> d
+    None -> bytes.utf8("")
+  }
+
+# key ^ pad_byte, with the key zero-extended to one block (hashed first when it
+# is longer than a block), followed by the message.
+fn pad_with(key: Bytes, pad_byte: Int, msg: Bytes) -> Bytes = {
+  var out = bytes.buf()
+  var i = 0
+  while i < BLOCK {
+    let k = if i < bytes.len(key) { bytes.at(key, i) } else { 0 }
+    out = bytes.put(out, k ^ pad_byte)
+    i = i + 1
+  }
+  bytes.freeze(bytes.put_bytes(out, msg))
+}
+
+fn mac(hash: fn(Bytes) -> Bytes, key: Bytes, msg: Bytes) -> Bytes = {
+  let k = if bytes.len(key) > BLOCK { hash(key) } else { key }
+  hash(pad_with(k, 0x5c, hash(pad_with(k, 0x36, msg))))
+}
+
+## HMAC-SHA256, 32 raw bytes.
+pub fn mac_sha256(key: Bytes, msg: Bytes) -> Bytes = mac(sha256_raw, key, msg)
+
+## HMAC-SHA1, 20 raw bytes.
+pub fn mac_sha1(key: Bytes, msg: Bytes) -> Bytes = mac(sha1.digest, key, msg)
+
+fn hex_of(key: String, msg: String, f: fn(Bytes, Bytes) -> Bytes) -> String =
+  bytes.to_hex(f(bytes.utf8(key), bytes.utf8(msg)))
+
+test "hmac-sha256 vectors (RFC 4231 case 2, and a long key)" {
+  assert hex_of("Jefe", "what do ya want for nothing?", mac_sha256) ==
+    "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+  # key longer than the block is hashed first (RFC 4231 case 6)
+  let long_key = bytes.freeze(fold(range(0, 131), bytes.buf(), (b, _i) => bytes.put(b, 0xaa)))
+  assert bytes.to_hex(mac_sha256(long_key, bytes.utf8("Test Using Larger Than Block-Size Key - Hash Key First"))) ==
+    "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+}
+
+test "hmac-sha1 vectors (RFC 2202 cases 2 and 6)" {
+  assert hex_of("Jefe", "what do ya want for nothing?", mac_sha1) ==
+    "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79"
+  let long_key = bytes.freeze(fold(range(0, 80), bytes.buf(), (b, _i) => bytes.put(b, 0xaa)))
+  assert bytes.to_hex(mac_sha1(long_key, bytes.utf8("Test Using Larger Than Block-Size Key - Hash Key First"))) ==
+    "aa4ae5e15272d00e95705637ce8a3b55ed402112"
+}

@@ -1,0 +1,114 @@
+# SHA-1 (FIPS 180-4) in Dawn, raw digest out. It exists for one reason: qiniu's
+# QBox signature is HMAC-SHA1 and the wire format is not ours to change. Nothing
+# here is used where collision resistance matters, and the sha2 package has no
+# SHA-1 on purpose. One-shot only: the largest input is a qiniu signing string,
+# a few hundred bytes, so there is no incremental API to carry.
+#
+# Same arithmetic discipline as sha2: Int is 64-bit and signed, so every 32-bit
+# result is masked, and shifts are logical on already-masked values.
+use std/bytes
+
+const MASK: Int = 0xFFFFFFFF
+
+fn rotl(x: Int, n: Int) -> Int = ((x << n) | (x >>> (32 - n))) & MASK
+
+# One 64-byte block of `data` starting at `off`, folded into the five words.
+fn compress(hs: List[Int], data: Bytes, off: Int) -> List[Int] = {
+  var w: List[Int] = []
+  var t = 0
+  while t < 16 {
+    let o = off + t * 4
+    w = w ++ [(bytes.at(data, o) << 24) | (bytes.at(data, o + 1) << 16) |
+      (bytes.at(data, o + 2) << 8) | bytes.at(data, o + 3)]
+    t = t + 1
+  }
+  while t < 80 {
+    w = w ++ [rotl(w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16], 1)]
+    t = t + 1
+  }
+  var a = hs[0]
+  var b = hs[1]
+  var c = hs[2]
+  var d = hs[3]
+  var e = hs[4]
+  t = 0
+  while t < 80 {
+    var f = 0
+    var k = 0
+    if t < 20 {
+      f = (b & c) | (~b & MASK & d)
+      k = 0x5A827999
+    } else if t < 40 {
+      f = b ^ c ^ d
+      k = 0x6ED9EBA1
+    } else if t < 60 {
+      f = (b & c) | (b & d) | (c & d)
+      k = 0x8F1BBCDC
+    } else {
+      f = b ^ c ^ d
+      k = 0xCA62C1D6
+    }
+    let tmp = (rotl(a, 5) + f + e + k + w[t]) & MASK
+    e = d
+    d = c
+    c = rotl(b, 30)
+    b = a
+    a = tmp
+    t = t + 1
+  }
+  [(hs[0] + a) & MASK, (hs[1] + b) & MASK, (hs[2] + c) & MASK, (hs[3] + d) & MASK,
+    (hs[4] + e) & MASK]
+}
+
+## The 20-byte SHA-1 digest of `data`.
+pub fn digest(data: Bytes) -> Bytes = {
+  let n = bytes.len(data)
+  # 0x80, zeros up to 56 bytes into a block, then the 64-bit bit count
+  var pad = bytes.put(bytes.put_bytes(bytes.buf(), data), 0x80)
+  while bytes.size(pad) % 64 != 56 {
+    pad = bytes.put(pad, 0)
+  }
+  let bits = n * 8
+  var s = 56
+  while s >= 0 {
+    pad = bytes.put(pad, (bits >>> s) & 0xFF)
+    s = s - 8
+  }
+  let msg = bytes.freeze(pad)
+  var hs = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0]
+  var off = 0
+  while off < bytes.len(msg) {
+    hs = compress(hs, msg, off)
+    off = off + 64
+  }
+  var out = bytes.buf()
+  for word in hs {
+    out = bytes.put(bytes.put(bytes.put(bytes.put(out, word >>> 24), word >>> 16), word >>> 8), word)
+  }
+  bytes.freeze(out)
+}
+
+test "sha1 known vectors" {
+  assert bytes.to_hex(digest(bytes.utf8(""))) == "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+  assert bytes.to_hex(digest(bytes.utf8("abc"))) == "a9993e364706816aba3e25717850c26c9cd0d89d"
+  assert bytes.to_hex(digest(bytes.utf8("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))) ==
+    "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
+}
+
+test "sha1 padding boundaries" {
+  # 55, 56 and 64 bytes straddle the one-block / two-block padding cases;
+  # vectors from Python hashlib
+  assert bytes.to_hex(digest(bytes.utf8(rep("a", 55)))) == "c1c8bbdc22796e28c0e15163d20899b65621d65a"
+  assert bytes.to_hex(digest(bytes.utf8(rep("a", 56)))) == "c2db330f6083854c99d4b5bfb6e8f29f201be699"
+  assert bytes.to_hex(digest(bytes.utf8(rep("a", 64)))) == "0098ba824b5c16427bd7a1122a5a442a25ec644d"
+}
+
+fn rep(s: String, n: Int) -> String = {
+  var out = ""
+  var i = 0
+  while i < n {
+    out = out ++ s
+    i = i + 1
+  }
+  out
+}

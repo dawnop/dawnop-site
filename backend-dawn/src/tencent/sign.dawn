@@ -1,31 +1,17 @@
 # Tencent Cloud TC3-HMAC-SHA256 signing (M6 knife 12 foundation) for the monitor
 # page. The signing key is a chain of HMAC-SHA256 where each digest keys the
-# next — byte[] keys that never leave this function body (spec §9.5), so the Mac
-# chain is inlined. Cross-checked against the Python reference byte-for-byte.
+# next, kept as Bytes so no hex round trip. Cross-checked against the Python reference byte-for-byte.
 use std/bytes
-use java "javax.crypto.Mac"
-use java "javax.crypto.spec.SecretKeySpec"
+use util/hmac
 
 ## The TC3 signature (lowercase hex) for a request. `string_to_sign` is the
 ## caller-assembled "TC3-HMAC-SHA256\n<ts>\n<scope>\n<hash>" blob.
-pub fn tc3_signature(secret_key: String, date: String, service: String, string_to_sign: String) -> String !io = {
+pub fn tc3_signature(secret_key: String, date: String, service: String, string_to_sign: String) -> String = {
   # signing_key = HMAC(HMAC(HMAC("TC3"+sk, date), service), "tc3_request")
-  let mac1 = Mac.getInstance("HmacSHA256")!
-  mac1.init(SecretKeySpec.new(bytes.utf8("TC3${secret_key}"), "HmacSHA256"))
-  let k1 = mac1.doFinal(bytes.utf8(date))!
-
-  let mac2 = Mac.getInstance("HmacSHA256")!
-  mac2.init(SecretKeySpec.new(k1, "HmacSHA256"))
-  let k2 = mac2.doFinal(bytes.utf8(service))!
-
-  let mac3 = Mac.getInstance("HmacSHA256")!
-  mac3.init(SecretKeySpec.new(k2, "HmacSHA256"))
-  let signing_key = mac3.doFinal(bytes.utf8("tc3_request"))!
-
-  let mac4 = Mac.getInstance("HmacSHA256")!
-  mac4.init(SecretKeySpec.new(signing_key, "HmacSHA256"))
-  let sig = mac4.doFinal(bytes.utf8(string_to_sign))!
-  bytes.to_hex(sig)
+  let k1 = hmac.mac_sha256(bytes.utf8("TC3${secret_key}"), bytes.utf8(date))
+  let k2 = hmac.mac_sha256(k1, bytes.utf8(service))
+  let signing_key = hmac.mac_sha256(k2, bytes.utf8("tc3_request"))
+  bytes.to_hex(hmac.mac_sha256(signing_key, bytes.utf8(string_to_sign)))
 }
 
 test "tc3 signature matches the Python reference" {
