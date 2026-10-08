@@ -1,14 +1,14 @@
 # Crypto primitives for auth/qiniu/JWT (M6 knife 3). SHA-256 comes from the
 # Dawn sha2 package; std/bytes handles the canonical hex and Base64 encoders.
 # HMAC-SHA1/SHA256 and constant-time equality are pure Dawn (util/hmac); the
-# non-canonical-compatible Base64 decoder, SecureRandom and UUID remain JDK calls.
+# Base64 decoder (which must keep the JDK's lenient acceptance set) is util/b64.
+# SecureRandom and UUID remain JDK calls.
 use std/str
 use std/bytes
 use sha2/sha256
-use util/ferr.{catch_text}
+use util/b64
 use util/hmac
 use java "java.security.SecureRandom"
-use java "java.util.Base64"
 use java "java.util.UUID"
 
 ## SHA-256 of a UTF-8 string, lowercase hex.
@@ -38,8 +38,8 @@ pub fn b64url_encode_nopad(s: String) -> String !io =
 ## base64 and payload bytes that are not UTF-8 refuse: the callers are JWT
 ## segments, which must arrive intact or not at all, never patched with U+FFFD.
 pub fn b64url_decode(s: String) -> Result[String, String] !io =
-  # Normalize optional padding before the JDK URL decoder.
-  match catch_text(() => Base64.getUrlDecoder()!.decode(pad4(s))!) {
+  # Normalize optional padding before decoding.
+  match b64.decode(pad4(s), true) {
     Err(e) -> Err(e)
     Ok(raw) ->
       match bytes.decode_utf8_checked(raw) {
@@ -119,7 +119,7 @@ test "base64url round-trips, unpadded and multibyte" {
   assert b64url_decode(nopad) == Ok("ab")
   match b64url_decode("!!!!") {
     Ok(_) -> { assert false }
-    Err(m) -> { assert str.contains(m, "Exception") }
+    Err(m) -> { assert str.contains(m, "base64") }
   }
   # valid base64 whose payload is not UTF-8 (a lone 0xFF) refuses too
   match b64url_decode("_w") {

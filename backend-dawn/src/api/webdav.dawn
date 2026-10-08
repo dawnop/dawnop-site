@@ -21,10 +21,10 @@ use std/char
 use std/map
 use std/list
 use util/ferr.{catch_text}
+use util/b64
+use util/uri.{Uri, is_opaque, percent_decode}
+use util/uri
 use db/sql.{DbConn}
-use java "java.util.Base64"
-use java "java.net.URI"
-use java "java.net.URLDecoder"
 use java "java.text.SimpleDateFormat"
 use java "java.util.Date"
 use java "java.util.Locale"
@@ -534,11 +534,11 @@ fn mkcol(a: Auth, rel: String) -> Result[Response, HttpError] !io =
 
 # ---- MOVE / COPY ----
 
-# Parse the Destination behind the FFI fault barrier. URI.create throws for
-# malformed syntax, which is a bad request rather than an internal server error.
-fn parse_destination_uri(raw: String) -> Result[URI, HttpError] !io =
-  match catch_text(() => URI.create(raw)!) {
-    Ok(uri) -> Ok(uri)
+# Parse the Destination with util/uri (a port of java.net.URI.create). Malformed
+# syntax is a bad request rather than an internal server error.
+fn parse_destination_uri(raw: String) -> Result[Uri, HttpError] !io =
+  match uri.parse(raw) {
+    Ok(u) -> Ok(u)
     Err(_) -> Err(http_error(400, "非法目标"))
   }
 
@@ -557,36 +557,36 @@ fn destination_default_port(scheme: String) -> Int =
 fn effective_port(scheme: String, port: Int) -> Int =
   if port >= 0 { port } else { destination_default_port(scheme) }
 
-fn parse_destination_host_uri(scheme: String, raw_host: String) -> Option[URI] !io =
-  match catch_text(() => URI.create("${scheme}://${raw_host}")!) {
-    Ok(uri) -> Some(uri)
+fn parse_destination_host_uri(scheme: String, raw_host: String) -> Option[Uri] !io =
+  match uri.parse("${scheme}://${raw_host}") {
+    Ok(u) -> Some(u)
     Err(_) -> None
   }
 
 # Request has no trusted external-scheme field. For a same-host absolute URI,
 # compare an omitted Host port using the Destination scheme's default. This
 # intentionally accepts both http and https when Host itself omits the port.
-fn destination_authority_matches(req: Request, uri: URI, scheme: String) -> Bool !io =
+fn destination_authority_matches(req: Request, u: Uri, scheme: String) -> Bool !io =
   match header(req, "host") {
     None -> false
     Some(raw_host) ->
       match parse_destination_host_uri(scheme, raw_host) {
         None -> false
         Some(host_uri) ->
-          match (host_uri.getHost(), uri.getHost()) {
+          match (host_uri.host, u.host) {
             (Some(host_name), Some(destination_host)) -> {
               let host_shape_ok =
-                match host_uri.getRawPath() {
+                match host_uri.path {
                   Some(path) -> path == ""
                   None -> false
                 }
               host_shape_ok &&
-                no_text_part(host_uri.getRawUserInfo()) &&
-                no_text_part(host_uri.getRawQuery()) &&
-                no_text_part(host_uri.getRawFragment()) &&
-                no_text_part(uri.getRawUserInfo()) &&
+                no_text_part(host_uri.user_info) &&
+                no_text_part(host_uri.query) &&
+                no_text_part(host_uri.fragment) &&
+                no_text_part(u.user_info) &&
                 str.to_lower(host_name) == str.to_lower(destination_host) &&
-                effective_port(scheme, host_uri.getPort()) == effective_port(scheme, uri.getPort())
+                effective_port(scheme, host_uri.port) == effective_port(scheme, u.port)
             }
             _ -> false
           }
@@ -617,44 +617,44 @@ fn require_single_host(req: Request) -> Result[Unit, HttpError] = {
   }
 }
 
-fn require_hierarchical_destination(uri: URI) -> Result[Unit, HttpError] !io =
-  if uri.isOpaque() {
+fn require_hierarchical_destination(u: Uri) -> Result[Unit, HttpError] !io =
+  if is_opaque(u) {
     Err(http_error(400, "Destination 必须是分层 URI"))
   } else {
     Ok(())
   }
 
-fn reject_destination_query(uri: URI) -> Result[Unit, HttpError] !io =
-  match uri.getRawQuery() {
+fn reject_destination_query(u: Uri) -> Result[Unit, HttpError] !io =
+  match u.query {
     None -> Ok(())
     Some(_) -> Err(http_error(400, "Destination 不支持查询参数"))
   }
 
-fn reject_destination_fragment(uri: URI) -> Result[Unit, HttpError] !io =
-  match uri.getRawFragment() {
+fn reject_destination_fragment(u: Uri) -> Result[Unit, HttpError] !io =
+  match u.fragment {
     None -> Ok(())
     Some(_) -> Err(http_error(400, "Destination 不支持片段"))
   }
 
-fn is_path_absolute_reference(raw: String, uri: URI) -> Bool !io =
+fn is_path_absolute_reference(raw: String, u: Uri) -> Bool !io =
   str.starts_with(raw, "/") &&
   not str.starts_with(raw, "//") &&
-  no_text_part(uri.getRawAuthority())
+  no_text_part(u.authority)
 
-fn destination_raw_path(uri: URI) -> Result[String, HttpError] !io =
-  match uri.getRawPath() {
+fn destination_raw_path(u: Uri) -> Result[String, HttpError] !io =
+  match u.path {
     Some(path) -> Ok(path)
     None -> Err(http_error(400, "非法目标"))
   }
 
-fn destination_path(req: Request, raw: String, uri: URI) -> Result[String, HttpError] !io = {
-  let _h = require_hierarchical_destination(uri)?
-  let _q = reject_destination_query(uri)?
-  let _f = reject_destination_fragment(uri)?
-  match uri.getScheme() {
+fn destination_path(req: Request, raw: String, u: Uri) -> Result[String, HttpError] !io = {
+  let _h = require_hierarchical_destination(u)?
+  let _q = reject_destination_query(u)?
+  let _f = reject_destination_fragment(u)?
+  match u.scheme {
     None ->
-      if is_path_absolute_reference(raw, uri) {
-        destination_raw_path(uri)
+      if is_path_absolute_reference(raw, u) {
+        destination_raw_path(u)
       } else {
         Err(http_error(400, "Destination 必须是绝对路径或 absolute URI"))
       }
@@ -664,10 +664,10 @@ fn destination_path(req: Request, raw: String, uri: URI) -> Result[String, HttpE
         Err(http_error(400, "Destination scheme 不受支持"))
       } else {
         let _h = require_single_host(req)?
-        if not destination_authority_matches(req, uri, scheme) {
+        if not destination_authority_matches(req, u, scheme) {
           Err(http_error(400, "Destination 不属于当前服务器"))
         } else {
-          destination_raw_path(uri)
+          destination_raw_path(u)
         }
       }
     }
@@ -796,14 +796,15 @@ fn valid_percent_utf8_loop(cps: List[Char], i: Int) -> Bool =
   }
 
 # single percent-decode of one path segment, like Python's unquote: %XX resolves,
-# a literal '+' stays '+' (URLDecoder would turn it into a space), so protect '+'
-# as %2B first. Per segment, because the split has to happen while the separators
-# are still the only "/" in the string.
-fn pct_decode_seg(s: String) -> Result[String, HttpError] !io =
+# a literal '+' stays '+' (percent_decode leaves it alone; java.net.URLDecoder,
+# which this replaced, turned it into a space and needed it protected as %2B).
+# Per segment, because the split has to happen while the separators are still the
+# only "/" in the string.
+fn pct_decode_seg(s: String) -> Result[String, HttpError] =
   if not valid_percent_utf8(s) {
     Err(http_error(400, "Destination 包含非法 UTF-8"))
   } else {
-    match catch_text(() => URLDecoder.decode(join(str.split(s, "+"), "%2B"), "UTF-8")!) {
+    match percent_decode(s) {
       Ok(decoded) ->
         if xml10_text_allowed(decoded) {
           Ok(decoded)
@@ -843,8 +844,8 @@ fn dest_rel(req: Request) -> Result[Option[String], HttpError] !io =
   match header(req, "destination") {
     None -> Ok(None)
     Some(d) -> {
-      let uri = parse_destination_uri(d)?
-      let path = destination_path(req, d, uri)?
+      let u = parse_destination_uri(d)?
+      let path = destination_path(req, d, u)?
       let prefix = dav_prefix(req)
       let stripped = strip_destination_prefix(path, prefix)?
       let decoded = decode_destination_segments(path_segs(stripped), 0, [])?
@@ -1089,7 +1090,7 @@ fn dav_auth(a: Auth, cell: TtlCell, req: Request) -> Result[Unit, HttpError] !io
 # both an Err instead of a panic. The caller answers 401 either way: credentials
 # the admin could not have typed are refused, not patched up with U+FFFD.
 fn b64_decode_try(s: String) -> Result[String, String] !io =
-  match catch_text(() => Base64.getDecoder()!.decode(s)!) {
+  match b64.decode(s, false) {
     Err(e) -> Err(e)
     Ok(raw) ->
       match bytes.decode_utf8_checked(raw) {

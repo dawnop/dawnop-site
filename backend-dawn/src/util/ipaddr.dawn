@@ -1,0 +1,164 @@
+# IPv4 and IPv6 literal parsing, ported from the JDK's IPAddressUtil (de-Java
+# knife S10). The only caller is paste's source grouping, which needs the raw
+# address bytes of a client-supplied string and must never trigger a DNS lookup:
+# InetAddress.getByName falls back to the resolver for anything that is not a
+# literal, and a prefilter was the only thing standing between a header and the
+# network. A literal parser has no such path. The results match getByName on the
+# inputs paste lets through, including its two non-obvious outputs: an
+# IPv4-mapped IPv6 address (::ffff:a.b.c.d) comes back as FOUR bytes, and a
+# dotted quad with leading zeros is read as decimal. Zone ids (%) and brackets
+# are not accepted: source_group already refuses both.
+use std/list
+use std/char
+use std/bytes
+
+fn digit16(c: Int) -> Int =
+  if c >= 48 && c <= 57 { c - 48 }
+  else if c >= 65 && c <= 70 { c - 55 }
+  else if c >= 97 && c <= 102 { c - 87 }
+  else { -1 }
+
+fn split_dots(a: List[Int]) -> List[List[Int]] = {
+  var parts: List[List[Int]] = []
+  var cur: List[Int] = []
+  for c in a {
+    if c == 46 {
+      parts = parts ++ [cur]
+      cur = []
+    } else {
+      cur = cur ++ [c]
+    }
+  }
+  parts ++ [cur]
+}
+
+# Decimal value of an all-digit part, or -1 (empty, non-digit, or beyond 255).
+fn octet(p: List[Int]) -> Int = {
+  if len(p) == 0 { return -1 }
+  var v = 0
+  for c in p {
+    if c < 48 || c > 57 { return -1 }
+    v = v * 10 + (c - 48)
+    if v > 255 { return -1 }
+  }
+  v
+}
+
+# Exactly four dot-separated decimal octets, each at most 255.
+fn ipv4_bytes(a: List[Int]) -> Option[List[Int]] =
+  if len(a) == 0 || len(a) > 15 {
+    None
+  } else {
+    let parts = split_dots(a)
+    if len(parts) != 4 {
+      None
+    } else {
+      let vs = list.map(parts, octet)
+      if list.any(vs, (v: Int) => v < 0) { None } else { Some(vs) }
+    }
+  }
+
+# The text -> 16 bytes translation of inet_pton6, without the zone-id tail.
+fn ipv6_bytes(a: List[Int]) -> Option[List[Int]] = {
+  let n = len(a)
+  if n < 2 { return None }
+  var i = 0
+  if a[0] == 58 {
+    if a[1] != 58 { return None }
+    i = 1
+  }
+  var curtok = i
+  var saw = false
+  var val = 0
+  var dst: List[Int] = []
+  var colonp = -1
+  var done = false
+  while not done && i < n {
+    let ch = a[i]
+    i = i + 1
+    let d = digit16(ch)
+    if d != -1 {
+      val = val * 16 + d
+      if val > 65535 { return None }
+      saw = true
+    } else if ch == 58 {
+      curtok = i
+      if not saw {
+        if colonp != -1 { return None }
+        colonp = len(dst)
+      } else {
+        if i == n { return None }
+        if len(dst) + 2 > 16 { return None }
+        dst = dst ++ [val / 256, val % 256]
+        saw = false
+        val = 0
+      }
+    } else if ch == 46 && len(dst) + 4 <= 16 {
+      let tail = list.slice(a, curtok, n)
+      match ipv4_bytes(tail) {
+        None -> { return None }
+        Some(v4) -> {
+          dst = dst ++ v4
+          saw = false
+          done = true
+        }
+      }
+    } else {
+      return None
+    }
+  }
+  if saw {
+    if len(dst) + 2 > 16 { return None }
+    dst = dst ++ [val / 256, val % 256]
+  }
+  if colonp != -1 {
+    if len(dst) == 16 { return None }
+    let head = list.take(dst, colonp)
+    let tail = list.drop(dst, colonp)
+    dst = head ++ list.map(range(0, 16 - len(dst)), _i => 0) ++ tail
+  }
+  if len(dst) != 16 { return None }
+  let mapped = list.take(dst, 10) == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] && dst[10] == 255 && dst[11] == 255
+  if mapped { Some(list.drop(dst, 12)) } else { Some(dst) }
+}
+
+## The raw address bytes of an IP literal: 4 for IPv4 (and IPv4-mapped IPv6),
+## 16 for other IPv6. None for anything else, hostnames included.
+pub fn parse_literal(s: String) -> Option[List[Int]] = {
+  let a = list.map(code_points(s), c => char.code(c))
+  if list.contains(a, 58) { ipv6_bytes(a) } else { ipv4_bytes(a) }
+}
+
+## The first `n` bytes of an address as lowercase hex.
+pub fn hex_prefix(addr: List[Int], n: Int) -> String =
+  bytes.to_hex(bytes.freeze(fold(list.take(addr, n), bytes.buf(), (b, x) => bytes.put(b, x))))
+
+# Expected values below were produced by InetAddress.getByName.
+fn hx(s: String) -> String =
+  match parse_literal(s) {
+    Some(l) -> hex_prefix(l, 16)
+    None -> "err"
+  }
+
+test "IPv4 literals" {
+  assert hx("1.2.3.4") == "01020304"
+  assert hx("010.1.1.1") == "0a010101"
+  assert hx("256.1.1.1") == "err"
+  assert hx("1.2.3") == "err"
+  assert hx("") == "err"
+  assert hx("localhost") == "err"
+}
+
+test "IPv6 literals, compression and embedded IPv4" {
+  assert hx("2001:db8::1") == "20010db8000000000000000000000001"
+  assert hx("::") == "00000000000000000000000000000000"
+  assert hx("1:2:3:4:5:6:7:8") == "00010002000300040005000600070008"
+  assert hx("::1.2.3.4") == "00000000000000000000000001020304"
+  assert hx("1:2:3:4:5:6:7:8:9") == "err"
+  assert hx("1::2::3") == "err"
+  assert hx("12345::1") == "err"
+}
+
+test "IPv4-mapped IPv6 comes back as four bytes, like getByName" {
+  assert hx("::ffff:1.2.3.4") == "01020304"
+}

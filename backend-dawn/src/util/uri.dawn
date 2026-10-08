@@ -1,0 +1,610 @@
+# java.net.URI.create, ported to Dawn (de-Java knife S10), plus the percent
+# decoder WebDAV needs. A WebDAV Destination header is an attacker-shaped string
+# that gets compared against the Host header and then turned into an object path,
+# so what matters is not "a URI parser" but the same URI parser the backend has
+# always used: which strings are refused, where the authority ends, whether a
+# host exists, what the raw path is. This follows the JDK 21 Parser (RFC 2396
+# plus the RFC 2732 IPv6 deviation) function for function, including its
+# tolerances: an empty authority before a non-empty path, a registry-based
+# authority when the server form does not parse (host absent, authority kept),
+# "other" characters above U+0080 that are neither spaces nor controls, and a
+# bare "%" inside a bracketed authority. It is NOT a general-purpose URL library
+# and exposes only the raw accessors the backend reads. The error text is for
+# logs and tests; the callers answer 400 without printing it.
+#
+# The JDK is still the oracle: the port was checked against java.net.URI on
+# generated and mutated inputs before the Java calls were deleted.
+use std/char
+use std/list
+use std/bytes
+
+pub type Uri = {
+  scheme: Option[String],
+  authority: Option[String],
+  user_info: Option[String],
+  host: Option[String],
+  port: Int,
+  path: Option[String],
+  query: Option[String],
+  fragment: Option[String]
+}
+
+# ---- character classes (JDK L_* / H_* masks; code 0 never matches) ----
+
+fn in_chars(c: Int, set: String) -> Bool =
+  fold(code_points(set), false, (acc, x) => acc || char.code(x) == c)
+
+fn is_alpha(c: Int) -> Bool = (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+fn is_digit(c: Int) -> Bool = c >= 48 && c <= 57
+fn is_alnum(c: Int) -> Bool = is_alpha(c) || is_digit(c)
+fn is_hex(c: Int) -> Bool = is_digit(c) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102)
+fn is_unreserved(c: Int) -> Bool = is_alnum(c) || in_chars(c, "-_.!~*'()")
+fn is_scheme_char(c: Int) -> Bool = is_alnum(c) || c == 43 || c == 45 || c == 46
+fn is_uric(c: Int) -> Bool = is_unreserved(c) || in_chars(c, ";/?:@&=+$,[]")
+fn is_pathc(c: Int) -> Bool = is_unreserved(c) || in_chars(c, ":@&=+$,;/")
+fn is_userinfo(c: Int) -> Bool = is_unreserved(c) || in_chars(c, ";:&=+$,")
+fn is_regname(c: Int) -> Bool = is_unreserved(c) || in_chars(c, "$,;:@&=+")
+fn is_server(c: Int) -> Bool = is_userinfo(c) || in_chars(c, ".:@[]")
+fn is_server_pct(c: Int) -> Bool = is_server(c) || c == 37
+fn is_scope(c: Int) -> Bool = is_alnum(c) || c == 95 || c == 46
+fn is_digit_dot(c: Int) -> Bool = is_digit(c) || c == 46
+fn is_alnum_dash(c: Int) -> Bool = is_alnum(c) || c == 45
+
+# Character.isSpaceChar (Zs, Zl, Zp) or Character.isISOControl.
+fn is_space_or_control(c: Int) -> Bool =
+  c <= 31 || (c >= 127 && c <= 159) || c == 32 || c == 160 || c == 5760 ||
+  (c >= 8192 && c <= 8202) || c == 8232 || c == 8233 || c == 8239 || c == 8287 || c == 12288
+
+# The JDK's "other" category: allowed wherever escapes are (note its `> 128`).
+fn is_other(c: Int) -> Bool = c > 128 && not is_space_or_control(c)
+
+# ---- scanning primitives ----
+
+fn at(a: List[Int], p: Int, n: Int, c: Int) -> Bool = p >= 0 && p < n && a[p] == c
+
+fn sub(a: List[Int], from: Int, to: Int) -> String =
+  from_code_points(list.map(list.slice(a, from, to), x => char.of(x).expect("code point")))
+
+# scan(start, end, stop): first index whose char is in `stop`, else `end`.
+fn scan_stop(a: List[Int], start: Int, end: Int, stop: String) -> Int = {
+  var p = start
+  while p < end && not in_chars(a[p], stop) { p = p + 1 }
+  p
+}
+
+# scan(start, end, err, stop): -1 when a char of `err` comes before any of `stop`.
+fn scan_err_stop(a: List[Int], start: Int, end: Int, err: String, stop: String) -> Int = {
+  var p = start
+  var res = -2
+  while res == -2 && p < end {
+    let c = a[p]
+    if in_chars(c, err) { res = -1 }
+    else if in_chars(c, stop) { res = p }
+    else { p = p + 1 }
+  }
+  if res == -2 { p } else { res }
+}
+
+# scan with a class and no escape handling.
+fn scan_plain(a: List[Int], start: Int, end: Int, ok: fn(Int) -> Bool) -> Int = {
+  var p = start
+  while p < end && a[p] != 0 && ok(a[p]) { p = p + 1 }
+  p
+}
+
+# scan with a class that also admits "%hh" and "other" characters. A '%' that is
+# not followed by two hex digits is an error here, as in the JDK.
+fn scan_esc(a: List[Int], start: Int, end: Int, ok: fn(Int) -> Bool) -> Result[Int, String] = {
+  var p = start
+  while p < end {
+    let c = a[p]
+    if c != 0 && ok(c) {
+      p = p + 1
+    } else if c == 37 {
+      if p + 3 <= end && is_hex(a[p + 1]) && is_hex(a[p + 2]) {
+        p = p + 3
+      } else {
+        return Err("Malformed escape pair")
+      }
+    } else if is_other(c) {
+      p = p + 1
+    } else {
+      return Ok(p)
+    }
+  }
+  Ok(p)
+}
+
+fn check_esc(a: List[Int], start: Int, end: Int, ok: fn(Int) -> Bool, what: String) -> Result[Unit, String] = {
+  let p = scan_esc(a, start, end, ok)?
+  if p < end { Err("Illegal character in ${what}") } else { Ok(()) }
+}
+
+fn check_plain(a: List[Int], start: Int, end: Int, ok: fn(Int) -> Bool, what: String) -> Result[Unit, String] =
+  if scan_plain(a, start, end, ok) < end { Err("Illegal character in ${what}") } else { Ok(()) }
+
+# ---- IPv4 ----
+
+fn scan_byte(a: List[Int], start: Int, n: Int) -> Int = {
+  let q = scan_plain(a, start, n, is_digit)
+  if q <= start {
+    q
+  } else {
+    var i = start
+    while i < q && a[i] == 48 { i = i + 1 }
+    let sig = q - i
+    if sig < 3 { q }
+    else if sig > 3 { start }
+    else if (a[i] - 48) * 100 + (a[i + 1] - 48) * 10 + (a[i + 2] - 48) > 255 { start }
+    else { q }
+  }
+}
+
+fn scan_dot(a: List[Int], p: Int, n: Int) -> Int = if at(a, p, n, 46) { p + 1 } else { p }
+
+# Ok(-1) when not an address (non-strict); strict failures are Err.
+fn scan_ipv4(a: List[Int], start: Int, n: Int, strict: Bool) -> Result[Int, String] = {
+  let m = scan_plain(a, start, n, is_digit_dot)
+  if m <= start || (strict && m != n) {
+    Ok(-1)
+  } else {
+    var p = start
+    var step = 0
+    var failed = false
+    while step < 7 && not failed {
+      let q = if step % 2 == 0 { scan_byte(a, p, m) } else { scan_dot(a, p, m) }
+      if q <= p { failed = true } else { p = q }
+      step = step + 1
+    }
+    if failed || p < m {
+      if strict { Err("Malformed IPv4 address") } else { Ok(-1) }
+    } else {
+      Ok(p)
+    }
+  }
+}
+
+fn take_ipv4(a: List[Int], start: Int, n: Int) -> Result[Int, String] = {
+  let p = scan_ipv4(a, start, n, true)?
+  if p <= start { Err("expected IPv4 address") } else { Ok(p) }
+}
+
+# parseIPv4Address: end index, or -1 (the host is then read as a hostname).
+fn parse_ipv4(a: List[Int], start: Int, n: Int) -> Int =
+  match scan_ipv4(a, start, n, false) {
+    Err(_) -> -1
+    Ok(p) ->
+      if p == -1 { -1 }
+      else if p > start && p < n && a[p] != 58 { -1 }
+      else { p }
+  }
+
+# ---- hostname ----
+
+# Returns (end, host text).
+fn parse_hostname(a: List[Int], start: Int, n: Int) -> Result[(Int, String), String] = {
+  var p = start
+  var l = -1
+  var go = true
+  while go {
+    let q = scan_plain(a, p, n, is_alnum)
+    if q <= p {
+      go = false
+    } else {
+      l = p
+      p = q
+      let q2 = scan_plain(a, p, n, is_alnum_dash)
+      if q2 > p {
+        if a[q2 - 1] == 45 { return Err("Illegal character in hostname") }
+        p = q2
+      }
+      let q3 = scan_dot(a, p, n)
+      if q3 <= p {
+        go = false
+      } else {
+        p = q3
+        if p >= n { go = false }
+      }
+    }
+  }
+  if p < n && not at(a, p, n, 58) { return Err("Illegal character in hostname") }
+  if l < 0 { return Err("expected hostname") }
+  if l > start && not is_alpha(a[l]) { return Err("Illegal character in hostname") }
+  Ok((p, sub(a, start, p)))
+}
+
+# ---- IPv6 reference ([...] contents); byte counts are threaded explicitly ----
+
+# Returns (position or -1, byte count).
+fn scan_hex_seq(a: List[Int], start: Int, n: Int, cnt0: Int) -> Result[(Int, Int), String] = {
+  var cnt = cnt0
+  var p = start
+  let q = scan_plain(a, p, n, is_hex)
+  if q <= p { return Ok((-1, cnt)) }
+  if at(a, q, n, 46) { return Ok((-1, cnt)) }
+  if q > p + 4 { return Err("IPv6 hexadecimal digit sequence too long") }
+  cnt = cnt + 2
+  p = q
+  var go = true
+  while go && p < n {
+    if not at(a, p, n, 58) {
+      go = false
+    } else if at(a, p + 1, n, 58) {
+      go = false
+    } else {
+      p = p + 1
+      let q2 = scan_plain(a, p, n, is_hex)
+      if q2 <= p { return Err("expected digits for an IPv6 address") }
+      if at(a, q2, n, 46) {
+        p = p - 1
+        go = false
+      } else {
+        if q2 > p + 4 { return Err("hexadecimal digit sequence too long") }
+        cnt = cnt + 2
+        p = q2
+      }
+    }
+  }
+  Ok((p, cnt))
+}
+
+fn scan_hex_post(a: List[Int], start: Int, n: Int, cnt0: Int) -> Result[(Int, Int), String] =
+  if start == n {
+    Ok((start, cnt0))
+  } else {
+    let (q, cnt) = scan_hex_seq(a, start, n, cnt0)?
+    if q > start {
+      if at(a, q, n, 58) {
+        let e = take_ipv4(a, q + 1, n)?
+        Ok((e, cnt + 4))
+      } else {
+        Ok((q, cnt))
+      }
+    } else {
+      let e = take_ipv4(a, start, n)?
+      Ok((e, cnt + 4))
+    }
+  }
+
+fn parse_ipv6_ref(a: List[Int], start: Int, n: Int) -> Result[Unit, String] = {
+  var p = start
+  var cnt = 0
+  var compressed = false
+  let (q, c1) = scan_hex_seq(a, p, n, 0)?
+  cnt = c1
+  if q > p {
+    p = q
+    if at(a, p, n, 58) && at(a, p + 1, n, 58) {
+      compressed = true
+      let (e, c2) = scan_hex_post(a, p + 2, n, cnt)?
+      p = e
+      cnt = c2
+    } else if at(a, p, n, 58) {
+      p = take_ipv4(a, p + 1, n)?
+      cnt = cnt + 4
+    }
+  } else if at(a, p, n, 58) && at(a, p + 1, n, 58) {
+    compressed = true
+    let (e, c2) = scan_hex_post(a, p + 2, n, cnt)?
+    p = e
+    cnt = c2
+  }
+  if p < n { return Err("Malformed IPv6 address") }
+  if cnt > 16 { return Err("IPv6 address too long") }
+  if not compressed && cnt < 16 { return Err("IPv6 address too short") }
+  if compressed && cnt == 16 { return Err("Malformed IPv6 address") }
+  Ok(())
+}
+
+# ---- authority ----
+
+type Server = { user: Option[String], host: String, port: Int, end: Int }
+
+fn parse_port(a: List[Int], p: Int, q: Int) -> Result[Int, String] = {
+  var i = p
+  while i < q - 1 && a[i] == 48 { i = i + 1 }
+  if q - i > 10 { return Err("Malformed port number") }
+  var v = 0
+  var j = i
+  while j < q {
+    v = v * 10 + (a[j] - 48)
+    j = j + 1
+  }
+  if v > 2147483647 { Err("Malformed port number") } else { Ok(v) }
+}
+
+fn parse_server(a: List[Int], start: Int, n: Int) -> Result[Server, String] = {
+  var p = start
+  var user: Option[String] = None
+  let q0 = scan_err_stop(a, p, n, "/?#", "@")
+  if q0 >= p && at(a, q0, n, 64) {
+    let _u = check_esc(a, p, q0, is_userinfo, "user info")?
+    user = Some(sub(a, p, q0))
+    p = q0 + 1
+  }
+  var host = ""
+  if at(a, p, n, 91) {
+    p = p + 1
+    let q = scan_err_stop(a, p, n, "/?#", "]")
+    if q > p && at(a, q, n, 93) {
+      let r = scan_stop(a, p, q, "%")
+      if r > p {
+        let _v = parse_ipv6_ref(a, p, r)?
+        if r + 1 == q { return Err("scope id expected") }
+        let _s = check_plain(a, r + 1, q, is_scope, "scope id")?
+      } else {
+        let _v = parse_ipv6_ref(a, p, q)?
+      }
+      host = sub(a, p - 1, q + 1)
+      p = q + 1
+    } else {
+      return Err("expected closing bracket for IPv6 address")
+    }
+  } else {
+    let q4 = parse_ipv4(a, p, n)
+    if q4 > p {
+      host = sub(a, p, q4)
+      p = q4
+    } else {
+      let (hq, h) = parse_hostname(a, p, n)?
+      host = h
+      p = hq
+    }
+  }
+  var port = -1
+  if at(a, p, n, 58) {
+    p = p + 1
+    let q = scan_stop(a, p, n, "/")
+    if q > p {
+      let _d = check_plain(a, p, q, is_digit, "port number")?
+      port = parse_port(a, p, q)?
+      p = q
+    }
+  }
+  if p < n { return Err("expected port number") }
+  Ok(Server { user: user, host: host, port: port, end: p })
+}
+
+type Auth = { authority: String, server: Option[Server] }
+
+fn parse_authority(a: List[Int], start: Int, n: Int) -> Result[Auth, String] = {
+  let server_chars =
+    if scan_stop(a, start, n, "]") > start {
+      scan_esc(a, start, n, is_server_pct)? == n
+    } else {
+      scan_esc(a, start, n, is_server)? == n
+    }
+  let reg_chars = scan_esc(a, start, n, is_regname)? == n
+  let whole = sub(a, start, n)
+  if reg_chars && not server_chars {
+    Ok(Auth { authority: whole, server: None })
+  } else if server_chars {
+    match parse_server(a, start, n) {
+      Ok(s) -> Ok(Auth { authority: whole, server: Some(s) })
+      Err(e) -> if reg_chars { Ok(Auth { authority: whole, server: None }) } else { Err(e) }
+    }
+  } else {
+    Err("Illegal character in authority")
+  }
+}
+
+# ---- top level ----
+
+type Hier = { auth: Option[Auth], path: String, query: Option[String], end: Int }
+
+fn parse_hierarchical(a: List[Int], start: Int, n: Int) -> Result[Hier, String] = {
+  var p = start
+  var auth: Option[Auth] = None
+  if at(a, p, n, 47) && at(a, p + 1, n, 47) {
+    p = p + 2
+    let q = scan_stop(a, p, n, "/?#")
+    if q > p {
+      auth = Some(parse_authority(a, p, q)?)
+      p = q
+    } else if q >= n {
+      # an empty authority is tolerated only before a path, query or fragment
+      return Err("expected authority")
+    }
+  }
+  let q = scan_stop(a, p, n, "?#")
+  let _p = check_esc(a, p, q, is_pathc, "path")?
+  let path = sub(a, p, q)
+  p = q
+  var query: Option[String] = None
+  if at(a, p, n, 63) {
+    p = p + 1
+    let q2 = scan_stop(a, p, n, "#")
+    let _q = check_esc(a, p, q2, is_uric, "query")?
+    query = Some(sub(a, p, q2))
+    p = q2
+  }
+  Ok(Hier { auth: auth, path: path, query: query, end: p })
+}
+
+fn empty_uri() -> Uri = Uri {
+  scheme: None, authority: None, user_info: None, host: None, port: -1,
+  path: None, query: None, fragment: None
+}
+
+fn with_hier(u: Uri, h: Hier) -> Uri = {
+  let base = Uri { scheme: u.scheme, authority: None, user_info: None, host: None, port: -1,
+                   path: Some(h.path), query: h.query, fragment: None }
+  match h.auth {
+    None -> base
+    Some(au) ->
+      match au.server {
+        None -> Uri { scheme: base.scheme, authority: Some(au.authority), user_info: None, host: None, port: -1,
+                      path: base.path, query: base.query, fragment: None }
+        Some(s) -> Uri { scheme: base.scheme, authority: Some(au.authority), user_info: s.user,
+                         host: Some(s.host), port: s.port, path: base.path, query: base.query, fragment: None }
+      }
+  }
+}
+
+## java.net.URI.create(s): the parsed URI, or Err for a string the JDK refuses.
+pub fn parse(s: String) -> Result[Uri, String] = {
+  let a = list.map(code_points(s), c => char.code(c))
+  let n = len(a)
+  let p0 = scan_err_stop(a, 0, n, "/?#", ":")
+  var p = 0
+  var u = empty_uri()
+  if p0 >= 0 && at(a, p0, n, 58) {
+    if p0 == 0 { return Err("expected scheme name") }
+    let _c = check_plain(a, 0, 1, is_alpha, "scheme name")?
+    let _s = check_plain(a, 1, p0, is_scheme_char, "scheme name")?
+    u = Uri { scheme: Some(sub(a, 0, p0)), authority: None, user_info: None, host: None, port: -1,
+              path: None, query: None, fragment: None }
+    p = p0 + 1
+    if at(a, p, n, 47) {
+      let h = parse_hierarchical(a, p, n)?
+      u = with_hier(u, h)
+      p = h.end
+    } else {
+      let q = scan_stop(a, p, n, "#")
+      if q <= p { return Err("expected scheme-specific part") }
+      let _o = check_esc(a, p, q, is_uric, "opaque part")?
+      p = q
+    }
+  } else {
+    let h = parse_hierarchical(a, 0, n)?
+    u = with_hier(u, h)
+    p = h.end
+  }
+  if at(a, p, n, 35) {
+    let _f = check_esc(a, p + 1, n, is_uric, "fragment")?
+    u = Uri { scheme: u.scheme, authority: u.authority, user_info: u.user_info, host: u.host, port: u.port,
+              path: u.path, query: u.query, fragment: Some(sub(a, p + 1, n)) }
+    p = n
+  }
+  if p < n { return Err("expected end of URI") }
+  Ok(u)
+}
+
+## URI.isOpaque(): a scheme followed by something other than "/".
+pub fn is_opaque(u: Uri) -> Bool =
+  match u.path {
+    None -> true
+    Some(_) -> false
+  }
+
+# ---- percent decoding ----
+
+fn hex_digit(c: Int) -> Int =
+  if is_digit(c) { c - 48 }
+  else if c >= 65 && c <= 70 { c - 55 }
+  else if c >= 97 && c <= 102 { c - 87 }
+  else { -1 }
+
+## Percent-decode `s` the way URLDecoder.decode(s with '+' protected, "UTF-8")
+## does: "%XX" runs are decoded as UTF-8, '+' stays '+', every other character is
+## copied, and a '%' without two hex digits after it is an Err.
+pub fn percent_decode(s: String) -> Result[String, String] = {
+  let a = list.map(code_points(s), c => char.code(c))
+  let n = len(a)
+  var out: List[String] = []
+  var run = bytes.buf()
+  var has_run = false
+  var i = 0
+  while i < n {
+    let c = a[i]
+    if c == 37 {
+      if i + 2 >= n { return Err("Incomplete trailing escape (%) pattern") }
+      let hi = hex_digit(a[i + 1])
+      let lo = hex_digit(a[i + 2])
+      if hi < 0 || lo < 0 { return Err("Illegal hex characters in escape (%) pattern") }
+      run = bytes.put(run, hi * 16 + lo)
+      has_run = true
+      i = i + 3
+    } else {
+      if has_run {
+        out = out ++ [bytes.decode_utf8_lossy(bytes.freeze(run))]
+        run = bytes.buf()
+        has_run = false
+      }
+      out = out ++ [from_code_points([char.of(c).expect("code point")])]
+      i = i + 1
+    }
+  }
+  if has_run { out = out ++ [bytes.decode_utf8_lossy(bytes.freeze(run))] }
+  Ok(join(out, ""))
+}
+
+# Expected values below were produced by java.net.URI.create / URLDecoder.
+fn show(o: Option[String]) -> String =
+  match o {
+    Some(x) -> "<${x}>"
+    None -> "null"
+  }
+
+fn host_of(s: String) -> String =
+  match parse(s) {
+    Err(_) -> "err"
+    Ok(u) -> "${show(u.host)}|${u.port}|${show(u.path)}"
+  }
+
+test "hierarchical URIs expose the raw parts the backend reads" {
+  match parse("http://u:p@Example.COM:8080/dav/x%20y?q#f") {
+    Err(_) -> { assert false }
+    Ok(u) -> {
+      assert u.scheme == Some("http")
+      assert u.authority == Some("u:p@Example.COM:8080")
+      assert u.user_info == Some("u:p")
+      assert u.host == Some("Example.COM")
+      assert u.port == 8080
+      assert u.path == Some("/dav/x%20y")
+      assert u.query == Some("q")
+      assert u.fragment == Some("f")
+      assert not is_opaque(u)
+    }
+  }
+}
+
+test "path-only and empty-authority references" {
+  assert host_of("/dav/a%2Fb/c") == "null|-1|</dav/a%2Fb/c>"
+  assert host_of("///x") == "null|-1|</x>"
+  assert host_of("") == "null|-1|<>"
+  assert host_of("//h/x") == "<h>|-1|</x>"
+}
+
+test "opaque URIs have no path" {
+  match parse("urn:dawnop:target") {
+    Ok(u) -> { assert is_opaque(u) }
+    Err(_) -> { assert false }
+  }
+  match parse("http:dav/a") {
+    Ok(u) -> { assert is_opaque(u) }
+    Err(_) -> { assert false }
+  }
+}
+
+test "a registry-based authority keeps the authority but has no host" {
+  assert host_of("http://a_b.com/x") == "null|-1|</x>"
+  assert host_of("http://256.1.1.1/x") == "null|-1|</x>"
+  assert host_of("http://h:99999999999/x") == "null|-1|</x>"
+}
+
+test "IPv6 authorities" {
+  assert host_of("http://[::1]:80/x") == "<[::1]>|80|</x>"
+  assert host_of("http://[fe80::1%25eth0]/x") == "<[fe80::1%25eth0]>|-1|</x>"
+  assert host_of("http://[1:2:3:4:5:6:7:8:9]/x") == "err"
+  assert host_of("http://[::1/x") == "err"
+}
+
+test "syntax the JDK refuses" {
+  assert host_of("http://") == "err"
+  assert host_of("/a b") == "err"
+  assert host_of("/a%zz") == "err"
+  assert host_of("http://exa mple/x") == "err"
+  assert host_of("1x:y") == "err"
+  assert host_of(":x") == "err"
+}
+
+test "percent decoding keeps '+', decodes UTF-8 runs and refuses bad escapes" {
+  assert percent_decode("a+b%20c") == Ok("a+b c")
+  assert percent_decode("%E4%B8%AD%e6%96%87") == Ok("中文")
+  assert percent_decode("x%F0%9F%98%80y") == Ok("x😀y")
+  assert percent_decode("%2B") == Ok("+")
+  assert percent_decode("%4") == Err("Incomplete trailing escape (%) pattern")
+  assert percent_decode("%zz") == Err("Illegal hex characters in escape (%) pattern")
+  assert percent_decode("%") == Err("Incomplete trailing escape (%) pattern")
+}
