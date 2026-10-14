@@ -1153,7 +1153,7 @@ def main() -> int:
         replace_once(
             service,
             "  match with_db(a.db.path, a.db.ext, c => save_db(c, rel, new_key, mime, text_byte_size(content))) {\n",
-            "  match with_db(a.db.path, a.db.ext, c => save_db(c, rel, new_key, mime, str.len(content))) {\n",
+            "  match with_db(a.db.path, a.db.ext, c => save_db(c, rel, new_key, mime, len(content))) {\n",
         )
     elif args.mutant == "webdav-propfind-depth-singleton-fail-open":
         # the reading before the tightening: whatever the single header said was

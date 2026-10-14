@@ -16,7 +16,7 @@ fn no(status: Int, message: String, retry: Int) -> Refusal = Refusal { status: s
 # No header falls into ONE shared direct-call bucket, never an unlimited path.
 pub fn source_group(ip: String) -> Result[String, String] !io =
   if ip == "" { Ok("direct") }
-  else if str.len(ip) > 45 || not fold(code_points(ip), true, (ok, c) => ok && (str.contains("0123456789abcdefABCDEF:.", to_string(c)))) {
+  else if len(ip) > 45 || not fold(code_points(ip), true, (ok, c) => ok && (str.contains("0123456789abcdefABCDEF:.", to_string(c)))) {
     Err("来源地址无效")
   } else if not str.contains(ip, ":") && (len(str.split(ip, ".")) != 4 || not fold(str.split(ip, "."), true, (ok, s) => ok && valid_octet(s))) {
     Err("来源地址无效")
@@ -28,7 +28,7 @@ pub fn source_group(ip: String) -> Result[String, String] !io =
   }
 
 fn valid_octet(s: String) -> Bool =
-  s != "" && str.len(s) <= 3 && fold(code_points(s), true, (ok, c) => ok && c >= '0' && c <= '9') &&
+  s != "" && len(s) <= 3 && fold(code_points(s), true, (ok, c) => ok && c >= '0' && c <= '9') &&
   (match parse_int(s) { Some(n) -> n >= 0 && n <= 255
     None -> false })
 
@@ -41,7 +41,7 @@ pub fn validate(title: String, content: String, days: Int) -> Result[Int, Refusa
   if len(code_points(title)) > 120 || not valid_text(title) { Err(no(422, "标题最多 120 字，不能含控制字符", 0)) }
   else if str.trim(content) == "" || not valid_text(content) { Err(no(422, "请输入 Markdown 正文，不能含二进制控制字符", 0)) }
   else if days != 1 && days != 7 && days != 30 { Err(no(422, "保存期限只能是 1、7 或 30 天", 0)) }
-  else { Ok(bytes.len(bytes.utf8(content))) }
+  else { Ok(len(bytes.utf8(content))) }
 
 fn budget(c: DbConn, day: Int, source: String) -> Result[(Int, Int, Int, Int), String] !io = {
   let rs = query(c, "select count,bytes,minute,minute_count from paste_budgets where day=? and source=?", [PInt(day), PStr(source)], [ColInt, ColInt, ColInt, ColInt])?

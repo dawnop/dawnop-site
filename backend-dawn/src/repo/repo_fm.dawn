@@ -759,7 +759,7 @@ fn path_after(paths: List[String], path: String, i: Int) -> Bool =
   if i >= len(paths) { false } else if paths[i] == path { true } else { path_after(paths, path, i + 1) }
 
 fn copy_destination(tree: CopyTree, source_path: String) -> String =
-  tree.destination_root ++ str.slice(source_path, str.len(tree.source_root), str.len(source_path))
+  tree.destination_root ++ str.slice(source_path, len(tree.source_root), len(source_path))
 
 fn validate_copy_targets(c: DbConn, trees: List[CopyTree]) -> Result[Unit, String] !io = {
   let _u = validate_copy_plan_targets(trees)?
@@ -1050,7 +1050,7 @@ fn reparent_loop(c: DbConn, paths: List[String], old_rel: String, new_rel: Strin
     Ok(0)
   } else {
     let p = paths[i]
-    let np = new_rel ++ str.slice(p, str.len(old_rel), str.len(p))
+    let np = new_rel ++ str.slice(p, len(old_rel), len(p))
     # A move is not an edit of the row, so its stamp stays put (#267). Three
     # reasons this is the right answer and not just the cheap one:
     #   1. updated_at leaves through two exits that both mean "the content was

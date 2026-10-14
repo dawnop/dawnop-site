@@ -41,8 +41,8 @@ fn after(s: String, sep: String) -> String = {
 }
 
 fn unquote(s: String) -> String =
-  if str.len(s) >= 2 && ((str.starts_with(s, "\"") && str.ends_with(s, "\"")) || (str.starts_with(s, "'") && str.ends_with(s, "'"))) {
-    str.slice(s, 1, str.len(s) - 1)
+  if len(s) >= 2 && ((str.starts_with(s, "\"") && str.ends_with(s, "\"")) || (str.starts_with(s, "'") && str.ends_with(s, "'"))) {
+    str.slice(s, 1, len(s) - 1)
   } else {
     s
   }

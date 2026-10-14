@@ -195,10 +195,10 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
     let _n = ex.getRequestBody()!.transferTo(buf)
     let got = buf.toByteArray()!
     let content_length = ex.getRequestHeaders()!.getFirst("Content-Length")!
-    let exact = got == expected && content_length == "${bytes.len(expected)}"
+    let exact = got == expected && content_length == "${len(expected)}"
     let status = if exact { 200 } else { 422 }
     let response = if exact { bytes.utf8("{}") } else { bytes.utf8("mismatch") }
-    ex.sendResponseHeaders(status, bytes.len(response))
+    ex.sendResponseHeaders(status, len(response))
     let os = ex.getResponseBody()!
     os.write(response)
     os.close()

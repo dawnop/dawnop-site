@@ -64,15 +64,15 @@ def main() -> int:
         replace_once(
             auth,
             '      } else {\n        ""\n      }\n  }\n',
-            "      } else {\n        str.slice(h, i + 1, str.len(h))\n      }\n  }\n",
+            "      } else {\n        str.slice(h, i + 1, len(h))\n      }\n  }\n",
         )
     else:
         # Tidy up the credential, which accepts `Bearer  <jwt>` -- a header
         # FastAPI's partition(" ") leaves with a leading space, so it 401s there.
         replace_once(
             auth,
-            "        str.slice(h, i + 1, str.len(h))\n      } else {\n",
-            "        str.trim(str.slice(h, i + 1, str.len(h)))\n      } else {\n",
+            "        str.slice(h, i + 1, len(h))\n      } else {\n",
+            "        str.trim(str.slice(h, i + 1, len(h)))\n      } else {\n",
         )
     return 0
 

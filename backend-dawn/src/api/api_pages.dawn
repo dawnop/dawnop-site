@@ -66,7 +66,7 @@ pub fn page_create(a: Auth) -> Handler =
       })
 
 # title/slug carry Field(max_length=255)
-fn page_over_len(s: String) -> Bool = str.len(s) > 255
+fn page_over_len(s: String) -> Bool = len(s) > 255
 
 # type is Literal["content","article_list"]; anything else (incl. "builtin") is a 422
 fn bad_page_type(t: String) -> Bool = t != "content" && t != "article_list"

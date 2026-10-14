@@ -13,7 +13,7 @@ use db/sql.{DbConn, PInt, ColInt, ColStr, query, str_at, bool_at, first_row}
 ## side (Content-Disposition filename*, fm download attname, WebDAV href).
 pub fn pct_encode(s: String) -> String = {
   let b = bytes.utf8(s)
-  pct_loop(b, 0, bytes.len(b), "")
+  pct_loop(b, 0, len(b), "")
 }
 
 fn pct_loop(b: Bytes, i: Int, n: Int, acc: String) -> String =

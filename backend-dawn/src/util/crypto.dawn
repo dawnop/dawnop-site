@@ -49,7 +49,7 @@ pub fn b64url_decode(s: String) -> Result[String, String] !io =
   }
 
 fn pad4(s: String) -> String =
-  match str.len(s) - str.len(s) / 4 * 4 {
+  match len(s) - len(s) / 4 * 4 {
     0 -> s
     2 -> s ++ "=="
     3 -> s ++ "="
@@ -62,12 +62,12 @@ fn pad4(s: String) -> String =
 pub fn eq_const(a: String, b: String) -> Bool = {
   let x = bytes.utf8(a)
   let y = bytes.utf8(b)
-  let n = if bytes.len(x) > bytes.len(y) { bytes.len(x) } else { bytes.len(y) }
-  var diff = bytes.len(x) ^ bytes.len(y)
+  let n = if len(x) > len(y) { len(x) } else { len(y) }
+  var diff = len(x) ^ len(y)
   var i = 0
   while i < n {
-    let p = if i < bytes.len(x) { bytes.at(x, i) } else { 0 }
-    let q = if i < bytes.len(y) { bytes.at(y, i) } else { 0 }
+    let p = if i < len(x) { bytes.at(x, i) } else { 0 }
+    let q = if i < len(y) { bytes.at(y, i) } else { 0 }
     diff = diff | (p ^ q)
     i = i + 1
   }
@@ -138,14 +138,14 @@ test "constant-time equality" {
 
 test "uuid shape" {
   let u = uuid()
-  assert str.len(u) == 36
+  assert len(u) == 36
   assert u != uuid()
 }
 
 test "random tokens are 256-bit base64url and do not repeat" {
   let t = random_token()
-  assert str.len(t) == 43
-  assert bytes.len(random_bytes(32)) == 32
+  assert len(t) == 43
+  assert len(random_bytes(32)) == 32
   assert t != random_token()
   # base64url alphabet only: nothing that needs escaping in a header or a URL
   assert not str.contains(t, "+")

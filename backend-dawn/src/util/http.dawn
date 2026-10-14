@@ -537,7 +537,7 @@ fn unwrap_execution(e: ForeignError) -> ForeignError =
         Some(i) ->
           ForeignError {
             kind: str.slice(c, 0, i),
-            message: str.slice(c, i + 2, str.len(c)),
+            message: str.slice(c, i + 2, len(c)),
             cause: None,
           }
       }
@@ -582,7 +582,7 @@ fn echo_server(status: Int, body: String) -> (HttpServer, Int) !io = {
     # reflect the request headers back so a test can assert what was sent
     let probe = unwrap_or(ex.getRequestHeaders()!.getFirst("X-Probe"), "-")
     let payload = bytes.utf8(body ++ probe)
-    ex.sendResponseHeaders(status, bytes.len(payload))
+    ex.sendResponseHeaders(status, len(payload))
     let os = ex.getResponseBody()!
     os.write(payload)
     os.close()
@@ -607,7 +607,7 @@ test "a bad host is an Err, not a crash" {
   # .invalid is reserved by RFC 2606 and never resolves — no live host involved
   match with_upstream(new_client(), () => fetch("https://no-such-host.invalid/", [])) {
     Ok(_) -> { assert false }
-    Err(m) -> { assert str.len(m) > 0 }
+    Err(m) -> { assert len(m) > 0 }
   }
 }
 
@@ -676,7 +676,7 @@ fn stall_server(stall_ms: Int, status: Int, body: String) -> (HttpServer, Int) !
   server.createContext("/", ex => {
     Thread.sleep(stall_ms)
     let payload = bytes.utf8(body)
-    ex.sendResponseHeaders(status, bytes.len(payload))
+    ex.sendResponseHeaders(status, len(payload))
     let os = ex.getResponseBody()!
     os.write(payload)
     os.close()
@@ -784,7 +784,7 @@ fn port_server() -> (HttpServer, Int) !io = {
   let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
   server.createContext("/", ex => {
     let payload = bytes.utf8(to_string(ex.getRemoteAddress()!.getPort()))
-    ex.sendResponseHeaders(200, bytes.len(payload))
+    ex.sendResponseHeaders(200, len(payload))
     let os = ex.getResponseBody()!
     os.write(payload)
     os.close()
@@ -1139,7 +1139,7 @@ test "the installed handler is what the callers see, and the machine is not" {
   # fails, because nothing is listening there
   match with_upstream(new_client(), () => fetch("http://127.0.0.1:1/never", [])) {
     Ok(r) -> panic("port 1 answered ${to_string(r.status)}")
-    Err(m) -> { assert str.len(m) > 0 }
+    Err(m) -> { assert len(m) > 0 }
   }
 }
 
@@ -1177,7 +1177,7 @@ fn body_tag(b: OutBody) -> String =
   match b {
     NoBody -> "none"
     TextBody(s) -> "text:${s}"
-    RawBody(raw) -> "raw:${to_string(bytes.len(raw))}"
+    RawBody(raw) -> "raw:${to_string(len(raw))}"
     PublishedBody(_p) -> "published"
   }
 

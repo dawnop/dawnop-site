@@ -63,7 +63,7 @@ pub fn split_kind(m: String) -> (Kind, String) =
     None -> (KPlain, m)
     Some(i) ->
       match named(str.slice(m, 0, i)) {
-        Some(k) -> (k, str.slice(m, i + 1, str.len(m)))
+        Some(k) -> (k, str.slice(m, i + 1, len(m)))
         None -> (KPlain, m)
       }
   }

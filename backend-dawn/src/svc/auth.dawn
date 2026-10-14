@@ -52,7 +52,7 @@ pub type Auth = {
 fn verify_password(plain: String, hashed: String) -> Bool !io = {
   let normalized =
     if str.starts_with(hashed, "\$2b\$") || str.starts_with(hashed, "\$2y\$") {
-      "\$2a\$" ++ str.slice(hashed, 4, str.len(hashed))
+      "\$2a\$" ++ str.slice(hashed, 4, len(hashed))
     } else {
       hashed
     }
@@ -195,7 +195,7 @@ pub fn scheme_param(h: String, want: String) -> String =
     None -> ""
     Some(i) ->
       if str.to_lower(str.slice(h, 0, i)) == want {
-        str.slice(h, i + 1, str.len(h))
+        str.slice(h, i + 1, len(h))
       } else {
         ""
       }
@@ -248,12 +248,12 @@ test "verify_password accepts the \$2b hashes the shared users table holds" {
   # getting it wrong locks every existing account out with a 401.
   let a2 = BCrypt.hashpw("hunter2", BCrypt.gensalt(4)!)!
   assert str.starts_with(a2, "\$2a\$")
-  let b2 = "\$2b\$" ++ str.slice(a2, 4, str.len(a2))
+  let b2 = "\$2b\$" ++ str.slice(a2, 4, len(a2))
   assert verify_password("hunter2", b2)
   assert verify_password("hunter2", a2)
   assert not verify_password("wrong-password", b2)
   # $2y$ is the third spelling of the same hash
-  assert verify_password("hunter2", "\$2y\$" ++ str.slice(a2, 4, str.len(a2)))
+  assert verify_password("hunter2", "\$2y\$" ++ str.slice(a2, 4, len(a2)))
   # the trap: jBCrypt refuses the $2b revision outright rather than ignoring it,
   # so without the rewrite this is what every login would hit
   match catch_fault(() => BCrypt.checkpw("hunter2", b2)) {

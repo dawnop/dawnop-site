@@ -44,7 +44,7 @@ pub fn viz_create(a: Auth) -> Handler =
           let source = str_or(m, "source", "")
           if present_null(m, "name") || present_null(m, "compiled") || present_null(m, "style") || present_null(m, "source") {
             Err(http_error(422, "字段不能为 null"))
-          } else if str.len(str_or(m, "slug", "")) > 255 {
+          } else if len(str_or(m, "slug", "")) > 255 {
             Err(http_error(422, "slug 长度超出 255"))
           } else if not valid_slug(slug) {
             Err(http_error(422, "slug 格式非法"))
@@ -123,7 +123,7 @@ fn viz_update_read(c: DbConn, id: Int, m: Map[String, Json]) -> Result[Option[Js
 fn update_viz_slug(c: DbConn, id: Int, raw: String) -> Result[Int, String] !io = {
   # _clean_slug lowercases+trims before validating; VizUpdate.slug is max_length=255
   let slug = str.to_lower(str.trim(raw))
-  if str.len(raw) > 255 {
+  if len(raw) > 255 {
     Err("slug 长度超出 255")
   } else if not valid_slug(slug) {
     Err("slug 格式非法")

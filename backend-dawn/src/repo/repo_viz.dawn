@@ -8,7 +8,7 @@ use util/jsonx.{obj, jint, jstr, jdatetime}
 ## slug: lowercase alnum segments joined by single dashes, no leading/trailing/
 ## double dash. Empty is invalid.
 pub fn valid_slug(s: String) -> Bool =
-  str.len(s) > 0 && no_edge_dash(s) && only_slug_chars(s) && no_double_dash(s)
+  len(s) > 0 && no_edge_dash(s) && only_slug_chars(s) && no_double_dash(s)
 
 fn no_edge_dash(s: String) -> Bool = not str.starts_with(s, "-") && not str.ends_with(s, "-")
 
