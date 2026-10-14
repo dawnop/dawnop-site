@@ -163,7 +163,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   那是一份没人声明的跨层契约，改一句话就悄悄改了状态码——并且已经错过一次（`qiniu/rs` 写的是
   `qiniu` 不是「七牛」，于是被对象存储拒掉的 WebDAV COPY 回 500，而 FastAPI 参照回 502）。
 - `db/db.dawn` — 每请求一连接（`with_db`）：WAL + `load_extension(libsimple)`。
-- `util/bcrypt.dawn` — 纯 Dawn 的 bcrypt（`$2a$`）校验，取代 jBCrypt；JVM 上约慢 10 倍（cost 12 约 1.9 s 对 0.18 s，见提交说明），换 cost 前先重测。
+- `util/bcrypt.dawn` — 纯 Dawn 的 bcrypt（`$2a$`）校验，取代 jBCrypt；状态是 `std/mem` 的 `I64Buf`（`with_mem` 内生灭，对外纯函数）；cost 12 校验与 jBCrypt 同量级（JVM 约 0.16 s），换 cost 前先重测。
 - `util/crypto.dawn` — sha256 / hmac-sha1 / hmac-sha256 / base64url / uuid（auth、七牛、JWT、腾讯共用）。
 - `util/http.dawn` — java.net.http 出站客户端：`fetch/post` + `fetch_bytes`（二进制体，G6）；
   **出站 HTTP 是具名效果 `Upstream`**（四个操作：text / bytes / stream / 起一个不等的交换）。

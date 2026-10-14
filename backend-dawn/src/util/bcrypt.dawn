@@ -14,31 +14,31 @@
 #
 # ---- how the state is held, and why it is shaped like this ----
 #
-# Dawn has no mutable array: a List is persistent, there is no `xs[i] = v`, and
-# an update by slicing is O(n). Blowfish's key schedule is nothing but ~8.5M
-# single-word writes at cost 12, so a literal port would copy a 1042-word table
-# for every one of them. The way out is that the schedule never writes at random.
-# Each pass rewrites the 1042 words (18 P words, then four 256-word S-boxes) in
-# strictly increasing order, so a pass can build its result by appending, which
-# is O(1) amortized on a List, while reading from the *previous* state for
-# every word it has not reached yet. `rd` is that merge: index k below the
-# count already built reads the new list, otherwise the old one. That is exactly
-# what an in-place pass would see, because an in-place pass also reads its own
-# earlier writes and its own not-yet-written words. All four tables live in one
-# flat 1042-word list (P at 0, S0 at 18, S1 at 274, S2 at 530, S3 at 786).
+# Blowfish's key schedule is nothing but ~8.5M single-word writes at cost 12,
+# each of which depends on the words written before it. A persistent List pays
+# a copy or a rebuild for that; a flat mutable buffer does not. The state is one
+# `I64Buf` of 1042 words (P at 0, S0 at 18, S1 at 274, S2 at 530, S3 at 786),
+# born by `from_list(INIT)` inside `mem.with_mem` in `hash_raw` and dead when
+# that call returns. `Mem` is resolved there, so everything outside this file
+# sees a pure function, and the buffer cannot be shared between two hashes: the
+# checker refuses a `with_mem` result that mentions a buffer.
 #
-# It is slower than jBCrypt by a constant factor (about 10x on the JVM, measured
-# in the commit that introduced this file), and the cost parameter makes that
-# factor visible: re-measure before raising a cost anywhere. The 16 rounds are
-# written out inside `rewrite`, the hot loop, rather than called as `encipher`:
-# the call returned a tuple per block and cost a third of the run. `encipher`
-# stays for the 64 final blocks, where it is not hot.
+# History: this file first held the state as a List, rebuilt by append-only
+# passes (a pass writes in increasing order, so it can append to the new list
+# while reading the old one), and ran about 10x slower than jBCrypt on the JVM
+# (1.9 s against 0.18 s at cost 12). Moving the state into `I64Buf` brings it to
+# jBCrypt's speed; the measurements are in the commit that made the change.
+# Every helper takes the buffer as an explicit argument and carries `!Mem`, so
+# the loop reads and writes through a borrowed handle. `encipher` keeps its
+# tuple result for the 64 final blocks; the 16 rounds are written out inside
+# `rewrite`, the hot loop, so no tuple is built per block.
 #
 # Dawn's `Int` is 64-bit and signed, so every 32-bit sum ends in `& MASK`. The
 # shifts are `>>>`; words are masked before they are shifted.
 
 use std/bytes
-use std/list.{drop}
+use std/mem
+use std/mem.{Mem}
 
 const MASK: Int = 0xFFFFFFFF
 
@@ -235,30 +235,25 @@ const ALPHABET: String = "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 
 # ---- Blowfish ----
 
-## Word `k` of the state being built: from `nw` when the pass has already
-## written it (k < n), otherwise from the state the pass started from.
-fn rd(nw: List[Int], old: List[Int], n: Int, k: Int) -> Int =
-  if k < n { nw[k] } else { old[k] }
-
-fn feistel(nw: List[Int], old: List[Int], n: Int, x: Int) -> Int = {
-  let a = rd(nw, old, n, S0 + ((x >>> 24) & 0xFF))
-  let b = rd(nw, old, n, S1 + ((x >>> 16) & 0xFF))
-  let c = rd(nw, old, n, S2 + ((x >>> 8) & 0xFF))
-  let d = rd(nw, old, n, S3 + (x & 0xFF))
+fn feistel(s: I64Buf, x: Int) -> Int !Mem = {
+  let a = mem.at(s, S0 + ((x >>> 24) & 0xFF))
+  let b = mem.at(s, S1 + ((x >>> 16) & 0xFF))
+  let c = mem.at(s, S2 + ((x >>> 8) & 0xFF))
+  let d = mem.at(s, S3 + (x & 0xFF))
   ((((a + b) ^ c) + d)) & MASK
 }
 
 ## One block through the 16 rounds, returned as (left, right).
-fn encipher(nw: List[Int], old: List[Int], n: Int, l0: Int, r0: Int) -> (Int, Int) = {
-  var l = l0 ^ rd(nw, old, n, 0)
+fn encipher(s: I64Buf, l0: Int, r0: Int) -> (Int, Int) !Mem = {
+  var l = l0 ^ mem.at(s, 0)
   var r = r0
   var i = 1
   while i < 17 {
-    r = r ^ feistel(nw, old, n, l) ^ rd(nw, old, n, i)
-    l = l ^ feistel(nw, old, n, r) ^ rd(nw, old, n, i + 1)
+    r = r ^ feistel(s, l) ^ mem.at(s, i)
+    l = l ^ feistel(s, r) ^ mem.at(s, i + 1)
     i = i + 2
   }
-  (r ^ rd(nw, old, n, 17), l)
+  (r ^ mem.at(s, 17), l)
 }
 
 ## `count` big-endian words read cyclically from `key`, the way bcrypt feeds a
@@ -282,21 +277,20 @@ fn stream_words(key: Bytes, count: Int) -> List[Int] = {
   out
 }
 
-## The state with the 18 P words XORed with `kw`.
-fn xor_p(st: List[Int], kw: List[Int]) -> List[Int] = {
-  var out: List[Int] = []
+## XORs `kw` into the 18 P words of the state.
+fn xor_p(s: I64Buf, kw: List[Int]) -> Unit !Mem = {
   var i = 0
   while i < 18 {
-    out = out ++ [st[i] ^ kw[i]]
+    mem.set(s, i, mem.at(s, i) ^ kw[i])
     i = i + 1
   }
-  out ++ drop(st, 18)
 }
 
-## One rewrite pass over all 1042 words. `salt` is either empty or four words
-## that are XORed into the running block before each encipher (cycling pairwise).
-fn rewrite(old: List[Int], salt: List[Int]) -> List[Int] = {
-  var nw: List[Int] = []
+## One rewrite pass over all 1042 words, in place. `salt` is either empty or four
+## words that are XORed into the running block before each encipher (cycling
+## pairwise). The 16 rounds are written out here, in the hot loop, rather than
+## calling `encipher`: a call returning a tuple per block is not free.
+fn rewrite(s: I64Buf, salt: List[Int]) -> Unit !Mem = {
   var n = 0
   var l = 0
   var r = 0
@@ -306,49 +300,51 @@ fn rewrite(old: List[Int], salt: List[Int]) -> List[Int] = {
       l = l ^ salt[n & 2]
       r = r ^ salt[(n & 2) + 1]
     }
-    var a = l ^ rd(nw, old, n, 0)
+    var a = l ^ mem.at(s, 0)
     var b = r
     var i = 1
     while i < 17 {
-      b = b ^ feistel(nw, old, n, a) ^ rd(nw, old, n, i)
-      a = a ^ feistel(nw, old, n, b) ^ rd(nw, old, n, i + 1)
+      b = b ^ feistel(s, a) ^ mem.at(s, i)
+      a = a ^ feistel(s, b) ^ mem.at(s, i + 1)
       i = i + 2
     }
-    l = b ^ rd(nw, old, n, 17)
+    l = b ^ mem.at(s, 17)
     r = a
-    nw = nw ++ [l, r]
+    mem.set(s, n, l)
+    mem.set(s, n + 1, r)
     n = n + 2
   }
-  nw
 }
 
-## The expensive key setup: one salted expansion, then 2^cost times expand with
-## the key and expand with the salt.
-fn eks_setup(key: Bytes, salt: Bytes, cost: Int) -> List[Int] = {
+## The expensive key setup, in place on `s`: one salted expansion, then 2^cost
+## times expand with the key and expand with the salt.
+fn eks_setup(s: I64Buf, key: Bytes, salt: Bytes, cost: Int) -> Unit !Mem = {
   let kw = stream_words(key, 18)
   let sw = stream_words(salt, 18)
   let salt_words = stream_words(salt, 4)
-  var st = rewrite(xor_p(INIT, kw), salt_words)
+  xor_p(s, kw)
+  rewrite(s, salt_words)
   var i = 0
   let rounds = 1 << cost
   while i < rounds {
-    st = rewrite(xor_p(st, kw), [])
-    st = rewrite(xor_p(st, sw), [])
+    xor_p(s, kw)
+    rewrite(s, [])
+    xor_p(s, sw)
+    rewrite(s, [])
     i = i + 1
   }
-  st
 }
 
 ## "OrpheanBeholderScryDoubt" encrypted 64 times in ECB with the final state,
 ## as 24 bytes.
-fn digest(st: List[Int]) -> List[Int] = {
+fn digest(s: I64Buf) -> List[Int] !Mem = {
   var w = stream_words(bytes.utf8("OrpheanBeholderScryDoubt"), 6)
   var round = 0
   while round < 64 {
     var next: List[Int] = []
     var j = 0
     while j < 6 {
-      let (a, b) = encipher([], st, 0, w[j], w[j + 1])
+      let (a, b) = encipher(s, w[j], w[j + 1])
       next = next ++ [a, b]
       j = j + 2
     }
@@ -361,6 +357,15 @@ fn digest(st: List[Int]) -> List[Int] = {
   }
   out
 }
+
+## The digest of the state `key` and `salt` build at `cost`. The state buffer
+## is born and dies inside this call, so from the outside it is a pure function.
+fn hash_raw(key: Bytes, salt: Bytes, cost: Int) -> List[Int] =
+  mem.with_mem(() => {
+    let s = mem.from_list(INIT)
+    eks_setup(s, key, salt, cost)
+    digest(s)
+  })
 
 # ---- bcrypt base64 ----
 
@@ -435,8 +440,7 @@ fn show_int(n: Int) -> String = "${n}"
 ## revision defines it.
 pub fn hash_with_salt(plain: String, salt: Bytes, cost: Int) -> String = {
   let key = bytes.freeze(bytes.put(bytes.put_bytes(bytes.buf(), bytes.utf8(plain)), 0))
-  let st = eks_setup(key, salt, cost)
-  let out = digest(st)
+  let out = hash_raw(key, salt, cost)
   let salt_list = bytes_list(salt)
   "\$2a\$" ++ two_digits(cost) ++ "\$" ++ encode64(salt_list, 16) ++ encode64(out, 23)
 }
@@ -561,4 +565,76 @@ test "hash_with_salt produces a hash checkpw accepts, and a different salt a dif
   assert checkpw("hunter2", h1)
   assert not checkpw("hunter3", h1)
   assert hash_with_salt("hunter2", s2, 4) != h1
+}
+
+# 41 hashes minted by jBCrypt 0.4 (costs 4 to 7; empty, unicode, 71/72/73/100 byte
+# and random passwords), kept so the port stays byte-identical to the library it
+# replaced. Every password here verifies; the ones under the 72-byte key limit
+# must also reject an altered password (past it, jBCrypt ignores the tail too).
+fn jbcrypt_cases() -> List[(String, String)] = [
+  ("", "\$2a\$04\$JJ2.Z.i.qod/jiU5350Yse8/yKBu.vtD.A1a8kssrzg4FFTVLBkgK"),
+  ("a", "\$2a\$05\$Lf7z/BC2qMQxh9TS42mrOOY6WaF3QnE4IW4NsYE495lgLlgVPWrlC"),
+  ("pässwörd", "\$2a\$06\$Q8Erme8G9gwhOlP9e1cmX.jSLaorjYo9VwPdIAzlRHTxjRyqOWEZa"),
+  ("密码🔑", "\$2a\$07\$P/FDRDZbgnUNRujTebB1qOR93y1fLaEI9f2zWaQZNxSlTR9dOkPUq"),
+  ("日本語パスワード", "\$2a\$04\$immTNusFk4wHp8jvsqxIZu2hAY.ow88U4CoMvZOVSXTyH2fJxV8Za"),
+  ("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrs", "\$2a\$05\$YgSgT.BdN1H0HZnHBWzgFuQXIcFP76dqjs8ExN4aFzZ2//2xRggRy"),
+  ("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrst", "\$2a\$06\$Sm9oVLcm.9WE321gX8P6x.XZgKHU55.70ZtYLTBRZq//4N8BbjmkS"),
+  ("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstu", "\$2a\$07\$wW.xuRUKvgNQ5xOjJ/174.jAWatdX1Kb6PlZ/XrUX6CiTgjFkLC7K"),
+  ("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuv", "\$2a\$04\$MqwUl4Ogt1sXaB9b6WT6QO0tZFKJMP4GfALG4sDzvCHJy5NAuh/Hm"),
+  ("mXxj9Mb.LPtdM5ux&cuPBqPC>+7,", "\$2a\$05\$WXJzmmPv9HojGFZG/ynE8uksqIO8If/ddCyGk0vq/SvJbdnhgXGWC"),
+  ("r/s:Ae@o*K[M@", "\$2a\$06\$ydOd4Fo0s/xkXphzdeOJre1FJsR9JHxiFPJ6z24wulgHbyCtaYICW"),
+  ("0N+T2PD4*E5oTw\$LPTB&sZOe=b:yhZT7Ag**", "\$2a\$07\$uZNFaSPa0IcM3gZGF/9Pnu0emKVnPoZV.OQZxrc0NsfSPYRsxhSlS"),
+  ("@Gj4n6{I<NyWp2s!PiR2-WsEV0}d3AN)", "\$2a\$04\$BSo4OBwnNPDxVuJI95J9n.B0PF.F14/z4DUaDz8BREKC8r25wpg0q"),
+  ("/7", "\$2a\$05\$417XN51juUCFCro4FG6zZe51gEQohRqZfJhMeqghY8aIjtb5byhZ6"),
+  ("s)EnR6XteL96*w9gbSvh3d=,29ybKS6c.ejD\$9", "\$2a\$06\$oLwXuOvpCTpjEo4KXoT1/uGKnPW1zCz6P.BVTCMzlulclXxJPqvk6"),
+  ("/%!rRC]9Gh+9M?mIIFmd:C1HbB>07", "\$2a\$07\$/CzKv7v8xAIh4QI4uySb7eBHUoYoh4AOLSKHgqBafleYcZ9X5rubO"),
+  ("eLv<[-0Yj", "\$2a\$04\$rYgEmcRCZ0uw4Z8BaUGBbeNX1kFcYP4kUr2CBTTInf8dLg6Nb1i7e"),
+  ("!(", "\$2a\$05\$wCOcycnR/ve1QnOea0DDCu8WVeUn/mSFm5nhbHAoSysZuZu3mlINe"),
+  ("}9%trW3Y[BC/!F2Ec", "\$2a\$06\$RLgSZhShd8cPYYwmSd.S5u/dVy9TbNKzv.Yu.p1iaQ.sPA8d6JKo2"),
+  ("8nGRg^aXshJ*AohIvfnpqZ", "\$2a\$07\$swQDfJ6260qt1N8YjsRPOuX/rmZ6FCJ8Mj.qjSLWMgBy.PrGVtWMq"),
+  ("0_AB;W&W!.:\$v0w]!", "\$2a\$04\$o2NhhODEjCiT56ChalgxuunN4DUz2SzqkxKklhSXrbE6dCm0vX5JK"),
+  (",bzF^VGuMG", "\$2a\$05\$acUOD5LYTHy8JeOqQ.i.z.91r3HDuiE8W3XgBP04VFvIBKuJVjFSe"),
+  ("yZcxNUoF{\$#Y3Vm3Q+ky6V>TAsLlk\$huADgj\$>", "\$2a\$06\$ygibvyyiKvSv/2yW6VafFu/9oIT.P0qAMqFt05u7tUKhh50zEpfu6"),
+  (",%Arnu#<n*>+QI=C(D{]#&%{bQVrm&e_.=", "\$2a\$07\$rlqeCTMw1ITBwzcbM6cntur.iLfi4Va0kMNmCJHwDImGMoJXaKdZy"),
+  ("u0}7hYV;miDoY#EvIknEzG0mN!S{kFjjG=&%", "\$2a\$04\$mhHAh0wpgw5nWP/Cy8XdFO6CtwHiHshfoi.m.EegNke0FJFFvU9.u"),
+  ("e2Oth2G+?qki].:Sn0G%Y0-y", "\$2a\$05\$QlvzacJaS6ps2wU3QSnDK.QC.qVojaFFsu0ZoNqZyewidlByPkZuS"),
+  ("^gw", "\$2a\$06\$qqxJxeaiOVDQQ3zexffOHOosjgAzGAWq.mU4LsBrUCQeK297Ur4vC"),
+  ("?H=]9:\$r.dl@3z&2aMtt)", "\$2a\$07\$BR.J866zX3Aw3Pstdk6Rmu.jhf8xwrmC5wX7Y/8r8dpq8bghUNHRW"),
+  ("_Dz*@F[?eS.v,=G@KSL8oRxEP@q6AaaL9_2kl0-z", "\$2a\$04\$9IqPx/69Y7gzhhg4YGnUpe26fzULw82aKOXOHgZukKcjCxc5Ta8Iq"),
+  ("GL\$uMBE?&dUi->", "\$2a\$05\$wTTGTfy3C1altMT.e2kRP.z31hom0.Vla3V6BJailJctH7E3aYvee"),
+  ("BpG#KgcgSCP+Wd<MU.:=S?7Y3^ND>kBkhp[*3P", "\$2a\$06\$kxUr96eLXIS5zrODxBLZ3e9jycukv2JcvdLLRCz/p5mBg72lrK8DK"),
+  ("ocs<", "\$2a\$07\$2FVAGjd76wHWl66K75KvWOnkiaQ/XmktZRkfWk0FoYdt8GJFS2yiO"),
+  ("j4cu,6kS!}k@hho@in)550ieD@hb", "\$2a\$04\$I.GByPLsVJcMzjiE0e17MugLoRZUuLlQ5lz2kR3KZso.2BbBu4fNq"),
+  ("DdM0H;nw;]QMJEru[l", "\$2a\$05\$9RHVKXy/nJTgGcfZ39QeBe6iBcIeRaHPuUxXiIVLWAM4USIhmnMHW"),
+  ("?*u2^dNQ.6iS;tB_tq_pvrT4W!=9iCJ", "\$2a\$06\$BBOCMQig12MG7FP3.dI4kuNvAKgdWsOEkPBd33SLtg0qfOp7spUbu"),
+  ("e92]uWUY2)lz4)ia&J5[+Ph", "\$2a\$07\$zW4GQp/vSzLUUsEZCAWZzO2dIr5pqeegGN1Q.DfY6VWOwEPx/QycO"),
+  ("pwIvATsu8s5=D", "\$2a\$04\$Mp9ilSTE7o0j4Efs54Y5heBkLfn8Ger29vsIls3NBB51/oODXiUpe"),
+  ("-5OA9fVgog:C1Q", "\$2a\$05\$MX7Ww.8Vh.P96CkIEtbUi.Nn/EydTu7.EAl6gsz8A9HaHqYAhNgru"),
+  ("Tx)rnI", "\$2a\$06\$tCg82UUnLoPRfqbcAwP1pedVBqimSt5fqMRG/CkrKA6hl7pIWOyKi"),
+  ("8=7J0G=5<y,YgxjeP%i-V)?", "\$2a\$07\$mXj5tRuafbj4v7tf8sztbemuE4INIUBM55p3FV3.U5RKIaNRq/mo."),
+  ("!}rx:;pek)B;/.JwCu;I0:J7br^rsI99I(i#Q", "\$2a\$04\$pYbjWj5SdpNVEqBgbyida.eAyPus2wP84.gbLl/bOcs6bjhiRUizq")
+]
+
+test "41 jBCrypt hashes verify, and a changed password is refused below the 72 byte limit" {
+  for (pw, h) in jbcrypt_cases() {
+    assert checkpw(pw, h)
+    if len(bytes.utf8(pw)) < 72 {
+      assert not checkpw(pw ++ "x", h)
+    }
+  }
+  assert len(jbcrypt_cases()) == 41
+}
+
+test "a cost 12 hash minted by jBCrypt verifies" {
+  assert checkpw("correct horse battery staple", "\$2a\$12\$abcdefghijklmnopqrstuu0sDWleciW5uGBGYwxpcgAsh9WK4bWNy")
+  assert not checkpw("correct horse battery stapl", "\$2a\$12\$abcdefghijklmnopqrstuu0sDWleciW5uGBGYwxpcgAsh9WK4bWNy")
+}
+
+test "the state buffer is private to each call: the same input hashes the same every time" {
+  let salt = bytes.utf8("0123456789abcdef")
+  let h1 = hash_with_salt("hunter2", salt, 4)
+  let other = hash_with_salt("another password", salt, 5)
+  let h2 = hash_with_salt("hunter2", salt, 4)
+  assert h1 == h2
+  assert other != h1
 }
