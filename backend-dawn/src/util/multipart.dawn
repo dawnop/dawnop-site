@@ -68,7 +68,7 @@ fn part_headers(block: String) -> List[(String, String)] =
         Some(i) ->
           acc ++ [(
             str.to_lower(str.trim(str.slice(line, 0, i))),
-            str.trim(str.slice(line, i + 1, str.len(line))),
+            str.trim(str.slice(line, i + 1, len(line))),
           )]
       })
 
@@ -103,14 +103,14 @@ fn bsplit(b: Bytes, sep: Bytes) -> List[Bytes] = bsplit_from(b, sep, 0, [])
 
 fn bsplit_from(b: Bytes, sep: Bytes, from: Int, acc: List[Bytes]) -> List[Bytes] =
   match bytes.index_of(b, sep, from) {
-    None -> acc ++ [bytes.slice(b, from, bytes.len(b))]
-    Some(i) -> bsplit_from(b, sep, i + bytes.len(sep), acc ++ [bytes.slice(b, from, i)])
+    None -> acc ++ [bytes.slice(b, from, len(b))]
+    Some(i) -> bsplit_from(b, sep, i + len(sep), acc ++ [bytes.slice(b, from, i)])
   }
 
 ## Drop a single trailing CRLF (the one before the next boundary) without touching
 ## the content's own bytes.
 fn strip_trailing_crlf(b: Bytes) -> Bytes = {
-  let n = bytes.len(b)
+  let n = len(b)
   if n >= 2 && bytes.slice(b, n - 2, n) == crlf_b() { bytes.slice(b, 0, n - 2) } else { b }
 }
 
@@ -119,10 +119,10 @@ fn strip_trailing_crlf(b: Bytes) -> Bytes = {
 ## lack a name and return None. Headers must decode as UTF-8 (in practice
 ## ASCII) or the part is refused; content stays Bytes.
 fn parse_part(chunk: Bytes) -> Option[Part] =
-  if bytes.len(chunk) < 2 || bytes.slice(chunk, 0, 2) != crlf_b() {
+  if len(chunk) < 2 || bytes.slice(chunk, 0, 2) != crlf_b() {
     None
   } else {
-    let body = bytes.slice(chunk, 2, bytes.len(chunk)) # strip the leading CRLF
+    let body = bytes.slice(chunk, 2, len(chunk)) # strip the leading CRLF
     match bytes.index_of(body, crlf2_b(), 0) { # headers | content on CRLFCRLF
       None -> None
       Some(hi) -> {
@@ -132,7 +132,7 @@ fn parse_part(chunk: Bytes) -> Option[Part] =
         match bytes.decode_utf8_checked(bytes.slice(body, 0, hi)) {
           Err(_) -> None
           Ok(headers) -> {
-            let content = strip_trailing_crlf(bytes.slice(body, hi + 4, bytes.len(body)))
+            let content = strip_trailing_crlf(bytes.slice(body, hi + 4, len(body)))
             match disp_name(headers) {
               None -> None
               Some(name) -> Some(Part {

@@ -241,7 +241,7 @@ pub fn name_refusal(name: String) -> Option[String] =
     Some("文件名不能包含 / 或 \\")
   } else if list.any(code_points(name), c => is_control(char.code(c))) {
     Some("文件名不能包含控制字符")
-  } else if bytes.len(bytes.utf8(name)) > MAX_NAME_BYTES {
+  } else if len(bytes.utf8(name)) > MAX_NAME_BYTES {
     Some("文件名不能超过 ${to_string(MAX_NAME_BYTES)} 字节")
   } else {
     match name_verdict(name) {
@@ -267,7 +267,7 @@ pub fn candidate_name(name: String, i: Int) -> String =
     if e == "" {
       "${name} (${to_string(i)})"
     } else {
-      let stem = str.slice(name, 0, str.len(name) - str.len(e) - 1)
+      let stem = str.slice(name, 0, len(name) - len(e) - 1)
       "${stem} (${to_string(i)}).${e}"
     }
   }
@@ -309,7 +309,7 @@ pub fn spec_refusal(s: DropSpec) -> Option[String] =
 
 fn known_drop(c: DbConn, token: String) -> Result[DropRow, DropErr] !io = {
   let _s = db(ensure_schema(c))?
-  let found: Option[DropRow] = if token == "" || str.len(token) > MAX_TOKEN_CHARS {
+  let found: Option[DropRow] = if token == "" || len(token) > MAX_TOKEN_CHARS {
     None
   } else {
     db(drop_by_hash(c, sha256_hex(token)))?

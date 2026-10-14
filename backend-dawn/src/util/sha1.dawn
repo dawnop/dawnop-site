@@ -62,10 +62,10 @@ fn compress(hs: List[Int], data: Bytes, off: Int) -> List[Int] = {
 
 ## The 20-byte SHA-1 digest of `data`.
 pub fn digest(data: Bytes) -> Bytes = {
-  let n = bytes.len(data)
+  let n = len(data)
   # 0x80, zeros up to 56 bytes into a block, then the 64-bit bit count
   var pad = bytes.put(bytes.put_bytes(bytes.buf(), data), 0x80)
-  while bytes.size(pad) % 64 != 56 {
+  while len(pad) % 64 != 56 {
     pad = bytes.put(pad, 0)
   }
   let bits = n * 8
@@ -77,7 +77,7 @@ pub fn digest(data: Bytes) -> Bytes = {
   let msg = bytes.freeze(pad)
   var hs = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0]
   var off = 0
-  while off < bytes.len(msg) {
+  while off < len(msg) {
     hs = compress(hs, msg, off)
     off = off + 64
   }

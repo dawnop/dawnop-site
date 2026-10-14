@@ -257,7 +257,7 @@ def main() -> int:
     elif args.mutant == "ignore-move-copy-body":
         replace_once(
             source,
-            "  if bytes.len(req.body) == 0 {\n",
+            "  if len(req.body) == 0 {\n",
             "  if true {\n",
         )
     elif args.mutant == "accept-file-parent":

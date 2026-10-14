@@ -94,7 +94,7 @@ pub fn create(a: Auth) -> Handler =
       })
 
 # title/slug carry Field(max_length=255); an over-length value is a 422 in FastAPI
-fn over_len(s: String) -> Bool = str.len(s) > 255
+fn over_len(s: String) -> Bool = len(s) > 255
 
 fn create_then_read(c: DbConn, na: NewArticle) -> Result[Json, String] !io = {
   let id = create_article(c, na)?

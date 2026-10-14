@@ -48,7 +48,7 @@ pub fn signed_url(q: Qiniu, key: String, suffix: String) -> String !io = {
 ## Move `path` from under `src_root` to under `dst_root`, keeping the tail. Both
 ## subtree copies walk rows this way, so a child lands at the mirrored spot.
 pub fn rebase(src_root: String, dst_root: String, path: String) -> String =
-  dst_root ++ str.slice(path, str.len(src_root), str.len(path))
+  dst_root ++ str.slice(path, len(src_root), len(path))
 
 fn best_effort_gc[!e](body: fn() -> Result[Unit, String] !e !io) -> Unit !e !io = {
   let _outcome: Result[Result[Unit, String], ForeignError] = catch_panic(body)
@@ -428,7 +428,7 @@ fn save_db(c: DbConn, rel: String, key: String, mime: String, size: Int) -> Resu
 }
 
 fn text_byte_size(content: String) -> Int !io =
-  bytes.len(bytes.utf8(content))
+  len(bytes.utf8(content))
 
 # Saving reuses the row's existing content type, so an unshippable legacy value
 # would be posted to qiniu and written back to the row unchanged. It goes through

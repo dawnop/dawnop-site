@@ -327,7 +327,7 @@ fn range_of(req: Request, total: Int) -> Option[(Int, Int)] =
       if not str.starts_with(rng, "bytes=") || total <= 0 {
         None
       } else {
-        let spec = str.slice(rng, 6, str.len(rng))
+        let spec = str.slice(rng, 6, len(rng))
         if str.contains(spec, ",") {
           None
         } else {
@@ -732,7 +732,7 @@ fn strip_destination_prefix(path: String, prefix: String) -> Result[String, Http
   } else if normalized_path == normalized_prefix {
     Ok("")
   } else if str.starts_with(normalized_path, normalized_prefix ++ "/") {
-    Ok(str.slice(normalized_path, str.len(normalized_prefix), str.len(normalized_path)))
+    Ok(str.slice(normalized_path, len(normalized_prefix), len(normalized_path)))
   } else {
     Err(http_error(400, "Destination 不在 WebDAV 根下"))
   }
@@ -857,7 +857,7 @@ fn dest_rel(req: Request) -> Result[Option[String], HttpError] !io =
 # while mutating the tree makes a request appear accepted when part of it was
 # discarded, so fail closed before any write.
 fn reject_move_copy_body(req: Request) -> Result[Unit, HttpError] =
-  if bytes.len(req.body) == 0 {
+  if len(req.body) == 0 {
     Ok(())
   } else {
     Err(http_error(415, "MOVE/COPY 不支持请求体"))

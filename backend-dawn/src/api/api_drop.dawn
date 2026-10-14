@@ -215,7 +215,7 @@ fn declared_length(req: Request) -> Option[Int] =
   }
 
 fn is_decimal(s: String) -> Bool =
-  s != "" && str.len(s) <= 18 && list.all(code_points(s), c => char.code(c) >= 0x30 && char.code(c) <= 0x39)
+  s != "" && len(s) <= 18 && list.all(code_points(s), c => char.code(c) >= 0x30 && char.code(c) <= 0x39)
 
 fn body_map(req: Request) -> Result[Map[String, Json], HttpError] !io =
   match body_obj(body_text(req)?) {

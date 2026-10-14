@@ -13,7 +13,7 @@ pub fn slugify(text: String) -> String = {
   let cps = code_points(str.to_lower(str.trim(text)))
   let out = collapse(cps, 0, [], false)
   let stripped = strip_edges(out)
-  if str.len(stripped) == 0 { "article" } else { stripped }
+  if len(stripped) == 0 { "article" } else { stripped }
 }
 
 # fold characters, turning non-word runs into single dashes

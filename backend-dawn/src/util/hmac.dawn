@@ -22,7 +22,7 @@ fn pad_with(key: Bytes, pad_byte: Int, msg: Bytes) -> Bytes = {
   var out = bytes.buf()
   var i = 0
   while i < BLOCK {
-    let k = if i < bytes.len(key) { bytes.at(key, i) } else { 0 }
+    let k = if i < len(key) { bytes.at(key, i) } else { 0 }
     out = bytes.put(out, k ^ pad_byte)
     i = i + 1
   }
@@ -30,7 +30,7 @@ fn pad_with(key: Bytes, pad_byte: Int, msg: Bytes) -> Bytes = {
 }
 
 fn mac(hash: fn(Bytes) -> Bytes, key: Bytes, msg: Bytes) -> Bytes = {
-  let k = if bytes.len(key) > BLOCK { hash(key) } else { key }
+  let k = if len(key) > BLOCK { hash(key) } else { key }
   hash(pad_with(k, 0x5c, hash(pad_with(k, 0x36, msg))))
 }
 
