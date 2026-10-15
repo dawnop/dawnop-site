@@ -20,9 +20,11 @@ environment — the two must never be compared with each other's bytes.
 
 Environment pinning is part of the contract, not an accident of the host:
 
-  * TZ=UTC — repo_fm derives `last_modified` from files.updated_at through
-    LocalDateTime in the system zone, so a +08 laptop and a UTC runner disagreed
-    by 28800 on every fm entry. Pinned here and recorded in the goldens.
+  * TZ=UTC — repo_fm derives `last_modified` from files.updated_at in the site's
+    fixed +08:00 zone (util/time.dawn), not the host's. It used to read the host
+    zone, so a +08 laptop and a UTC runner disagreed by 28800 on every fm entry.
+    The pin stays as a negative control: a run under TZ=UTC must still produce
+    the +08 values the goldens record.
   * DAWN_SIMPLE_EXT="" — never load the FTS tokenizer even if the .so happens to
     be on disk, so the search path is the same everywhere (see
     contract_golden.SEARCH_BACKEND for what that does and does not cover).

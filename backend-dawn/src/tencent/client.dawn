@@ -3,10 +3,7 @@
 # via the http client. Signing is tencent/sign (byte-for-byte vs the reference);
 # every call is read-only (DescribeInstances*, GetMonitorData) — safe.
 use std/str
-use java "java.time.Instant"
-use java "java.time.LocalDate"
-use java "java.time.ZoneOffset"
-use java "java.time.format.DateTimeFormatter"
+use util/time.{utc_date}
 use util/crypto.{sha256_hex}
 use util/clock.{Clock, now_s}
 use tencent/sign.{tc3_signature}
@@ -81,14 +78,6 @@ pub fn call_finish(t: PendingTc) -> Result[Json, String] !io = {
     Err("tencent ${t.action} HTTP ${to_string(r.status)}: ${r.body}")
   }
 }
-
-fn utc_date(ts: Int) -> String !io = {
-  let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")!
-  let d = LocalDate.ofInstant(java_instant(ts), ZoneOffset.ofHours(0)!)!
-  d.format(fmt)!
-}
-
-fn java_instant(ts: Int) -> Instant !io = Instant.ofEpochSecond(ts)!
 
 # ---- TC3 assembly, against a frozen clock ----
 #

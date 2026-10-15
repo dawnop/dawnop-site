@@ -5,9 +5,7 @@ use std/str
 use std/char
 use std/list
 use web/types.{HttpError, http_error}
-use java "java.time.LocalDateTime"
-use java "java.time.ZoneId"
-use java "java.time.format.DateTimeFormatter"
+use util/time.{parse_local}
 
 pub const STORAGE: String = "qiniu"
 
@@ -264,13 +262,16 @@ pub fn safe_persisted_mime(mime: String) -> String =
 fn is_shippable_mime(mime: String) -> Bool =
   mime != "" && list.all(code_points(mime), c => char.code(c) >= 0x20 && char.code(c) <= 0x7E)
 
-## Unix seconds for a SQLite DATETIME, interpreted in the system-local zone —
-## matches Python's naive `datetime.timestamp()`.
-pub fn ts(s: String) -> Int !io = {
+## Unix seconds for a SQLite DATETIME, interpreted in the site's fixed zone
+## (util/time.ZONE_OFFSET_S), which is what Python's naive `datetime.timestamp()`
+## saw on the host that wrote the rows. A malformed value panics, as the
+## java.time parse it replaced did.
+pub fn ts(s: String) -> Int = {
   let core = if len(s) >= 19 { str.slice(s, 0, 19) } else { s }
-  let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")!
-  let ldt = LocalDateTime.parse(core, fmt)!
-  ldt.atZone(ZoneId.systemDefault()!)!.toEpochSecond()
+  match parse_local(core) {
+    Some(t) -> t
+    None -> panic("malformed DATETIME: ${core}")
+  }
 }
 
 # Substring search (fm_split/parent_rel/basename/ext) now uses the builtin

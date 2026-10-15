@@ -25,10 +25,7 @@ use util/b64
 use util/uri.{Uri, is_opaque, percent_decode}
 use util/uri
 use db/sql.{DbConn}
-use java "java.text.SimpleDateFormat"
-use java "java.util.Date"
-use java "java.util.Locale"
-use java "java.util.TimeZone"
+use util/time.{http_date, iso_date}
 use web/types.{Request, Response, HttpError, Handler, Guard, http_error, as_http, as_http_with, text, raw, binary, redirect, with_header, header, headers_all, param_segs, response_headers}
 use web/router.{Route, route_method_of, tagged, body_limit, guarded}
 use db/db.{with_db}
@@ -78,17 +75,6 @@ fn xml_escape(s: String) -> String = {
 }
 
 # ---- dates (HTTP RFC1123 and ISO8601, both GMT) ----
-
-fn http_date(t: Int) -> String !io = fmt_date("EEE, dd MMM yyyy HH:mm:ss 'GMT'", t)
-
-fn iso_date(t: Int) -> String !io = fmt_date("yyyy-MM-dd'T'HH:mm:ss'Z'", t)
-
-fn fmt_date(pattern: String, t: Int) -> String !io = {
-  let loc = Locale.forLanguageTag("en-US")!
-  let f = SimpleDateFormat.new(pattern, loc)
-  let _z = f.setTimeZone(TimeZone.getTimeZone("GMT")!)
-  f.format(Date.new(t * 1000))!
-}
 
 # ---- prefix / rel / href ----
 

@@ -48,12 +48,12 @@ OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 #   updated_at,
 #   created_at     -> fixture literals. api_public deliberately does not touch
 #                     updated_at on a view. PINNED.
-#   last_modified  -> fm entries; repo_fm derives it from files.updated_at via
-#                     LocalDateTime in the *system* zone. Not wall-clock volatile,
-#                     environment volatile: it differed by 28800 between this
-#                     laptop (+08) and a UTC runner. Fixed by pinning TZ=UTC in
-#                     contract_run.py and recording it in the env fingerprint,
-#                     not by scrubbing the field. PINNED.
+#   last_modified  -> fm entries; repo_fm derives it from files.updated_at in the
+#                     site's fixed zone (util/time.dawn, +08:00), so it no longer
+#                     depends on the host zone. It used to: it differed by 28800
+#                     between a +08 laptop and a UTC runner. The runner still pins
+#                     TZ=UTC, now as a negative control that the host zone is
+#                     ignored. PINNED.
 #   cached_at, generated_at, now, timestamp, latency_ms, cpu*, load, uptime,
 #   mem*, disk, net, used*, free, available, rss, traffic, points, series,
 #   remote_space, space_used
