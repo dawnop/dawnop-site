@@ -1023,7 +1023,7 @@
       "path": "qiniu://archive",
       "type": "dir",
       "file_size": null,
-      "last_modified": 1767355200,
+      "last_modified": 1767326400,
       "mime_type": null,
       "visibility": "public"
      },
@@ -1035,7 +1035,7 @@
       "path": "qiniu://docs",
       "type": "dir",
       "file_size": null,
-      "last_modified": 1767441600,
+      "last_modified": 1767412800,
       "mime_type": null,
       "visibility": "public"
      },
@@ -1047,7 +1047,7 @@
       "path": "qiniu://empty-dir",
       "type": "dir",
       "file_size": null,
-      "last_modified": 1767787200,
+      "last_modified": 1767758400,
       "mime_type": null,
       "visibility": "public"
      },
@@ -1059,7 +1059,7 @@
       "path": "qiniu://图片",
       "type": "dir",
       "file_size": null,
-      "last_modified": 1768046400,
+      "last_modified": 1768017600,
       "mime_type": null,
       "visibility": "public"
      },
@@ -1071,7 +1071,7 @@
       "path": "qiniu://example.txt",
       "type": "file",
       "file_size": 42,
-      "last_modified": 1767873600,
+      "last_modified": 1767844800,
       "mime_type": "text/plain",
       "visibility": "public"
      },
@@ -1083,7 +1083,7 @@
       "path": "qiniu://legacy-parent.txt",
       "type": "file",
       "file_size": 64,
-      "last_modified": 1768219200,
+      "last_modified": 1768190400,
       "mime_type": "text/plain",
       "visibility": "public"
      },
@@ -1095,7 +1095,7 @@
       "path": "qiniu://readme.md",
       "type": "file",
       "file_size": 1024,
-      "last_modified": 1767960000,
+      "last_modified": 1767931200,
       "mime_type": "text/markdown",
       "visibility": "public"
      }
@@ -1117,7 +1117,7 @@
       "path": "qiniu://example.txt",
       "type": "file",
       "file_size": 42,
-      "last_modified": 1767873600,
+      "last_modified": 1767844800,
       "mime_type": "text/plain",
       "visibility": "public"
      },
@@ -1129,7 +1129,7 @@
       "path": "qiniu://legacy-parent.txt",
       "type": "file",
       "file_size": 64,
-      "last_modified": 1768219200,
+      "last_modified": 1768190400,
       "mime_type": "text/plain",
       "visibility": "public"
      }

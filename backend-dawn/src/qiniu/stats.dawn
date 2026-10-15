@@ -6,9 +6,8 @@
 # signature. Endpoints use http:// like the Python client (scheme is unsigned).
 use std/str
 use std/map
-use java "java.time.LocalDateTime"
-use java "java.time.ZoneId"
-use java "java.time.format.DateTimeFormatter"
+use util/clock.{system_s}
+use util/time.{parse_local, local_date, local_compact_date, local_compact_datetime}
 use util/http.{Pending, Upstream, fetch_start, post_start, await_resp}
 use qiniu/creds.{Qiniu}
 use qiniu/sign.{qiniu_mac}
@@ -60,11 +59,9 @@ pub fn finish_q(q: PendingQ) -> Result[Json, String] !io = {
 # ---- kodo v6 series (space / count / blob_io) ----
 
 fn day_range(days: Int) -> (String, String) !io = {
-  let d = DateTimeFormatter.ofPattern("yyyyMMdd")!
-  let full = DateTimeFormatter.ofPattern("yyyyMMddHHmmss")!
-  let now = LocalDateTime.now()!
-  let begin = now.minusDays(days)!.format(d)!
-  ("${begin}000000", now.format(full)!)
+  let now = system_s()
+  let begin = local_compact_date(now - days * 86400)
+  ("${begin}000000", local_compact_datetime(now))
 }
 
 ## Issue the `kodo_series` request. The day range is stamped here, so the reply
@@ -150,12 +147,11 @@ pub fn cdn_tune_start(q: Qiniu, kind: String, days: Int, domains: List[String]) 
   if len(domains) == 0 {
     Ok(None)
   } else {
-    let d = DateTimeFormatter.ofPattern("yyyy-MM-dd")!
-    let now = LocalDateTime.now()!
+    let now = system_s()
     let body = render(obj([
       ("domains", jstr(join(domains, ";"))),
-      ("startDate", jstr(now.minusDays(days)!.format(d)!)),
-      ("endDate", jstr(now.format(d)!)),
+      ("startDate", jstr(local_date(now - days * 86400))),
+      ("endDate", jstr(local_date(now))),
       ("granularity", jstr("day")),
     ]))
     let started = mac_json_start(q, "POST", FUSION_HOST, "/v2/tune/${kind}", body)?
@@ -176,12 +172,12 @@ pub fn cdn_tune_finish(started: Option[PendingQ]) -> Result[(List[Int], List[Int
     }
   }
 
-# "yyyy-MM-dd HH:mm:ss" in the local zone → unix seconds (matches strptime().timestamp())
-fn day_epoch(s: String) -> Int !io = {
-  let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")!
-  let zone = ZoneId.systemDefault()!
-  LocalDateTime.parse(s, fmt)!.atZone(zone)!.toEpochSecond()
-}
+# "yyyy-MM-dd HH:mm:ss" in the site zone (util/time) → unix seconds (matches strptime().timestamp())
+fn day_epoch(s: String) -> Int =
+  match parse_local(s) {
+    Some(t) -> t
+    None -> panic("malformed CDN day: ${s}")
+  }
 
 # every per-region value array under data.{domain}.{region}
 fn leaf_arrays(data: Json) -> List[List[Json]] = {

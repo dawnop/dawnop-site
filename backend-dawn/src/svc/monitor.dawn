@@ -13,15 +13,12 @@ use java "java.lang.Runtime"
 use java "java.lang.Thread"
 use java "java.io.File"
 use java "java.lang.management.ManagementFactory"
-use java "java.time.Instant"
-use java "java.time.LocalDateTime"
-use java "java.time.ZoneOffset"
-use java "java.time.format.DateTimeFormatter"
 use svc/auth.{Auth}
 use qiniu/creds.{Qiniu}
 use tencent/client
 use util/ttl.{TtlCell, cache_get, cache_put, new_cell, now_s}
 use util/clock.{Clock, system_ms}
+use util/time.{utc_datetime}
 use qiniu/stats.{field, int_of, last_nonzero, PendingQ, PendingRespack, kodo_series_start, kodo_series_finish, flow_series_start, flow_series_finish, cdn_domains_start, cdn_domains_finish, cdn_tune_start, cdn_tune_finish, respack_start, respack_finish, respack_summary}
 use tencent/client.{PendingTc}
 use util/http.{HttpCell, HttpResp, Upstream, fetch, new_client, fetch_start, await_resp, with_upstream, pending, no_answer}
@@ -439,11 +436,9 @@ fn instance_finish(started: Result[PendingTc, String]) -> Result[Json, String] !
 
 # QCE/LIGHTHOUSE CpuUsage, daily points over 30 days, via the monitor service
 fn cpu_trend_start(id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !Clock !Upstream !io = {
-  let fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")!
-  let zone = ZoneOffset.ofHours(0)!
-  let now = LocalDateTime.ofInstant(Instant.now()!, zone)!
-  let start = now.minusDays(30)!
-  let payload = "{\"Namespace\":\"QCE/LIGHTHOUSE\",\"MetricName\":\"CpuUsage\",\"Period\":86400,\"StartTime\":\"${start.format(fmt)!}+00:00\",\"EndTime\":\"${now.format(fmt)!}+00:00\",\"Instances\":[{\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"${instance}\"}]}]}"
+  let now = now_s()
+  let start = now - 30 * 86400
+  let payload = "{\"Namespace\":\"QCE/LIGHTHOUSE\",\"MetricName\":\"CpuUsage\",\"Period\":86400,\"StartTime\":\"${utc_datetime(start)}+00:00\",\"EndTime\":\"${utc_datetime(now)}+00:00\",\"Instances\":[{\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"${instance}\"}]}]}"
   client.call_start(id, key, "monitor", "GetMonitorData", "2018-07-24", region, payload)
 }
 
