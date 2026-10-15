@@ -37,6 +37,7 @@ use svc/files.{gc_unreferenced}
 use repo/repo_drop.{DropRow, DropPending, ensure_schema, insert_drop, drop_by_hash, drop_by_id, list_drops, revoke_drop, delete_drop, dir_present, rel_free, reserve_key, pending_for, release_key, insert_drop_file, charge}
 use repo/repo_fm.{key_referenced}
 use util/paths.{fm_join, basename, ext, key_ext_ok, guess_mime, safe_persisted_mime, name_verdict, NameAccepted, NameAllBlank, NameEdgeBlank, NameDotSegment}
+use std/io.{Random}
 use util/crypto.{random_token, sha256_hex, uuid_hex}
 use util/clock.{Clock, now_s}
 use util/ferr.{catch_text}
@@ -274,7 +275,7 @@ pub fn candidate_name(name: String, i: Int) -> String =
 
 # Only a short alphanumeric extension is carried into the object key; anything
 # else gets a bare uuid (util/paths `key_ext_ok`, shared with the text save).
-fn mint_key(name: String) -> String !io = {
+fn mint_key(name: String) -> String !Random !io = {
   let e = ext(name)
   if key_ext_ok(e) { "${uuid_hex()}.${e}" } else { uuid_hex() }
 }
@@ -364,7 +365,7 @@ fn pick_rel(c: DbConn, dir: String, name: String, own_key: String, i: Int) -> Re
 
 ## POST /api/drop/upload-token: reserve a fresh key and a free name for one file,
 ## and sign a credential the bucket itself limits (insertOnly, fsizeLimit).
-pub fn grant_direct(a: Auth, token: String, name: String, size: Int) -> Result[DirectGrant, DropErr] !Clock !io = {
+pub fn grant_direct(a: Auth, token: String, name: String, size: Int) -> Result[DirectGrant, DropErr] !Random !Clock !io = {
   let d = with_db(a.db.path, a.db.ext, c => active_drop(c, token))?
   let _n = name_ok(name)?
   let _q = refuse_if(quota_refusal(d, size))?
@@ -477,7 +478,7 @@ pub fn put_precheck(a: Auth, token: String, name: String, declared: Option[Int])
 ## chunked body). The quota is judged on the declared length before anything is
 ## uploaded (by the route's guard before the spill, and here again after it),
 ## and on the actual length in the final transaction.
-pub fn put_file(a: Auth, token: String, name: String, declared: Option[Int], body_path: Option[String]) -> Result[(String, Int), DropErr] !Clock !Upstream !io = {
+pub fn put_file(a: Auth, token: String, name: String, declared: Option[Int], body_path: Option[String]) -> Result[(String, Int), DropErr] !Random !Clock !Upstream !io = {
   let checked = put_precheck(a, token, name, declared)?
   let (d, length) = checked
   let path = spilled(body_path)?
@@ -587,7 +588,7 @@ fn discard(a: Auth, key: String, drop_id: Int) -> Unit !Upstream !io = {
 # ---- admin ----
 
 ## POST /api/fm/drops: create a link, saving its token for the admin list.
-pub fn create_drop(a: Auth, s: DropSpec) -> Result[(DropRow, String), DropErr] !Clock !io = {
+pub fn create_drop(a: Auth, s: DropSpec) -> Result[(DropRow, String), DropErr] !Random !Clock !io = {
   let _v = spec_ok(s)?
   let token = random_token()
   let expires_at = now_s() + s.expires_in_s

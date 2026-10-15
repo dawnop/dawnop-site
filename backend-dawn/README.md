@@ -381,7 +381,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   每个 drop 请求在自己的连接上再 `create table if not exists` 一次（表已在时 SQLite 不拿写锁，实测），
   因为库文件可能在进程运行中被换掉（恢复备份、契约 harness 重播 fixture）。旧的仅摘要链接
   在升级事务内清除，同时清其 `drop_pending`；已上传文件与 `pending_uploads` 孤儿账本保留。
-- `qiniu/sign.upload_token_limited` 与 `util/crypto.random_token`（32 字节 SecureRandom，base64url 43 字符）
+- `qiniu/sign.upload_token_limited` 与 `util/crypto.random_token`（32 字节 `Random` 效果取的随机字节，base64url 43 字符）
   是它新加的两块地基；管理端的 `upload_token` 逐字节不变。
 
 **公开 Markdown 与私人记录**

@@ -1,5 +1,7 @@
 # Public read/create endpoints and JWT-guarded management only.
 use std/map
+use std/io.{with_random_real}
+use util/crypto.{uuid_hex}
 use web/types.{Request, Response, HttpError, Handler, http_error, body_text, headers_all, json_ok, json_response, raw, with_header, param, query, query_int_bounded}
 use web/router.{Route, route_get, route_post, route_put, body_limit}
 use json/value.{Json, JStr, JInt, JArr}
@@ -67,7 +69,9 @@ fn create(a: Auth) -> Handler = req => {
   let source = match paste.source_group(ip) { Ok(s) -> s
     Err(e) -> return Err(http_error(400, e)) }
   let now = system_s()
-  match db(a, c => paste.create(c, a.secret, source, title, content, days, now))? {
+  # minted here, before the transaction: db() runs its closure at plain !io
+  let id = with_random_real(() => uuid_hex())
+  match db(a, c => paste.create(c, a.secret, source, title, content, days, now, id))? {
     Ok(p) -> Ok(json_response(201, repo_paste.as_json(p)))
     Err(e) -> Err(if e.retry > 0 { HttpError { ..http_error(e.status, e.message), headers: [("Retry-After", to_string(e.retry))] } } else { http_error(e.status, e.message) })
   }

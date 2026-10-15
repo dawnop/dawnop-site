@@ -22,6 +22,7 @@ use qiniu/creds.{Qiniu}
 use db/db.{with_db}
 use util/paths.{fm_split, parent_rel, basename, ext, key_ext_ok, fm_join, full, guess_mime, safe_persisted_mime, strip_slashes, strip_trailing_slash}
 use repo/repo_fm.{FileRow, ReplaceOutcome, MovePlan, CopiedRow, CopyTree, fs_data, taken, insert_folder, replace_file, replace_file_receipt, create_file_once, reparent_allow_missing, prepare_fm_move, commit_fm_moves, get_row, delete_subtrees, entry_json, key_referenced, key_pending, validate_fm_ancestors, validate_fm_file_target, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}
+use std/io.{Random}
 use util/crypto.{uuid_hex}
 use qiniu/sign.{private_url}
 use qiniu/rs.{delete_obj, copy_obj, upload_text, upload_bytes}
@@ -103,7 +104,7 @@ fn gc_copied_rows_unreferenced(a: Auth, rows: List[CopiedRow], i: Int) -> Unit !
 
 ## Duplicate an object under a fresh uuid key; Ok carries the new key. This is
 ## what makes copy (unlike rename/move) a real object-store operation.
-pub fn copy_object(q: Qiniu, src_key: String) -> Result[String, String] !Upstream !io = {
+pub fn copy_object(q: Qiniu, src_key: String) -> Result[String, String] !Random !Upstream !io = {
   let new_key = uuid_hex()
   let _c = as_outbound(copy_obj(q, src_key, new_key))?
   Ok(new_key)
@@ -178,7 +179,7 @@ fn plan_fm_moves(c: DbConn, sources: List[String], dest: String, i: Int, acc: Li
 
 # ---- copy (dirs are recreated, files get a fresh qiniu object) ----
 
-pub fn do_copy(q: Qiniu, c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !Upstream !io =
+pub fn do_copy(q: Qiniu, c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !Random !Upstream !io =
   {
     let planned = plan_fm_copies(c, sources, dest, i, [])?
     let _u = validate_copy_plan_targets(planned)?
@@ -215,7 +216,7 @@ fn plan_fm_copies(c: DbConn, sources: List[String], dest: String, i: Int, acc: L
     }
   }
 
-fn copy_tree_list_objects(q: Qiniu, trees: List[CopyTree], i: Int, acc: List[CopyTree]) -> Result[List[CopyTree], String] !Upstream !io =
+fn copy_tree_list_objects(q: Qiniu, trees: List[CopyTree], i: Int, acc: List[CopyTree]) -> Result[List[CopyTree], String] !Random !Upstream !io =
   if i >= len(trees) {
     Ok(acc)
   } else {
@@ -234,7 +235,7 @@ fn copy_tree_list_objects(q: Qiniu, trees: List[CopyTree], i: Int, acc: List[Cop
 
 ## Copy every keyed file in a prepared tree to a fresh object key. Metadata is
 ## not touched here; the caller commits the returned plan as one transaction.
-pub fn copy_tree_objects(q: Qiniu, tree: CopyTree) -> Result[CopyTree, String] !Upstream !io = {
+pub fn copy_tree_objects(q: Qiniu, tree: CopyTree) -> Result[CopyTree, String] !Random !Upstream !io = {
   let rows = copy_tree_object_rows(q, tree.rows, 0, [])?
   Ok(CopyTree {
     source_root: tree.source_root,
@@ -243,7 +244,7 @@ pub fn copy_tree_objects(q: Qiniu, tree: CopyTree) -> Result[CopyTree, String] !
   })
 }
 
-fn copy_tree_object_rows(q: Qiniu, rows: List[CopiedRow], i: Int, acc: List[CopiedRow]) -> Result[List[CopiedRow], String] !Upstream !io =
+fn copy_tree_object_rows(q: Qiniu, rows: List[CopiedRow], i: Int, acc: List[CopiedRow]) -> Result[List[CopiedRow], String] !Random !Upstream !io =
   if i >= len(rows) {
     Ok(acc)
   } else {
@@ -373,7 +374,7 @@ pub fn merge_deleted(base: Json, deleted: List[Json]) -> Json =
 
 # ---- create empty file / save text ----
 
-pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json], String] !Upstream !io = {
+pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json], String] !Random !Upstream !io = {
   let checked: Result[Bool, String] = with_db(a.db.path, a.db.ext, c => {
     let _v = validate_effect_path(c, rel)?
     taken(c, rel)
@@ -402,7 +403,7 @@ fn create_file_db(c: DbConn, rel: String, key: String, mime: String, cur: String
 
 ## Write text to a NEW qiniu key, repoint the row, then best-effort collect the
 ## old key only when no metadata row still references it. Returns {path}.
-pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !Upstream !io = {
+pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !Random !Upstream !io = {
   let checked: Result[Option[FileRow], String] = with_db(a.db.path, a.db.ext, c => {
     let _v = validate_effect_path(c, rel)?
     get_row(c, rel)
@@ -445,7 +446,7 @@ fn save_mime(existing: Option[FileRow], rel: String) -> String =
 # a 302 `Location` through signed_url, and the extension used to be copied
 # verbatim, so a name ending in ".p<U+010A>x" put a raw LF into that header on
 # web 5.1 (the JDK writes a char's low byte) and is a 500 on web 6.1.
-fn save_key(rel: String) -> String !io = key_for_save(uuid_hex(), rel)
+fn save_key(rel: String) -> String !Random = key_for_save(uuid_hex(), rel)
 
 fn key_for_save(id: String, rel: String) -> String = {
   let e = ext(basename(rel))
@@ -454,7 +455,7 @@ fn key_for_save(id: String, rel: String) -> String = {
 
 # ---- proxy upload ----
 
-pub fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int) -> Result[Json, String] !Upstream !io = {
+pub fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int) -> Result[Json, String] !Random !Upstream !io = {
   let checked: Result[Unit, String] = with_db(a.db.path, a.db.ext, c => validate_effect_path(c, rel))
   let _v = checked?
   let key = upload_key()
@@ -484,7 +485,7 @@ fn validate_effect_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
   validate_fm_file_target(c, rel)
 
 # Proxy uploads always use a fresh key.
-fn upload_key() -> String !io = uuid_hex()
+fn upload_key() -> String !Random = uuid_hex()
 
 # The receipt is the row this upload wrote, so it is read inside the transaction
 # that wrote it (repo_fm.replace_file_receipt) rather than by a get_row after the

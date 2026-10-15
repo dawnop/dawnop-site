@@ -23,6 +23,7 @@ use web/router.{Route, route_get, route_post, route_put, tagged, body_limit, gua
 use json/value.{Json, JNull, JInt, JStr, JArr}
 use util/jsonx.{obj, jstr, jint, jbool, jdatetime}
 use util/jsonread.{body_obj}
+use std/io.{Random, with_random_real}
 use util/clock.{Clock, system_ms}
 use util/http.{Upstream, with_upstream}
 use util/errkind.{KConflict, KUpstream, KTimeout, split_kind, upstream, timeout}
@@ -115,13 +116,13 @@ fn drop_token(req: Request) -> Result[String, HttpError] =
   }
 
 # A route closure is the innermost thing that owns a whole unit of work, so the
-# production Clock and Upstream handlers are installed here (util/clock and
+# production Clock, Random and Upstream handlers are installed here (util/clock and
 # util/http say why they cannot go in main).
-fn public(a: Auth, body: fn(Request) -> Result[Response, HttpError] !Clock !Upstream !io) -> Handler =
+fn public(a: Auth, body: fn(Request) -> Result[Response, HttpError] !Clock !Random !Upstream !io) -> Handler =
   req =>
   with_upstream(a.http, () => {
     with handle Clock { now_ms() => system_ms() }
-    body(req)
+    with_random_real(() => body(req))
   })
 
 ## GET /api/drop: what the upload page shows. The directory is reported by its
@@ -286,7 +287,7 @@ pub fn create_ep(a: Auth) -> Handler =
       max_file_bytes: opt_int_or(m, "max_file_bytes", DEFAULT_MAX_FILE_BYTES)?,
       max_total_bytes: opt_int_or(m, "max_total_bytes", DEFAULT_MAX_TOTAL_BYTES)?,
     }
-    let made = lift(create_drop(a, s))?
+    let made = lift(with_random_real(() => create_drop(a, s)))?
     let (d, _token) = made
     let status = lift(drop_status(a, d))?
     Ok(json_response(201, drop_json(d, status)))
