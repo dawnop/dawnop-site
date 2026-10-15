@@ -400,7 +400,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 **监控（刀 12）**
 - `api/api_monitor.dawn` — `/api/monitor`，120s TTL + `?refresh`，配额从 settings 表实时注入。
-- `svc/monitor.dawn` — 四块容错聚合：server（/proc，回落 JMX）、lighthouse（TC3）、qiniu（kodo+CDN+respack）、vault 探活。
+- `svc/monitor.dawn` — 四块容错聚合：server（读 /proc，无 /proc 时回 source: "none" 的空值，不再回落 JMX）、lighthouse（TC3）、qiniu（kodo+CDN+respack）、vault 探活。
   读 /proc 的那几个是 `!Fs`（`server_block` / `cpu_*` / `loadavg` / `meminfo` / `net_totals` / `uptime_s`）。
   **CPU 占用是「本次 /proc/stat 采样 − 上次调用留下的快照」**（psutil 的 `cpu_percent(interval=None)`），
   不再每次自己睡 300ms 采窗口：三个第三方请求改成并发之后，那个窗口和本端点自己的活儿重叠了，

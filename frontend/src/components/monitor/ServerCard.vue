@@ -30,6 +30,9 @@ const loadInfo = computed(() => {
   return { pcts, level, cores }
 })
 
+// 本机指标来自 /proc；没有 /proc 的主机（macOS 开发机）后端回 source: "none" 和全 0
+const hasProc = computed(() => props.server?.source !== 'none')
+
 const trafficCycle = computed(() => {
   const t = props.lh?.traffic
   if (!t) return ''
@@ -62,9 +65,18 @@ const trafficCycle = computed(() => {
       class="mb"
     />
 
+    <el-alert
+      v-if="server && !hasProc"
+      type="info"
+      :closable="false"
+      show-icon
+      title="本机 CPU / 内存 / 负载指标只在 Linux 上提供（读自 /proc），当前主机不可用"
+      class="mb"
+    />
+
     <!-- 本机实时 + 月流量包 表盘 -->
     <div v-if="server" class="tiles">
-      <div class="tile">
+      <div v-if="hasProc" class="tile">
         <div class="tile-l">
           CPU<span v-if="server.cpu_count" class="muted"> · {{ server.cpu_count }} 核</span>
         </div>
@@ -75,7 +87,7 @@ const trafficCycle = computed(() => {
           :color="barColor(server.cpu_percent)"
         />
       </div>
-      <div class="tile">
+      <div v-if="hasProc" class="tile">
         <div class="tile-l">内存</div>
         <el-progress
           type="dashboard"
@@ -128,7 +140,9 @@ const trafficCycle = computed(() => {
           · 超额 {{ fmtBytes(lh.traffic.overflow) }}</span
         >
       </div>
-      <div v-if="server"><span class="k">运行</span>{{ fmtDuration(server.uptime) }}</div>
+      <div v-if="server && hasProc">
+        <span class="k">运行</span>{{ fmtDuration(server.uptime) }}
+      </div>
       <div v-if="loadInfo" class="load-cell">
         <span class="k">负载</span>
         <el-tag :type="loadInfo.level.type" size="small" effect="light">{{
