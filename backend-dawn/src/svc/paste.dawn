@@ -5,7 +5,7 @@ use std/bytes
 use std/char
 use db/sql.{DbConn, PStr, PInt, ColInt, query, exec, scalar_int, int_at, first_row, with_immediate_tx}
 use repo/repo_paste.{Paste, limits, cleanup}
-use util/crypto.{uuid_hex, hmac_sha256_hex}
+use util/crypto.{hmac_sha256_hex}
 use util/ipaddr.{parse_literal, hex_prefix}
 
 pub type Refusal = { status: Int, message: String, retry: Int }
@@ -53,7 +53,7 @@ fn charge(c: DbConn, day: Int, source: String, size: Int, minute: Int) -> Result
   Ok(())
 }
 
-pub fn create(c: DbConn, secret: String, source: String, title: String, content: String, days: Int, now: Int) -> Result[Result[Paste, Refusal], String] !io = {
+pub fn create(c: DbConn, secret: String, source: String, title: String, content: String, days: Int, now: Int, id: String) -> Result[Result[Paste, Refusal], String] !io = {
   match validate(title, content, days) {
     Err(e) -> Ok(Err(e))
     Ok(size) -> {
@@ -76,7 +76,7 @@ pub fn create(c: DbConn, secret: String, source: String, title: String, content:
         else if gc >= limit("global_day") || gb + size > limit("global_day_bytes") { Ok(Err(no(503, "今日提交已暂停，请明日重试", 86400 - now % 86400))) }
         else if count >= limit("stored_count") || stored + size > limit("stored_bytes") { Ok(Err(no(503, "存储已满，暂时无法发布", 300))) }
         else {
-          let p = Paste { id: uuid_hex(), title: title, content: content, created_at: now, expires_at: Some(now + days * 86400), size_bytes: size }
+          let p = Paste { id: id, title: title, content: content, created_at: now, expires_at: Some(now + days * 86400), size_bytes: size }
           let _i = exec(c, "insert into pastes(id,title,content,created_at,expires_at,size_bytes) values(?,?,?,?,?,?)", [PStr(p.id), PStr(title), PStr(content), PInt(now), PInt(now + days * 86400), PInt(size)])?
           charge(c, day, digest, size, minute)?
           charge(c, day, "global", size, minute)?

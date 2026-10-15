@@ -19,6 +19,7 @@ use svc/files.{signed_url, gc_unreferenced, mk_folder, do_rename, do_move, do_co
   item_paths, merge_deleted, do_create_file, do_save, run_upload, sanitize_name, token_rel }
 use repo/repo_settings.{setting_int}
 use util/errkind.{KConflict, KUpstream, KTimeout, conflict, upstream, timeout, split_kind}
+use std/io.{Random, with_random_real}
 use util/crypto.{uuid_hex}
 use svc/export.{pct_encode}
 use qiniu/sign.{upload_token}
@@ -36,8 +37,8 @@ use json/parser.{parse}
 # innermost thing that owns a whole outbound unit of work: web's `Handler` type
 # is closed at `!io`, so a closure emitting `!Upstream` cannot BE a route (see
 # util/http). Routes that never call out keep plain `guarded`.
-fn guarded_out(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !Upstream !io) -> Result[Response, HttpError] !io =
-  guarded(a, req, () => with_upstream(a.http, body))
+fn guarded_out(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !Random !Upstream !io) -> Result[Response, HttpError] !io =
+  guarded(a, req, () => with_upstream(a.http, () => with_random_real(body)))
 
 
 ## GET /api/fm?path= — directory listing (FsData).
@@ -381,7 +382,7 @@ pub fn upload_token_ep(a: Auth) -> Handler =
     let _n = require_admissible_names(rel)?
     let _p = as_http_with(with_db(a.db.path, a.db.ext, c => upload_token_preflight(c, rel)), conflict_or(500))?
     let e = ext(sanitize_name(raw_name))
-    let key = if e == "" { uuid_hex() } else { "${uuid_hex()}.${e}" }
+    let key = with_random_real(() => if e == "" { uuid_hex() } else { "${uuid_hex()}.${e}" })
     let token = upload_token(a.qiniu, key, now_s() + a.qiniu.expires)
     let _x = as_http(with_db(a.db.path, a.db.ext, c => ledger(c, key, rel)), 500)?
     Ok(json_ok(obj([
@@ -611,7 +612,7 @@ fn upload_path_field(parts: List[Part]) -> Result[String, HttpError] !io =
     None -> Ok("")
   }
 
-fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpError] !Upstream !io = {
+fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpError] !Random !Upstream !io = {
   let target = fm_split(path_field)
   # fp.filename comes from the (UTF-8-decoded) part headers already
   let name = sanitize_name(fp.filename)
