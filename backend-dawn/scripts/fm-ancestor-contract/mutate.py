@@ -490,8 +490,8 @@ def main() -> int:
         )
         replace_once(
             service,
-            "fn upload_key() -> String !io = uuid_hex()\n",
-            "fn upload_key(existing: Option[FileRow]) -> String !io =\n"
+            "fn upload_key() -> String !Random = uuid_hex()\n",
+            "fn upload_key(existing: Option[FileRow]) -> String !Random =\n"
             "  match existing {\n"
             "    Some(o) -> match o.key { Some(k) -> k, None -> uuid_hex() }\n"
             "    None -> uuid_hex()\n"
@@ -961,7 +961,7 @@ def main() -> int:
     elif args.mutant == "webdav-move-overwrite-delete-on-failure":
         replace_once(
             webdav,
-            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Upstream !io = {\n",
+            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Random !Upstream !io = {\n",
             "fn mutant_cleanup_failed_file_move(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Unit !Upstream !io =\n"
             "  if not is_move || not overwrite {\n"
             "    ()\n"
@@ -980,7 +980,7 @@ def main() -> int:
             "    }\n"
             "  }\n"
             "\n"
-            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Upstream !io = {\n",
+            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Random !Upstream !io = {\n",
         )
         replace_once(
             webdav,
@@ -993,7 +993,7 @@ def main() -> int:
     elif args.mutant == "webdav-collection-overwrite-delete-on-failure":
         replace_once(
             webdav,
-            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Upstream !io = {\n",
+            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Random !Upstream !io = {\n",
             "fn mutant_cleanup_failed_collection(a: Auth, rel: String, dst: String, overwrite: Bool) -> Unit !Upstream !io =\n"
             "  if not overwrite {\n"
             "    ()\n"
@@ -1012,7 +1012,7 @@ def main() -> int:
             "    }\n"
             "  }\n"
             "\n"
-            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Upstream !io = {\n",
+            "fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Random !Upstream !io = {\n",
         )
         replace_once(
             webdav,
