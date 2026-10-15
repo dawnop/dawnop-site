@@ -9,10 +9,8 @@ use std/list
 use std/bytes
 use java "java.lang.String"
 use java "java.lang.System"
-use java "java.lang.Runtime"
 use java "java.lang.Thread"
 use java "java.io.File"
-use java "java.lang.management.ManagementFactory"
 use svc/auth.{Auth}
 use qiniu/creds.{Qiniu}
 use tencent/client
@@ -32,11 +30,18 @@ use json/parser.{parse}
 use util/jsonread.{parse_text}
 use util/jsonx.{obj, jint, jstr, jbool}
 
-# ---- server: the local machine, /proc first (production is Linux), JMX fallback ----
+# ---- server: the local machine, read from /proc (production is Linux) ----
+#
+# Everything but the disk comes from /proc, which is what the host sees and what
+# the dashboard means by "server". There is no JVM fallback any more: on a host
+# without /proc (a macOS dev machine) the block answers `source: "none"` with
+# zeroed numbers and a null load, and the page says the local metrics are
+# unavailable. The old fallback reported JVM heap and JMX load as if they were
+# the machine's, which is a different thing wearing the same labels. Disk is the
+# one reading with no /proc file behind it (statvfs), so it still asks the OS
+# through java.io.File on both paths.
 
 pub fn server_block(cpu_cell: TtlCell) -> Json !Fs !io = {
-  let rt = Runtime.getRuntime()!
-  let procs = rt.availableProcessors()
   let root = File.new("/")
   let dtotal = root.getTotalSpace()
   let dfree = root.getUsableSpace()
@@ -46,9 +51,10 @@ pub fn server_block(cpu_cell: TtlCell) -> Json !Fs !io = {
     ("percent", JNum(pct(dtotal - dfree, dtotal))),
   ])
   match io.read_file("/proc/stat") {
-    Ok(_probe) -> obj([
+    Ok(stat) -> obj([
+      ("source", jstr("proc")),
       ("cpu_percent", JNum(cpu_percent(cpu_cell, CPU_SNAPSHOT_MAX_AGE_S))),
-      ("cpu_count", jint(procs)),
+      ("cpu_count", jint(cpu_count_of(stat))),
       ("load", loadavg()),
       ("mem", meminfo()),
       ("disk", disk),
@@ -56,30 +62,33 @@ pub fn server_block(cpu_cell: TtlCell) -> Json !Fs !io = {
       ("boot_time", jint(now_s() - uptime_s())),
       ("uptime", jint(uptime_s())),
     ])
-    # dev machines (macOS) have no /proc; approximate — production never takes this path
-    Err(_m) -> {
-      let total_mem = rt.maxMemory()
-      let free_mem = rt.freeMemory()
-      let jvm_up = ManagementFactory.getRuntimeMXBean()!.getUptime() / 1000
-      let load1 = ManagementFactory.getOperatingSystemMXBean()!.getSystemLoadAverage()
-      let cpu = clip100(load1 * 100.0 / to_float(procs))
-      obj([
-        ("cpu_percent", JNum(round1(cpu))),
-        ("cpu_count", jint(procs)),
-        ("load", JArr([JNum(load1), JNull, JNull])),
-        ("mem", obj([
-          ("total", jint(total_mem)),
-          ("used", jint(total_mem - free_mem)),
-          ("percent", JNum(pct(total_mem - free_mem, total_mem))),
-        ])),
-        ("disk", disk),
-        ("net", obj([("sent", jint(0)), ("recv", jint(0))])),
-        ("boot_time", jint(now_s() - jvm_up)),
-        ("uptime", jint(jvm_up)),
-      ])
-    }
+    Err(_m) -> no_proc_server(disk)
   }
 }
+
+## The block for a host with no /proc: the same keys, zero numbers, null load.
+## `source` is what the page keys off to say the local metrics are unavailable.
+fn no_proc_server(disk: Json) -> Json = obj([
+  ("source", jstr("none")),
+  ("cpu_percent", JNum(0.0)),
+  ("cpu_count", jint(0)),
+  ("load", JArr([JNull, JNull, JNull])),
+  ("mem", obj([("total", jint(0)), ("used", jint(0)), ("percent", JNum(0.0))])),
+  ("disk", disk),
+  ("net", obj([("sent", jint(0)), ("recv", jint(0))])),
+  ("boot_time", jint(0)),
+  ("uptime", jint(0)),
+])
+
+## Logical CPUs in /proc/stat text: the per-CPU `cpuN` lines, not the aggregate
+## `cpu` line. Runtime.availableProcessors() also honoured cgroup CPU limits; the
+## production host is a plain VM, where the two agree, and the dashboard wants the
+## host's cores for the load-per-core percentages anyway.
+fn cpu_count_of(stat: String) -> Int =
+  len(filter(str.split(stat, "\n"), l => is_cpu_n_line(l)))
+
+fn is_cpu_n_line(l: String) -> Bool =
+  str.starts_with(l, "cpu") && len(l) > 3 && str.slice(l, 3, 4) >= "0" && str.slice(l, 3, 4) <= "9"
 
 # How long a window a call opens when it has nothing to difference against, and
 # how old a snapshot may be before it stops describing "now". The window is
@@ -675,6 +684,24 @@ test "cpu_of takes busy/total jiffies off the aggregate cpu line" {
   # a short line must not index past the end
   assert cpu_of("cpu  1 2\n") == (3, 3)
   assert cpu_of("") == (0, 0)
+}
+
+test "cpu_count_of counts cpuN lines and not the aggregate or other cpu-prefixed keys" {
+  let stat = "cpu  100 20 30 800 40 0 5 0 0 0\ncpu0 50 10 15 400 20 0 2 0 0 0\ncpu1 50 10 15 400 20 0 3 0 0 0\nintr 1\n"
+  assert cpu_count_of(stat) == 2
+  assert cpu_count_of("cpu  1 2 3\n") == 0
+  assert cpu_count_of("") == 0
+  assert cpu_count_of("cpu12 1 2\ncpu13 1 2\ncpufreq 1\n") == 2
+}
+
+test "a host without /proc answers the same keys with nothing in them" {
+  let disk = obj([("total", jint(10)), ("used", jint(4)), ("percent", JNum(40.0))])
+  let j = no_proc_server(disk)
+  assert field(j, "source") == JStr("none")
+  assert field(j, "cpu_count") == jint(0)
+  assert field(j, "load") == JArr([JNull, JNull, JNull])
+  assert field(j, "uptime") == jint(0)
+  assert field(j, "disk") == disk
 }
 
 test "loadavg_of reads the three averages, and only those" {
