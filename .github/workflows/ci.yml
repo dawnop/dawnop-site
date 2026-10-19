@@ -172,6 +172,18 @@ jobs:
       - name: public Markdown and durable submission limits
         run: python3 backend-dawn/scripts/check-paste.py
 
+      # Nothing checked formatting here, so by v0.94.0 fourteen files had drifted
+      # from what `dawn fmt` prints, unnoticed. The formatter is the pinned one
+      # that fetch-dawn.sh resolves from .dawn-version, the same compiler that
+      # built the jar above: a newer dawn may format differently, and bumping the
+      # pin is where that difference is meant to show up. `!cancelled()` so a red
+      # test above does not hide a formatting slip in the same push.
+      - name: dawn fmt --check
+        if: ${{ !cancelled() }}
+        run: |
+          DAWN="$(scripts/fetch-dawn.sh)"
+          "$DAWN" fmt backend-dawn --check
+
       # The deployable artifact. The jar is deliberately NOT in git: a build
       # output committed by hand drifts from src/ silently, and its lib/ is
       # gitignored anyway, so the in-repo jar could never run from a checkout.
