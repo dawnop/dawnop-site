@@ -40,7 +40,6 @@ use json/parser.{parse}
 fn guarded_out(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !Random !Upstream !io) -> Result[Response, HttpError] !io =
   guarded(a, req, () => with_upstream(a.http, () => with_random_real(body)))
 
-
 ## GET /api/fm?path= — directory listing (FsData).
 pub fn fm_list(a: Auth) -> Handler =
   req =>

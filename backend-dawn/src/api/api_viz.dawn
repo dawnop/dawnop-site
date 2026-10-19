@@ -195,7 +195,7 @@ fn put_viz(c: DbConn, body: String) -> Unit !io = {
     Err(e) -> panic("bad test body: ${e}")
   }
   match viz_update_read(c, 1, m) {
-    Ok(Some(_j)) -> {}
+    Ok(Some(_j)) -> { }
     Ok(None) -> panic("component vanished")
     Err(e) -> panic(e)
   }

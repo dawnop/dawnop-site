@@ -43,9 +43,9 @@ pub fn main() -> Unit !io = {
   let db = Db { path: db_path, ext: db_ext }
   # The hourly timer runs this mode with the same database/environment as the server.
   # It exits without binding a port; expired bodies and old budgets are removed atomically.
-  if unwrap_or(get(args(),0),"")=="--cleanup-pastes" {
+  if unwrap_or(get(args(), 0), "") == "--cleanup-pastes" {
     let now = system_s()
-    let run = with_db(db.path,db.ext,c => with_immediate_tx(c,() => repo_paste.cleanup_existing(c,now)))
+    let run = with_db(db.path, db.ext, c => with_immediate_tx(c, () => repo_paste.cleanup_existing(c, now)))
     match run { Ok(n) -> println("expired pastes removed: ${n}")
       Err(e) -> panic("paste cleanup failed: ${e}") }
     return ()

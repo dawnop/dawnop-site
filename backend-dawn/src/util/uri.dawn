@@ -428,15 +428,15 @@ fn empty_uri() -> Uri = Uri {
 
 fn with_hier(u: Uri, h: Hier) -> Uri = {
   let base = Uri { scheme: u.scheme, authority: None, user_info: None, host: None, port: -1,
-                   path: Some(h.path), query: h.query, fragment: None }
+    path: Some(h.path), query: h.query, fragment: None }
   match h.auth {
     None -> base
     Some(au) ->
       match au.server {
         None -> Uri { scheme: base.scheme, authority: Some(au.authority), user_info: None, host: None, port: -1,
-                      path: base.path, query: base.query, fragment: None }
+          path: base.path, query: base.query, fragment: None }
         Some(s) -> Uri { scheme: base.scheme, authority: Some(au.authority), user_info: s.user,
-                         host: Some(s.host), port: s.port, path: base.path, query: base.query, fragment: None }
+          host: Some(s.host), port: s.port, path: base.path, query: base.query, fragment: None }
       }
   }
 }
@@ -453,7 +453,7 @@ pub fn parse(s: String) -> Result[Uri, String] = {
     let _c = check_plain(a, 0, 1, is_alpha, "scheme name")?
     let _s = check_plain(a, 1, p0, is_scheme_char, "scheme name")?
     u = Uri { scheme: Some(sub(a, 0, p0)), authority: None, user_info: None, host: None, port: -1,
-              path: None, query: None, fragment: None }
+      path: None, query: None, fragment: None }
     p = p0 + 1
     if at(a, p, n, 47) {
       let h = parse_hierarchical(a, p, n)?
@@ -473,7 +473,7 @@ pub fn parse(s: String) -> Result[Uri, String] = {
   if at(a, p, n, 35) {
     let _f = check_esc(a, p + 1, n, is_uric, "fragment")?
     u = Uri { scheme: u.scheme, authority: u.authority, user_info: u.user_info, host: u.host, port: u.port,
-              path: u.path, query: u.query, fragment: Some(sub(a, p + 1, n)) }
+      path: u.path, query: u.query, fragment: Some(sub(a, p + 1, n)) }
     p = n
   }
   if p < n { return Err("expected end of URI") }

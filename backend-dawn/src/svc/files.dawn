@@ -570,7 +570,6 @@ test "best-effort GC isolates success, errors, and panics" {
   assert true
 }
 
-
 # ---- the SQLite write-lock window, asserted ----
 #
 # util/http spends seventeen lines arguing that a hung qiniu endpoint stops
