@@ -19,7 +19,7 @@ fn compress(hs: List[Int], data: Bytes, off: Int) -> List[Int] = {
   while t < 16 {
     let o = off + t * 4
     w = w ++ [(bytes.at(data, o) << 24) | (bytes.at(data, o + 1) << 16) |
-      (bytes.at(data, o + 2) << 8) | bytes.at(data, o + 3)]
+        (bytes.at(data, o + 2) << 8) | bytes.at(data, o + 3)]
     t = t + 1
   }
   while t < 80 {

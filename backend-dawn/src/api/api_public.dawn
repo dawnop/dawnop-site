@@ -45,7 +45,7 @@ fn site_exists(c: DbConn, kind: String, slug: String, authed: Bool) -> Result[Bo
   } else if kind == "tag" {
     match repo_tag.by_slug(c, slug)? { Some(_) -> Ok(true), None -> Ok(false) }
   } else if kind == "paste" {
-    repo_paste.active_exists(c,slug,system_s())
+    repo_paste.active_exists(c, slug, system_s())
   } else { Ok(false) }
 
 ## GET /api/articles — published list, paginated, optional ?tag= filter.

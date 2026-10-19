@@ -1086,7 +1086,6 @@ test "an unconfigured block asks nothing and answers the constant" {
     obj([("configured", jbool(false))])
 }
 
-
 # ---- concurrency, asserted without a clock ----
 #
 # `util/http` proves that `sendAsync` really overlaps, against three peers that

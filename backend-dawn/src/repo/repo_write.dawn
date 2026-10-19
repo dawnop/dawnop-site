@@ -345,7 +345,7 @@ fn same_patch() -> ArticlePatch =
 
 fn put_article(c: DbConn, p: ArticlePatch) -> Unit !io =
   match update_article(c, 1, p) {
-    Ok(true) -> {}
+    Ok(true) -> { }
     Ok(false) -> panic("article vanished")
     Err(e) -> panic(e)
   }

@@ -1119,19 +1119,19 @@ fn dav_handler(a: Auth, cell: TtlCell, method: String) -> Handler =
         # is a web `Handler`, whose type is closed at `!io` (util/http says
         # why). GET/PUT/DELETE/MOVE/COPY all reach qiniu from in here.
         with_upstream(a.http, () => with_random_real(() =>
-          match method {
-            "PROPFIND" -> propfind(a, req, rel)
-            "HEAD" -> get_or_head(a, req, rel, true)
-            "GET" -> get_or_head(a, req, rel, false)
-            "PUT" -> put(a, req, rel)
-            "DELETE" -> del(a, rel)
-            "MKCOL" -> mkcol(a, rel)
-            "MOVE" -> move_or_copy(a, req, rel, true)
-            "COPY" -> move_or_copy(a, req, rel, false)
-            "LOCK" -> Ok(lock_response(req, rel))
-            "UNLOCK" -> Ok(text(204, ""))
-            _ -> Err(http_error(405, "method not allowed"))
-          }))
+            match method {
+              "PROPFIND" -> propfind(a, req, rel)
+              "HEAD" -> get_or_head(a, req, rel, true)
+              "GET" -> get_or_head(a, req, rel, false)
+              "PUT" -> put(a, req, rel)
+              "DELETE" -> del(a, rel)
+              "MKCOL" -> mkcol(a, rel)
+              "MOVE" -> move_or_copy(a, req, rel, true)
+              "COPY" -> move_or_copy(a, req, rel, false)
+              "LOCK" -> Ok(lock_response(req, rel))
+              "UNLOCK" -> Ok(text(204, ""))
+              _ -> Err(http_error(405, "method not allowed"))
+            }))
       }
     }
   }

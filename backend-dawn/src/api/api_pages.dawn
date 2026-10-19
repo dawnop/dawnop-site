@@ -259,7 +259,7 @@ fn put_page(c: DbConn, body: String) -> Unit !io = {
     Err(e) -> panic("bad test body: ${e}")
   }
   match page_update_read(c, 1, m) {
-    Ok(Some(_j)) -> {}
+    Ok(Some(_j)) -> { }
     Ok(None) -> panic("page vanished")
     Err(e) -> panic(e)
   }

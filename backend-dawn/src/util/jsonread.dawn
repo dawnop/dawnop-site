@@ -84,10 +84,10 @@ fn scan_atom(src: String, i: Cursor) -> Cursor = {
   let c = lexer.peek(src, i)
   if c == -1 || c == char.code(',') || c == char.code('}') || c == char.code(']') ||
     c == char.code(' ') || c == char.code('\t') || c == char.code('\n') || c == char.code('\r') {
-      i
-    } else {
-      scan_atom(src, cursor.next(src, i))
-    }
+    i
+  } else {
+    scan_atom(src, cursor.next(src, i))
+  }
 }
 
 fn scan_elements(src: String, i: Cursor) -> Result[Cursor, String] = {
