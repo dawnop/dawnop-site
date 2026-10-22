@@ -3,6 +3,7 @@ use std/io
 use std/str
 use site_sqlite/db/native_sqlite.{with_db}
 use site_core/db/sql.{Db, execute, db_query, scalar_int, busy_timeout, with_immediate_tx, ColInt, ColStr, VInt, VStr, VNull, QueryResult}
+use sql_scenarios/cache_scenarios.{cache_suite, cache_write, cache_read, cache_write_now, cache_read_now}
 use sql_scenarios/scenarios.{demand, check, sql_suite, fts_suite}
 
 fn done(r: Result[Unit, String]) -> Unit = demand(r)
@@ -102,7 +103,12 @@ pub fn main() -> Unit !io = {
     let label = if mode == "wal-error" { "startup-wal" } else { "startup-extension" }
     check(match r { Err(m) -> str.contains(m, if mode == "wal-error" { "site.db.wal" } else { "sqlite.extension" })
       Ok(_) -> false }, label)
-  } else if mode == "bench" {
+  } else if mode == "cache-write-now" { done(with_db(path, "", () => io.with_clock_real(cache_write_now))) }
+  else if mode == "cache-read-now" { done(with_db(path, "", () => io.with_clock_real(cache_read_now))) }
+  else if mode == "cache-write" { done(with_db(path, "", cache_write)) }
+  else if mode == "cache-read" { done(with_db(path, "", cache_read)) }
+  else if str.starts_with(mode, "cache") { done(with_db(path, "", () => cache_suite(mode))) }
+  else if mode == "bench" {
     let start = io.with_clock_real(() => io.now())
     done(with_db(path, ext, () => {
       check(scalar_int("select 1", [])? == 1, "bench-read")

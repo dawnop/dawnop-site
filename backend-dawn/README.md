@@ -147,14 +147,14 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 S1 的 `core/src`、`app/jvm/src`、`test/{core,jvm}` 三类物理根继续保留。
 core 是名为 site_core 的 Dawn 包，app 通过 `[deps] site_core = "../../core"` 消费，
-跨根导入写为 `use site_core/...`。S3 后 core 有 33 个模块，包含 db/sql、全部 10 个 repo、
+跨根导入写为 `use site_core/...`。S5 后 core 有 34 个模块，包含 db/sql、全部 10 个 repo、
 svc/search、svc/export、svc/paste，以及原有 config、qiniu/creds、qiniu/sign、tencent/sign 与纯 util。
-app 留 25 个模块，包含 db/jdbc 与 db/db，及仍依赖 Clock、TTL、Upstream 的业务和 HTTP 入口。
-core 的完整 native 依赖闭包为四包 43 个源码文件，零 Java 依赖。
+app 留 25 个模块，包含 db/jdbc 与 db/db，及仍依赖 Clock、Upstream 的业务和 HTTP 入口。
+core 的完整 native 依赖闭包为四包 44 个源码文件，零 Java 依赖。
 
 S4 增加独立 `app/native` 包 site_sqlite，仅含 `db/native_sqlite` handler，core 不回指它。
 `test/sql` 保存两个真实 handler 共用的 SQL 场景；`test/native` 是可 check/build/test 的
-测试 consumer。JVM 生产与原 437 项测试仍用原命令、原根；native HTTP 入口尚属后续刀。
+测试 consumer。JVM 生产与原 437 项测试仍用原命令、原根，新增七项缓存测试后共 444 项；native HTTP 入口尚属后续刀。
 
 以下模块名按原相对路径记：core 中的模块在 core/src 下，其余在 app/jvm/src 下，
 对应测试在 test/core 或 test/jvm。main 属于 app，config 属于 core。
@@ -440,7 +440,7 @@ S4 增加独立 `app/native` 包 site_sqlite，仅含 `db/native_sqlite` handler
   不再每次自己睡 300ms 采窗口：三个第三方请求改成并发之后，那个窗口和本端点自己的活儿重叠了，
   报出来的数被「测它」这个动作本身污染；它同时还是缓存命中路径上一道 300ms 硬地板（实测
   307ms → 7.4ms）。**先读上次快照、再采本次**，而 /proc/stat 计数器单调不减，所以无论多少虚拟线程
-  同时进来，差值都不可能为负；快照存在一个 `TtlCell`（`AtomicReference`，读写各自原子）里、
+  同时进来，差值都不可能为负；快照存在同库 `runtime_cache` 的 `cpu.v1` 槽（SELECT 与短事务 UPSERT 各自原子）里、
   **每次请求都刷新**（`server_block` 在 120s 缓存之外，缓存命中也照刷，否则窗口会漂成缓存 TTL）。
   三种情况回落到 300ms 窗口：进程起来后的第一次、快照超过 `CPU_SNAPSHOT_MAX_AGE_S`（300s，
   再老就成了「上次开页面至今的平均值」）、以及采样对本身算不出读数（同一 jiffy 内、或计数器倒退）。
@@ -449,8 +449,15 @@ S4 增加独立 `app/native` 包 site_sqlite，仅含 `db/native_sqlite` handler
   只有真跑（看时钟、看 cell）才判得出来。
 - `tencent/client.dawn` / `tencent/sign.dawn` — 腾讯云 v3 请求装配 / TC3-HMAC-SHA256 签名（vs SDK 逐字节）。
 - `qiniu/stats.dawn` — kodo v6 序列 / fusion CDN tune / billing respack。
-- `util/ttl.dawn` — `AtomicReference` TTL cache cell（monitor 120s、respack 300s 共享、fm space 600s；
-  另有一个不是缓存的用法：monitor 的 CPU 快照，借的是它「值 + 年龄上限」这一半）。
+- `core/src/util/cache.dawn` — `runtime_cache(namespace, cache_key, payload, created_ms)`，
+  `(namespace, cache_key)` 复合主键；仅通过 `!Db` 与 std `Clock` 存取。monitor 120s、
+  respack 300s（monitor/FM 共享）、space 600s、dav 300s、CPU 样本 300s，分别为 `.v1` 命名空间。
+  命中只读、不续期，毫秒边界严格小于 TTL，时钟早于写入时间不命中；写入只持短事务。
+  CPU 每次请求回写，持久化 boot_id，启动身份不符、计数回退、样本过期继续走 300ms 窗口。
+- `app/jvm/src/util/ttl.dawn` — SQLite 缓存的 JDBC/Clock 边界，`TtlCell` 仅持地址。
+  启动兼容加表；旧 JVM 可忽略，不改变原业务表。认证 HMAC/版本联查/租约仍属 S6。
+- `scripts/ttl-cache/run.sh` — 同一 test/sql 场景双臂、两新进程四种组合互读、写锁下只读命中，
+  以及 TTL、namespace、倒退、命中写库、CPU boot 和真实退回 AtomicReference 的先红负控。
 
 **入口**
 - `main.dawn` — 读配置、建 `Auth`/`MonCfg`、拼装全部路由 + 中间件、绑定端口。

@@ -25,7 +25,7 @@ use svc/auth.{Auth, routes}
 use svc/drop.{init_schema}
 use site_core/qiniu/creds.{Qiniu}
 use api/webdav.{dav_routes}
-use util/ttl.{new_cell}
+use util/ttl.{new_cell, init_cache}
 use util/http.{new_client}
 
 pub fn main() -> Unit !io = {
@@ -90,20 +90,21 @@ pub fn main() -> Unit !io = {
     vault_alive: get_or(cfg, "VAULT_ALIVE_URL", "http://127.0.0.1:8222/alive"),
     vault_public: get_or(cfg, "VAULT_PUBLIC_URL", "https://vault.dawnop.com"),
   }
-  # TTL cells (FastAPI TTLCache parity): monitor third-party 120s, respack 300s
-  # (shared with fm stats), fm bucket-space 600s
-  let mon_cell = new_cell()
-  let respack_cell = new_cell()
-  let space_cell = new_cell()
-  let dav_cell = new_cell()
+  # Named SQLite slots: monitor third-party 120s, respack 300s (shared
+  # with fm stats), fm bucket-space 600s, DAV authentication 300s.
+  init_cache(db_path)
+  let mon_cell = new_cell(db_path, "monitor.v1")
+  let respack_cell = new_cell(db_path, "respack.v1")
+  let space_cell = new_cell(db_path, "space.v1")
+  let dav_cell = new_cell(db_path, "dav.v1")
   # Not a cache: the previous /proc/stat sample, which the monitor's CPU reading
   # differences against instead of sleeping through a window of its own. The
-  # cell's age bound is what stops a long gap between visits being reported as a
+  # slot's age bound is what stops a long gap between visits being reported as a
   # live reading. See svc/monitor.cpu_percent.
-  let cpu_cell = new_cell()
+  let cpu_cell = new_cell(db_path, "cpu.v1")
 
-  # The upload-link tables are the only ones this backend creates (FastAPI's
-  # create_all made the rest). Each drop request re-ensures them on its own
+  # Upload-link tables, like the runtime cache, are additive to FastAPI's
+  # original schema. Each drop request re-ensures them on its own
   # connection, so a failure here is logged rather than fatal.
   match init_schema(a) {
     Ok(_) -> ()

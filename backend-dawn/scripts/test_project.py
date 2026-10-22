@@ -57,6 +57,12 @@ def stage_project(destination: Path, backend: Path = BACKEND) -> None:
     shutil.copy2(backend / "app/jvm/dawn.lock", destination / "dawn.lock")
     for source in (destination / "src").rglob("*.dawn"):
         source.write_text(source.read_text().replace("use site_core/", "use "))
+    cache_cases = (backend / "test/sql/src/cache_scenarios.dawn").read_text()
+    cache_cases = cache_cases.replace("use site_core/", "use ").replace(
+        "use scenarios.{check}",
+        'fn check(ok: Bool, name: String) -> Unit = if not ok { panic("assertion: ${name}") }',
+    )
+    (destination / "src/cache_scenarios.dawn").write_text(cache_cases)
     for kind in ("jvm", "core"):
         fragments = backend / "test" / kind
         for fragment in sorted(fragments.rglob("*.dawn")):

@@ -1,0 +1,161 @@
+# The same fake-clock cache cases run through JDBC and native SQLite.
+use std/io.{Clock}
+use site_core/util/cache
+use site_core/util/cache.{CacheSlot}
+use site_core/db/sql.{Db, execute, query, ColStr, ColInt, PStr, scalar_int, in_transaction}
+use scenarios.{check}
+
+pub fn at[T, !e](ms: Int, body: fn() -> T !Clock !e) -> T !e = {
+  with handle Clock {
+    clock_wall_ns() => ms * 1000000
+    clock_mono() => panic("cache must not use process monotonic time")
+    clock_sleep_ns(_ns) => panic("cache must not sleep")
+  }
+  body()
+}
+
+fn read(ns: String, ms: Int, ttl: Int) -> Result[Option[String], String] !Db =
+  at(ms, () => cache.cache_get(cache.slot(ns), ttl))
+
+fn put(ns: String, ms: Int, payload: String) -> Result[Unit, String] !Db !io =
+  at(ms, () => cache.cache_put(cache.slot(ns), payload))
+
+fn observed(name: String) -> Unit !io = println("cache\t${name}")
+
+fn boundary() -> Result[Unit, String] !Db !io = {
+  for (ns, ttl) in [("monitor.v1", 120), ("respack.v1", 300), ("space.v1", 600), ("dav.v1", 300), ("cpu.v1", 300)] {
+    put(ns, 1000123, "中文|\u{0}|${ns}")?
+    check(read(ns, 1000123 + ttl * 1000 - 1, ttl)? == Some("中文|\u{0}|${ns}"), "ttl-before-1ms")
+    check(read(ns, 1000123 + ttl * 1000, ttl)? == None, "ttl-exact-expiry")
+    check(read(ns, 1000123, 0)? == None, "ttl-zero")
+  }
+  observed("five-slot-boundaries")
+  Ok(())
+}
+
+fn backwards() -> Result[Unit, String] !Db !io = {
+  put("monitor.v1", 1000123, "fresh")?
+  check(read("monitor.v1", 1000122, 120)? == None, "clock-backwards")
+  observed("clock-backwards")
+  Ok(())
+}
+
+fn namespaces() -> Result[Unit, String] !Db !io = {
+  let slots = ["monitor.v1", "respack.v1", "space.v1", "dav.v1", "cpu.v1"]
+  for ns in slots { put(ns, 1000123, ns)? }
+  for ns in slots { check(read(ns, 1000124, 120)? == Some(ns), "namespace-isolation") }
+  let other = CacheSlot { namespace: "monitor.v1", key: "other" }
+  at(1000123, () => cache.cache_put(other, "another key"))?
+  check(read("monitor.v1", 1000124, 120)? == Some("monitor.v1"), "key-isolation")
+  check(read("unknown.v1", 1000124, 120)? == None, "unknown-namespace")
+  observed("five-namespaces-and-keys")
+  Ok(())
+}
+
+fn readonly() -> Result[Unit, String] !Db !io = {
+  put("monitor.v1", 1000123, "original")?
+  let before = query("select payload,created_ms from runtime_cache where namespace=?", [PStr("monitor.v1")], [ColStr, ColInt])?
+  let changes = scalar_int("select total_changes()", [])?
+  execute("PRAGMA query_only=on", [])?
+  # SQLite itself rejects any attempted hit write, including a swallowed error.
+  let hit = read("monitor.v1", 1100123, 120)
+  execute("PRAGMA query_only=off", [])?
+  check(hit == Ok(Some("original")), "hit-readonly")
+  check(query("select payload,created_ms from runtime_cache where namespace=?", [PStr("monitor.v1")], [ColStr, ColInt])? == before, "hit-no-refresh")
+  check(scalar_int("select total_changes()", [])? == changes, "hit-no-write")
+  # A writable hit must also leave both the stored timestamp and writes alone.
+  check(read("monitor.v1", 1100123, 120)? == Some("original"), "hit-writable")
+  check(scalar_int("select total_changes()", [])? == changes, "hit-no-write")
+  check(read("monitor.v1", 1120123, 120)? == None, "hit-no-sliding-expiry")
+  observed("readonly-hit-no-renewal")
+  Ok(())
+}
+
+fn cpu() -> Result[Unit, String] !Db !io = {
+  put("cpu.v1", 1000123, cache.sample_payload("boot-A", "100 400"))?
+  let payload = unwrap_or(read("cpu.v1", 1000124, 300)?, "")
+  check(cache.sample_from(payload, "boot-A") == Some("100 400"), "cpu-same-boot")
+  check(cache.sample_from(payload, "boot-B") == None, "cpu-other-boot")
+  check(cache.sample_from(payload, "") == None, "cpu-unknown-boot")
+  check(cache.sample_from("legacy", "boot-A") == None, "cpu-malformed")
+  # CPU writes every sample; its timestamp changes independently of mon TTL.
+  put("cpu.v1", 1000223, cache.sample_payload("boot-A", "150 600"))?
+  check(cache.sample_from(unwrap_or(read("cpu.v1", 1300222, 300)?, ""), "boot-A") == Some("150 600"), "cpu-replaced-sample")
+  check(read("cpu.v1", 1300223, 300)? == None, "cpu-sample-age")
+  observed("cpu-boot-and-replacement")
+  Ok(())
+}
+
+fn transaction() -> Result[Unit, String] !Db !io = {
+  check(in_transaction()? == false, "cache-start-outside-tx")
+  put("space.v1", 1000123, "null")?
+  check(in_transaction()? == false, "cache-put-ends-tx")
+  execute("create trigger refuse_cache before insert on runtime_cache begin select raise(abort,'refuse cache'); end", [])?
+  let rejected = put("space.v1", 1000223, "bad")
+  execute("drop trigger refuse_cache", [])?
+  check(match rejected { Err(_) -> true
+    Ok(_) -> false }, "cache-write-failure")
+  check(in_transaction()? == false, "cache-error-ends-tx")
+  check(read("space.v1", 1000224, 600)? == Some("null"), "cache-error-retains-value")
+  observed("short-transaction-and-rollback")
+  Ok(())
+}
+
+fn schema_replacement() -> Result[Unit, String] !Db !io = {
+  execute("drop table runtime_cache", [])?
+  check(read("monitor.v1", 1000124, 120)? == None, "replacement-schema-miss")
+  check(scalar_int("select count(*) from sqlite_master where name='runtime_cache'", [])? == 0, "replacement-read-no-ddl")
+  put("monitor.v1", 1000123, "rebuilt")?
+  check(read("monitor.v1", 1000124, 120)? == Some("rebuilt"), "replacement-write-recreates")
+  execute("drop table runtime_cache", [])?
+  execute("create table runtime_cache(namespace text, cache_key text)", [])?
+  check(match read("monitor.v1", 1000124, 120) { Err(_) -> true
+    Ok(_) -> false }, "schema-errors-propagate")
+  execute("drop table runtime_cache", [])?
+  cache.ensure_schema()?
+  observed("database-replacement-and-errors")
+  Ok(())
+}
+
+pub fn cache_suite(mode: String) -> Result[Unit, String] !Db !io = {
+  cache.ensure_schema()?
+  if mode == "cache" || mode == "cache-boundary" { boundary()? }
+  if mode == "cache" || mode == "cache-backwards" { backwards()? }
+  if mode == "cache" || mode == "cache-namespaces" { namespaces()? }
+  if mode == "cache" || mode == "cache-readonly" { readonly()? }
+  if mode == "cache" || mode == "cache-cpu" { cpu()? }
+  if mode == "cache" || mode == "cache-transaction" { transaction()? }
+  if mode == "cache" || mode == "cache-schema" { schema_replacement()? }
+  Ok(())
+}
+
+pub fn cache_write() -> Result[Unit, String] !Db !io = {
+  for ns in ["monitor.v1", "respack.v1", "space.v1", "dav.v1", "cpu.v1"] { put(ns, 1000123, "persisted|${ns}")? }
+  observed("process-A-wrote-five-slots")
+  Ok(())
+}
+
+## No schema creation here: the second process can run with query_only enabled.
+pub fn cache_read() -> Result[Unit, String] !Db !io = {
+  for (ns, ttl) in [("monitor.v1", 120), ("respack.v1", 300), ("space.v1", 600), ("dav.v1", 300), ("cpu.v1", 300)] {
+    check(read(ns, 1000124, ttl)? == Some("persisted|${ns}"), "process-restart-hit")
+  }
+  observed("process-B-read-five-slots")
+  Ok(())
+}
+
+pub fn cache_write_now() -> Result[Unit, String] !Db !Clock !io = {
+  for ns in ["monitor.v1", "respack.v1", "space.v1", "dav.v1", "cpu.v1"] {
+    cache.cache_put(cache.slot(ns), "persisted|${ns}")?
+  }
+  observed("process-A-wrote-five-slots")
+  Ok(())
+}
+
+pub fn cache_read_now() -> Result[Unit, String] !Db !Clock !io = {
+  for (ns, ttl) in [("monitor.v1", 120), ("respack.v1", 300), ("space.v1", 600), ("dav.v1", 300), ("cpu.v1", 300)] {
+    check(cache.cache_get(cache.slot(ns), ttl)? == Some("persisted|${ns}"), "process-restart-hit")
+  }
+  observed("process-B-read-five-slots")
+  Ok(())
+}

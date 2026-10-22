@@ -1,7 +1,7 @@
 use java "java.lang.String"
 use std/bytes
 use site_core/qiniu/creds.{Qiniu}
-use util/ttl.{new_cell}
+use util/ttl.{test_cell}
 use util/http.{HttpCell, HttpResp, new_client, with_upstream, pending, no_answer}
 use db/db.{DbConfig}
 use java "java.util.concurrent.atomic.AtomicReference"
@@ -103,7 +103,7 @@ test "cpu_delta_pct is the busy share of the window it spans" {
 }
 
 test "a snapshot survives the cell verbatim, and ages out of it" {
-  let cell = new_cell()
+  let cell = test_cell()
   assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) == None
   cpu_put(cell, (1234, 5678))
   assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) == Some((1234, 5678))
@@ -118,7 +118,7 @@ test "a snapshot survives the cell verbatim, and ages out of it" {
 }
 
 test "a reading with a snapshot to difference against opens no window of its own" {
-  let cell = new_cell()
+  let cell = test_cell()
 
   # the genuine first call: nothing recorded yet, so this one has to sample a
   # window and pays for it
@@ -142,7 +142,7 @@ test "a reading with a snapshot to difference against opens no window of its own
 }
 
 test "every reading leaves its own snapshot behind" {
-  let cell = new_cell()
+  let cell = test_cell()
   # a plausible snapshot, young enough that this call takes the delta path
   cpu_put(cell, (0, 0))
   let _x = io.with_fs_real(() => cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S))
@@ -155,7 +155,7 @@ test "every reading leaves its own snapshot behind" {
 }
 
 test "a snapshot too old to describe now sends the call back to sampling" {
-  let cell = new_cell()
+  let cell = test_cell()
   # present, and usable at the production bound
   cpu_put(cell, (0, 0))
   assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) != None
@@ -262,7 +262,7 @@ test "a failing qiniu sub-fetch reports itself and leaves the other groups whole
   ])
   let cl = new_client()
   let a = test_auth(cl)
-  let cell = new_cell()
+  let cell = test_cell()
 
   # one of the four kodo requests points at a path the stub refuses
   let j = with_upstream(cl, () => {
@@ -316,7 +316,7 @@ test "each qiniu group fails alone, whichever one it is" {
   ])
   let cl = new_client()
   let a = test_auth(cl)
-  let cell = new_cell()
+  let cell = test_cell()
   let j = with_upstream(cl, () => {
     let started = QiniuPending {
       kodo: Ok(KodoPending {
@@ -406,7 +406,7 @@ test "an API-level Error is still one call's failure, not the block's" {
 
 test "an unconfigured block asks nothing and answers the constant" {
   let cl = new_client()
-  let cell = new_cell()
+  let cell = test_cell()
   let blank = test_auth_with(cl, "")
   # no credentials means no request is started at all -- the start phase is
   # where that decision is made, so it is the start phase that must make it.
