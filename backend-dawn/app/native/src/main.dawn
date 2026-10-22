@@ -1,13 +1,14 @@
 # One accepted connection, one exchange, then exit. Stdout is only HTTP wire.
 use std/io
 use wire/finish.{finish_exchange}
+use wire/headers.{application_transport}
 use site_core/config.{load, get_or}
 use site_core/application.{configure, app_routes}
 use site_core/maintenance
 use site_core/util/jsonx.{fastapi_errors}
 use db/native_sqlite.{with_database}
 use util/application_http.{new_client}
-use web/exchange.{serve_exchange, stdio_transport, ExchangeConfig}
+use web/exchange.{serve_exchange, ExchangeConfig}
 use web/types.{DEFAULT_MAX_BODY}
 use web/middleware.{with_logging_to_stderr, with_cors, with_body_limit}
 
@@ -33,7 +34,7 @@ pub fn main() -> Unit !io = {
       serve_exchange(ExchangeConfig { max_body: DEFAULT_MAX_BODY, errors: fastapi_errors() },
         app_routes(app, new_client()), [with_logging_to_stderr,
           next => with_cors(app.origin, next),
-          next => with_body_limit(2000000, next)], stdio_transport())
+          next => with_body_limit(2000000, next)], application_transport())
       match finish_exchange() { Ok(_) -> ()
         Err(e) -> io.eprintln("transport teardown: ${e.kind}") }
     }
