@@ -1,0 +1,292 @@
+# Portable monitor planning and assembly. No Pending values or host HTTP types.
+use std/str
+use util/http.{OutReq, NoBody, MANAGEMENT_TIMEOUT_S}
+use util/http_batch.{UpstreamBatch, BatchReq, BatchReply, exchange_batch, text_for, reply_for}
+use util/clock.{Clock, system_ms, system_s}
+use util/time.{utc_datetime}
+use qiniu/creds.{Qiniu}
+use qiniu/stats as stats
+use tencent/client.{call_request}
+use json/value.{Json, JNull, JInt, JStr, JArr, JObj}
+use json/parser.{parse}
+use util/jsonx.{obj, jint, jstr, jbool}
+use util/jsonread.{parse_text}
+
+pub type MonitorConfig = {
+  qiniu: Qiniu, tencent_id: String, tencent_key: String, region: String,
+  instance: String, vault_alive: String, vault_public: String,
+}
+pub type MonitorRequest = { item: BatchReq, fail: String }
+pub type MonitorResult = { third: Json, vault: Json, packs: Option[Json] }
+
+fn tc_on(cfg: MonitorConfig) -> Bool = cfg.tencent_id != "" && cfg.tencent_key != ""
+
+fn plain(id: String, req: OutReq) -> MonitorRequest =
+  MonitorRequest { item: BatchReq { id: id, req: req }, fail: "" }
+fn qreq(id: String, p: stats.PreparedQ) -> MonitorRequest =
+  MonitorRequest { item: BatchReq { id: id, req: p.req }, fail: p.fail }
+fn get_request(url: String) -> OutReq =
+  OutReq { method: "GET", url: url, headers: [], body: NoBody, budget_s: MANAGEMENT_TIMEOUT_S }
+fn vault_base(url: String) -> String =
+  if str.ends_with(url, "/alive") { str.slice(url, 0, len(url) - 6) } else { url }
+
+## First-round independence is visible in the request list, before any IO.
+pub fn first_round(cfg: MonitorConfig, third_cached: Bool, packs_cached: Bool) -> List[MonitorRequest] !io = {
+  with handle Clock { now_ms() => system_ms() }
+  var requests = [plain("vault.alive", get_request(cfg.vault_alive)),
+    plain("vault.config", get_request(vault_base(cfg.vault_alive) ++ "/api/config"))]
+  if not third_cached {
+    if tc_on(cfg) {
+      let args = "{\"InstanceIds\":[\"${cfg.instance}\"]}"
+      let now = system_s()
+      let payload = "{\"Namespace\":\"QCE/LIGHTHOUSE\",\"MetricName\":\"CpuUsage\",\"Period\":86400,\"StartTime\":\"${utc_datetime(now - 30 * 86400)}+00:00\",\"EndTime\":\"${utc_datetime(now)}+00:00\",\"Instances\":[{\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"${cfg.instance}\"}]}]}"
+      requests = requests ++ [
+        plain("tc.traffic", call_request(cfg.tencent_id, cfg.tencent_key, "lighthouse", "DescribeInstancesTrafficPackages", "2020-03-24", cfg.region, args)),
+        plain("tc.instance", call_request(cfg.tencent_id, cfg.tencent_key, "lighthouse", "DescribeInstances", "2020-03-24", cfg.region, args)),
+        plain("tc.trend", call_request(cfg.tencent_id, cfg.tencent_key, "monitor", "GetMonitorData", "2018-07-24", cfg.region, payload))]
+    }
+    if cfg.qiniu.ak != "" {
+      requests = requests ++ [qreq("qn.space", stats.kodo_request(cfg.qiniu, "space", 30)),
+        qreq("qn.count", stats.kodo_request(cfg.qiniu, "count", 30)),
+        qreq("qn.flow", stats.flow_request(cfg.qiniu, "flow", 30)),
+        qreq("qn.hits", stats.flow_request(cfg.qiniu, "hits", 30)),
+        qreq("qn.domains", stats.domains_request(cfg.qiniu))]
+      if not packs_cached {
+        requests = requests ++ [qreq("qn.list", stats.billing_request(cfg.qiniu, false)),
+          qreq("qn.overview", stats.billing_request(cfg.qiniu, true))]
+      }
+    }
+  }
+  requests
+}
+
+pub fn execute_round(plan: List[MonitorRequest]) -> List[BatchReply] !UpstreamBatch =
+  if len(plan) == 0 { [] } else { exchange_batch(map(plan, r => r.item)) }
+
+fn qjson(plan: List[MonitorRequest], replies: List[BatchReply], id: String) -> Result[Json, String] = {
+  let entries = filter(plan, p => p.item.id == id)
+  if len(entries) != 1 { return Err("missing outbound monitor request") }
+  let p = entries[0]
+  let r = text_for(replies, id, p.item.req.budget_s)?
+  if r.status == 200 { parse_text(r.body) } else { Err("${p.fail}: ${to_string(r.status)}") }
+}
+
+fn domains_of(first: List[MonitorRequest], replies: List[BatchReply]) -> Result[List[String], String] =
+  Ok(stats.domains_decode(qjson(first, replies, "qn.domains")?))
+
+## Only the domain-dependent requests enter round two. An isolated failure or
+## an empty domain list means there is no second curl invocation.
+pub fn second_round(cfg: MonitorConfig, first: List[MonitorRequest], replies: List[BatchReply]) -> List[MonitorRequest] !io =
+  match domains_of(first, replies) {
+    Ok(domains) -> if len(domains) == 0 { [] } else {
+      [qreq("qn.flux", stats.tune_request(cfg.qiniu, "flux", 30, domains)),
+        qreq("qn.bandwidth", stats.tune_request(cfg.qiniu, "bandwidth", 30, domains))]
+    }
+    Err(_) -> []
+  }
+
+## The transport is synchronous at the explicit batch boundary. Cold CPU
+## sampling is owned by the caller and its 300ms is additional to these rounds.
+pub fn collect_monitor(cfg: MonitorConfig, cached: Option[Json], packs: Option[Json]) -> MonitorResult !UpstreamBatch !io = {
+  let first = first_round(cfg, is_some(cached), is_some(packs))
+  let replies = execute_round(first)
+  let second: List[MonitorRequest] = if is_some(cached) { [] } else { second_round(cfg, first, replies) }
+  let later = execute_round(second)
+  assemble(cfg, cached, packs, first, replies, second, later)
+}
+
+fn is_some[T](v: Option[T]) -> Bool = match v { Some(_) -> true
+  None -> false }
+
+pub fn assemble(cfg: MonitorConfig, cached: Option[Json], packs: Option[Json], first: List[MonitorRequest], replies: List[BatchReply], second: List[MonitorRequest], later: List[BatchReply]) -> MonitorResult !io = {
+  let fresh_packs: Option[Json] = if cfg.qiniu.ak == "" || is_some(cached) || is_some(packs) { None }
+  else { match pack_result(first, replies) { Ok(j) -> Some(j)
+    Err(_) -> None } }
+  let third = match cached {
+    Some(j) -> j
+    None -> obj([("lighthouse", lighthouse(cfg, replies)),
+      ("qiniu", qiniu(cfg, packs, first, replies, second, later)), ("cached_at", jint(system_s()))])
+  }
+  MonitorResult { third: third, vault: vault_collect(cfg.vault_alive, cfg.vault_public, replies), packs: fresh_packs }
+}
+
+fn tc_json(replies: List[BatchReply], id: String, action: String) -> Result[Json, String] = {
+  let r = text_for(replies, id, MANAGEMENT_TIMEOUT_S)?
+  if r.status == 200 { parse_text(r.body) }
+  else { Err("tencent ${action} HTTP ${to_string(r.status)}: ${r.body}") }
+}
+
+fn result_field(key: String, value: Result[Json, String]) -> (String, Json) =
+  match value { Ok(j) -> (key, j)
+    Err(m) -> (key ++ "_error", jstr(m)) }
+
+fn lighthouse(cfg: MonitorConfig, replies: List[BatchReply]) -> Json =
+  if not tc_on(cfg) { obj([("configured", jbool(false))]) }
+  else { obj([("configured", jbool(true)),
+    result_field("traffic", traffic(replies)), result_field("instance", instance(replies)),
+    result_field("cpu_trend", cpu_trend(replies))]) }
+
+fn pack_result(first: List[MonitorRequest], replies: List[BatchReply]) -> Result[Json, String] = {
+  let listing = qjson(first, replies, "qn.list")?
+  let overview = qjson(first, replies, "qn.overview")?
+  Ok(stats.respack_decode(listing, overview))
+}
+
+fn qiniu(cfg: MonitorConfig, packs: Option[Json], first: List[MonitorRequest], replies: List[BatchReply], second: List[MonitorRequest], later: List[BatchReply]) -> Json = {
+  if cfg.qiniu.ak == "" { return obj([("configured", jbool(false))]) }
+  let main = match kodo(first, replies) { Ok(entries) -> entries
+    Err(m) -> [("error", jstr(m))] }
+  let cdn = match cdn(first, replies, second, later) { Ok(entries) -> entries
+    Err(m) -> [("cdn_error", jstr(m))] }
+  let package: Result[Json, String] = match packs { Some(j) -> Ok(j)
+    None -> pack_result(first, replies) }
+  let package_fields = match package {
+    Ok(j) -> [("cdn_pack", stats.field(j, "cdn")), ("storage_pack", stats.field(j, "storage"))]
+    Err(m) -> [("respack_error", jstr(m))]
+  }
+  obj([("configured", jbool(true)), ("bucket", jstr(cfg.qiniu.bucket))] ++ main ++ cdn ++ package_fields)
+}
+
+fn kodo(first: List[MonitorRequest], replies: List[BatchReply]) -> Result[List[(String, Json)], String] = {
+  let (stimes, sdatas) = stats.kodo_decode(qjson(first, replies, "qn.space")?)
+  let (_, cdatas) = stats.kodo_decode(qjson(first, replies, "qn.count")?)
+  let flow = stats.flow_decode(qjson(first, replies, "qn.flow")?, "flow")
+  let hits = stats.flow_decode(qjson(first, replies, "qn.hits")?, "hits")
+  Ok([("space", jint(stats.last_nonzero(sdatas))), ("count", jint(stats.last_nonzero(cdatas))),
+    ("flow_30d", jint(sum_snd(flow))), ("hits_30d", jint(sum_snd(hits))),
+    ("space_trend", trend_int(stimes, sdatas)), ("flow_trend", JArr(map(flow, p => {
+      let (t, v) = p
+      obj([("t", jstr(t)), ("v", jint(v))])
+    })))])
+}
+
+fn cdn(first: List[MonitorRequest], replies: List[BatchReply], second: List[MonitorRequest], later: List[BatchReply]) -> Result[List[(String, Json)], String] = {
+  let domains = domains_of(first, replies)?
+  let empty: (List[Int], List[Int]) = ([], [])
+  let (ftimes, fvalues) = if len(domains) == 0 { empty }
+  else { stats.tune_decode(qjson(second, later, "qn.flux")?) }
+  let (_, bvalues) = if len(domains) == 0 { empty }
+  else { stats.tune_decode(qjson(second, later, "qn.bandwidth")?) }
+  let peak = fold(bvalues, 0, (acc, v) => if v > acc { v } else { acc })
+  Ok([("cdn_flow_30d", jint(fold(fvalues, 0, (acc, v) => acc + v))),
+    ("cdn_peak_bps", jint(peak)), ("cdn_domains", JArr(map(domains, d => JStr(d)))),
+    ("cdn_trend", trend_int(ftimes, fvalues))])
+}
+
+pub fn vault_collect(alive_url: String, public_url: String, replies: List[BatchReply]) -> Json = {
+  let head = [("url", jstr(vault_base(alive_url))), ("public_url", jstr(public_url))]
+  match text_for(replies, "vault.alive", MANAGEMENT_TIMEOUT_S) {
+    Err(m) -> obj(head ++ [("alive", jbool(false)), ("error", jstr(m))])
+    Ok(r) -> {
+      let measured = match reply_for(replies, "vault.alive") { Ok(item) -> item.elapsed_ms
+        Err(_) -> 0 }
+      let version = match text_for(replies, "vault.config", MANAGEMENT_TIMEOUT_S) {
+        Ok(c) -> match parse(c.body) { Ok(j) -> [("version", stats.field(j, "version"))]
+          Err(_) -> [] }
+        Err(_) -> []
+      }
+      obj(head ++ [("alive", jbool(r.status == 200)), ("latency_ms", jint(measured))] ++ version)
+    }
+  }
+}
+fn tc_resp(action: String, j: Json) -> Result[Json, String] = {
+  let resp = stats.field(j, "Response")
+  match stats.field(resp, "Error") {
+    JObj(_e) -> {
+      let err = stats.field(resp, "Error")
+      Err("${action} 失败: ${jstr_plain(stats.field(err, "Code"))} ${jstr_plain(stats.field(err, "Message"))}")
+    }
+    _ -> Ok(resp),
+  }
+}
+
+fn jstr_plain(j: Json) -> String =
+  match j {
+    JStr(s) -> s
+    _ -> "",
+  }
+
+fn arr0(j: Json) -> Option[Json] =
+  match j {
+    JArr(xs) -> get(xs, 0)
+    _ -> None,
+  }
+
+fn arr_of(j: Json) -> List[Json] =
+  match j {
+    JArr(xs) -> xs
+    _ -> [],
+  }
+
+fn sum_snd(xs: List[(String, Int)]) -> Int =
+  fold(xs, 0, (acc, p) => {
+    let (_t, v) = p
+    acc + v
+  })
+
+fn trend_int(times: List[Int], values: List[Int]) -> Json = {
+  let n = if len(times) < len(values) { len(times) } else { len(values) }
+  JArr(map(range(0, n), i => obj([("t", jint(times[i])), ("v", jint(values[i]))])))
+}
+
+fn traffic(replies: List[BatchReply]) -> Result[Json, String] = {
+  let j = tc_json(replies, "tc.traffic", "DescribeInstancesTrafficPackages")?
+  let resp = tc_resp("DescribeInstancesTrafficPackages", j)?
+  match arr0(stats.field(resp, "InstanceTrafficPackageSet")) {
+    Some(inst) ->
+      match arr0(stats.field(inst, "TrafficPackageSet")) {
+        Some(p) -> Ok(obj([
+          ("used", JInt(stats.int_of(stats.field(p, "TrafficUsed")))),
+          ("total", JInt(stats.int_of(stats.field(p, "TrafficPackageTotal")))),
+          ("remaining", JInt(stats.int_of(stats.field(p, "TrafficPackageRemaining")))),
+          ("overflow", JInt(stats.int_of(stats.field(p, "TrafficOverflow")))),
+          ("start", stats.field(p, "StartTime")),
+          ("end", stats.field(p, "EndTime")),
+          ("status", stats.field(p, "Status")),
+        ]))
+        None -> Err("流量包列表为空")
+      }
+    None -> Err("未找到该实例的流量包")
+  }
+}
+
+fn instance(replies: List[BatchReply]) -> Result[Json, String] = {
+  let j = tc_json(replies, "tc.instance", "DescribeInstances")?
+  let resp = tc_resp("DescribeInstances", j)?
+  match arr0(stats.field(resp, "InstanceSet")) {
+    Some(s) -> {
+      let ip = match arr0(stats.field(s, "PublicAddresses")) {
+        Some(a) -> a
+        None -> JNull
+      }
+      Ok(obj([
+        ("name", stats.field(s, "InstanceName")),
+        ("cpu", JInt(stats.int_of(stats.field(s, "CPU")))),
+        ("memory_gb", JInt(stats.int_of(stats.field(s, "Memory")))),
+        ("state", stats.field(s, "InstanceState")),
+        ("ip", ip),
+        ("disk_gb", JInt(stats.int_of(stats.field(stats.field(s, "SystemDisk"), "DiskSize")))),
+        ("expired_at", stats.field(s, "ExpiredTime")),
+        ("created_at", stats.field(s, "CreatedTime")),
+      ]))
+    }
+    None -> Err("未找到实例")
+  }
+}
+
+fn cpu_trend(replies: List[BatchReply]) -> Result[Json, String] = {
+  let j = tc_json(replies, "tc.trend", "GetMonitorData")?
+  let resp = tc_resp("GetMonitorData", j)?
+  match arr0(stats.field(resp, "DataPoints")) {
+    Some(dp) -> {
+      let ts = arr_of(stats.field(dp, "Timestamps"))
+      let vs = arr_of(stats.field(dp, "Values"))
+      let n = if len(ts) < len(vs) { len(ts) } else { len(vs) }
+      Ok(JArr(map(range(0, n), i => obj([
+        ("t", JInt(stats.int_of(ts[i]))),
+        ("v", vs[i]),
+      ]))))
+    }
+    None -> Ok(JArr([]))
+  }
+}

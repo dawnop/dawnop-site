@@ -56,16 +56,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 dawnop-site/
 ├── backend-dawn/               # 生产后端（Dawn → JVM 字节码）
-│   ├── core/                   # 可移植包 site_core，36 个模块；无 Java 依赖
+│   ├── core/                   # 可移植包 site_core，41 个模块；无 Java 依赖
 │   │   ├── src/                # config、db/sql、repo、svc 与纯 util/qiniu/tencent，含 Upstream 与 HTTP 类型
 │   │   └── dawn.toml           # web/json/sha2，保持 v0.98.0 tag/hash
-│   ├── app/jvm/                # JVM 应用，25 个模块；路径依赖 ../../core
+│   ├── app/jvm/                # JVM 应用，22 个模块；路径依赖 ../../core
 │   │   ├── src/                # main、api、其余 svc 与 JDBC/Clock/HTTP 接缝及缓存地址包装
 │   │   ├── dawn.toml           # web_jvm、sqlite-jdbc 与 site_core
 │   │   └── dawn.lock           # 原 JDBC artifact 锁，内容不变
 │   ├── app/native/             # site_sqlite：独立 Db 与 curl Upstream handler
 │   ├── test/{core,jvm}/        # 按原模块路径保存测试与专用夹具
-│   ├── test/{sql,native,transport}/ # 共用 SQL/HTTP 场景与 native consumer
+│   ├── test/{sql,native,transport,monitor}/ # 共用 SQL/HTTP 场景与 native consumer
 │   ├── build.sh                # 临时镜像跑测试 → 直接 build app/jvm
 │   ├── scripts/test_project.py # 生成同模块白盒测试镜像，不扩大私有 API
 │   ├── scripts/check_core.py   # native check 与源码依赖闭包门禁，含真实负控
@@ -278,7 +278,8 @@ dawnop-site/
 backend-dawn/scripts/native-sqlite/run.sh # native handler、SQL 双臂、真实 FTS、BUSY、ASan/LSan
 java -jar backend-dawn/backend-dawn.jar # 跑起来（lib/ 须在 jar 旁边）
 python3 backend-dawn/scripts/test_project.py # 独立运行全量白盒单测
-python3 backend-dawn/scripts/check_core.py --negative-controls # core native 门禁（含 HTTP 类型泄漏负控）
+python3 backend-dawn/scripts/check_core.py --negative-controls # core native 门禁
+backend-dawn/scripts/monitor-batch/run.sh # S9 双臂批次、隔离、并行和负控（含 HTTP 类型泄漏负控）
 
 # 编译器版本由 .dawn-version 钉住，scripts/fetch-dawn.sh 自动下载并缓存到 .dawn/。
 # **升钉是两个文件一起改**：.dawn-version 换 tag，.dawn-version.sha256 补该 tag 的

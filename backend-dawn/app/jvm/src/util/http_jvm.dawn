@@ -1,5 +1,10 @@
 # JVM owner of the process HTTP client, publishers, futures and raw streams.
 use site_core/util/http.{HttpResp, BytesResp, StreamResp, OutReq, OutBody, NoBody, TextBody, RawBody, FileBody, RequestBody, Upstream, Pending, pending, response_stream, request_parts}
+use site_core/util/http_batch.{UpstreamBatch, BatchReq, BatchReply, unique_ids, failed, batch_fault}
+use java "java.lang.System"
+use java "java.lang.Object"
+use java "java.util.concurrent.atomic.AtomicLong"
+use std/str
 use web_jvm/server.{input_source}
 use java "java.net.URI"
 use java "java.net.http.HttpClient"
@@ -55,7 +60,8 @@ fn client_of(cell: HttpCell) -> HttpClient = cell
 ## write at each, so writing the arm inline read better; Upstream has a dozen
 ## sites and four arms apiece, and a dozen copies of the same four arms is a
 ## dozen places for them to drift.
-pub fn with_upstream[T](cl: HttpCell, body: fn() -> T !Upstream !io) -> T !io = {
+pub fn with_upstream[T](cl: HttpCell, body: fn() -> T !Upstream !UpstreamBatch !io) -> T !io = {
+  with handle UpstreamBatch { exchange_batch(requests) => wire_batch(cl, requests) }
   with handle Upstream {
     exchange(req) => wire_exchange(cl, req)
     exchange_bytes(req) => wire_exchange_bytes(cl, req)
@@ -172,3 +178,65 @@ fn add_headers(b: Builder, hs: List[(String, String)], i: Int) -> Builder !io =
     let b2 = b.header(k, v)!
     add_headers(b2, hs, i + 1)
   }
+
+# The completion callback records a monotonic timestamp for each exchange;
+# joining a slow earlier item cannot inflate a later item's duration.
+type BatchStarted = { response: CompletableFuture, completion: CompletableFuture }
+type BatchFuture = { item: BatchReq, future: Result[BatchStarted, ForeignError], start: Int, stop: AtomicLong }
+
+fn wire_batch(cl: HttpCell, requests: List[BatchReq]) -> List[BatchReply] !io = {
+  if not unique_ids(requests) {
+    return map(requests, r => failed(r.id, batch_fault("duplicate or empty outbound batch ID")))
+  }
+  let started = map(requests, item => {
+    let start = System.nanoTime()
+    let stop = AtomicLong.new(0)
+    let future = batch_start(cl, item.req, stop)
+    match future { Err(_) -> stop.set(System.nanoTime())
+      Ok(_) -> () }
+    BatchFuture { item: item, start: start, stop: stop, future: future }
+  })
+  map(started, batch_join)
+}
+
+fn batch_start(cl: HttpCell, req: OutReq, stop: AtomicLong) -> Result[BatchStarted, ForeignError] !io =
+  flatten_fault(catch_fault(() => {
+    let built = request_for(req)?
+    let future = client_of(cl).sendAsync(built, BodyHandlers.ofString()!)!
+    let completed = future.thenApply((raw: Object) => {
+      stop.set(System.nanoTime())
+      raw
+    })!.exceptionally((error: Object) => {
+      stop.set(System.nanoTime())
+      error
+    })!
+    Ok(BatchStarted { response: future, completion: completed })
+  }))
+
+fn batch_join(started: BatchFuture) -> BatchReply !io = {
+  let item = started.item
+  let result: Result[HttpResponse, ForeignError] = match started.future {
+    Err(e) -> Err(e)
+    Ok(f) -> flatten_fault(catch_fault(() => {
+      let _ = f.completion.get()!
+      cast(f.response.get()!)
+    }))
+  }
+  let stop = started.stop.get()
+  let elapsed = ((if stop == 0 { System.nanoTime() } else { stop }) - started.start) / 1000000
+  match result {
+    Err(e) -> {
+      let real = match e.cause {
+        None -> e
+        Some(c) -> match str.split_once(c, ": ") {
+          None -> ForeignError { kind: c, message: "", cause: None }
+          Some((kind, message)) -> ForeignError { kind: kind, message: message, cause: None }
+        }
+      }
+      BatchReply { id: item.id, exit_code: if str.ends_with(real.kind, "TimeoutException") { 28 } else { 1 },
+        status: 0, headers: "", body: "", elapsed_ms: elapsed, error: Some(real) }
+    }
+    Ok(resp) -> BatchReply { id: item.id, exit_code: 0, status: resp.statusCode(),
+      headers: String.valueOf(resp.headers()!.map()!)!, body: String.valueOf(resp.body()!)!, elapsed_ms: elapsed, error: None }
+  }
+}

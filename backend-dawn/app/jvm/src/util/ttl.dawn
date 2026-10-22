@@ -2,7 +2,7 @@
 use std/io
 use db/db.{with_db}
 use site_core/util/cache
-use util/clock.{system_s}
+use site_core/util/clock.{system_s}
 
 pub type TtlCell = { path: String, address: cache.CacheSlot }
 

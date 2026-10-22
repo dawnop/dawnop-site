@@ -7,7 +7,7 @@ use site_core/config.{load, get_or, require_int_in_range}
 use db/db.{DbConfig, with_db}
 use site_core/db/sql.{with_immediate_tx}
 use site_core/repo/repo_paste
-use util/clock.{system_s}
+use site_core/util/clock.{system_s}
 use web_jvm/server.{serve_app_with, ServerConfig}
 use web/types.{DEFAULT_MAX_BODY}
 use site_core/util/jsonx.{fastapi_errors}

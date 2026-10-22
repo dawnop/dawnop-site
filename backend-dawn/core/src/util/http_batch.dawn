@@ -1,0 +1,49 @@
+# Explicit bounded text batches. IDs, never completion positions, own replies.
+use std/list
+use util/http.{OutReq, HttpResp, deadline_text}
+
+pub type BatchReq = { id: String, req: OutReq }
+pub type BatchReply = {
+  id: String,
+  exit_code: Int,
+  status: Int,
+  headers: String,
+  body: String,
+  elapsed_ms: Int,
+  error: Option[ForeignError],
+}
+
+pub effect UpstreamBatch {
+  fn exchange_batch(requests: List[BatchReq]) -> List[BatchReply]
+}
+
+pub fn batch_fault(message: String) -> ForeignError =
+  ForeignError { kind: "site.batch.ProtocolError", message: message, cause: None }
+
+pub fn failed(id: String, e: ForeignError) -> BatchReply =
+  BatchReply { id: id, exit_code: -1, status: 0, headers: "", body: "", elapsed_ms: 0, error: Some(e) }
+
+## Reject ambiguous input before contacting any peer.
+pub fn unique_ids(requests: List[BatchReq]) -> Bool = {
+  var seen: List[String] = []
+  for item in requests {
+    if item.id == "" || list.any(seen, id => id == item.id) { return false }
+    seen = seen ++ [item.id]
+  }
+  true
+}
+
+pub fn reply_for(replies: List[BatchReply], id: String) -> Result[BatchReply, String] = {
+  let matches = filter(replies, r => r.id == id)
+  if len(matches) == 1 { Ok(matches[0]) } else { Err("missing or duplicate outbound batch ID") }
+}
+
+pub fn reply_text(reply: BatchReply, budget_s: Int) -> Result[HttpResp, String] =
+  match reply.error {
+    Some(e) -> Err(deadline_text(budget_s, e))
+    None -> if reply.exit_code != 0 { Err("outbound batch item failed") }
+    else { Ok(HttpResp { status: reply.status, body: reply.body }) }
+  }
+
+pub fn text_for(replies: List[BatchReply], id: String, budget_s: Int) -> Result[HttpResp, String] =
+  reply_text(reply_for(replies, id)?, budget_s)

@@ -1,0 +1,152 @@
+# The same consumer is linked to the real JVM and curl owners.
+use std/io
+use std/str
+use site_core/util/http.{OutReq, NoBody, timed_out}
+use site_core/util/http_batch.{UpstreamBatch, BatchReq, BatchReply, exchange_batch, reply_for, reply_text}
+use site_core/svc/monitor_batch.{MonitorConfig, MonitorRequest, first_round, second_round, assemble, vault_collect}
+use site_core/qiniu/stats.{field}
+use site_core/qiniu/creds.{Qiniu}
+use json/value.{Json, JStr, JInt, JBool, JNull, JArr}
+use json/render.{render}
+use site_core/util/jsonx.{obj, jint, jstr}
+
+fn check(ok: Bool, name: String) -> Unit = if not ok { panic("assertion: ${name}") }
+fn request(id: String, base: String, path: String, budget: Int) -> BatchReq =
+  BatchReq { id: id, req: OutReq { method: "GET", url: base ++ path,
+    headers: [("X-Fixture", "batch-fixture-secret")], body: NoBody, budget_s: budget } }
+fn found(replies: List[BatchReply], id: String) -> BatchReply =
+  match reply_for(replies, id) { Ok(r) -> r
+    Err(_) -> { check(false, "item-ID")
+      replies[0] } }
+fn successful(replies: List[BatchReply], id: String) -> BatchReply !io = {
+  let r = found(replies, id)
+  if r.exit_code != 0 || r.error != None || r.status != 200 {
+    io.eprintln("item ${id} exit=${r.exit_code} status=${r.status}")
+    match r.error { Some(e) -> io.eprintln(e.kind ++ ": " ++ e.message)
+      None -> () }
+  }
+  check(r.exit_code == 0 && r.error == None && r.status == 200, "item-success")
+  r
+}
+
+pub fn scenario(name: String, base: String) -> Json !UpstreamBatch !io =
+  io.with_clock_real(() => {
+    if name == "boundaries" {
+      check(exchange_batch([]) == [], "empty-batch")
+      let duplicate = request("same", base, "/must-not-contact", 10)
+      let refused = exchange_batch([duplicate, duplicate])
+      check(len(refused) == 2 && refused[0].error != None && refused[1].error != None, "duplicate-input-ID")
+      check(reply_for(refused, "same") == Err("missing or duplicate outbound batch ID"), "duplicate-output-ID")
+      check(reply_for([], "missing") == Err("missing or duplicate outbound batch ID"), "missing-output-ID")
+      let invalid = BatchReq { id: "invalid", req: OutReq { method: "GET", url: base ++ "/must-not-contact",
+        headers: [("X-Bad", "one\ntwo")], body: NoBody, budget_s: 10 } }
+      let got = exchange_batch([invalid, request("valid", base, "/item/valid/20", 10), request("utf8", base, "/utf8", 10)])
+      check(found(got, "invalid").error != None, "invalid-item-isolated")
+      check(successful(got, "valid").body == "valid", "invalid-neighbor-survives")
+      check(successful(got, "utf8").body == "a\u{0}\u{fffd}z", "text-decoding")
+    }
+    let start = io.now()
+    let requests: List[BatchReq] = if name == "parallel" {
+      map(range(0, 6), i => request(to_string(i), base, "/item/${i}/900", 10))
+    } else if name == "order" {
+      let delays = [900, 100, 700, 300, 500, 200]
+      map(range(0, 6), i => request(to_string(i), base, "/item/${i}/${delays[i]}", 10))
+    } else if name == "mixed" {
+      [request("ok", base, "/item/ok/100", 10), request("denied", base, "/denied", 10),
+        request("broken", base, "/close", 10), request("timeout", base, "/item/timeout/1800", 1),
+        request("last", base, "/item/last/300", 10)]
+    } else if name == "vault" {
+      [request("slow", base, "/item/slow/1200", 10),
+        request("vault.alive", base, "/item/alive/150", 10),
+        request("vault.config", base, "/config", 10)]
+    } else { [] }
+    let replies = exchange_batch(requests)
+    let wall_ms = io.elapsed_ns(start, io.now()) / 1000000
+    if name == "parallel" || name == "order" {
+      for i in range(0, 6) {
+        let r = successful(replies, to_string(i))
+        check(r.body == to_string(i), "completion-ID")
+        check(str.contains(str.to_lower(r.headers), "x-item"), "item-headers")
+        check(r.elapsed_ms > 0, "item-duration")
+        if name == "order" {
+          let delays = [900, 100, 700, 300, 500, 200]
+          check(r.elapsed_ms >= delays[i] - 30, "completion-ID")
+        }
+      }
+      if name == "parallel" { check(wall_ms < 2400, "parallel-wall") }
+    } else if name == "mixed" {
+      check(successful(replies, "ok").body == "ok", "isolated-success")
+      check(successful(replies, "last").body == "last", "isolated-last")
+      let denied = found(replies, "denied")
+      check(denied.status == 503 && denied.error == None && denied.body == "denied", "HTTP-status-preserved")
+      let broken = found(replies, "broken")
+      check(broken.exit_code != 0 && broken.error != None && broken.status == 0, "item-error")
+      let timeout = found(replies, "timeout")
+      check(timeout.exit_code == 28 && timeout.error != None, "item-timeout")
+      match reply_text(timeout, 1) { Ok(_) -> check(false, "timeout-policy")
+        Err(m) -> check(timed_out(m), "timeout-policy") }
+    } else if name == "vault" {
+      let vault = vault_collect(base ++ "/alive", "public", replies)
+      check(field(vault, "alive") == JBool(true), "vault-alive")
+      check(field(vault, "version") == JStr("fixture-version"), "vault-version")
+      let measured = successful(replies, "vault.alive").elapsed_ms
+      check(field(vault, "latency_ms") == JInt(measured), "vault-item-duration")
+      check(measured >= 100 && measured < 850, "vault-not-batch-duration")
+    }
+    obj([("wall_ms", jint(wall_ms)), ("items", JArr(map(replies, r => obj([
+      ("id", jstr(r.id)), ("exit", jint(r.exit_code)), ("status", jint(r.status)),
+      ("elapsed_ms", jint(r.elapsed_ms))]))))])
+  })
+
+fn config() -> MonitorConfig = MonitorConfig {
+  qiniu: Qiniu { ak: "test-ak", sk: "test-sk", bucket: "test-bucket", domain: "", expires: 3600, rs_host: "", up_host: "" },
+  tencent_id: "id", tencent_key: "key", region: "region", instance: "instance",
+  vault_alive: "http://invalid.example/alive", vault_public: "public",
+}
+
+# Rewrite only the destination after signing, keeping IDs, bodies and headers.
+# The fake peer validates the full plan and round dependency independently.
+fn local_plan(plan: List[MonitorRequest], base: String, mode: String) -> List[MonitorRequest] =
+  map(plan, p => {
+    let req = p.item.req
+    MonitorRequest { fail: p.fail, item: BatchReq { id: p.item.id,
+      req: OutReq { method: req.method, url: base ++ "/monitor/" ++ mode ++ "/" ++ p.item.id,
+        headers: req.headers, body: req.body, budget_s: if mode == "timeout" && p.item.id == "tc.traffic" { 1 } else { req.budget_s } } } }
+  })
+
+pub fn monitor_scenario(base: String, mode: String) -> Json !UpstreamBatch !io = {
+  let cfg = config()
+  let cached: Option[Json] = if mode == "warm" { Some(obj([("cached_at", jint(123)), ("lighthouse", obj([])), ("qiniu", obj([]))])) } else { None }
+  let packs: Option[Json] = if mode == "packs" { Some(obj([("cdn", jint(77)), ("storage", JNull)])) } else { None }
+  let first = first_round(cfg, mode == "warm", mode == "packs")
+  check(len(first) == (if mode == "warm" { 2 } else if mode == "packs" { 10 } else { 12 }), "first-plan")
+  let replies = exchange_batch(map(local_plan(first, base, mode), p => p.item))
+  let second: List[MonitorRequest] = if mode == "warm" { [] } else { second_round(cfg, first, replies) }
+  check(len(second) == (if mode == "warm" || mode == "domains-fail" || mode == "empty" { 0 } else { 2 }), "second-plan")
+  let later: List[BatchReply] = if len(second) == 0 { [] } else { exchange_batch(map(local_plan(second, base, mode), p => p.item)) }
+  let result = assemble(cfg, cached, packs, first, replies, second, later)
+  let lh = field(result.third, "lighthouse")
+  let qn = field(result.third, "qiniu")
+  if mode == "warm" {
+    check(field(result.third, "cached_at") == jint(123), "third-cache")
+  } else {
+    check(field(field(lh, "instance"), "name") == JStr("box"), "monitor-instance")
+    if mode == "failure" || mode == "timeout" { check(field(lh, "traffic_error") != JNull, "traffic-isolation") }
+    else { check(field(field(lh, "traffic"), "used") == jint(7), "monitor-traffic") }
+    if mode == "failure" { check(field(qn, "error") != JNull && field(qn, "space") == JNull, "kodo-isolation") }
+    else { check(field(qn, "space") == jint(20), "monitor-space") }
+    if mode == "domains-fail" || mode == "tune-fail" { check(field(qn, "cdn_error") != JNull, "cdn-isolation") }
+    else { check(field(qn, "cdn_flow_30d") == jint(if mode == "empty" { 0 } else { 30 }), "monitor-cdn") }
+    if mode == "billing-fail" { check(field(qn, "respack_error") != JNull && result.packs == None, "billing-isolation") }
+    else if mode == "packs" { check(field(qn, "cdn_pack") == jint(77) && result.packs == None, "billing-cache") }
+    else { check(field(field(qn, "cdn_pack"), "total") == jint(4294967296) && result.packs != None, "monitor-billing") }
+  }
+  check(field(result.vault, "alive") == JBool(true), "monitor-vault")
+  result.third
+}
+
+pub fn main_scenario(argv: List[String]) -> Unit !UpstreamBatch !io = {
+  let result = if argv[0] == "monitor" { monitor_scenario(argv[1], argv[2]) }
+  else { scenario(argv[0], argv[1]) }
+  io.println(render(result))
+}

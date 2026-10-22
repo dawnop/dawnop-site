@@ -39,7 +39,7 @@ use site_core/repo/repo_fm.{key_referenced}
 use site_core/util/paths.{fm_join, basename, ext, key_ext_ok, guess_mime, safe_persisted_mime, name_verdict, NameAccepted, NameAllBlank, NameEdgeBlank, NameDotSegment}
 use std/io.{Random}
 use site_core/util/crypto.{random_token, sha256_hex, uuid_hex}
-use util/clock.{Clock, now_s}
+use site_core/util/clock.{Clock, now_s}
 use site_core/util/ferr.{catch_text}
 use site_core/util/errkind.{upstream}
 use site_core/util/http.{Upstream, as_outbound, tag_outbound}

@@ -9,8 +9,8 @@
 # The reading is a Float between 0 and 100 whichever path produced it, so the
 # response cannot tell these apart and neither can the contract goldens, which
 # assert the monitor's shape rather than its values. What separates them is the
-# clock and the cell: a call that fell back to sampling spends CPU_WINDOW_MS
-# doing it, and a call that differenced without writing back leaves the cell
+# window wait counter and the cell: a fallback invokes wait_window once
+# with CPU_WINDOW_MS, and a call that differenced without writing back leaves the cell
 # where it found it. Both mutants below that matter are chosen to leave the
 # source reading exactly as it does now -- `always-sample-a-window` still calls
 # cpu_delta_pct with the previous snapshot in hand, and `unbounded-snapshot-age`

@@ -84,8 +84,8 @@ test "uptime_of takes the first float, truncated to whole seconds" {
 # taken (the fallback still answers, just slowly and biased by whatever else the
 # request is doing), and the snapshot can quietly stop being refreshed (the
 # window then drifts out to whatever the cache TTL happens to impose). Neither
-# is visible in the shape or in the value, so both are asserted by timing the
-# call and by reading the cell back.
+# is visible in the shape or in the value, so both are asserted by counting window waits
+# and by reading the cell back.
 
 test "cpu_delta_pct is the busy share of the window it spans" {
   # 50 busy jiffies out of a 200-jiffy window
@@ -120,26 +120,25 @@ test "a snapshot survives the cell verbatim, and ages out of it" {
 
 test "a reading with a snapshot to difference against opens no window of its own" {
   let cell = test_cell()
-
-  # the genuine first call: nothing recorded yet, so this one has to sample a
-  # window and pays for it
-  let t0 = System.currentTimeMillis()
-  let first = io.with_fs_real(() => cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S))
-  let first_ms = System.currentTimeMillis() - t0
-  assert first >= 0.0
-  assert first_ms >= CPU_WINDOW_MS
-
-  # let the jiffy counters move, so the next call has a window to report on
-  Thread.sleep(120)
-
-  let t1 = System.currentTimeMillis()
-  let second = io.with_fs_real(() => cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S))
-  let second_ms = System.currentTimeMillis() - t1
-  assert second >= 0.0
-  # the whole point of the change: the second call reports the 120ms above
-  # instead of sleeping through 300ms of its own. This is the assertion the
-  # cache-hit path's old 300ms floor failed.
-  assert second_ms < CPU_WINDOW_MS
+  let waits = AtomicReference.new("0")
+  let samples = AtomicReference.new("0")
+  with handle CpuWait {
+    wait_window(ms) => {
+      assert ms == CPU_WINDOW_MS
+      waits.set(to_string(unwrap_or(parse_int(String.valueOf(waits.get()!)!), 0) + 1))
+    }
+    read_sample() => {
+      let n = unwrap_or(parse_int(String.valueOf(samples.get()!)!), 0) + 1
+      samples.set(to_string(n))
+      (n * 10, n * 100)
+    }
+  }
+  let first = cpu_percent_sampled(cell, CPU_SNAPSHOT_MAX_AGE_S)
+  assert first == 10.0
+  assert String.valueOf(waits.get()!)! == "1"
+  let second = cpu_percent_sampled(cell, CPU_SNAPSHOT_MAX_AGE_S)
+  assert second == 10.0
+  assert String.valueOf(waits.get()!)! == "1"
 }
 
 test "every reading leaves its own snapshot behind" {

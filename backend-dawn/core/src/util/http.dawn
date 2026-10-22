@@ -238,7 +238,7 @@ fn raw_response_source(s: ResponseStream) -> BodySource = s
 #
 # Only a timeout is reworded. Every other fault keeps `fe_text`'s byte-exact
 # rendering, which callers' error surfaces and the contract goldens rely on.
-fn deadline_text(budget_s: Int, e: ForeignError) -> String =
+pub fn deadline_text(budget_s: Int, e: ForeignError) -> String =
   if str.ends_with(e.kind, "TimeoutException") {
     "${TIMEOUT_PREFIX}${to_string(budget_s)}s: ${fe_text(e)}"
   } else {
