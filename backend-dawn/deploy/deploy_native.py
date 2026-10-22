@@ -9,6 +9,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import urllib.request
 import zipfile
@@ -88,8 +89,14 @@ def verifier(release, sha):
         "native_package", release / "tools/package.py"
     )
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.verify(release, sha)
+    # Importing a verifier must not add an unmanifested __pycache__ to its input.
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+        return module.verify(release, sha)
+    finally:
+        sys.dont_write_bytecode = previous
 
 
 def atomic_link(target, destination):
