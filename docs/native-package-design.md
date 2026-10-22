@@ -37,6 +37,8 @@ S13 必须在真实 nginx 对大体传输限制至多 4 并发并保留至少 3 
 包；保留生产沙箱指令，仅替换测试路径和本地服务身份，结束删除本次测试文件。
 先做六个要求的负控，再测 64 活跃连接、512 MiB 完整摘要、空闲/总截止、kill
 恢复、WAL 目录权限、cleanup 互斥及 native 卸下后 JVM 继续读取同库。
+大体另有真实停滞负控、字节进度 watchdog 和 CPU/I/O 收紧回归；页缓存回收不再
+误判为客户端固定 10 秒响应超时，详见 [进度门设计](native-package-upload-design.md)。
 O1 压力独立混合 JDBC 3.53.4 与 native 3.54.1，记录短写、读、完整重复
 checkpoint、WAL reset、关闭重开与 BUSY。未复现不证明补丁存在，版本 provenance 是硬条件。
 

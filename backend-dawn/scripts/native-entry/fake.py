@@ -17,6 +17,7 @@ class Peer(ThreadingHTTPServer):
         self.last_upload = None
         self.payload = None
         self.errors = []
+        self.upload_bytes = 0
         self.thread = threading.Thread(target=self.serve_forever, daemon=True)
         self.thread.start()
 
@@ -52,6 +53,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         remaining = int(self.headers["Content-Length"])
         prefix = self.rfile.read(min(4096, remaining))
+        self.server.upload_bytes += len(prefix)
         remaining -= len(prefix)
         marker = prefix.index(b'name="file"')
         start = prefix.index(b"\r\n\r\n", marker) + 4
@@ -62,6 +64,7 @@ class Handler(BaseHTTPRequestHandler):
         size = 0
         while remaining:
             chunk = self.rfile.read(min(65536, remaining))
+            self.server.upload_bytes += len(chunk)
             if not chunk:
                 self.server.errors.append("short upstream upload")
                 return
