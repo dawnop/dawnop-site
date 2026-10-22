@@ -274,6 +274,12 @@ S4 增加独立 `app/native` 包 site_sqlite，仅含 `db/native_sqlite` handler
 - `web` — **dawn-lang 的 `packages/web`**（`[deps.web]` url+hash 依赖，vendored 副本已删）：`server`（HttpServer + G6 二进制响应体 + 流式）/`router`（tags/任意动词）/`types`/`middleware`（logging/cors/body-limit）。
 
 **鉴权（刀 7）**
+- `core/src/svc/dav_auth.dawn` — WebDAV 的 HMAC 凭据键、300s 成功缓存、账号状态/密码版本联查与
+  SQLite 短租约。密钥复用 `.env` 的 SECRET_KEY，域分离；轮换须替换全部共库进程。
+  `auth_account_state` 缺行默认启用，`enabled=0` 停用 WebDAV；直接改 users.password_hash 也立即失效。
+  随机 owner token 与 5s 到期共同约束发布，bcrypt 在事务外；失败仅在短租约内合并，等待上限 15s。
+  详见根目录 `docs/auth-cache-design.md`；`scripts/auth-cache/run.sh` 用同源 JDBC/native 场景、
+  40 进程真实 cost12 bcrypt、跨臂命中、崩溃恢复与六个先红负控验收。
 - `svc/auth.dawn` — `Auth` 配置类型、`current_user`（Bearer + `?token=`）、login/me；bcrypt 校验走 `util/bcrypt`（`$2b$→$2a$` 归一）。
   **Authorization 头的形状由 `scheme_param` 一处说了算**（Bearer 与 WebDAV 的 Basic 共用它）：
   在**第一个空格**处切开，scheme 大小写不敏感地比，其余部分**原样**取走。三条推论都与 FastAPI
@@ -451,11 +457,12 @@ S4 增加独立 `app/native` 包 site_sqlite，仅含 `db/native_sqlite` handler
 - `qiniu/stats.dawn` — kodo v6 序列 / fusion CDN tune / billing respack。
 - `core/src/util/cache.dawn` — `runtime_cache(namespace, cache_key, payload, created_ms)`，
   `(namespace, cache_key)` 复合主键；仅通过 `!Db` 与 std `Clock` 存取。monitor 120s、
-  respack 300s（monitor/FM 共享）、space 600s、dav 300s、CPU 样本 300s，分别为 `.v1` 命名空间。
+  respack 300s（monitor/FM 共享）、space 600s、CPU 样本 300s，分别为 `.v1` 命名空间。
+  dav 300s 改由上述认证协议持有 `dav.auth.v2`，初始化清除旧 `dav.v1` 摘要槽。
   命中只读、不续期，毫秒边界严格小于 TTL，时钟早于写入时间不命中；写入只持短事务。
   CPU 每次请求回写，持久化 boot_id，启动身份不符、计数回退、样本过期继续走 300ms 窗口。
 - `app/jvm/src/util/ttl.dawn` — SQLite 缓存的 JDBC/Clock 边界，`TtlCell` 仅持地址。
-  启动兼容加表；旧 JVM 可忽略，不改变原业务表。认证 HMAC/版本联查/租约仍属 S6。
+  启动兼容加表；旧 JVM 可忽略，不改变原业务表。WebDAV 不再通过此包装读写成功缓存。
 - `scripts/ttl-cache/run.sh` — 同一 test/sql 场景双臂、两新进程四种组合互读、写锁下只读命中，
   以及 TTL、namespace、倒退、命中写库、CPU boot 和真实退回 AtomicReference 的先红负控。
 

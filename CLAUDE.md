@@ -321,6 +321,7 @@ python3 scripts/check_config_defaults.py --mutants     # 负控：改真实输�
 python3 backend-dawn/scripts/contract_run.py            # 播种 fixture→起后端→跑四套
 python3 backend-dawn/scripts/contract_run.py --record   # 改了行为后重录，diff 进 review
 python3 backend-dawn/scripts/contract_run.py --only read
+backend-dawn/scripts/auth-cache/run.sh                  # 双臂认证、40进程防击穿、崩溃恢复与负控
 # 期望响应录在 backend-dawn/scripts/golden/*.json。read/edge/webdav 跑在「没有七牛凭据」
 # 的后端上；qiniu 那套另起一个后端，把 QINIU_RS_HOST/UP_HOST/DOMAIN 指向本地假七牛
 # （contract_qiniu_fake.py，会校验每个 HMAC 签名），于是子目录 COPY、PUT→GET 字节往返、

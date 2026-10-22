@@ -154,6 +154,9 @@ jobs:
       - name: SQLite TTL cache dual arm and cross process contracts
         run: backend-dawn/scripts/ttl-cache/run.sh
 
+      - name: WebDAV auth cache leases and 40 process bcrypt contracts
+        run: backend-dawn/scripts/auth-cache/run.sh
+
       - name: Java FFI boundaries
         run: python3 backend-dawn/scripts/check-ffi-boundaries.py
 

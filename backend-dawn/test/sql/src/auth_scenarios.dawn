@@ -1,0 +1,186 @@
+# Identical real SQL scenarios and bcrypt probes for both backend arms.
+use std/io
+use std/io.{Clock, with_random_real}
+use site_core/svc/dav_auth
+use site_core/db/sql.{Db, execute, query, scalar_int, in_transaction, PStr, ColStr, str_at}
+use scenarios.{demand, check}
+
+const SECRET: String = "auth-fixture-secret"
+const USER: String = "contract-admin"
+const PASS: String = "contract-fixture-pw"
+const FIXTURE_HASH: String = "\$2b\$12\$fBm/BBrDqZMMZXAiEDQ8M.atcuXIoOZ18WfMf6Uw5xhj0q8dhPUCe"
+
+fn at[T, !e](ms: Int, body: fn() -> T !Clock !e) -> T !e = {
+  with handle Clock {
+    clock_wall_ns() => ms * 1000000
+    clock_mono() => io.instant_at_ns(0)
+    clock_sleep_ns(_ns) => panic("unexpected auth wait")
+  }
+  body()
+}
+
+fn counted(plain: String, hash: String) -> Bool !Db !io = {
+  check(not demand(in_transaction()), "bcrypt-outside-tx")
+  demand(execute("insert into auth_test_bcrypt values(1)", []))
+  dav_auth.verify_password(plain, hash)
+}
+
+fn auth(secret: String, pass: String, ms: Int) -> Result[Bool, String] !Db !io =
+  at(ms, () => with_random_real(() => dav_auth.authenticate(secret, USER, pass, counted)))
+
+fn hit(pass: String, ms: Int) -> Result[Bool, String] !Db =
+  at(ms, () => dav_auth.cached(SECRET, USER, dav_auth.credential_key(SECRET, USER ++ ":" ++ pass)))
+
+fn reset() -> Result[Unit, String] !Db = {
+  dav_auth.ensure_schema()?
+  execute("create table if not exists auth_test_bcrypt(n integer)", [])?
+  execute("delete from auth_test_bcrypt", [])?
+  execute("delete from runtime_cache where namespace='dav.auth.v2'", [])?
+  execute("delete from auth_verify_leases", [])?
+  execute("delete from auth_account_state", [])
+}
+
+pub fn auth_suite(mode: String) -> Result[Unit, String] !Db !io = {
+  reset()?
+  let ms = 1000123
+  if mode == "auth" || mode == "auth-key" {
+    # Independently computed with Python's hmac, including NUL and UTF-8 bytes.
+    check(dav_auth.credential_key("key", "用户:pw:密") == "67d4ca282ebbd6a5af9e094199dbfd30b4dae4ce4a14eedc5612f942f6466374", "hmac-key")
+    check(auth(SECRET, PASS, ms)?, "auth-success")
+    check(auth("rotated-secret", PASS, ms + 1)?, "secret-rotation")
+    check(scalar_int("select count(*) from auth_test_bcrypt", [])? == 2, "rotation-reverifies")
+    check(scalar_int("select count(*) from runtime_cache where namespace='dav.auth.v2'", [])? == 2, "rotated-keys-independent")
+    println("auth\thmac-and-rotation")
+  }
+  if mode == "auth" || mode == "auth-expiry" {
+    reset()?
+    check(auth(SECRET, PASS, ms)?, "auth-success")
+    check(hit(PASS, ms + 299999)?, "auth-before-expiry")
+    check(not hit(PASS, ms + 300000)?, "auth-exact-expiry")
+    check(not hit(PASS, ms - 1)?, "auth-backwards")
+    println("auth\t300s-strict-boundary")
+  }
+  if mode == "auth" || mode == "auth-account" {
+    reset()?
+    check(auth(SECRET, PASS, ms)?, "auth-success")
+    let original = query("select password_hash from users where username=?", [PStr(USER)], [ColStr])?
+    execute("update users set password_hash='changed' where username=?", [PStr(USER)])?
+    check(not hit(PASS, ms + 1)?, "password-change-invalidates")
+    check(not auth(SECRET, PASS, ms + 1)?, "old-password-denied")
+    execute("update users set password_hash=? where username=?", [PStr(str_at(original[0], 0)), PStr(USER)])?
+    execute("insert into auth_account_state select id,0 from users where username=?", [PStr(USER)])?
+    check(not hit(PASS, ms + 1)?, "disabled-invalidates")
+    check(not auth(SECRET, PASS, ms + 1)?, "disabled-denied")
+    execute("update auth_account_state set enabled=1", [])?
+    execute("update users set username='renamed' where username=?", [PStr(USER)])?
+    check(not hit(PASS, ms + 1)?, "renamed-invalidates")
+    execute("update users set username=? where username='renamed'", [PStr(USER)])?
+    execute("begin immediate", [])?
+    execute("delete from users where username=?", [PStr(USER)])?
+    check(not hit(PASS, ms + 1)?, "deleted-invalidates")
+    execute("rollback", [])?
+    println("auth\taccount-version-and-status")
+  }
+  if mode == "auth" || mode == "auth-readonly" {
+    reset()?
+    check(auth(SECRET, PASS, ms)?, "auth-success")
+    let before = scalar_int("select total_changes()", [])?
+    execute("PRAGMA query_only=on", [])?
+    let result = auth(SECRET, PASS, ms + 1)
+    execute("PRAGMA query_only=off", [])?
+    check(result == Ok(true), "auth-hit-readonly")
+    check(scalar_int("select total_changes()", [])? == before, "auth-hit-no-writes")
+    check(scalar_int("select created_ms from runtime_cache where namespace='dav.auth.v2'", [])? == ms, "auth-no-renewal")
+    println("auth\treadonly-hit")
+  }
+  if mode == "auth" || mode == "auth-fencing" {
+    reset()?
+    let result = at(ms, () => with_random_real(() => dav_auth.authenticate(SECRET, USER, PASS, (p, h) => {
+      let valid = counted(p, h)
+      demand(execute("update auth_verify_leases set owner='successor'", []))
+      valid
+    })))?
+    check(not result, "stale-owner-denied")
+    check(scalar_int("select count(*) from auth_verify_leases where owner='successor'", [])? == 1, "successor-lease-retained")
+    check(not hit(PASS, ms + 1)?, "stale-owner-no-cache")
+    reset()?
+    let expired = at(ms, () => with_random_real(() => dav_auth.authenticate(SECRET, USER, PASS, (p, h) => {
+      let valid = counted(p, h)
+      demand(execute("update auth_verify_leases set expires_ms=0", []))
+      valid
+    })))?
+    check(not expired, "expired-owner-denied")
+    check(not hit(PASS, ms + 1)?, "expired-owner-no-cache")
+    reset()?
+    let raced = at(ms, () => with_random_real(() => dav_auth.authenticate(SECRET, USER, PASS, (p, h) => {
+      let valid = counted(p, h)
+      demand(execute("update users set password_hash='changed' where username=?", [PStr(USER)]))
+      valid
+    })))?
+    check(not raced, "password-change-during-bcrypt")
+    check(not hit(PASS, ms + 1)?, "changed-version-no-cache")
+    println("auth\tfenced-owner-and-account-race")
+  }
+  if mode == "auth" || mode == "auth-failure" {
+    reset()?
+    for i in range(0, 140) {
+      check(not at(ms, () => with_random_real(() => dav_auth.authenticate(SECRET, "unknown-${i}", PASS, counted)))?, "unknown-denied")
+    }
+    check(scalar_int("select count(*) from auth_verify_leases", [])? == 0, "unknown-no-leases")
+    check(scalar_int("select count(*) from auth_test_bcrypt", [])? == 0, "unknown-no-bcrypt")
+    # The preceding race intentionally changed the hash; restore the fixture.
+    execute("update users set password_hash=? where username=?", [PStr(FIXTURE_HASH), PStr(USER)])?
+    check(not auth(SECRET, "wrong", ms)?, "wrong-denied")
+    check(not auth(SECRET, "wrong", ms + 1)?, "wrong-coalesced")
+    check(scalar_int("select count(*) from auth_test_bcrypt", [])? == 1, "wrong-one-bcrypt")
+    check(not auth(SECRET, "wrong", ms + 5000)?, "failed-lease-expires")
+    check(scalar_int("select count(*) from auth_test_bcrypt", [])? == 2, "failed-lease-retries")
+    check(scalar_int("select count(*) from runtime_cache where namespace='dav.auth.v2'", [])? == 0, "no-negative-success-cache")
+    for i in range(0, 140) { let _ = at(ms, () => with_random_real(() => dav_auth.authenticate(SECRET, USER, "spray-${i}", (_p, _h) => false)))? }
+    check(scalar_int("select count(*) from auth_verify_leases", [])? == 128, "lease-capacity")
+    check(auth(SECRET, PASS, ms + 5000)?, "full-leases-expire")
+    execute("delete from runtime_cache where namespace='dav.auth.v2'", [])?
+    execute("with recursive seq(x) as (values(0) union all select x+1 from seq where x<299) insert into runtime_cache select 'dav.auth.v2','synthetic-'||x,'capacity',1000123 from seq", [])?
+    check(auth(SECRET, PASS, ms + 5001)?, "cache-capacity-auth")
+    check(scalar_int("select count(*) from runtime_cache where namespace='dav.auth.v2'", [])? == 256, "cache-capacity")
+    check(not demand(in_transaction()), "failure-no-open-tx")
+    println("auth\tfailure-coalescing-and-capacity")
+  }
+  if mode == "auth" || mode == "auth-schema" {
+    reset()?
+    check(auth(SECRET, PASS, ms)?, "auth-success")
+    execute("drop table auth_account_state", [])?
+    check(not hit(PASS, ms + 1)?, "missing-state-miss")
+    check(auth(SECRET, PASS, ms + 1)?, "missing-state-recreated")
+    execute("drop table runtime_cache", [])?
+    check(not hit(PASS, ms + 2)?, "restored-db-miss")
+    check(auth(SECRET, PASS, ms + 2)?, "restored-db-recreated")
+    execute("drop table runtime_cache", [])?
+    execute("create table runtime_cache(namespace text, cache_key text)", [])?
+    check(match hit(PASS, ms + 3) { Err(_) -> true
+      Ok(_) -> false }, "auth-db-errors-propagate")
+    println("auth\trestored-database-and-errors")
+  }
+  Ok(())
+}
+
+## Each child waits at a real barrier after opening its own database connection.
+pub fn auth_process(mode: String, password: String) -> Result[Unit, String] !Db !io = {
+  if mode == "auth-init" { return reset() }
+  if mode == "auth-barrier" {
+    println("ready")
+    io.flush_stdout()
+    let _ = io.read_line()
+  }
+  let result = io.with_clock_real(() => with_random_real(() => dav_auth.authenticate(SECRET, USER, password, (p, h) => {
+    let valid = counted(p, h)
+    if mode == "auth-hold" {
+      println("holding")
+      io.flush_stdout()
+      let _ = io.read_line()
+    }
+    valid
+  })))?
+  println(if result { "accepted" } else { "denied" })
+  Ok(())
+}
