@@ -1,7 +1,7 @@
 # JVM listener with the shared portable application and existing artifact interface.
 use std/io
 use site_core/config.{load, get_or}
-use db/db.{config}
+use db/db.{config, probe_engine}
 use util/application_http.{new_client}
 use site_core/application.{configure, app_routes}
 use site_core/maintenance
@@ -11,12 +11,15 @@ use web/types.{DEFAULT_MAX_BODY}
 use web/middleware.{with_logging_to_stderr, with_cors, with_body_limit}
 
 pub fn main() -> Unit !io = {
+  let mode = unwrap_or(get(args(), 0), "")
+  let engine = probe_engine()
+  io.eprintln(engine)
+  if mode == "--engine-info" { return () }
   let cfg = io.with_fs_real(() => load(env_or("DAWNOP_ENV", "backend/.env")))
   let db_path = get_or(cfg, "DAWN_DB_PATH", "backend/dawnop.db")
   let db_ext = get_or(cfg, "DAWN_SIMPLE_EXT", "backend/extensions/libsimple")
   let db = config(db_path, db_ext)
   let app = configure(cfg, db)
-  let mode = unwrap_or(get(args(), 0), "")
   if mode == "--cleanup-pastes" {
     io.eprintln("expired pastes removed: ${required(maintenance.cleanup(db))}")
     return ()

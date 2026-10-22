@@ -58,12 +58,15 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   `web/wire`；JVM HTTP owner 在响应臂内用 `input_source` 把私有
   InputStream 转成 core ResponseStream 所包装的 BodySource。源的 read(pos, n) 接收累计字节偏移；
   input_source 保持原调用方式，由 InputStream 自己推进游标。
-- 依赖：在 [`app/jvm/dawn.toml`](app/jvm/dawn.toml) 的 `[java-deps]` 里声明（现只剩 `sqlite-jdbc`；`jbcrypt` 已由纯 Dawn 的 `util/bcrypt` 取代——零传递依赖
+- 依赖：在 [`app/jvm/dawn.toml`](app/jvm/dawn.toml) 的 `[java-deps]` 里声明（现只剩 `sqlite-jdbc:3.53.4.0`；`jbcrypt` 已由纯 Dawn 的 `util/bcrypt` 取代——零传递依赖
   白名单，见 m6.md §2 G1）。`dawn run/test/build` 自动从 Maven 拉取并挂上 classpath；
   `dawn build` 另把它们复制进 jar 同级的 `lib/`，jar 的 manifest `Class-Path` 以相对路径引用它，
   **部署时保持 `lib/` 与 jar 同目录**（形态与从前一致）。`lib/` 是构建产物，不入库。
   国内网络可设 `DAWN_MAVEN_MIRROR=https://maven.aliyun.com/repository/public` 加速。
 - 构建：`./build.sh [输出名]`（先 `dawn test` 后 `dawn build`；需 `dawn` 在 PATH、`JAVA_HOME` 指向 GraalVM/JDK 21）。
+  构建后 `scripts/check_jdbc_artifact.py` 对照字节锁核对完整 lib、摘要与 manifest，
+  遗留旧 jar 即失败；从旧驱动升级的本地工作区应先清理旧 lib 产物再构建。
+  build 还执行 `scripts/jdbc-init/run.py` 的旧引擎、吞 WAL、吞扩展及真实旧 jar 负控。
   **jar 与 `lib/` 都是构建产物，不入库**——jar 曾经入库，结果是它悄悄落后于 `src/`（要靠手动
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
@@ -117,6 +120,16 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - `DAWN_PORT`（默认 8001）、`DAWN_CORS_ORIGIN`（默认 `https://dawnop.com`）。
 - `DAWN_DB_PATH`（默认 `backend/dawnop.db`；生产 `/opt/dawnop/data/dawnop.db`，与 FastAPI 同文件，WAL 共享）。
 - `DAWN_SIMPLE_EXT`（`libsimple` 路径，无扩展名；写 `articles` 触发 FTS `tokenize='simple'` 必须加载）。
+  配置非空时加载失败会拒绝启动，空串仅用于明确不使用 simple 的隔离环境。
+
+JVM 两个连接入口共用严格初始化：实际 SQLite 版本至少 3.51.3、busy timeout=5000、
+WAL 查询结果必须是 wal、配置扩展必须加载；错误关闭连接并传播到启动层。
+启动及 cleanup 均先在内存连接上记录 sqlite_version()/sqlite_source_id()，
+`java -jar backend-dawn.jar --engine-info` 只运行该诊断，不读取配置或打开业务库。
+版本门拒绝已知旧引擎；它不能替代来源、摘要及扩展验收。
+本地 S4 额外执行 native 3.54.1 → 新 JVM → native 的真实 handler 回滚矩阵，
+包含保留 WAL、关闭重开、提交后与未提交时杀进程四种交接，验证文章三触发器、paste 触发器和 FTS integrity，
+并核对 FTS secure-delete 保持关闭。这不是生产恢复或 S12 包验收。
 
 共享的那批里有一个带边界：`QINIU_TOKEN_EXPIRES`（默认 3600）只收 **1..86400**（闭区间，单位秒）。
 它是本后端签的每一个七牛 deadline——直传凭证、私有下载 URL、代理上传——的时效。写了但不合法
@@ -209,7 +222,7 @@ JVM 只留 6 个模块（入口、JDBC、HTTP 适配及测试构造），native 
   query_rows 在 core 从完整列名建立索引，同名列后者覆盖；空结果的 QueryResult 仍保留列名。
 - `app/jvm/src/db/jdbc.dawn` — 唯一 JDBC owner，不透明 DbConn 仅供适配层和 JVM 测试使用。
   with_connection 在连接 bracket 内执行 with_jdbc，实际回调执行时才安装 Db，连接与语句正常及异常
-  路径均关闭。ForeignError 统一经过 catch_text，JDBC 版本和 Result 错误文本保持原状。
+  路径均关闭。ForeignError 统一经过 catch_text，Result 错误文本保持原状。
   **事务状态由 SQLite 回答**：JDBC autoCommit 标志看不见裸 begin immediate。adapter 用 begin
   探测并立即撤销自己的空事务，嵌套拒绝则保留外层；core 的 with_tx 和 require_tx 读 in_transaction。
   with_immediate_tx 直接读 begin immediate 的拒绝，不额外探测。两种入口都拒绝嵌套，不清外层；

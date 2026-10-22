@@ -1,0 +1,46 @@
+use std/bytes
+use test_support
+use site_core/db/sql.{scalar_int, execute}
+
+fn refused(body: fn() -> Unit !io, phrase: String) -> Bool !io =
+  match catch_panic(body) {
+    Err(e) -> str.contains(e.message, phrase)
+    Ok(_) -> false
+  }
+
+test "JVM engine version gate compares all numeric components" {
+  for version in ["3.36.0", "3.51.2", "3.9.99", "3.51", "unknown"] {
+    assert (not safe_version(version))
+  }
+  for version in ["3.51.3", "3.53.4", "3.54.1", "4.0.0"] {
+    assert (safe_version(version))
+  }
+}
+
+test "JVM startup refuses non WAL before either callback runs" {
+  assert (refused(() => with_db(":memory:", "", () => panic("body ran")), "SQLite did not enter WAL mode"))
+  assert (refused(() => site_runtime.with_db(config(":memory:", ""), () => panic("body ran")), "SQLite did not enter WAL mode"))
+}
+
+test "JVM startup propagates extension failure before either callback runs" {
+  let path = test_support.file(bytes.utf8(""))
+  assert (refused(() => with_db(path, path ++ ".missing", () => panic("body ran")), "missing"))
+  assert (refused(() => site_runtime.with_db(config(path, path ++ ".missing"), () => panic("body ran")), "missing"))
+  # A failed initializer must close its connection before the next writer.
+  with_db(path, "", () => { assert required(scalar_int("PRAGMA busy_timeout", [])) == 5000 })
+}
+
+test "JVM memory probe reports actual engine identity without WAL" {
+  let info = probe_engine()
+  assert (str.contains(info, "sqlite_version=3.53.4 sqlite_source_id="))
+}
+
+test "JVM startup propagates WAL setting SQL errors before body" {
+  let path = test_support.file(bytes.utf8(""))
+  with_connection(open_ext("jdbc:sqlite:${path}"), () => {
+    required(execute("create table wal_lock(id integer)", []))
+    required(execute("begin immediate", []))
+    assert refused(() => with_db(path, "", () => panic("body ran")), "database is locked")
+    required(execute("rollback", []))
+  })
+}

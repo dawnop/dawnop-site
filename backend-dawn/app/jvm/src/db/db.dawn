@@ -1,6 +1,9 @@
-# Per-work-unit JDBC connection with the existing initialization policy.
+# Per-work-unit JDBC connections share strict initialization before any body runs.
 use db/jdbc.{open_ext, with_connection, db_connection}
-use site_core/db/sql.{Db, execute, busy_timeout, query, ColStr, VStr, PStr}
+use site_core/db/runtime as site_runtime
+use std/str
+use std/fmt.{parse_int}
+use site_core/db/sql.{Db, ColStr, VStr, PStr}
 
 use site_core/db/runtime.{DbConfig, DbOps}
 
@@ -18,16 +21,10 @@ fn connect(path: String, ext: String) -> DbOps !io = {
 }
 
 pub fn with_db[T, !e](path: String, ext: String, body: fn() -> T !Db !e) -> T !io =
-  with_connection(open_ext("jdbc:sqlite:${path}"), () => {
-    let _w = execute("PRAGMA journal_mode=WAL", [])
-    let _b = busy_timeout(5000)
-    if ext != "" {
-      let _e = query("select load_extension('${ext}')", [], [ColStr])
-    }
-    body()
-  })
+  site_runtime.with_db(config(path, ext), body)
 
 fn with_connection_ops(c: DbOps, ext: String) -> DbOps !io = {
+  let _ = engine_info(c)
   required((c.busy_timeout)(5000))
   let mode = required((c.query)("PRAGMA journal_mode=WAL", [], [ColStr]))
   if mode.rows != [[VStr("wal")]] { panic("SQLite did not enter WAL mode") }
@@ -36,3 +33,27 @@ fn with_connection_ops(c: DbOps, ext: String) -> DbOps !io = {
 }
 fn required[T](r: Result[T, String]) -> T = match r { Ok(v) -> v
   Err(m) -> panic(m) }
+
+# Compare numeric components, never lexicographic version strings.
+fn safe_version(version: String) -> Bool = match map(str.split(version, "."), part => parse_int(part)) {
+  [Some(major), Some(minor), Some(patch)] ->
+    major > 3 || (major == 3 && (minor > 51 || (minor == 51 && patch >= 3)))
+  _ -> false
+}
+
+fn engine_info(c: DbOps) -> String !io = {
+  let info = required((c.query)("select sqlite_version(), sqlite_source_id()", [], [ColStr, ColStr]))
+  match info.rows {
+    [[VStr(version), VStr(source)]] -> {
+      if not safe_version(version) { panic("SQLite ${version} refused: requires >= 3.51.3; source_id=${source}") }
+      "sqlite_version=${version} sqlite_source_id=${source}"
+    }
+    _ -> panic("SQLite engine identity query returned unexpected rows")
+  }
+}
+
+# Memory-only deployment probe. It deliberately does not request WAL or open the business DB.
+pub fn probe_engine() -> String !io = {
+  let c = open_ext("jdbc:sqlite::memory:")
+  with_connection(c, () => engine_info(db_connection(c)))
+}

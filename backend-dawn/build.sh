@@ -18,4 +18,6 @@ DAWN="$(../scripts/fetch-dawn.sh)"
 
 python3 scripts/test_project.py --dawn "$DAWN"
 "$DAWN" build app/jvm -o "$OUT"
+python3 scripts/check_jdbc_artifact.py "$OUT"
+python3 scripts/jdbc-init/run.py --dawn "$DAWN" --jar "$OUT"
 echo "built $OUT with $("$DAWN" --version)"

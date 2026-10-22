@@ -6,7 +6,7 @@ name = "backend_dawn"
 # manifest Class-Path points at, so `jar + lib/` stays movable, as before.
 # Set $DAWN_MAVEN_MIRROR to fetch from a closer mirror.
 [java-deps]
-sqlite = "org.xerial:sqlite-jdbc:3.36.0.3"
+sqlite = "org.xerial:sqlite-jdbc:3.53.4.0"
 
 # Dawn source packages live in the dawn-lang repo (packages/), pinned to the
 # same tag as the compiler. One archive serves web, web_jvm, JSON, and SHA-256
