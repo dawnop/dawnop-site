@@ -1,0 +1,16 @@
+# Native application callbacks share the established curl handlers.
+use util/http_curl as curl
+use util/http_curl.{CurlConfig}
+use site_core/util/http_runtime.{HttpCell}
+use site_core/util/http as http
+use site_core/util/http_batch as batch
+pub fn new_client() -> HttpCell = {
+  let cfg = CurlConfig { temp_parent: "" }
+  HttpCell {
+    text: req => curl.with_upstream(cfg, () => http.exchange(req)),
+    bytes: req => curl.with_upstream(cfg, () => http.exchange_bytes(req)),
+    stream: req => curl.with_upstream(cfg, () => http.exchange_stream(req)),
+    start: req => curl.with_upstream(cfg, () => http.exchange_start(req)),
+    batch: requests => curl.with_upstream(cfg, () => batch.exchange_batch(requests)),
+  }
+}

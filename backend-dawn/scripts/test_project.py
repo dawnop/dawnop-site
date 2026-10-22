@@ -29,6 +29,10 @@ def combine(source: str, fragment: str) -> str:
         return ""
 
     fragment = re.sub(pattern, merge, fragment)
+    # Namespace imports may appear in both halves after a standard effect move.
+    for line in source.splitlines():
+        if re.fullmatch(r"use [a-z_][a-z0-9_/]*(?: as [a-z_][a-z0-9_]*)?", line):
+            fragment = re.sub(r"(?m)^" + re.escape(line) + r"\n", "", fragment)
     return source + "\n" + fragment
 
 

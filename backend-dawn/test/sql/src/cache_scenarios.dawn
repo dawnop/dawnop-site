@@ -112,8 +112,12 @@ fn schema_replacement() -> Result[Unit, String] !Db !io = {
   execute("drop table runtime_cache", [])?
   check(read("monitor.v1", 1000124, 120)? == None, "replacement-schema-miss")
   check(scalar_int("select count(*) from sqlite_master where name='runtime_cache'", [])? == 0, "replacement-read-no-ddl")
+  check(match put("monitor.v1", 1000123, "rebuilt") { Err(_) -> true
+    Ok(_) -> false }, "replacement-write-needs-migration")
+  check(scalar_int("select count(*) from sqlite_master where name='runtime_cache'", [])? == 0, "replacement-write-no-ddl")
+  cache.ensure_schema()?
   put("monitor.v1", 1000123, "rebuilt")?
-  check(read("monitor.v1", 1000124, 120)? == Some("rebuilt"), "replacement-write-recreates")
+  check(read("monitor.v1", 1000124, 120)? == Some("rebuilt"), "replacement-migration-restores")
   execute("drop table runtime_cache", [])?
   execute("create table runtime_cache(namespace text, cache_key text)", [])?
   check(match read("monitor.v1", 1000124, 120) { Err(_) -> true
@@ -137,6 +141,7 @@ pub fn cache_suite(mode: String) -> Result[Unit, String] !Db !io = {
 }
 
 pub fn cache_write() -> Result[Unit, String] !Db !io = {
+  cache.ensure_schema()?
   for ns in ["monitor.v1", "respack.v1", "space.v1", "dav.v1", "cpu.v1"] { put(ns, 1000123, "persisted|${ns}")? }
   observed("process-A-wrote-five-slots")
   Ok(())
@@ -152,6 +157,7 @@ pub fn cache_read() -> Result[Unit, String] !Db !io = {
 }
 
 pub fn cache_write_now() -> Result[Unit, String] !Db !Clock !io = {
+  cache.ensure_schema()?
   for ns in ["monitor.v1", "respack.v1", "space.v1", "dav.v1", "cpu.v1"] {
     cache.cache_put(cache.slot(ns), "persisted|${ns}")?
   }

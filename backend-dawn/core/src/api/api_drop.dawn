@@ -1,3 +1,5 @@
+use std/io.{eprintln, Random, with_random_real}
+use std/io
 # Upload links ("drops"), the HTTP surface. Two audiences, two doors:
 #
 #   /api/fm/drops*   the admin creates, lists, revokes and deletes links. Every
@@ -13,22 +15,20 @@
 # Responses to the uploader carry the file's name and size and nothing else:
 # no object key (except the one upload-token hands out, which the client needs
 # to upload), no stored path, nothing about other files.
-use util/http_jvm.{HttpCell, with_upstream}
+use util/http_runtime.{HttpCell, with_upstream}
 use std/map
 use std/list
 use std/char
 use web/types.{Request, Response, HttpError, Handler, Guard, http_error, json_ok, json_response, body_text, headers_all, param}
 use web/router.{Route, route_get, route_post, route_put, tagged, body_limit, guarded as route_guarded}
 use json/value.{Json, JNull, JInt, JStr, JArr}
-use site_core/util/jsonx.{obj, jstr, jint, jbool, jdatetime}
-use site_core/util/jsonread.{body_obj}
-use std/io.{Random, with_random_real}
-use site_core/util/clock.{Clock, system_ms}
-use site_core/util/http.{Upstream}
-use site_core/util/errkind.{KConflict, KUpstream, KTimeout, split_kind}
-use site_core/util/paths.{fm_split, full, basename}
+use util/jsonx.{obj, jstr, jint, jbool, jdatetime}
+use util/jsonread.{body_obj}
+use util/http.{Upstream}
+use util/errkind.{KConflict, KUpstream, KTimeout, split_kind}
+use util/paths.{fm_split, full, basename}
 use svc/auth.{Auth, guarded}
-use site_core/repo/repo_drop.{DropRow}
+use repo/repo_drop.{DropRow}
 use svc/drop.{Refusal, NotFound, Gone, TooLarge, Invalid, Unprocessable, LengthRequired, NoFreeName,
   DropErr, Refused, Failed, DropStatus, DropSpec, drop_info, grant_direct, register_direct, put_file, put_precheck,
   create_drop, list_all, revoke, remove, status_text, drop_status,
@@ -94,7 +94,7 @@ fn lift_public[T](r: Result[T, DropErr]) -> Result[T, HttpError] !io =
     Ok(v) -> Ok(v)
     Err(e) -> {
       match e {
-        Failed(msg) -> println("drop request failed: ${msg}")
+        Failed(msg) -> eprintln("drop request failed: ${msg}")
         Refused(_r) -> ()
       }
       Err(public_error(e))
@@ -117,11 +117,12 @@ fn drop_token(req: Request) -> Result[String, HttpError] =
 # A route closure is the innermost thing that owns a whole unit of work, so the
 # production Clock, Random and Upstream handlers are installed here (util/clock and
 # util/http say why they cannot go in main).
-fn public(cl: HttpCell, body: fn(Request) -> Result[Response, HttpError] !Clock !Random !Upstream !io) -> Handler =
+fn public(cl: HttpCell, body: fn(Request) -> Result[Response, HttpError] !io.Clock !Random !Upstream !io) -> Handler =
   req =>
   with_upstream(cl, () => {
-    with handle Clock { now_ms() => system_ms() }
-    with_random_real(() => body(req))
+    io.with_clock_real(() => {
+      with_random_real(() => body(req))
+    })
   })
 
 ## GET /api/drop: what the upload page shows. The directory is reported by its
@@ -191,11 +192,12 @@ pub fn put(a: Auth, cl: HttpCell) -> Handler =
 ## the handler still runs it, and the final transaction re-checks the quota.
 pub fn put_guard(a: Auth) -> Guard =
   req => {
-    with handle Clock { now_ms() => system_ms() }
-    let token = drop_token(req)?
-    let name = param(req, "name")?
-    let _c = lift_public(put_precheck(a, token, name, declared_length(req)))?
-    Ok(())
+    io.with_clock_real(() => {
+      let token = drop_token(req)?
+      let name = param(req, "name")?
+      let _c = lift_public(put_precheck(a, token, name, declared_length(req)))?
+      Ok(())
+    })
   }
 
 fn receipt(name: String, size: Int) -> Response =
@@ -275,33 +277,35 @@ fn drop_json(d: DropRow, status: DropStatus) -> Json =
 pub fn create_ep(a: Auth) -> Handler =
   req =>
   guarded(a, req, () => {
-    with handle Clock { now_ms() => system_ms() }
-    let m = body_map(req)?
-    let dir = req_str(m, "dir")?
-    let s = DropSpec {
-      dir: fm_split(dir),
-      label: opt_str_or(m, "label", "")?,
-      expires_in_s: opt_int_or(m, "expires_in_s", DEFAULT_EXPIRES_S)?,
-      max_files: opt_int_or(m, "max_files", DEFAULT_MAX_FILES)?,
-      max_file_bytes: opt_int_or(m, "max_file_bytes", DEFAULT_MAX_FILE_BYTES)?,
-      max_total_bytes: opt_int_or(m, "max_total_bytes", DEFAULT_MAX_TOTAL_BYTES)?,
-    }
-    let made = lift(with_random_real(() => create_drop(a, s)))?
-    let (d, _token) = made
-    let status = lift(drop_status(a, d))?
-    Ok(json_response(201, drop_json(d, status)))
+    io.with_clock_real(() => {
+      let m = body_map(req)?
+      let dir = req_str(m, "dir")?
+      let s = DropSpec {
+        dir: fm_split(dir),
+        label: opt_str_or(m, "label", "")?,
+        expires_in_s: opt_int_or(m, "expires_in_s", DEFAULT_EXPIRES_S)?,
+        max_files: opt_int_or(m, "max_files", DEFAULT_MAX_FILES)?,
+        max_file_bytes: opt_int_or(m, "max_file_bytes", DEFAULT_MAX_FILE_BYTES)?,
+        max_total_bytes: opt_int_or(m, "max_total_bytes", DEFAULT_MAX_TOTAL_BYTES)?,
+      }
+      let made = lift(with_random_real(() => create_drop(a, s)))?
+      let (d, _token) = made
+      let status = lift(drop_status(a, d))?
+      Ok(json_response(201, drop_json(d, status)))
+    })
   })
 
 ## GET /api/fm/drops: every link with its state and token, newest first. Admin only.
 pub fn list_ep(a: Auth) -> Handler =
   req =>
   guarded(a, req, () => {
-    with handle Clock { now_ms() => system_ms() }
-    let rows = lift(list_all(a))?
-    Ok(json_ok(obj([("items", JArr(map(rows, pair => {
-      let (d, status) = pair
-      drop_json(d, status)
-    })))])))
+    io.with_clock_real(() => {
+      let rows = lift(list_all(a))?
+      Ok(json_ok(obj([("items", JArr(map(rows, pair => {
+        let (d, status) = pair
+        drop_json(d, status)
+      })))])))
+    })
   })
 
 ## POST /api/fm/drops/revoke {id}.

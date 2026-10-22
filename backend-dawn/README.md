@@ -5,7 +5,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 迁移期 nginx 按路由灰度切流，**2026-07 已全量切到 Dawn**（uvicorn 退役、只回滚时拉起）。
 `/api` 全部端点已迁移。M6 期间逐路由与 FastAPI 对拍过，但**今天的契约是 `scripts/golden/*.json`
 而不是 FastAPI**：钉住的是 Dawn 自己的答案，其中若干处与 FastAPI 刻意不同，见
-[「与 FastAPI 的已知分歧」](#与-fastapi-的已知分歧)。曾留待 M6.5 的 **WebDAV**（`app/jvm/src/api/webdav.dawn`）
+[「与 FastAPI 的已知分歧」](#与-fastapi-的已知分歧)。曾留待 M6.5 的 **WebDAV**（`core/src/api/webdav.dawn`）
 与 `POST /api/fm/upload`（multipart 代理上传，`core/src/util/multipart.dawn`）**也已落地**。
 
 契约由 `scripts/golden/*.json` 钉住（`scripts/contract_run.py`，CI 每次 push 都跑）：
@@ -83,6 +83,16 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   原 JVM 生产入口不改；大文件下载暂存的 TTFB 未获 S13 放行，详见根目录
   `docs/curl-transport-design.md`。上传按追加裁决改用 upload-file，显式 method/request-target，固定长度并抑制 Expect；
   原内存阈值不变，退回 data-binary 的真实256/512 MiB负控必须红。
+
+- native 入口：仓库根运行 `backend-dawn/scripts/native-entry/run.sh`，实际 check/build/test app/native，
+  检查完整依赖图零 Java，并先证明启动 println、吞 guard 拒绝、立即关闭 socket 和请求期重跑迁移四个负控会红。
+  包含手写 HTTP 字节、TCP 早拒绝/晚到 body/断连、256/512 MiB 全摘要与全进程树 RSS、单交换冷启动。
+  CLI 为无参数 serve（stdin/stdout）、`--migrate` 与 `--cleanup-pastes`；日志均走 stderr。
+  手工构建：`DAWNC=$(scripts/fetch-dawn-native.sh)` 后 `$DAWNC build backend-dawn/app/native -o /tmp/dawnop-native`。
+  先用已有业务 schema 的隔离库和同一 DAWNOP_ENV 执行 --migrate，再喂请求到 stdin；此处无部署授权。
+  fd teardown 在 flush 后半关闭写端，最多排空 8 MiB / 300 ms，随后退出，不会循环服务第二个交换。
+  S10 在已有 backend CI job 执行，原 native-acceptance 仍跑 S2/S4/S5/S6/S8/S9，job 数与 timeout 不变。
+  S8 的完整暂存 TTFB 限制继续适用，355 native 双臂是 S11，部署包是 S12。
 - core 门禁：`python3 scripts/check_core.py --negative-controls`。对整个 core 根运行
   发布版 native dawnc check，再扫描所有可达源码包的完整源码及 manifest，拒绝 Java、
   java-deps、web_jvm 与回指 app/test 的本地依赖。CI 先证明 Java 导入与 app 导入负控会红。
@@ -158,18 +168,22 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 ## 模块地图
 
-S1 的 `core/src`、`app/jvm/src`、`test/{core,jvm}` 三类物理根继续保留。
-core 是名为 site_core 的 Dawn 包，app 通过 `[deps] site_core = "../../core"` 消费，
-跨根导入写为 `use site_core/...`。S2 后 core 有 44 个模块，包含 db/sql、全部 10 个 repo、
-svc/search、svc/export、svc/paste、svc/dav_auth、util/http，以及原有 config、qiniu/creds、qiniu/sign、tencent/sign 与纯 util。
-app 留 20 个模块，包含 db/jdbc 与 db/db，及仍依赖 Clock、Upstream 的业务和 HTTP 入口。
-core 的完整 native 依赖闭包为四包 55 个源码文件，零 Java 依赖。
+S10 保留独立的 core、JVM/native app 和 test 根。core 有 64 个模块，持有全部路由、业务、
+配置装配与迁移接口；两个入口通过路径依赖消费同一份 application.app_routes。
+JVM 只留 6 个模块（入口、JDBC、HTTP 适配及测试构造），native 有 5 个 Dawn 模块及 fd teardown C 接缝。
+测试仍在一次性 JVM 同模块镜像合并白盒片段；core 自身和 native 完整依赖图分别接受零 Java 扫描。
 
-S4 增加独立 `app/native` 包 site_sqlite，S8 在同包加入 `util/http_curl` Upstream 四操作；core 不回指它。
-`test/sql` 保存两个真实 handler 共用的 SQL 场景；`test/native` 是可 check/build/test 的
-测试 consumer。JVM 生产与原 444 项测试仍用原命令；S7 新增四项类型/源生命周期/范围拒绝断言及可达 web/source 一项测试后共 449 项；S2 新增三项错误映射与时钟回拨测试后共 452 项；native HTTP 入口尚属后续刀。
+- `core/src/db/runtime.dawn` 的 DbConfig 保存配置与纯 Dawn DbOps 工厂，泛型 with_db 在操作记录
+  的 bracket 内安装 Db 六臂。JVM 工厂每工作单元开关真实 JDBC；native 外层 sqlite.with_db 拥有
+  单交换唯一连接，借用操作只在该动态作用域内执行，不扩展既有写事务。
+- `core/src/util/http_runtime.dawn` 保存四种出站形状和显式 batch 的 IO 回调；两端
+  util/application_http 适配实际 owner，共享路由实际执行时安装 Upstream/UpstreamBatch。
+- `core/src/util/runtime_ttl.dawn` 保存五槽 SQLite 地址；JVM util/ttl 只为既有测试提供路径构造。
+- `core/src/application.dawn` 统一环境默认值和路由顺序，两个入口配置文件均只加载一次。
+- `core/src/maintenance.dawn` 显式 migrate、check_schema、cleanup。serve 路径不建表；
+  native 只核对已有 WAL 和 additive schema，未准备的库在写出 wire 前失败。
 
-以下模块名按原相对路径记：core 中的模块在 core/src 下，其余在 app/jvm/src 下，
+以下模块名按原相对路径记：业务模块均在 core/src 下，适配器在各自 app 根下，
 对应测试在 test/core 或 test/jvm。main 属于 app，config 属于 core。
 `qiniu_*`/`tencent_*` 进目录后丢前缀
 （`qiniu/sign`、`tencent/client`），`api_*`/`repo_*` 保留前缀——api 与 repo 是唯一会同名对撞的两层。
@@ -209,7 +223,7 @@ S4 增加独立 `app/native` 包 site_sqlite，S8 在同包加入 `util/http_cur
   迁过来时没有一个端点要改措辞。从前是在 API 层匹配中文子串（「已存在」「所属页面」「七牛」）反推，
   那是一份没人声明的跨层契约，改一句话就悄悄改了状态码——并且已经错过一次（`qiniu/rs` 写的是
   `qiniu` 不是「七牛」，于是被对象存储拒掉的 WebDAV COPY 回 500，而 FastAPI 参照回 502）。
-- `app/jvm/src/db/db.dawn` — 配置记录 DbConfig 与每工作单元一连接的 with_db：WAL、5000ms busy timeout 与原有扩展初始化；回调为 fn() 并由连接 handler 消解 Db。
+- `app/jvm/src/db/db.dawn` — JVM DbOps 工厂与测试用旧路径构造；每个业务工作单元一连接，WAL、5000ms busy timeout、扩展错误均到达调用边界。
 - `util/bcrypt.dawn` — 纯 Dawn 的 bcrypt（`$2a$`）校验，取代 jBCrypt；状态是 `std/mem` 的 `I64Buf`（`with_mem` 内生灭，对外纯函数）；cost 12 校验与 jBCrypt 同量级（JVM 约 0.16 s），换 cost 前先重测。
 - `util/crypto.dawn` — sha256 / hmac-sha1 / hmac-sha256 / base64url / uuid（auth、七牛、JWT、腾讯共用）。
 - `core/src/util/http.dawn` — 可移植出站类型、效果与错误策略：`fetch/post` + `fetch_bytes`（二进制体，G6）；
@@ -226,9 +240,8 @@ S4 增加独立 `app/native` 包 site_sqlite，S8 在同包加入 `util/http_cur
   `dav_handler`（一处罩住 GET/PUT/DELETE/MOVE/COPY 全部）、`api_monitor` 的路由闭包
   （issue 与 read 是两次调用，必须同一个 handler 罩住）、`api_drop` 的 `public`（上传链接的四条
   公开路由，连同 Clock 一起装）。其余 `with_upstream` 都在测试里。
-  **装不进 main**：`with handle` 只给自己块的剩余部分供证据，路由闭包不捕获它，而
-  web 的 `Handler` 别名是闭合行（`!io`），发 `!Upstream` 的闭包根本不是 `Handler`——和 `util/clock`
-  记的是同一堵墙。`db/db` 的 `with_db` 与 core `db/sql` 的 `with_immediate_tx` 使用效果多态（`!e`）：它们是
+  **必须在回调执行时安装**：`with handle` 只给自己块的剩余部分供证据，路由闭包不捕获它，而
+  web 的 `Handler` 别名是闭合行（`!io`），发 `!Upstream` 的闭包根本不是 `Handler`——标准 Clock/Fs 同样在回调的工作边界安装。`db/db` 的 `with_db` 与 core `db/sql` 的 `with_immediate_tx` 使用效果多态（`!e`）：它们是
   纯转发器，闭在 `!io` 上会挡住「在写事务里做一次出站调用」这件生产每天都在做的事。
   故意留在 `!io` 的三处：`new_client`（它造的正是臂用的客户端）、`file_body`（只装配请求体）、
   `close_stream`（放掉臂已经交出来的流）——都不碰对端，也都没有值得注入的断言。
@@ -414,7 +427,7 @@ S4 增加独立 `app/native` 包 site_sqlite，S8 在同包加入 `util/http_cur
   日志）、不读 Authorization（那是管理员的头，两种凭据不能互相顶替）、不读 cookie；头出现两次是 400。
   反过来，`guarded`/`guarded_flexible`/WebDAV Basic 都不看这个头，drop token 当 JWT 或 Basic 密码用
   一律 401（`drop.token.not-admin`）。Clock 与 Upstream 的生产 handler 装在 `public` 路由闭包里，
-  理由同 `util/clock`。给上传方的回包只有 `{name, size}`（upload-token 必须回 `key`，客户端要拿它直传），
+  理由使用 std Clock。给上传方的回包只有 `{name, size}`（upload-token 必须回 `key`，客户端要拿它直传），
   不回存储路径和任何别的文件（`drop.responses.minimal`）。
 - `svc/drop.dawn` — 规则全在这。①每个公开请求都从库里重新判一遍：存在、未吊销、未过期（Clock 的 now）、
   额度没满、目录还在且是目录（`status_of`，吊销 > 过期 > 用尽 > 目录没了）；未知 404，其余 410。
@@ -436,9 +449,8 @@ S4 增加独立 `app/native` 包 site_sqlite，S8 在同包加入 `util/http_cur
   （dawn-lang#310），落盘大小只能靠 nginx 封顶。现在靠路由 guard 与 `body_limit` 在后端做到；
   契约 `drop.put.refused-unread` 用「声明 100MB、只发几个字节」的请求钉住（不读体才能在超时内答复）。
 - `repo/repo_drop.dawn` — `upload_drops`（完整 token 供管理员再次分享，鉴权查 sha256）与 `drop_pending` 两张表的 SQL，以及
-  `ensure_schema`。这是本后端**第一次自己建表**（其余都是 FastAPI `create_all` 建的）：启动时建一次，
-  每个 drop 请求在自己的连接上再 `create table if not exists` 一次（表已在时 SQLite 不拿写锁，实测），
-  因为库文件可能在进程运行中被换掉（恢复备份、契约 harness 重播 fixture）。旧的仅摘要链接
+  `ensure_schema`。建表和旧 schema 升级由显式 --migrate 执行，请求不重复初始化。
+  恢复数据库后须重新 prepare；契约 harness 在重播 fixture 时显式迁移或恢复已迁移快照。旧的仅摘要链接
   在升级事务内清除，同时清其 `drop_pending`；已上传文件与 `pending_uploads` 孤儿账本保留。
 - `qiniu/sign.upload_token_limited` 与 `util/crypto.random_token`（32 字节 `Random` 效果取的随机字节，base64url 43 字符）
   是它新加的两块地基；管理端的 `upload_token` 逐字节不变。
@@ -488,7 +500,7 @@ S4 增加独立 `app/native` 包 site_sqlite，S8 在同包加入 `util/http_cur
   `(namespace, cache_key)` 复合主键；仅通过 `!Db` 与 std `Clock` 存取。monitor 120s、
   respack 300s（monitor/FM 共享）、space 600s、CPU 样本 300s，分别为 `.v1` 命名空间。
   dav 300s 改由上述认证协议持有 `dav.auth.v2`，初始化清除旧 `dav.v1` 摘要槽。
-  命中只读、不续期，毫秒边界严格小于 TTL，时钟早于写入时间不命中；写入只持短事务。
+  命中只读、不续期，毫秒边界严格小于 TTL，时钟早于写入时间不命中；写入只持短事务且要求显式迁移已完成。
   CPU 每次请求回写，持久化 boot_id，启动身份不符、计数回退、样本过期继续走 300ms 窗口。
 - `app/jvm/src/util/ttl.dawn` — SQLite 缓存的 JDBC/Clock 边界，`TtlCell` 仅持地址。
   启动兼容加表；旧 JVM 可忽略，不改变原业务表。WebDAV 不再通过此包装读写成功缓存。

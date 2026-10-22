@@ -1,0 +1,32 @@
+# JVM boundary for the portable SQLite cache. Cells carry addresses, not state.
+use std/io
+use db/runtime.{DbConfig, with_db, without_extension}
+use util/cache
+use util/clock.{system_s}
+
+pub type TtlCell = { db: DbConfig, address: cache.CacheSlot }
+
+pub fn new_cell(db: DbConfig, namespace: String) -> TtlCell =
+  TtlCell { db: without_extension(db), address: cache.slot(namespace) }
+
+pub fn init_cache(db: DbConfig) -> Unit !io =
+  required(with_db(without_extension(db), cache.ensure_schema))
+
+pub fn cache_get(cell: TtlCell, ttl_s: Int) -> Option[String] !io =
+  io.with_clock_real(() => cache_get_clock(cell, ttl_s))
+
+pub fn cache_get_clock(cell: TtlCell, ttl_s: Int) -> Option[String] !io.Clock !io =
+  required(with_db(cell.db, () => cache.cache_get(cell.address, ttl_s)))
+
+pub fn cache_put(cell: TtlCell, payload: String) -> Unit !io =
+  io.with_clock_real(() => cache_put_clock(cell, payload))
+
+pub fn cache_put_clock(cell: TtlCell, payload: String) -> Unit !io.Clock !io =
+  required(with_db(cell.db, () => cache.cache_put(cell.address, payload)))
+
+pub fn now_s() -> Int !io = system_s()
+
+fn required[T](r: Result[T, String]) -> T = match r {
+  Ok(v) -> v
+  Err(m) -> panic("runtime cache: ${m}")
+}

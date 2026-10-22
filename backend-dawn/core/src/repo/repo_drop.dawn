@@ -36,12 +36,7 @@ const DDL_DROPS: String = "create table if not exists upload_drops (id integer p
 const DDL_PENDING: String = "create table if not exists drop_pending (key text primary key, drop_id integer not null, rel text not null, size_limit integer not null, created_at text not null)"
 
 ## Create the two tables when they are missing. Idempotent, and cheap when they
-## exist: SQLite answers `if not exists` from the schema without taking the
-## write lock (measured: it does not wait on another connection's open
-## `begin immediate`). main runs it once at startup, and every drop request runs
-## it again on its own connection, because the database file can be replaced
-## under a running process (a restore, or the contract harness reseeding its
-## fixture), and a missing table would otherwise be a 500 until the next restart.
+## Explicit prepare migration. Requests require this schema to exist already.
 pub fn ensure_schema() -> Result[Unit, String] !Db !io = {
   let _d = execute(DDL_DROPS, [])?
   let _p = execute(DDL_PENDING, [])?

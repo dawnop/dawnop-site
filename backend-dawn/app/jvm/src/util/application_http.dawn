@@ -1,0 +1,15 @@
+# Adapt the process JVM client to portable application callbacks.
+use util/http_jvm as jvm
+use site_core/util/http_runtime.{HttpCell}
+use site_core/util/http as http
+use site_core/util/http_batch as batch
+pub fn new_client() -> HttpCell !io = {
+  let c = jvm.new_client()
+  HttpCell {
+    text: req => jvm.with_upstream(c, () => http.exchange(req)),
+    bytes: req => jvm.with_upstream(c, () => http.exchange_bytes(req)),
+    stream: req => jvm.with_upstream(c, () => http.exchange_stream(req)),
+    start: req => jvm.with_upstream(c, () => http.exchange_start(req)),
+    batch: requests => jvm.with_upstream(c, () => batch.exchange_batch(requests)),
+  }
+}

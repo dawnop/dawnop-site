@@ -1,22 +1,22 @@
 # Monitor endpoint (M6 knife 12), protected. Aggregates the four blocks; the
 # third-party pair (lighthouse + qiniu) memoizes in a 120s TTL cell like the
 # FastAPI TTLCache, `?refresh=1` busts it. server/vault stay live every call.
-use util/http_jvm.{HttpCell, with_upstream}
+use util/http_runtime.{HttpCell, with_upstream}
 use std/map
 use std/io
 use web/types.{Handler, json_ok, query}
 use web/router.{Route, route_get}
 use svc/auth.{Auth, current_user}
-use db/db.{with_db}
-use site_core/repo/repo_settings.{setting_int}
-use util/ttl.{TtlCell, cache_get, cache_put}
+use db/runtime.{with_db}
+use repo/repo_settings.{setting_int}
+use util/runtime_ttl.{TtlCell, cache_get, cache_put}
 use svc/monitor.{server_block}
-use site_core/svc/monitor_batch.{MonitorConfig, collect_monitor}
-use site_core/qiniu/stats.{field}
+use svc/monitor_batch.{MonitorConfig, collect_monitor}
+use qiniu/stats.{field}
 use json/value.{Json, JBool, JInt, JObj}
 use json/render.{render}
 use json/parser.{parse}
-use site_core/util/jsonx.{obj}
+use util/jsonx.{obj}
 
 ## The monitor config (Tencent Lighthouse creds/instance + Vault URLs), read
 ## once at startup from .env.
@@ -86,7 +86,7 @@ fn with_quota(a: Auth, qn: Json) -> Json !io =
   match field(qn, "configured") {
     JBool(on) ->
       if on {
-        let gb = match with_db(a.db.path, a.db.ext, () => setting_int("storage_quota_gb", a.storage_quota)) {
+        let gb = match with_db(a.db, () => setting_int("storage_quota_gb", a.storage_quota)) {
           Ok(n) -> n
           Err(_m) -> a.storage_quota
         }

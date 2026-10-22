@@ -7,18 +7,18 @@ use std/list
 use web/types.{Handler, http_error, as_http, opt_param_int, json_ok, json_response, text, body_text}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json, JArr, JInt}
-use site_core/db/sql.{Db, bool_int}
-use db/db.{with_db}
+use db/sql.{Db, bool_int}
+use db/runtime.{with_db}
 use svc/auth.{Auth, guarded}
-use site_core/util/jsonread.{body_obj, has, str_or, opt_str, bool_or, opt_int}
-use site_core/repo/repo_page
-use site_core/repo/repo_pagetag.{NewPage, create_page, page_kind, delete_page, reorder_pages, set_page_str, set_page_int, set_page_created, touch_page, page_sig, regen_page_slug, page_title}
+use util/jsonread.{body_obj, has, str_or, opt_str, bool_or, opt_int}
+use repo/repo_page
+use repo/repo_pagetag.{NewPage, create_page, page_kind, delete_page, reorder_pages, set_page_str, set_page_int, set_page_created, touch_page, page_sig, regen_page_slug, page_title}
 
 ## GET /api/pages/admin — all pages.
 pub fn pages_admin(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
-      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, () => repo_page.list_admin()), 500)?))))
+      Ok(json_ok(JArr(as_http(with_db(a.db, () => repo_page.list_admin()), 500)?))))
 
 ## GET /api/pages/admin/{page_id} — one page (builtin included), for the edit
 ## form; saves the editor pulling the whole admin list just to find one row.
@@ -27,7 +27,7 @@ pub fn page_admin_get(a: Auth) -> Handler =
   guarded(a, req, () =>
       match opt_param_int(req, "page_id") {
         Some(id) ->
-          match as_http(with_db(a.db.path, a.db.ext, () => repo_page.by_id_admin(id)), 500)? {
+          match as_http(with_db(a.db, () => repo_page.by_id_admin(id)), 500)? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(404, "页面不存在"))
           }
@@ -61,7 +61,7 @@ pub fn page_create(a: Auth) -> Handler =
               None -> 0 },
             created_at: opt_str(m, "created_at"),
           }
-          Ok(json_response(201, as_http(with_db(a.db.path, a.db.ext, () => page_create_read(np)), 500)?))
+          Ok(json_response(201, as_http(with_db(a.db, () => page_create_read(np)), 500)?))
         }
       })
 
@@ -97,7 +97,7 @@ pub fn page_update(a: Auth) -> Handler =
             } else if has(m, "type") && bad_page_type(str_or(m, "type", "content")) {
               Err(http_error(422, "type 只能是 content 或 article_list"))
             } else {
-              match as_http(with_db(a.db.path, a.db.ext, () => page_update_read(id, m)), 500)? {
+              match as_http(with_db(a.db, () => page_update_read(id, m)), 500)? {
                 Some(j) -> Ok(json_ok(j))
                 None -> Err(http_error(404, "页面不存在"))
               }
@@ -155,7 +155,7 @@ pub fn page_delete(a: Auth) -> Handler =
   guarded(a, req, () =>
       match opt_param_int(req, "page_id") {
         Some(id) ->
-          match as_http(with_db(a.db.path, a.db.ext, () => page_delete_guarded(id)), 500)? {
+          match as_http(with_db(a.db, () => page_delete_guarded(id)), 500)? {
             0 -> Err(http_error(404, "页面不存在"))
             1 -> Ok(text(204, ""))
             _o -> Err(http_error(400, "内置页面不可删除，可在导航中隐藏"))
@@ -186,7 +186,7 @@ pub fn page_reorder(a: Auth) -> Handler =
         # non-integer element is a 422 in FastAPI (not a silently-empty reorder).
         match strict_int_list(m, "ids") {
           None -> Err(http_error(422, "ids 必须是整数数组"))
-          Some(ids) -> Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, () => reorder_read(ids)), 500)?)))
+          Some(ids) -> Ok(json_ok(JArr(as_http(with_db(a.db, () => reorder_read(ids)), 500)?)))
         }
       })
 

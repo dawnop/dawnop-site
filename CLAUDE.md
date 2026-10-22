@@ -56,14 +56,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 dawnop-site/
 ├── backend-dawn/               # 生产后端（Dawn → JVM 字节码）
-│   ├── core/                   # 可移植包 site_core，44 个模块；无 Java 依赖
+│   ├── core/                   # 可移植包 site_core，64 个模块；共享路由与业务，零 Java
 │   │   ├── src/                # config、db/sql、repo、svc 与纯 util/qiniu/tencent，含 Upstream 与 HTTP 类型
 │   │   └── dawn.toml           # web/json/sha2，保持 v0.98.0 tag/hash
-│   ├── app/jvm/                # JVM 应用，20 个模块；路径依赖 ../../core
-│   │   ├── src/                # main、api、其余 svc 与 JDBC/Clock/HTTP 接缝及缓存地址包装
+│   ├── app/jvm/                # JVM 应用，6 个模块；路径依赖 ../../core
+│   │   ├── src/                # main、JDBC owner、HTTP 适配与测试用缓存构造
 │   │   ├── dawn.toml           # web_jvm、sqlite-jdbc 与 site_core
 │   │   └── dawn.lock           # 原 JDBC artifact 锁，内容不变
-│   ├── app/native/             # site_sqlite：独立 Db 与 curl Upstream handler
+│   ├── app/native/             # native 单交换入口、SQLite/curl handler 与有界 fd teardown
 │   ├── test/{core,jvm}/        # 按原模块路径保存测试与专用夹具
 │   ├── test/{sql,native,transport,monitor}/ # 共用 SQL/HTTP 场景与 native consumer
 │   ├── build.sh                # 临时镜像跑测试 → 直接 build app/jvm
@@ -275,6 +275,7 @@ dawnop-site/
 ```bash
 # ---- 后端：Dawn（生产用的这套）----
 ./backend-dawn/build.sh                 # 取编译器 → 跑 test/ 白盒测试 → 打 jar（+ lib/）
+backend-dawn/scripts/native-entry/run.sh # native 单交换、逐字节 wire、大体、冷启动与先红负控
 backend-dawn/scripts/native-sqlite/run.sh # native handler、SQL 双臂、真实 FTS、BUSY、ASan/LSan
 java -jar backend-dawn/backend-dawn.jar # 跑起来（lib/ 须在 jar 旁边）
 python3 backend-dawn/scripts/test_project.py # 独立运行全量白盒单测

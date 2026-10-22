@@ -1,4 +1,5 @@
 # The JVM adapter owns every JDBC value and converts faults at one boundary.
+use site_core/db/runtime.{DbOps}
 use std/str
 use site_core/util/ferr.{catch_text}
 use site_core/db/sql.{Db, SqlV, PInt, PFloat, PStr, PNull, Col, ColInt, ColFloat, ColStr, Cell, VInt, VFloat, VStr, VNull, QueryResult}
@@ -126,3 +127,15 @@ pub fn with_jdbc[T, !e](c: DbConn, body: fn() -> T !Db !e) -> T !io = {
   }
   body()
 }
+
+## The caller brackets these operations; no JDBC value enters core.
+pub fn db_connection(c: DbConn) -> DbOps =
+  DbOps {
+    query: (q, ps, cols) => jdbc_query(c, q, ps, cols),
+    execute: (q, ps) => jdbc_execute(c, q, ps),
+    changes: (q, ps) => jdbc_changes(c, q, ps),
+    last_id: () => jdbc_last_id(c),
+    busy_timeout: ms => jdbc_execute(c, "PRAGMA busy_timeout=${ms}", []),
+    in_transaction: () => jdbc_in_transaction(c),
+    close: () => close_conn(c),
+  }

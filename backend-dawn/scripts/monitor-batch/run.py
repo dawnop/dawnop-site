@@ -5,6 +5,7 @@ import contextlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -27,6 +28,8 @@ def build(work, arm, backend=BACKEND):
     project = work / "project"
     (project / "src").mkdir(parents=True)
     manifest = (backend / f"app/{arm}/dawn.toml").read_text()
+    # Native sources belong to the dependency, not this consumer root.
+    manifest = re.sub(r"(?ms)^\[native\]\n.*?(?=^\[|\Z)", "", manifest)
     manifest = manifest.replace('name = "site_sqlite"', 'name = "monitor_probe"')
     manifest = manifest.replace(
         'site_core = "../../core"', f'site_core = "{backend / "core"}"'

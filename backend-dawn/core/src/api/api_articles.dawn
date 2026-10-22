@@ -2,18 +2,18 @@
 # handler authenticates first via auth.current_user; the request body is JSON
 # (create/update). Writes run on a connection with the FTS extension loaded.
 use std/str
-use site_core/db/sql.{Db}
+use db/sql.{Db}
 use web/types.{Request, HttpError, Handler, http_error, as_http, as_http_with, json_ok, json_response, text, raw, with_header, param_segs, query, query_int_bounded, body_text}
-use site_core/svc/export.{export_markdown, url_encode}
+use svc/export.{export_markdown, url_encode}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json}
-use site_core/util/jsonx.{paginated, fastapi_errors}
-use db/db.{with_db}
+use util/jsonx.{paginated, fastapi_errors}
+use db/runtime.{with_db}
 use svc/auth.{Auth, guarded}
-use site_core/util/jsonread.{body_obj, has, str_or, opt_str, bool_or, opt_int, str_list}
-use site_core/repo/repo_article
-use site_core/repo/repo_write.{NewArticle, ArticlePatch, create_article, update_article, delete_article}
-use site_core/util/errkind.{KInvalid, split_kind}
+use util/jsonread.{body_obj, has, str_or, opt_str, bool_or, opt_int, str_list}
+use repo/repo_article
+use repo/repo_write.{NewArticle, ArticlePatch, create_article, update_article, delete_article}
+use util/errkind.{KInvalid, split_kind}
 
 # A `{name}` path capture, or "" when the route table and the handler disagree.
 # web3 holds a capture as the segments it matched; every route here is a single
@@ -44,7 +44,7 @@ pub fn list_admin(a: Auth) -> Handler =
     }
     let page_id = opt_query_int(req, "page_id")?
     let q = query(req, "q")
-    let (total, items) = as_http(with_db(a.db.path, a.db.ext, () => repo_article.list_admin(pub_filter, page_id, q, page, size)), 500)?
+    let (total, items) = as_http(with_db(a.db, () => repo_article.list_admin(pub_filter, page_id, q, page, size)), 500)?
     Ok(json_ok(paginated(total, page, size, items)))
   })
 
@@ -52,7 +52,7 @@ pub fn list_admin(a: Auth) -> Handler =
 pub fn admin_stats(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
-      Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, () => repo_article.stats()), 500)?)))
+      Ok(json_ok(as_http(with_db(a.db, () => repo_article.stats()), 500)?)))
 
 ## GET /api/articles/admin/{article_id} — one article (any status).
 pub fn admin_get(a: Auth) -> Handler =
@@ -60,7 +60,7 @@ pub fn admin_get(a: Auth) -> Handler =
   guarded(a, req, () =>
       match parse_int(param(req, "article_id")) {
         Some(id) ->
-          match as_http(with_db(a.db.path, a.db.ext, () => repo_article.by_id_admin(id)), 500)? {
+          match as_http(with_db(a.db, () => repo_article.by_id_admin(id)), 500)? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(404, "文章不存在"))
           }
@@ -89,7 +89,7 @@ pub fn create(a: Auth) -> Handler =
             tags: str_list(m, "tags"),
             created_at: opt_str(m, "created_at"),
           }
-          Ok(json_response(201, as_http_with(with_db(a.db.path, a.db.ext, () => create_then_read(na)), classify)?))
+          Ok(json_response(201, as_http_with(with_db(a.db, () => create_then_read(na)), classify)?))
         }
       })
 
@@ -120,7 +120,7 @@ pub fn update(a: Auth) -> Handler =
               Err(http_error(422, "标题或 slug 长度超出 255"))
             } else {
               let p = patch_of(m)
-              match as_http_with(with_db(a.db.path, a.db.ext, () => update_then_read(id, p)), classify)? {
+              match as_http_with(with_db(a.db, () => update_then_read(id, p)), classify)? {
                 Some(j) -> Ok(json_ok(j))
                 None -> Err(http_error(404, "文章不存在"))
               }
@@ -160,7 +160,7 @@ pub fn export_md(a: Auth) -> Handler =
   guarded(a, req, () =>
       match parse_int(param(req, "article_id")) {
         Some(id) ->
-          match as_http(with_db(a.db.path, a.db.ext, () => export_markdown(id)), 500)? {
+          match as_http(with_db(a.db, () => export_markdown(id)), 500)? {
             Some(pair) -> {
               let (slug, body) = pair
               Ok(with_header(
@@ -179,7 +179,7 @@ pub fn remove(a: Auth) -> Handler =
       match parse_int(param(req, "article_id")) {
         Some(id) ->
           {
-            let n = as_http(with_db(a.db.path, a.db.ext, () => delete_article(id)), 500)?
+            let n = as_http(with_db(a.db, () => delete_article(id)), 500)?
             if n == 0 { Err(http_error(404, "文章不存在")) } else { Ok(text(204, "")) }
           }
         None -> Err(http_error(422, "article_id must be an integer"))

@@ -1,33 +1,33 @@
 # File-manager handlers (M6 knife 11), pure-metadata subset: list, create-folder,
 # rename, move. These never touch qiniu (rename/move only rewrite paths); the
 # qiniu-mutating endpoints (upload/delete/copy/save) are added separately.
-use util/http_jvm.{HttpCell, with_upstream}
+use util/http_runtime.{HttpCell, with_upstream}
 use std/str
 use std/bytes
 use std/map
-use site_core/db/sql.{Db}
+use db/sql.{Db}
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, query, redirect, header, body_text}
-use site_core/util/multipart.{Part, boundary_of, parse_multipart, part_named}
-use site_core/util/http.{Upstream, fetch_stream, ok_stream, stream_response, close_stream, as_outbound}
+use util/multipart.{Part, boundary_of, parse_multipart, part_named}
+use util/http.{Upstream, fetch_stream, ok_stream, stream_response, close_stream, as_outbound}
 use web/router.{Route, route_get, route_post, tagged}
-use site_core/util/jsonx.{obj, jstr, jint}
-use db/db.{with_db}
+use util/jsonx.{obj, jstr, jint}
+use db/runtime.{with_db}
 use svc/auth.{Auth, guarded, guarded_flexible}
-use site_core/util/jsonread.{body_obj, str_or, str_list, opt_int}
-use site_core/util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime, safe_persisted_mime, require_admissible_names}
-use site_core/repo/repo_fm.{fs_data, get_row, ledger_insert, search_files, entry_json, stats_db, validate_fm_ancestors, validate_fm_file_target, validate_register_preflight, finalize_register}
+use util/jsonread.{body_obj, str_or, str_list, opt_int}
+use util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime, safe_persisted_mime, require_admissible_names}
+use repo/repo_fm.{fs_data, get_row, ledger_insert, search_files, entry_json, stats_db, validate_fm_ancestors, validate_fm_file_target, validate_register_preflight, finalize_register}
 use svc/files.{signed_url, gc_unreferenced, mk_folder, do_rename, do_move, do_copy, do_delete,
   item_paths, merge_deleted, do_create_file, do_save, run_upload, sanitize_name, token_rel }
-use site_core/repo/repo_settings.{setting_int}
-use site_core/util/errkind.{KConflict, KUpstream, KTimeout, split_kind}
+use repo/repo_settings.{setting_int}
+use util/errkind.{KConflict, KUpstream, KTimeout, split_kind}
 use std/io.{Random, with_random_real}
-use site_core/util/crypto.{uuid_hex}
-use site_core/svc/export.{pct_encode}
-use site_core/qiniu/sign.{upload_token}
-use site_core/qiniu/rs.{stat}
-use site_core/qiniu/stats.{kodo_series, last_nonzero, field, int_of}
+use util/crypto.{uuid_hex}
+use svc/export.{pct_encode}
+use qiniu/sign.{upload_token}
+use qiniu/rs.{stat}
+use qiniu/stats.{kodo_series, last_nonzero, field, int_of}
 use svc/monitor.{respack_cached}
-use util/ttl.{TtlCell, cache_get, cache_put, now_s}
+use util/runtime_ttl.{TtlCell, cache_get, cache_put, now_s}
 use json/value.{Json, JNull, JObj, JStr, JNum, JInt}
 use json/render.{render}
 use json/parser.{parse}
@@ -49,7 +49,7 @@ pub fn fm_list(a: Auth) -> Handler =
       Some(p) -> p
       None -> ""
     }
-    Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, () => fs_data(fm_split(path))), 500)?))
+    Ok(json_ok(as_http(with_db(a.db, () => fs_data(fm_split(path))), 500)?))
   })
 
 ## POST /api/fm/create-folder — {path, name}.
@@ -65,7 +65,7 @@ pub fn create_folder(a: Auth) -> Handler =
         } else {
           let rel = fm_join(cur, name)
           let _n = require_admissible_names(rel)?
-          match as_http_with(with_db(a.db.path, a.db.ext, () => mk_folder(rel, cur)), conflict_or(500))? {
+          match as_http_with(with_db(a.db, () => mk_folder(rel, cur)), conflict_or(500))? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
           }
@@ -88,7 +88,7 @@ pub fn rename(a: Auth) -> Handler =
         } else {
           let new_rel = fm_join(parent_rel(old), new_name)
           let _n = require_admissible_names(new_rel)?
-          match as_http_with(with_db(a.db.path, a.db.ext, () => do_rename(old, new_rel, cur)), conflict_or(500))? {
+          match as_http_with(with_db(a.db, () => do_rename(old, new_rel, cur)), conflict_or(500))? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(409, "已存在同名项：${basename(new_rel)}"))
           }
@@ -123,7 +123,7 @@ pub fn move(a: Auth) -> Handler =
         let dest = fm_split(str_or(m, "destination", ""))
         let sources = str_list(m, "sources")
         let _n = check_relocation_targets(dest, sources, 0)?
-        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, () => do_move(sources, dest, cur, 0)), conflict_or(500))?))
+        Ok(json_ok(as_http_with(with_db(a.db, () => do_move(sources, dest, cur, 0)), conflict_or(500))?))
       })
 
 # Move and copy write `fm_join(dest, basename(src))` for each source. Those are
@@ -145,7 +145,7 @@ pub fn sign(a: Auth) -> Handler =
   req =>
   guarded(a, req, () => {
     let rel = fm_split(qparam(req, "path"))
-    match as_http(with_db(a.db.path, a.db.ext, () => get_row(rel)), 500)? {
+    match as_http(with_db(a.db, () => get_row(rel)), 500)? {
       Some(o) ->
         match o.key {
           Some(k) -> Ok(json_ok(obj([("url", jstr(signed_url(a.qiniu, k, "")))])))
@@ -163,7 +163,7 @@ pub fn stats(a: Auth, cl: HttpCell, space_cell: TtlCell, respack_cell: TtlCell) 
   req =>
   guarded_out(a, cl, req, () =>
       {
-        let (used_local, files, dirs) = as_http(with_db(a.db.path, a.db.ext, () => stats_db()), 500)?
+        let (used_local, files, dirs) = as_http(with_db(a.db, () => stats_db()), 500)?
         {
           let remote = remote_space(a, space_cell)
           let remote_n = int_of(remote)
@@ -211,7 +211,7 @@ fn quota_bytes(a: Auth, respack_cell: TtlCell) -> Int !Upstream !io = {
   if cap > 0 {
     cap
   } else {
-    let gb = match with_db(a.db.path, a.db.ext, () => setting_int("storage_quota_gb", a.storage_quota)) {
+    let gb = match with_db(a.db, () => setting_int("storage_quota_gb", a.storage_quota)) {
       Ok(n) -> n
       Err(_m) -> a.storage_quota
     }
@@ -225,7 +225,7 @@ pub fn content(a: Auth, cl: HttpCell) -> Handler =
   req =>
   guarded_out(a, cl, req, () => {
     let rel = fm_split(qparam(req, "path"))
-    match as_http(with_db(a.db.path, a.db.ext, () => get_row(rel)), 500)? {
+    match as_http(with_db(a.db, () => get_row(rel)), 500)? {
       Some(o) ->
         match o.key {
           Some(k) -> {
@@ -285,7 +285,7 @@ pub fn preview(a: Auth) -> Handler =
   guarded_flexible(a, req, () => {
     let (w, h, mode) = preview_params(req)?
     let rel = fm_split(qparam(req, "path"))
-    match as_http(with_db(a.db.path, a.db.ext, () => get_row(rel)), 500)? {
+    match as_http(with_db(a.db, () => get_row(rel)), 500)? {
       Some(o) ->
         match o.key {
           Some(k) -> {
@@ -354,7 +354,7 @@ pub fn download(a: Auth) -> Handler =
   })
 
 fn redirect_to_named(a: Auth, rel: String) -> Result[Response, HttpError] !io =
-  match as_http(with_db(a.db.path, a.db.ext, () => get_row(rel)), 500)? {
+  match as_http(with_db(a.db, () => get_row(rel)), 500)? {
     Some(o) ->
       match o.key {
         Some(k) -> Ok(redirect(302, signed_url(a.qiniu, k, "?attname=${url_q(basename(rel))}")))
@@ -380,11 +380,11 @@ pub fn upload_token_ep(a: Auth) -> Handler =
     # the token is minted for a path /register will later be handed back, so the
     # name is refused here rather than after the client has spent the credential
     let _n = require_admissible_names(rel)?
-    let _p = as_http_with(with_db(a.db.path, a.db.ext, () => upload_token_preflight(rel)), conflict_or(500))?
+    let _p = as_http_with(with_db(a.db, () => upload_token_preflight(rel)), conflict_or(500))?
     let e = ext(sanitize_name(raw_name))
     let key = with_random_real(() => if e == "" { uuid_hex() } else { "${uuid_hex()}.${e}" })
     let token = upload_token(a.qiniu, key, now_s() + a.qiniu.expires)
-    let _x = as_http(with_db(a.db.path, a.db.ext, () => ledger(key, rel)), 500)?
+    let _x = as_http(with_db(a.db, () => ledger(key, rel)), 500)?
     Ok(json_ok(obj([
       ("token", jstr(token)),
       ("key", jstr(key)),
@@ -423,8 +423,8 @@ pub fn delete(a: Auth, cl: HttpCell) -> Handler =
         let m = as_http(body_obj(body_text(req)?), 422)?
         let cur = fm_split(str_or(m, "path", ""))
         let items = item_paths(m)
-        let deleted = as_http_with(with_db(a.db.path, a.db.ext, () => do_delete(a.qiniu, items, 0, [])), mutation_failure)?
-        let base = as_http(with_db(a.db.path, a.db.ext, () => fs_data(cur)), 500)?
+        let deleted = as_http_with(with_db(a.db, () => do_delete(a.qiniu, items, 0, [])), mutation_failure)?
+        let base = as_http(with_db(a.db, () => fs_data(cur)), 500)?
         Ok(json_ok(merge_deleted(base, deleted)))
       })
 
@@ -477,7 +477,7 @@ pub fn copy(a: Auth, cl: HttpCell) -> Handler =
         let dest = fm_split(str_or(m, "destination", ""))
         let sources = str_list(m, "sources")
         let _n = check_relocation_targets(dest, sources, 0)?
-        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, () => do_copy(a.qiniu, sources, dest, cur, 0)), mutation_failure)?))
+        Ok(json_ok(as_http_with(with_db(a.db, () => do_copy(a.qiniu, sources, dest, cur, 0)), mutation_failure)?))
       })
 
 ## POST /api/fm/register — {path, key, size?, content_type?}. Confirms the
@@ -505,7 +505,7 @@ pub fn register(a: Auth, cl: HttpCell) -> Handler =
       })
 
 fn register_preflight(a: Auth, rel: String, key: String) -> Result[Unit, String] !io =
-  with_db(a.db.path, a.db.ext, () => validate_register_preflight(rel, key))
+  with_db(a.db, () => validate_register_preflight(rel, key))
 
 fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint: Option[Int], ct_hint: String) -> Result[Json, String] !Upstream !io = {
   # qiniu's stat is authoritative for size/mime; fall back to the client's
@@ -514,7 +514,7 @@ fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint:
   #   mime = mimeType or content_type or _guess_mime(basename)
   let size = reg_size(stat_body, size_hint)
   let mime = reg_mime(stat_body, ct_hint, rel)
-  let finalized = with_db(a.db.path, a.db.ext, () => finalize_register(rel, key, mime, size))?
+  let finalized = with_db(a.db, () => finalize_register(rel, key, mime, size))?
   let (row, outcome) = finalized
   let _gc = gc_unreferenced(a, outcome.superseded_key)
   Ok(entry_json(row))
@@ -569,7 +569,7 @@ pub fn fm_search(a: Auth) -> Handler =
     let base = fm_split(qparam(req, "path"))
     let needle = str.to_lower(str.trim(qparam(req, "filter")))
     let deep = qparam(req, "deep") != ""
-    Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, () => search_files(base, needle, deep)), 500)?))
+    Ok(json_ok(as_http(with_db(a.db, () => search_files(base, needle, deep)), 500)?))
   })
 
 ## The fm routes (protected). Static paths precede any captures. The two TTL

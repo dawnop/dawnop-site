@@ -1,27 +1,26 @@
+use std/io.{eprintln, with_random_real}
 # Public read/create endpoints and JWT-guarded management only.
 use std/map
-use std/io.{with_random_real}
-use site_core/util/crypto.{uuid_hex}
+use util/crypto.{uuid_hex}
 use web/types.{Request, Response, HttpError, Handler, http_error, body_text, headers_all, json_ok, json_response, raw, with_header, param, query, query_int_bounded}
 use web/router.{Route, route_get, route_post, route_put, body_limit}
 use json/value.{Json, JStr, JInt, JArr}
-use site_core/util/jsonread.{body_obj}
-use site_core/util/jsonx.{obj, jint, jbool, fastapi_errors}
-use site_core/util/clock.{system_s}
-use db/db.{with_db}
-use site_core/db/sql.{Db, PInt, PStr, exec, with_immediate_tx}
+use util/jsonread.{body_obj}
+use util/jsonx.{obj, jint, jbool, fastapi_errors}
+use util/clock.{system_s}
+use db/runtime.{with_db}
+use db/sql.{Db, PInt, PStr, exec, with_immediate_tx}
 use svc/auth.{Auth, guarded}
-use site_core/svc/paste
-use site_core/repo/repo_paste
+use svc/paste
+use repo/repo_paste
 
 fn db[T](a: Auth, body: fn() -> Result[T, String] !Db !io) -> Result[T, HttpError] !io = {
   let run: fn() -> Result[T, String] !Db !io = () => {
-    repo_paste.ensure_schema()?
     body()
   }
-  let r = with_db(a.db.path, a.db.ext, run)
+  let r = with_db(a.db, run)
   match r { Ok(v) -> Ok(v)
-    Err(e) -> { println("paste failed: ${e}")
+    Err(e) -> { eprintln("paste failed: ${e}")
       Err(http_error(500, "服务器内部错误")) } }
 }
 fn body(req: Request) -> Result[Map[String, Json], HttpError] !io =

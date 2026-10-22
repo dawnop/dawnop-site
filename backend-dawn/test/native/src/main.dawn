@@ -1,4 +1,4 @@
-# Test consumer of the real adapter. No native HTTP entry is introduced by S4.
+# SQL consumer of the real native adapter, independent of the HTTP entry.
 use std/io
 use std/str
 use site_sqlite/db/native_sqlite.{with_db}

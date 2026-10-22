@@ -3516,7 +3516,9 @@ ASSERTIONS = [
 def run_assertions(ctx):
     failures = []
     for name, assertion in ASSERTIONS:
-        contract_fixture.build(str(ctx.db))
+        with sqlite3.connect(ctx.db.with_suffix(".prepared")) as prepared:
+            with sqlite3.connect(ctx.db) as target:
+                prepared.backup(target)
         ctx.fake.reset()
         checks = Checks()
         try:
@@ -3607,6 +3609,9 @@ def main():
         try:
             contract_run.wait_health(base, process)
             token = contract_run.login(base)
+            with sqlite3.connect(db) as source:
+                with sqlite3.connect(db.with_suffix(".prepared")) as snapshot:
+                    source.backup(snapshot)
             ctx = Context(
                 base=base,
                 db=db,

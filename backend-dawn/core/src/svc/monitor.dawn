@@ -7,19 +7,19 @@ use std/io
 use std/io.{Fs, DiskSpace}
 use std/list
 use svc/auth.{Auth}
-use site_core/tencent/client
-use site_core/util/cache.{sample_payload, sample_from}
-use util/ttl.{TtlCell, cache_get, cache_put, cache_get_clock, cache_put_clock, now_s}
-use site_core/util/clock.{Clock, system_ms, sleep_ms, elapsed_ms}
-use site_core/util/time.{utc_datetime}
-use site_core/qiniu/stats.{field, int_of, last_nonzero, PendingQ, PendingRespack, kodo_series_start, kodo_series_finish, flow_series_start, flow_series_finish, cdn_domains_start, cdn_domains_finish, cdn_tune_start, cdn_tune_finish, respack_start, respack_finish, respack_summary}
-use site_core/tencent/client.{PendingTc}
-use site_core/util/http.{Upstream, fetch, fetch_start, await_resp}
+use tencent/client
+use util/cache.{sample_payload, sample_from}
+use util/runtime_ttl.{TtlCell, cache_get, cache_put, cache_get_clock, cache_put_clock, now_s}
+use util/clock.{sleep_ms, elapsed_ms}
+use util/time.{utc_datetime}
+use qiniu/stats.{field, int_of, last_nonzero, PendingQ, PendingRespack, kodo_series_start, kodo_series_finish, flow_series_start, flow_series_finish, cdn_domains_start, cdn_domains_finish, cdn_tune_start, cdn_tune_finish, respack_start, respack_finish, respack_summary}
+use tencent/client.{PendingTc}
+use util/http.{Upstream, fetch, fetch_start, await_resp}
 use json/value.{Json, JNull, JNum, JInt, JStr, JArr, JObj}
 use json/render.{render}
 use json/parser.{parse}
-use site_core/util/jsonread.{parse_text}
-use site_core/util/jsonx.{obj, jint, jstr, jbool}
+use util/jsonread.{parse_text}
+use util/jsonx.{obj, jint, jstr, jbool}
 
 # ---- server: the local machine, read from /proc (production is Linux) ----
 #
@@ -349,19 +349,20 @@ pub type LighthousePending = {
 ## This is where the real clock is installed for everything TC3: the three
 ## signatures below are stamped with the second this runs in. It is the
 ## outermost function that owns a complete unit of Tencent work, and stopping
-## here is what keeps `!Clock` out of api_monitor and off every route closure
+## here is what keeps `!io.Clock` out of api_monitor and off every route closure
 ## (a route closure cannot carry it at all -- see util/clock).
 pub fn lighthouse_start(secret_id: String, secret_key: String, region: String, instance: String) -> Option[LighthousePending] !Upstream !io = {
-  with handle Clock { now_ms() => system_ms() }
-  if secret_id == "" || secret_key == "" {
-    None
-  } else {
-    Some(LighthousePending {
-      traffic: traffic_start(secret_id, secret_key, region, instance),
-      instance: instance_start(secret_id, secret_key, region, instance),
-      trend: cpu_trend_start(secret_id, secret_key, region, instance),
-    })
-  }
+  io.with_clock_real(() => {
+    if secret_id == "" || secret_key == "" {
+      None
+    } else {
+      Some(LighthousePending {
+        traffic: traffic_start(secret_id, secret_key, region, instance),
+        instance: instance_start(secret_id, secret_key, region, instance),
+        trend: cpu_trend_start(secret_id, secret_key, region, instance),
+      })
+    }
+  })
 }
 
 ## Read what `lighthouse_start` issued.
@@ -406,7 +407,7 @@ fn jstr_plain(j: Json) -> String =
     _ -> "",
   }
 
-fn traffic_start(id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !Clock !Upstream !io =
+fn traffic_start(id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !io.Clock !Upstream !io =
   client.call_start(id, key, "lighthouse", "DescribeInstancesTrafficPackages", "2020-03-24", region, "{\"InstanceIds\":[\"${instance}\"]}")
 
 fn traffic_finish(started: Result[PendingTc, String]) -> Result[Json, String] !io = {
@@ -430,7 +431,7 @@ fn traffic_finish(started: Result[PendingTc, String]) -> Result[Json, String] !i
   }
 }
 
-fn instance_start(id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !Clock !Upstream !io =
+fn instance_start(id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !io.Clock !Upstream !io =
   client.call_start(id, key, "lighthouse", "DescribeInstances", "2020-03-24", region, "{\"InstanceIds\":[\"${instance}\"]}")
 
 fn instance_finish(started: Result[PendingTc, String]) -> Result[Json, String] !io = {
@@ -458,7 +459,7 @@ fn instance_finish(started: Result[PendingTc, String]) -> Result[Json, String] !
 }
 
 # QCE/LIGHTHOUSE CpuUsage, daily points over 30 days, via the monitor service
-fn cpu_trend_start(id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !Clock !Upstream !io = {
+fn cpu_trend_start(id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !io.Clock !Upstream !io = {
   let now = now_s()
   let start = now - 30 * 86400
   let payload = "{\"Namespace\":\"QCE/LIGHTHOUSE\",\"MetricName\":\"CpuUsage\",\"Period\":86400,\"StartTime\":\"${utc_datetime(start)}+00:00\",\"EndTime\":\"${utc_datetime(now)}+00:00\",\"Instances\":[{\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"${instance}\"}]}]}"

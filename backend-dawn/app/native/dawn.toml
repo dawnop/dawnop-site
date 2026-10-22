@@ -1,6 +1,9 @@
 schema = 1
 name = "site_sqlite"
 
+[native]
+sources = ["src/wire/finish.c"]
+
 [deps]
 site_core = "../../core"
 

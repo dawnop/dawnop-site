@@ -486,7 +486,7 @@ def main() -> int:
         replace_once(
             service,
             "  let key = upload_key()\n",
-            "  let existing = with_db(a.db.path, a.db.ext, () => get_row(rel))?\n"
+            "  let existing = with_db(a.db, () => get_row(rel))?\n"
             "  let key = upload_key(existing)\n",
         )
         replace_once(
@@ -516,8 +516,8 @@ def main() -> int:
     elif args.mutant == "fm-copy-plain-error-as-502":
         replace_once(
             fm_api,
-            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, () => do_copy(a.qiniu, sources, dest, cur, 0)), mutation_failure)?))\n",
-            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, () => do_copy(a.qiniu, sources, dest, cur, 0)), conflict_or(502))?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db, () => do_copy(a.qiniu, sources, dest, cur, 0)), mutation_failure)?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db, () => do_copy(a.qiniu, sources, dest, cur, 0)), conflict_or(502))?))\n",
         )
     elif args.mutant == "fm-skip-directory-target-preflight":
         replace_once(
@@ -558,7 +558,7 @@ def main() -> int:
             "          let r = as_http_with(as_outbound(stat(a.qiniu, key)), mutation_failure)?\n"
             "          if r.status == 200 {\n",
             "          let r = as_http_with(as_outbound(stat(a.qiniu, key)), mutation_failure)?\n"
-            "          let _ancestors = as_http_with(with_db(a.db.path, a.db.ext, () => validate_fm_ancestors(rel)), conflict_or(500))?\n"
+            "          let _ancestors = as_http_with(with_db(a.db, () => validate_fm_ancestors(rel)), conflict_or(500))?\n"
             "          if r.status == 200 {\n",
         )
     elif args.mutant == "fm-skip-reparent-validation":
@@ -593,8 +593,8 @@ def main() -> int:
     elif args.mutant == "fm-map-conflict-as-default":
         replace_once(
             fm_api,
-            "          match as_http_with(with_db(a.db.path, a.db.ext, () => mk_folder(rel, cur)), conflict_or(500))? {\n",
-            "          match as_http(with_db(a.db.path, a.db.ext, () => mk_folder(rel, cur)), 500)? {\n",
+            "          match as_http_with(with_db(a.db, () => mk_folder(rel, cur)), conflict_or(500))? {\n",
+            "          match as_http(with_db(a.db, () => mk_folder(rel, cur)), 500)? {\n",
         )
     elif args.mutant == "repo-subtree-shape-fail-open":
         replace_once(
@@ -620,7 +620,7 @@ def main() -> int:
         replace_once(
             webdav,
             "fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {\n"
-            "  with_db(a.db.path, a.db.ext, () => {\n"
+            "  with_db(a.db, () => {\n"
             "    let parent = parent_rel(rel)\n"
             '    let found: Result[Option[FileRow], String] = if parent == "" { Ok(None) } else { get_row(parent) }\n'
             "    let row = found?\n"
@@ -641,7 +641,7 @@ def main() -> int:
             "  })\n"
             "}\n",
             "fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io =\n"
-            "  with_db(a.db.path, a.db.ext, () => {\n"
+            "  with_db(a.db, () => {\n"
             "    let parent = parent_rel(rel)\n"
             '    let found: Result[Option[FileRow], String] = if parent == "" { Ok(None) } else { get_row(parent) }\n'
             "    let row = found?\n"
@@ -705,8 +705,8 @@ def main() -> int:
         )
         replace_once(
             webdav,
-            "      with_db(a.db.path, a.db.ext, () => commit_webdav_move(rel, dst, overwrite))\n",
-            "      with_db(a.db.path, a.db.ext, () => mutant_commit_webdav_move_without_overlap_guard(rel, dst, overwrite))\n",
+            "      with_db(a.db, () => commit_webdav_move(rel, dst, overwrite))\n",
+            "      with_db(a.db, () => mutant_commit_webdav_move_without_overlap_guard(rel, dst, overwrite))\n",
         )
     elif args.mutant == "webdav-copy-root-only-preflight":
         replace_once(
@@ -794,7 +794,7 @@ def main() -> int:
             "      let mime = guess_mime(basename(rel))\n"
             "      let e = ext(basename(rel))\n",
             "    } else {\n"
-            "      let stale = as_http(with_db(a.db.path, a.db.ext, () => get_row(rel)), 500)?\n"
+            "      let stale = as_http(with_db(a.db, () => get_row(rel)), 500)?\n"
             "      let stale_key = match stale { Some(o) -> o.key, None -> None }\n"
             "      let mime = guess_mime(basename(rel))\n"
             "      let e = ext(basename(rel))\n",
@@ -842,7 +842,7 @@ def main() -> int:
             '  if rel == "" {\n'
             '    Err(http_error(405, "不能删除根"))\n'
             "  } else {\n"
-            "    let rows = as_http(with_db(a.db.path, a.db.ext, () => delete_subtree(rel)), 500)?\n"
+            "    let rows = as_http(with_db(a.db, () => delete_subtree(rel)), 500)?\n"
             "    if len(rows) == 0 {\n"
             '      Err(http_error(404, "资源不存在"))\n'
             "    } else {\n"
@@ -871,7 +871,7 @@ def main() -> int:
             "  }\n"
             "\n"
             "fn mutant_delete_before_commit(a: Auth, rel: String) -> Result[List[FileRow], String] !Upstream !io =\n"
-            "  with_db(a.db.path, a.db.ext, () =>\n"
+            "  with_db(a.db, () =>\n"
             "    with_immediate_tx(() => {\n"
             "      let rows = subtree_rows(rel)?\n"
             "      let _d = mutant_delete_metadata(rows, 0)?\n"
@@ -903,7 +903,7 @@ def main() -> int:
             '  if rel == "" {\n'
             '    Err(http_error(405, "不能删除根"))\n'
             "  } else {\n"
-            "    let rows = as_http(with_db(a.db.path, a.db.ext, () => delete_subtree(rel)), 500)?\n"
+            "    let rows = as_http(with_db(a.db, () => delete_subtree(rel)), 500)?\n"
             "    if len(rows) == 0 {\n"
             '      Err(http_error(404, "资源不存在"))\n'
             "    } else {\n"
@@ -921,7 +921,7 @@ def main() -> int:
             "  }\n"
             "\n"
             "fn mutant_delete_rowwise(a: Auth, rel: String) -> Result[List[FileRow], String] !io =\n"
-            "  with_db(a.db.path, a.db.ext, () => {\n"
+            "  with_db(a.db, () => {\n"
             "    let rows = subtree_rows(rel)?\n"
             "    let _d = mutant_delete_rows(rows, 0)?\n"
             "    Ok(rows)\n"
@@ -952,7 +952,7 @@ def main() -> int:
             "  let copied_result: Result[CopyTree, String] = match copy_tree_objects(a.qiniu, planned) {\n"
             "    Ok(tree) -> Ok(tree)\n"
             "    Err(m) -> {\n"
-            "      let removed = with_db(a.db.path, a.db.ext, () => delete_subtree(dst))?\n"
+            "      let removed = with_db(a.db, () => delete_subtree(dst))?\n"
             "      let _gc = gc_rows_unreferenced(a, removed)\n"
             "      Err(m)\n"
             "    }\n"
@@ -967,11 +967,11 @@ def main() -> int:
             "  if not is_move || not overwrite {\n"
             "    ()\n"
             "  } else {\n"
-            "    match with_db(a.db.path, a.db.ext, () => get_row(rel)) {\n"
+            "    match with_db(a.db, () => get_row(rel)) {\n"
             "      Ok(Some(source)) -> if source.is_dir {\n"
             "        ()\n"
             "      } else {\n"
-            "        match with_db(a.db.path, a.db.ext, () => delete_subtree(dst)) {\n"
+            "        match with_db(a.db, () => delete_subtree(dst)) {\n"
             "          Ok(rows) -> gc_rows_unreferenced(a, rows)\n"
             "          Err(_) -> ()\n"
             "        }\n"
@@ -999,9 +999,9 @@ def main() -> int:
             "  if not overwrite {\n"
             "    ()\n"
             "  } else {\n"
-            "    match with_db(a.db.path, a.db.ext, () => get_row(rel)) {\n"
+            "    match with_db(a.db, () => get_row(rel)) {\n"
             "      Ok(Some(source)) -> if source.is_dir {\n"
-            "        match with_db(a.db.path, a.db.ext, () => delete_subtree(dst)) {\n"
+            "        match with_db(a.db, () => delete_subtree(dst)) {\n"
             "          Ok(rows) -> gc_rows_unreferenced(a, rows)\n"
             "          Err(_) -> ()\n"
             "        }\n"
@@ -1153,8 +1153,8 @@ def main() -> int:
     elif args.mutant == "fm-save-codepoint-size":
         replace_once(
             service,
-            "  match with_db(a.db.path, a.db.ext, () => save_db(rel, new_key, mime, text_byte_size(content))) {\n",
-            "  match with_db(a.db.path, a.db.ext, () => save_db(rel, new_key, mime, len(content))) {\n",
+            "  match with_db(a.db, () => save_db(rel, new_key, mime, text_byte_size(content))) {\n",
+            "  match with_db(a.db, () => save_db(rel, new_key, mime, len(content))) {\n",
         )
     elif args.mutant == "webdav-propfind-depth-singleton-fail-open":
         # the reading before the tightening: whatever the single header said was
@@ -1262,8 +1262,8 @@ def main() -> int:
         replace_once(
             fm_api,
             "          let _n = require_admissible_names(rel)?\n"
-            "          match as_http_with(with_db(a.db.path, a.db.ext, () => mk_folder(rel, cur)), conflict_or(500))? {\n",
-            "          match as_http_with(with_db(a.db.path, a.db.ext, () => mk_folder(rel, cur)), conflict_or(500))? {\n",
+            "          match as_http_with(with_db(a.db, () => mk_folder(rel, cur)), conflict_or(500))? {\n",
+            "          match as_http_with(with_db(a.db, () => mk_folder(rel, cur)), conflict_or(500))? {\n",
         )
     elif args.mutant == "name-guard-fm-rename-fail-open":
         replace_once(
@@ -1275,15 +1275,15 @@ def main() -> int:
         replace_once(
             fm_api,
             "        let _n = check_relocation_targets(dest, sources, 0)?\n"
-            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, () => do_move(sources, dest, cur, 0)), conflict_or(500))?))\n",
-            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, () => do_move(sources, dest, cur, 0)), conflict_or(500))?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db, () => do_move(sources, dest, cur, 0)), conflict_or(500))?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db, () => do_move(sources, dest, cur, 0)), conflict_or(500))?))\n",
         )
     elif args.mutant == "name-guard-fm-copy-fail-open":
         replace_once(
             fm_api,
             "        let _n = check_relocation_targets(dest, sources, 0)?\n"
-            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, () => do_copy(a.qiniu, sources, dest, cur, 0)), mutation_failure)?))\n",
-            "        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, () => do_copy(a.qiniu, sources, dest, cur, 0)), mutation_failure)?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db, () => do_copy(a.qiniu, sources, dest, cur, 0)), mutation_failure)?))\n",
+            "        Ok(json_ok(as_http_with(with_db(a.db, () => do_copy(a.qiniu, sources, dest, cur, 0)), mutation_failure)?))\n",
         )
     elif args.mutant == "name-guard-fm-create-file-fail-open":
         replace_once(
@@ -1303,8 +1303,8 @@ def main() -> int:
         replace_once(
             fm_api,
             "    let _n = require_admissible_names(rel)?\n"
-            "    let _p = as_http_with(with_db(a.db.path, a.db.ext, () => upload_token_preflight(rel)), conflict_or(500))?\n",
-            "    let _p = as_http_with(with_db(a.db.path, a.db.ext, () => upload_token_preflight(rel)), conflict_or(500))?\n",
+            "    let _p = as_http_with(with_db(a.db, () => upload_token_preflight(rel)), conflict_or(500))?\n",
+            "    let _p = as_http_with(with_db(a.db, () => upload_token_preflight(rel)), conflict_or(500))?\n",
         )
     elif args.mutant == "name-guard-fm-register-fail-open":
         replace_once(
@@ -1356,26 +1356,26 @@ def main() -> int:
         replace_once(
             fm_api,
             "          let _n = require_admissible_names(rel)?\n"
-            "          match as_http_with(with_db(a.db.path, a.db.ext, () => mk_folder(rel, cur)), conflict_or(500))? {\n",
+            "          match as_http_with(with_db(a.db, () => mk_folder(rel, cur)), conflict_or(500))? {\n",
             "          let _n = require_admissible_names(rel)?\n"
             "          let single: Result[Unit, HttpError] =\n"
             '            if str.contains(name, "/") { Err(http_error(400, "name 必须是单段名称")) } else { Ok(()) }\n'
             "          let _s = single?\n"
-            "          match as_http_with(with_db(a.db.path, a.db.ext, () => mk_folder(rel, cur)), conflict_or(500))? {\n",
+            "          match as_http_with(with_db(a.db, () => mk_folder(rel, cur)), conflict_or(500))? {\n",
         )
     elif args.mutant == "name-guard-webdav-put-fail-open":
         replace_once(
             webdav,
             "    let _n = require_admissible_names(rel)?\n"
-            "    match as_http_with(with_db(a.db.path, a.db.ext, () => put_preflight(rel)), conflict_or(500))? {\n",
-            "    match as_http_with(with_db(a.db.path, a.db.ext, () => put_preflight(rel)), conflict_or(500))? {\n",
+            "    match as_http_with(with_db(a.db, () => put_preflight(rel)), conflict_or(500))? {\n",
+            "    match as_http_with(with_db(a.db, () => put_preflight(rel)), conflict_or(500))? {\n",
         )
     elif args.mutant == "name-guard-webdav-mkcol-fail-open":
         replace_once(
             webdav,
             "    let _n = require_admissible_names(rel)?\n"
-            "    match as_http(with_db(a.db.path, a.db.ext, () => get_row(rel)), 500)? {\n",
-            "    match as_http(with_db(a.db.path, a.db.ext, () => get_row(rel)), 500)? {\n",
+            "    match as_http(with_db(a.db, () => get_row(rel)), 500)? {\n",
+            "    match as_http(with_db(a.db, () => get_row(rel)), 500)? {\n",
         )
     elif args.mutant == "name-guard-webdav-destination-fail-open":
         replace_once(

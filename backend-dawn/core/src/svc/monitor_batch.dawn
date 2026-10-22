@@ -1,8 +1,9 @@
+use std/io
 # Portable monitor planning and assembly. No Pending values or host HTTP types.
 use std/str
 use util/http.{OutReq, NoBody, MANAGEMENT_TIMEOUT_S}
 use util/http_batch.{UpstreamBatch, BatchReq, BatchReply, exchange_batch, text_for, reply_for}
-use util/clock.{Clock, system_ms, system_s}
+use util/clock.{system_s}
 use util/time.{utc_datetime}
 use qiniu/creds.{Qiniu}
 use qiniu/stats as stats
@@ -32,32 +33,33 @@ fn vault_base(url: String) -> String =
 
 ## First-round independence is visible in the request list, before any IO.
 pub fn first_round(cfg: MonitorConfig, third_cached: Bool, packs_cached: Bool) -> List[MonitorRequest] !io = {
-  with handle Clock { now_ms() => system_ms() }
-  var requests = [plain("vault.alive", get_request(cfg.vault_alive)),
-    plain("vault.config", get_request(vault_base(cfg.vault_alive) ++ "/api/config"))]
-  if not third_cached {
-    if tc_on(cfg) {
-      let args = "{\"InstanceIds\":[\"${cfg.instance}\"]}"
-      let now = system_s()
-      let payload = "{\"Namespace\":\"QCE/LIGHTHOUSE\",\"MetricName\":\"CpuUsage\",\"Period\":86400,\"StartTime\":\"${utc_datetime(now - 30 * 86400)}+00:00\",\"EndTime\":\"${utc_datetime(now)}+00:00\",\"Instances\":[{\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"${cfg.instance}\"}]}]}"
-      requests = requests ++ [
-        plain("tc.traffic", call_request(cfg.tencent_id, cfg.tencent_key, "lighthouse", "DescribeInstancesTrafficPackages", "2020-03-24", cfg.region, args)),
-        plain("tc.instance", call_request(cfg.tencent_id, cfg.tencent_key, "lighthouse", "DescribeInstances", "2020-03-24", cfg.region, args)),
-        plain("tc.trend", call_request(cfg.tencent_id, cfg.tencent_key, "monitor", "GetMonitorData", "2018-07-24", cfg.region, payload))]
-    }
-    if cfg.qiniu.ak != "" {
-      requests = requests ++ [qreq("qn.space", stats.kodo_request(cfg.qiniu, "space", 30)),
-        qreq("qn.count", stats.kodo_request(cfg.qiniu, "count", 30)),
-        qreq("qn.flow", stats.flow_request(cfg.qiniu, "flow", 30)),
-        qreq("qn.hits", stats.flow_request(cfg.qiniu, "hits", 30)),
-        qreq("qn.domains", stats.domains_request(cfg.qiniu))]
-      if not packs_cached {
-        requests = requests ++ [qreq("qn.list", stats.billing_request(cfg.qiniu, false)),
-          qreq("qn.overview", stats.billing_request(cfg.qiniu, true))]
+  io.with_clock_real(() => {
+    var requests = [plain("vault.alive", get_request(cfg.vault_alive)),
+      plain("vault.config", get_request(vault_base(cfg.vault_alive) ++ "/api/config"))]
+    if not third_cached {
+      if tc_on(cfg) {
+        let args = "{\"InstanceIds\":[\"${cfg.instance}\"]}"
+        let now = system_s()
+        let payload = "{\"Namespace\":\"QCE/LIGHTHOUSE\",\"MetricName\":\"CpuUsage\",\"Period\":86400,\"StartTime\":\"${utc_datetime(now - 30 * 86400)}+00:00\",\"EndTime\":\"${utc_datetime(now)}+00:00\",\"Instances\":[{\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"${cfg.instance}\"}]}]}"
+        requests = requests ++ [
+          plain("tc.traffic", call_request(cfg.tencent_id, cfg.tencent_key, "lighthouse", "DescribeInstancesTrafficPackages", "2020-03-24", cfg.region, args)),
+          plain("tc.instance", call_request(cfg.tencent_id, cfg.tencent_key, "lighthouse", "DescribeInstances", "2020-03-24", cfg.region, args)),
+          plain("tc.trend", call_request(cfg.tencent_id, cfg.tencent_key, "monitor", "GetMonitorData", "2018-07-24", cfg.region, payload))]
+      }
+      if cfg.qiniu.ak != "" {
+        requests = requests ++ [qreq("qn.space", stats.kodo_request(cfg.qiniu, "space", 30)),
+          qreq("qn.count", stats.kodo_request(cfg.qiniu, "count", 30)),
+          qreq("qn.flow", stats.flow_request(cfg.qiniu, "flow", 30)),
+          qreq("qn.hits", stats.flow_request(cfg.qiniu, "hits", 30)),
+          qreq("qn.domains", stats.domains_request(cfg.qiniu))]
+        if not packs_cached {
+          requests = requests ++ [qreq("qn.list", stats.billing_request(cfg.qiniu, false)),
+            qreq("qn.overview", stats.billing_request(cfg.qiniu, true))]
+        }
       }
     }
-  }
-  requests
+    requests
+  })
 }
 
 pub fn execute_round(plan: List[MonitorRequest]) -> List[BatchReply] !UpstreamBatch =

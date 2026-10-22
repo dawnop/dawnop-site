@@ -1,33 +1,10 @@
 # Wall time is for dates and persisted TTLs; Instant is for process durations.
 use std/io
 
-## Wall-clock milliseconds since the epoch, from whichever clock the caller's
-## handler installed.
-pub effect Clock {
-  fn now_ms() -> Int
-}
-
-## Wall-clock milliseconds straight from the machine. The one place this backend
-## reads the host clock; `with_system_clock` is what wires it to the effect, and
-## util/ttl.now_s is the reader for the sites that have not been migrated.
+## Host wall-clock milliseconds and seconds for IO-only callbacks.
 pub fn system_ms() -> Int !io = io.with_clock_real(wall_ms)
-
-## Wall-clock seconds straight from the machine.
 pub fn system_s() -> Int !io = system_ms() / 1000
-
-## Wall-clock seconds from the installed clock. Truncating division, so a frozen
-## handler at millisecond resolution pins this exactly.
-pub fn now_s() -> Int !Clock = now_ms() / 1000
-
-## Run `body` against the real machine clock. The production sites all install
-## the same handler inline (`with handle Clock { now_ms() => system_ms() }`),
-## but that is a readability choice, not a typing one: the wrapper compiles
-## with `?` in the body too when the body's type is a concrete Result, which
-## was tried on svc/auth.login against the full suite.
-pub fn with_system_clock[T](body: fn() -> T !Clock !io) -> T !io = {
-  with handle Clock { now_ms() => system_ms() }
-  body()
-}
+pub fn now_s() -> Int !io.Clock = wall_ms() / 1000
 
 ## Milliseconds from the installed wall clock, including fractional truncation.
 pub fn wall_ms() -> Int !io.Clock = io.now_wall_ns() / 1000000

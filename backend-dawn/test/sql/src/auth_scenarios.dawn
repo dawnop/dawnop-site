@@ -151,10 +151,18 @@ pub fn auth_suite(mode: String) -> Result[Unit, String] !Db !io = {
     check(auth(SECRET, PASS, ms)?, "auth-success")
     execute("drop table auth_account_state", [])?
     check(not hit(PASS, ms + 1)?, "missing-state-miss")
-    check(auth(SECRET, PASS, ms + 1)?, "missing-state-recreated")
+    check(match auth(SECRET, PASS, ms + 1) { Err(_) -> true
+      Ok(_) -> false }, "missing-state-needs-migration")
+    check(scalar_int("select count(*) from sqlite_master where name='auth_account_state'", [])? == 0, "missing-state-no-initialization")
+    dav_auth.ensure_schema()?
+    check(auth(SECRET, PASS, ms + 1)?, "state-migration-restores")
     execute("drop table runtime_cache", [])?
     check(not hit(PASS, ms + 2)?, "restored-db-miss")
-    check(auth(SECRET, PASS, ms + 2)?, "restored-db-recreated")
+    check(match auth(SECRET, PASS, ms + 2) { Err(_) -> true
+      Ok(_) -> false }, "restored-db-needs-migration")
+    check(scalar_int("select count(*) from sqlite_master where name='runtime_cache'", [])? == 0, "restored-db-no-initialization")
+    reset()?
+    check(auth(SECRET, PASS, ms + 2)?, "cache-migration-restores")
     execute("drop table runtime_cache", [])?
     execute("create table runtime_cache(namespace text, cache_key text)", [])?
     check(match hit(PASS, ms + 3) { Err(_) -> true

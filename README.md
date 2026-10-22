@@ -34,8 +34,9 @@
 ## 目录结构
 
 ```
-backend-dawn/   生产后端（Dawn）。core/src（Db/Upstream 效果、SQL 业务与纯 HTTP 类型）与 app/jvm/src（JDBC/JDK HTTP 等适配）分根，test/ 保存白盒测试，app/jvm/dawn.toml 声明 java-deps
-                app/native/src/{db/native_sqlite,util/http_curl} 保存 SQLite 与 curl handler；test/{sql,native,transport} 验证两臂、缓存与本地传输
+backend-dawn/   Dawn 后端。core/src 共享全部路由、业务与可移植 Db/Upstream 接口（零 Java）
+                app/jvm/src 保存 JVM listener/JDBC/JDK HTTP；app/native/src/main.dawn 是 stdin/stdout 单交换入口
+                native 的 SQLite/curl 与有界 fd teardown 独立；test/ 和 scripts/native-entry 验证字节、状态与资源
 backend/        FastAPI 实现：回滚目标 + 契约参照
 frontend/       Vue 3 + Vite
 deploy/         nginx / systemd / 证书 / vaultwarden

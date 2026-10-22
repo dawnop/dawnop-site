@@ -1,8 +1,21 @@
 # Per-work-unit JDBC connection with the existing initialization policy.
-use db/jdbc.{open_ext, with_connection}
-use site_core/db/sql.{Db, execute, busy_timeout, query, ColStr}
+use db/jdbc.{open_ext, with_connection, db_connection}
+use site_core/db/sql.{Db, execute, busy_timeout, query, ColStr, VStr, PStr}
 
-pub type DbConfig = { path: String, ext: String }
+use site_core/db/runtime.{DbConfig, DbOps}
+
+pub fn config(path: String, ext: String) -> DbConfig =
+  DbConfig { path: path, ext: ext, connect: connect }
+
+fn connect(path: String, ext: String) -> DbOps !io = {
+  let c = open_ext("jdbc:sqlite:${path}")
+  let connection = db_connection(c)
+  match catch_panic(() => with_connection_ops(connection, ext)) {
+    Ok(ready) -> ready
+    Err(e) -> { connection.close()
+      panic(e.message) }
+  }
+}
 
 pub fn with_db[T, !e](path: String, ext: String, body: fn() -> T !Db !e) -> T !io =
   with_connection(open_ext("jdbc:sqlite:${path}"), () => {
@@ -13,3 +26,13 @@ pub fn with_db[T, !e](path: String, ext: String, body: fn() -> T !Db !e) -> T !i
     }
     body()
   })
+
+fn with_connection_ops(c: DbOps, ext: String) -> DbOps !io = {
+  required((c.busy_timeout)(5000))
+  let mode = required((c.query)("PRAGMA journal_mode=WAL", [], [ColStr]))
+  if mode.rows != [[VStr("wal")]] { panic("SQLite did not enter WAL mode") }
+  if ext != "" { let _ = required((c.query)("select load_extension(?)", [PStr(ext)], [ColStr])) }
+  c
+}
+fn required[T](r: Result[T, String]) -> T = match r { Ok(v) -> v
+  Err(m) -> panic(m) }

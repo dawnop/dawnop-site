@@ -1,20 +1,20 @@
+use std/io
 # Authentication (M6 knife 7): login (bcrypt verify + JWT issue) and /me
 # (JWT verify). bcrypt hashes are read as-is from the shared users table, so
 # existing passwords keep working; JWTs interoperate with PyJWT (see jwt.dawn).
 use std/str
-use site_core/svc/dav_auth.{verify_password}
+use svc/dav_auth.{verify_password}
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, header, body_text}
 # db/sql exports a `query` too, so web's is reached through the module name.
 use web/types as wtypes
 use web/router.{Route, route_get, route_post}
 use web/wire.{parse_form, form_value}
 use json/value.{Json}
-use site_core/util/jsonx.{obj, jint, jstr, jdatetime}
-use db/db.{DbConfig, with_db}
-use site_core/db/sql.{Db, PStr, ColInt, ColStr, query, int_at, str_at, first_str, first_map}
-use site_core/util/jwt.{sign, verify}
-use site_core/util/clock.{Clock, system_ms}
-use site_core/qiniu/creds.{Qiniu}
+use util/jsonx.{obj, jint, jstr, jdatetime}
+use db/runtime.{DbConfig, with_db}
+use db/sql.{Db, PStr, ColInt, ColStr, query, int_at, str_at, first_str, first_map}
+use util/jwt.{sign, verify}
+use qiniu/creds.{Qiniu}
 
 ## Authentication and application configuration, without transport resources.
 pub type Auth = {
@@ -46,36 +46,30 @@ fn user_json(username: String) -> Result[Option[Json], String] !Db !io = {
 ## POST /api/auth/login — OAuth2 password form (username, password) → JWT.
 pub fn login(a: Auth) -> Handler =
   req => {
-    # the real clock for the `exp` this issues. It is installed here rather than
-    # anywhere further out because a Handler is a closure and closures do not
-    # carry handlers (util/clock explains). Inline `with handle` rather than
-    # clock.with_system_clock is a readability choice, not a typing one: the
-    # wrapper form was tried on this handler and compiles, `?`s and all, because
-    # the body's type is the same concrete Result the handler returns. It costs
-    # a closure and a level of indentation over the whole body, which is the
-    # only reason the statement form stays.
-    with handle Clock { now_ms() => system_ms() }
-    let form = parse_form(body_text(req)?)
-    # OAuth2PasswordRequestForm requires both fields: an absent username/password
-    # is a 422 (a present-but-empty value proceeds to the 401 auth check).
-    if not has_field(form, "username") || not has_field(form, "password") {
-      Err(http_error(422, "username 和 password 必填"))
-    } else {
-      let username = get_or_blank(form, "username")
-      let password = get_or_blank(form, "password")
-      match as_http(with_db(a.db.path, a.db.ext, () => hash_of(username)), 500)? {
-        Some(hashed) ->
-          if verify_password(password, hashed) {
-            Ok(json_ok(obj([
-              ("access_token", jstr(sign(a.secret, username, a.expire_min))),
-              ("token_type", jstr("bearer")),
-            ])))
-          } else {
-            Err(http_error(401, "用户名或密码错误"))
-          }
-        None -> Err(http_error(401, "用户名或密码错误"))
+    # Install standard Clock when the callback runs, so JWT expiry uses wall time.
+    io.with_clock_real(() => {
+      let form = parse_form(body_text(req)?)
+      # OAuth2PasswordRequestForm requires both fields: an absent username/password
+      # is a 422 (a present-but-empty value proceeds to the 401 auth check).
+      if not has_field(form, "username") || not has_field(form, "password") {
+        Err(http_error(422, "username 和 password 必填"))
+      } else {
+        let username = get_or_blank(form, "username")
+        let password = get_or_blank(form, "password")
+        match as_http(with_db(a.db, () => hash_of(username)), 500)? {
+          Some(hashed) ->
+            if verify_password(password, hashed) {
+              Ok(json_ok(obj([
+                ("access_token", jstr(sign(a.secret, username, a.expire_min))),
+                ("token_type", jstr("bearer")),
+              ])))
+            } else {
+              Err(http_error(401, "用户名或密码错误"))
+            }
+          None -> Err(http_error(401, "用户名或密码错误"))
+        }
       }
-    }
+    })
   }
 
 fn has_field(m: Map[String, List[String]], k: String) -> Bool =
@@ -86,7 +80,7 @@ pub fn me(a: Auth) -> Handler =
   req =>
   {
     let username = current_user(a, req)?
-    match as_http(with_db(a.db.path, a.db.ext, () => user_json(username)), 500)? {
+    match as_http(with_db(a.db, () => user_json(username)), 500)? {
       Some(j) -> Ok(json_ok(j))
       None -> Err(http_error(401, "无效或过期的凭证"))
     }
@@ -167,15 +161,16 @@ fn header_token(req: Request) -> String =
 # everything above it keeps its row: this is the single place token expiry is
 # decided, and every protected route reaches it through a closure.
 fn auth_with(a: Auth, tok: String) -> Result[String, HttpError] !io = {
-  with handle Clock { now_ms() => system_ms() }
-  if tok == "" {
-    Err(http_error(401, "无效或过期的凭证"))
-  } else {
-    match verify(a.secret, tok) {
-      Ok(sub) -> Ok(sub)
-      Err(_e) -> Err(http_error(401, "无效或过期的凭证"))
+  io.with_clock_real(() => {
+    if tok == "" {
+      Err(http_error(401, "无效或过期的凭证"))
+    } else {
+      match verify(a.secret, tok) {
+        Ok(sub) -> Ok(sub)
+        Err(_e) -> Err(http_error(401, "无效或过期的凭证"))
+      }
     }
-  }
+  })
 }
 
 fn query_token(req: Request) -> Option[String] = wtypes.query(req, "token")

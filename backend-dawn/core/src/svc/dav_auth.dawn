@@ -1,6 +1,7 @@
+use std/io
 # Shared WebDAV authentication. SQLite leases coordinate independent processes.
 use std/str
-use std/io.{Clock, Random, now_wall_ns, now, elapsed_ns, sleep_ns}
+use std/io.{Random, now_wall_ns, now, elapsed_ns, sleep_ns}
 use util/crypto.{hmac_sha256_hex, eq_const, random_token}
 use util/bcrypt.{checkpw}
 use util/cache
@@ -48,7 +49,7 @@ fn account(secret: String, username: String) -> Result[Option[Account], String] 
 }
 
 ## One snapshot checks both the current account and the cached proof; no writes.
-pub fn cached(secret: String, username: String, key: String) -> Result[Bool, String] !Db !Clock = {
+pub fn cached(secret: String, username: String, key: String) -> Result[Bool, String] !Db !io.Clock = {
   let rows = match query("select c.payload,c.created_ms,u.id,u.password_hash,u.created_at from runtime_cache c join users u on u.username=? left join auth_account_state s on s.user_id=u.id where c.namespace='dav.auth.v2' and c.cache_key=? and coalesce(s.enabled,1)=1", [PStr(username), PStr(key)], [ColStr, ColInt, ColInt, ColStr, ColStr]) {
     Ok(r) -> r
     Err(m) -> if missing_table(m) { return Ok(false) } else { return Err(m) }
@@ -62,9 +63,8 @@ pub fn cached(secret: String, username: String, key: String) -> Result[Bool, Str
   })
 }
 
-fn claim(secret: String, username: String, key: String, owner: String) -> Result[Claim, String] !Db !Clock !io =
+fn claim(secret: String, username: String, key: String, owner: String) -> Result[Claim, String] !Db !io.Clock !io =
   with_immediate_tx(() => {
-    ensure_schema()?
     if cached(secret, username, key)? { return Ok(AuthHit) }
     let a = match account(secret, username)? { None -> return Ok(AuthDenied)
       Some(a) -> a }
@@ -84,7 +84,7 @@ fn claim(secret: String, username: String, key: String, owner: String) -> Result
   })
 
 ## A stale owner cannot publish, release a successor's lease, or accept old auth.
-fn publish(secret: String, username: String, key: String, owner: String, a: Account, valid: Bool) -> Result[Bool, String] !Db !Clock !io =
+fn publish(secret: String, username: String, key: String, owner: String, a: Account, valid: Bool) -> Result[Bool, String] !Db !io.Clock !io =
   with_immediate_tx(() => {
     let ms = now_wall_ns() / 1000000
     let held = scalar_int("select count(*) from auth_verify_leases where cache_key=? and owner=? and account_version=? and claimed_ms<=? and expires_ms>?", [PStr(key), PStr(owner), PStr(a.version), PInt(ms), PInt(ms)])? == 1
@@ -107,7 +107,7 @@ fn publish(secret: String, username: String, key: String, owner: String, a: Acco
   })
 
 ## The callback is the real bcrypt in production; tests count that exact work.
-pub fn authenticate(secret: String, username: String, password: String, verify: fn(String, String) -> Bool !Db !io) -> Result[Bool, String] !Db !Clock !Random !io = {
+pub fn authenticate(secret: String, username: String, password: String, verify: fn(String, String) -> Bool !Db !io) -> Result[Bool, String] !Db !io.Clock !Random !io = {
   let key = credential_key(secret, username ++ ":" ++ password)
   if cached(secret, username, key)? { return Ok(true) }
   let owner = random_token()
