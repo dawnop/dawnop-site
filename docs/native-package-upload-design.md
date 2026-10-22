@@ -48,8 +48,8 @@ upload 文件增长、假桶实际读取、下载 body 文件增长和客户端�
 
 先红负控：在真实 socket 激活的 PUT 实例上 SIGSTOP，让同一进度门看到已发数据
 后停止推进，必须因无进度失败；随后恢复并停止本次实例，不留挂起进程。
-阳性保留原 shipped 单元的完整 512 MiB 双向摘要、curl loader 隔离，另一次在
-新的 shipped 内存/沙箱和更紧 CPU/I/O 下跑 512 MiB 双向。必须核验实际 cgroup 的 memory.max、
+阳性使用最终 shipped 单元的完整 512 MiB 双向摘要、curl loader 隔离，另一次在
+新的 shipped 内存/沙箱和更紧 CPU/I/O 下跑 512 MiB 双向。必须核验实际 cgroup 的 memory.high/max、
 cpu.max、io.max，证明约束真的应用；需要看到超出旧 10 秒的响应等待、实际组装与
 接收进度、零 OOM，并限制最大无进度间隔。证据随既有 native-units artifact 上传，
 不新增 workflow job，不改变 20 分钟上限。
@@ -70,5 +70,5 @@ oom_kill 均为零，完整双向摘要与 JVM 卸包回滚通过。raw JSONL �
 
 ## 不做的（理由）
 
-不部署、不碰服务器、不改 nginx 或业务、不放宽生产资源，不把合成盘速当生产吞吐
+不部署、不碰服务器、不改 nginx 或业务、不提高父 slice 总预算，不把合成盘速当生产吞吐
 承诺。不以提高固定 recv 超时掩盖停滞，也不以 CPU 活动冒充有效字节进度。
