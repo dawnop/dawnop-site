@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(tr -d ' \t\n\r' < "$ROOT/.dawn-version")"
 case "$VERSION" in
   v0.97.0) SHA=34317c6cf609b94ae6a0ca4f6381d17c620afd5e58b3639742f307c53e9fad48 ;;
+  v0.98.0) SHA=f3c1a110c24fad4e5205f410927ef1d46f6bfbb32906188f74c58e87c440e137 ;;
   *) echo "No verified native compiler digest for $VERSION" >&2; exit 1 ;;
 esac
 BIN="$ROOT/.dawn/$VERSION/dawnc"
