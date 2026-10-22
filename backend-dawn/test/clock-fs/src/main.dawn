@@ -1,0 +1,53 @@
+use std/io
+use sql_scenarios/fake_clock
+use site_core/util/clock.{wall_ms, elapsed_ms, sleep_ms}
+use site_core/util/fs
+
+fn check(ok: Bool, name: String) -> Unit = if not ok { panic("assertion: ${name}") }
+
+fn clocks() -> Unit !io = {
+  fake_clock.with_fake(1551113065789, clock => {
+    check(wall_ms() == 1551113065789, "wall-ns-to-ms")
+    let start = io.now()
+    sleep_ms(37)
+    io.sleep_ns(999999)
+    check(elapsed_ms(start) == 37, "elapsed-ns-to-ms")
+    check(wall_ms() == 1551113065826, "wall-truncate-ms")
+    fake_clock.rewind_wall(clock, 2000000000)
+    check(wall_ms() == 1551113063826, "wall-backwards")
+    check(elapsed_ms(start) == 37, "elapsed-ignores-wall-backwards")
+    check(fake_clock.sleep_count(clock) == 2, "fake-observes-sleep")
+    check(fake_clock.slept_ns(clock) == 37999999, "fake-advances-sleep")
+  })
+  println("PASS clock conversions and sleep with backwards wall time")
+}
+
+fn failure(path: String, owner: String) -> Unit !io.Fs !io =
+  match fs.file_size(path) {
+    Ok(_) -> check(false, owner)
+    Err(m) -> {
+      check(m != "", "filesystem-error-text")
+      println("PASS ${owner}: ${m}")
+    }
+  }
+
+pub fn main() -> Unit !io = {
+  let argv = args()
+  clocks()
+  io.with_fs_real(() => {
+    let root = argv[0]
+    check(fs.file_size(root ++ "/empty") == Ok(0), "empty-file-is-zero")
+    check(fs.file_size(root ++ "/data") == Ok(4), "regular-file-bytes")
+    failure(root ++ "/directory", "directory-size-error")
+    failure(root ++ "/missing", "missing-size-error")
+    failure(root ++ "/denied/data", "permission-size-error")
+    failure(root ++ "/data\u{0}", "invalid-path-size-error")
+    let disk = match io.disk_space(root) {
+      Ok(s) -> s
+      Err(e) -> panic(e.message)
+    }
+    check(disk.total > 0 && disk.available >= 0 && disk.available <= disk.total, "disk-space")
+    check(match io.disk_space(root ++ "/missing") { Err(_) -> true
+      Ok(_) -> false }, "disk-space-failure")
+  })
+}

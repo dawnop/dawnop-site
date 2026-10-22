@@ -77,10 +77,10 @@ def main() -> int:
         # CPU load since the dashboard was last opened, presented as now.
         replace_once(
             monitor,
-            "fn cpu_prev(cell: TtlCell, max_age_s: Int) -> Option[(Int, Int)] !io =\n"
-            "  match cache_get(cell, max_age_s) {\n",
-            "fn cpu_prev(cell: TtlCell, _max_age_s: Int) -> Option[(Int, Int)] !io =\n"
-            "  match cache_get(cell, 86400) {\n",
+            "fn cpu_prev(cell: TtlCell, max_age_s: Int) -> Option[(Int, Int)] !io.Clock !io =\n"
+            "  match cache_get_clock(cell, max_age_s) {\n",
+            "fn cpu_prev(cell: TtlCell, _max_age_s: Int) -> Option[(Int, Int)] !io.Clock !io =\n"
+            "  match cache_get_clock(cell, 86400) {\n",
         )
     else:
         # The monotonicity guard goes, leaving only the divide-by-zero one. The

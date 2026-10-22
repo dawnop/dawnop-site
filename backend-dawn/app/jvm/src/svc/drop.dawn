@@ -40,14 +40,14 @@ use site_core/util/paths.{fm_join, basename, ext, key_ext_ok, guess_mime, safe_p
 use std/io.{Random}
 use site_core/util/crypto.{random_token, sha256_hex, uuid_hex}
 use site_core/util/clock.{Clock, now_s}
-use site_core/util/ferr.{catch_text}
+use site_core/util/fs
+use std/io
 use site_core/util/errkind.{upstream}
 use site_core/util/http.{Upstream, as_outbound, tag_outbound}
 use site_core/qiniu/sign.{upload_token_limited}
-use qiniu/rs.{stat, upload_file}
+use site_core/qiniu/rs.{stat, upload_file}
 use json/value.{JObj, JInt, JNum, JStr}
 use json/parser.{parse}
-use java "java.io.File"
 
 # ---- limits ----
 
@@ -168,7 +168,7 @@ fn spilled(body_path: Option[String]) -> Result[String, DropErr] =
 # The size of what actually arrived, read off the spilled file rather than
 # taken from the header that announced it.
 fn file_length(path: String) -> Result[Int, DropErr] !io = {
-  let n: Result[Int, String] = catch_text(() => File.new(path).length())
+  let n: Result[Int, String] = io.with_fs_real(() => fs.file_size(path))
   db(n)
 }
 

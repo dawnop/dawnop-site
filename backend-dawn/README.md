@@ -73,7 +73,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   CI 的 S4/S5/S6/S8/S9 位于独立 `native-acceptance` job；`scripts/sqlite_ci_cache.py`
   仅缓存固定摘要下载与完整插桩 SQLite 引擎，命中仍验摘要并重跑全部负控与 sanitizer。
   缓存身份含源码摘要、编译器、参数、平台和实现摘要；`mutants-complete` 显式核对该 job 成功。
-  保留原有全部 JVM 测试（S7 后含依赖共 449 项）及 11 条 FFI 断言；无需 .env、外部库或真实服务。
+  保留原有全部 JVM 测试（S2 后含依赖共 452 项）及 11 条 FFI 断言；无需 .env、外部库或真实服务。
 - curl 顺序传输：`backend-dawn/scripts/curl-transport/run.sh --work <空目录>`。
   `test/transport` 是 JVM 与 native 共用的真实出站 consumer；Python 外部进程只监听回环。
   默认执行 256/512 MiB 完整摘要、进程树 RSS/PSS、暂存磁盘与 TTFB，及五个源码负控。
@@ -160,14 +160,14 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 S1 的 `core/src`、`app/jvm/src`、`test/{core,jvm}` 三类物理根继续保留。
 core 是名为 site_core 的 Dawn 包，app 通过 `[deps] site_core = "../../core"` 消费，
-跨根导入写为 `use site_core/...`。S9 后 core 有 41 个模块，包含 db/sql、全部 10 个 repo、
+跨根导入写为 `use site_core/...`。S2 后 core 有 44 个模块，包含 db/sql、全部 10 个 repo、
 svc/search、svc/export、svc/paste、svc/dav_auth、util/http，以及原有 config、qiniu/creds、qiniu/sign、tencent/sign 与纯 util。
-app 留 22 个模块，包含 db/jdbc 与 db/db，及仍依赖 Clock、Upstream 的业务和 HTTP 入口。
-core 的完整 native 依赖闭包为四包 52 个源码文件，零 Java 依赖。
+app 留 20 个模块，包含 db/jdbc 与 db/db，及仍依赖 Clock、Upstream 的业务和 HTTP 入口。
+core 的完整 native 依赖闭包为四包 55 个源码文件，零 Java 依赖。
 
 S4 增加独立 `app/native` 包 site_sqlite，S8 在同包加入 `util/http_curl` Upstream 四操作；core 不回指它。
 `test/sql` 保存两个真实 handler 共用的 SQL 场景；`test/native` 是可 check/build/test 的
-测试 consumer。JVM 生产与原 444 项测试仍用原命令；S7 新增四项类型/源生命周期/范围拒绝断言及可达 web/source 一项测试后共 449 项；native HTTP 入口尚属后续刀。
+测试 consumer。JVM 生产与原 444 项测试仍用原命令；S7 新增四项类型/源生命周期/范围拒绝断言及可达 web/source 一项测试后共 449 项；S2 新增三项错误映射与时钟回拨测试后共 452 项；native HTTP 入口尚属后续刀。
 
 以下模块名按原相对路径记：core 中的模块在 core/src 下，其余在 app/jvm/src 下，
 对应测试在 test/core 或 test/jvm。main 属于 app，config 属于 core。
@@ -310,7 +310,7 @@ S4 增加独立 `app/native` 包 site_sqlite，S8 在同包加入 `util/http_cur
   wire 侧在 edge golden 的 `me.schemeless` / `me.lowerScheme` / `me.upperScheme` 等六条——
   其中只有这三条能分辨新旧，另外三条（`me.wrongScheme` / `me.twoSpaces` / `me.emptyScheme`）
   新旧都回 401、只是理由不同，钉住它们的是单测和变异体。
-- `util/jwt.dawn` — HS256 签发/校验，与 PyJWT 双向互认。
+- `core/src/util/jwt.dawn` — HS256 签发/校验，与 PyJWT 双向互认，S2 随 Clock 迁入 core。
 
 **公开只读（刀 6/8）**
 - `api/api_public.dawn` — health/search/viz/`{slug}`/articles/pages/tags 路由。
@@ -397,7 +397,7 @@ S4 增加独立 `app/native` 包 site_sqlite，S8 在同包加入 `util/http_cur
 - `qiniu/creds.dawn` — `Qiniu` 凭据与端点记录（ak/sk/bucket/domain/expires/rs_host/up_host）。
   sign/rs/stats 的函数整条收它，而不是收一排靠位置对齐的 ak/sk/bucket 标量。
 - `qiniu/sign.dawn` — 三类七牛签名：上传凭证、私有下载 URL、QBox 管理、QiniuMacAuth（统计/CDN/账单，含 body）。
-- `qiniu/rs.dawn` — 管理 REST：stat/delete/copy/upload_text/upload_bytes/upload_file。
+- `core/src/qiniu/rs.dawn` — 管理 REST：stat/delete/copy/upload_text/upload_bytes/upload_file。
 - `util/paths.dawn` / `repo/repo_fm.dawn` — 路径原语 / 虚拟树（path↔key，DirEntry 序列化）。
 - `util/multipart.dawn` — 入站 `multipart/form-data` 解析，只服务 `POST /api/fm/upload`（代理上传）。
   结构在**字节层**定位（`byte_index_of`/`byte_slice`），每个 part 的正文原样留作 `Bytes`，
@@ -477,7 +477,13 @@ S4 增加独立 `app/native` 包 site_sqlite，S8 在同包加入 `util/http_cur
   cpu-sampling 原四变异与 owner 矩阵不变，always-sample-a-window 仍只击中原 owner。
 - `core/src/tencent/client.dawn` / `tencent/sign.dawn` — 腾讯云请求数据与 TC3 签名；
   `core/src/qiniu/stats.dawn` — 共享请求装配和响应解码，旧单请求调用继续复用。
-- `core/src/util/clock.dawn` — 原命名 Clock 接缝，真实臂改用 std Clock，不再导入 Java。
+- `core/src/util/clock.dawn` — 墙钟 ns 除以 1000000 得毫秒，进程内耗时只读 std Instant，
+  sleep_ms 通过 std sleep_ns 交给安装的 Clock。JVM 批次在完成回调记录单项单调时长。
+- `core/src/util/fs.dawn` — std file_size 的错误转旧 String 通道；目录、缺失与权限失败均保留 Err，
+  WebDAV 仍 500，drop 仍 Failed，真实空文件才返回 Ok(0)。monitor disk_space 取 available 对齐旧 usableSpace。
+  `scripts/clock-fs/run.sh` 先证明千倍换算、墙钟用于耗时与目录大小当成功三个源码负控会红，再验 JVM/native。
+  `test/sql/src/fake_clock.dawn` 共用假钟以 scoped Mem 记录 wall/mono、sleep 次数与累计 ns，
+  sleep 推进两钟，单独回拨 wall 不影响 elapsed；CPU 与五槽 TTL 边界测试不真实等待。
 - `core/src/util/cache.dawn` — `runtime_cache(namespace, cache_key, payload, created_ms)`，
   `(namespace, cache_key)` 复合主键；仅通过 `!Db` 与 std `Clock` 存取。monitor 120s、
   respack 300s（monitor/FM 共享）、space 600s、CPU 样本 300s，分别为 `.v1` 命名空间。

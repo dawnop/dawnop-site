@@ -24,7 +24,7 @@ use std/io.{Random, with_random_real}
 use site_core/util/crypto.{uuid_hex}
 use site_core/svc/export.{pct_encode}
 use site_core/qiniu/sign.{upload_token}
-use qiniu/rs.{stat}
+use site_core/qiniu/rs.{stat}
 use site_core/qiniu/stats.{kodo_series, last_nonzero, field, int_of}
 use svc/monitor.{respack_cached}
 use util/ttl.{TtlCell, cache_get, cache_put, now_s}

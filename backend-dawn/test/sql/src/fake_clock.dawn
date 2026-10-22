@@ -1,0 +1,32 @@
+# A scoped fake shared by JVM white-box and dual-arm SQLite scenarios.
+use std/io
+use std/io.{Clock}
+use std/mem
+
+pub alias FakeClock = I64Buf
+
+## State: wall ns, monotonic ns, sleep count, total slept ns.
+## No fake or buffer escapes the scope; sleeping never touches the host.
+pub fn with_fake[!e](wall_ms: Int, body: fn(FakeClock) -> Unit !Clock !mem.Mem !e) -> Unit !e =
+  mem.with_mem(() => {
+    let state = mem.from_list([wall_ms * 1000000, 0, 0, 0])
+    with handle Clock {
+      clock_wall_ns() => mem.at(state, 0)
+      clock_mono() => io.instant_at_ns(mem.at(state, 1))
+      clock_sleep_ns(ns) => {
+        mem.set(state, 2, mem.at(state, 2) + 1)
+        if ns > 0 {
+          mem.set(state, 0, mem.at(state, 0) + ns)
+          mem.set(state, 1, mem.at(state, 1) + ns)
+          mem.set(state, 3, mem.at(state, 3) + ns)
+        }
+      }
+    }
+    body(state)
+  })
+
+pub fn rewind_wall(state: FakeClock, ns: Int) -> Unit !mem.Mem =
+  mem.set(state, 0, mem.at(state, 0) - ns)
+
+pub fn sleep_count(state: FakeClock) -> Int !mem.Mem = mem.at(state, 2)
+pub fn slept_ns(state: FakeClock) -> Int !mem.Mem = mem.at(state, 3)

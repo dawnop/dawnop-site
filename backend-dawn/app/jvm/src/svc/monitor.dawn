@@ -4,16 +4,13 @@
 # Vaultwarden probe. A failing item lands in its own *_error field, never 500s.
 use std/str
 use std/io
-use std/io.{Fs}
+use std/io.{Fs, DiskSpace}
 use std/list
-use java "java.lang.System"
-use java "java.lang.Thread"
-use java "java.io.File"
 use svc/auth.{Auth}
 use site_core/tencent/client
 use site_core/util/cache.{sample_payload, sample_from}
-use util/ttl.{TtlCell, cache_get, cache_put, now_s}
-use site_core/util/clock.{Clock, system_ms}
+use util/ttl.{TtlCell, cache_get, cache_put, cache_get_clock, cache_put_clock, now_s}
+use site_core/util/clock.{Clock, system_ms, sleep_ms, elapsed_ms}
 use site_core/util/time.{utc_datetime}
 use site_core/qiniu/stats.{field, int_of, last_nonzero, PendingQ, PendingRespack, kodo_series_start, kodo_series_finish, flow_series_start, flow_series_finish, cdn_domains_start, cdn_domains_finish, cdn_tune_start, cdn_tune_finish, respack_start, respack_finish, respack_summary}
 use site_core/tencent/client.{PendingTc}
@@ -33,12 +30,15 @@ use site_core/util/jsonx.{obj, jint, jstr, jbool}
 # unavailable. The old fallback reported JVM heap and JMX load as if they were
 # the machine's, which is a different thing wearing the same labels. Disk is the
 # one reading with no /proc file behind it (statvfs), so it still asks the OS
-# through java.io.File on both paths.
+# through std/io.disk_space on both paths.
 
 pub fn server_block(cpu_cell: TtlCell) -> Json !Fs !io = {
-  let root = File.new("/")
-  let dtotal = root.getTotalSpace()
-  let dfree = root.getUsableSpace()
+  let space = match io.disk_space("/") {
+    Ok(s) -> s
+    Err(_) -> DiskSpace { total: 0, available: 0 }
+  }
+  let dtotal = space.total
+  let dfree = space.available
   let disk = obj([
     ("total", jint(dtotal)),
     ("used", jint(dtotal - dfree)),
@@ -124,13 +124,14 @@ pub effect CpuWait {
   fn read_sample() -> (Int, Int)
 }
 
-fn cpu_percent(cell: TtlCell, max_age_s: Int) -> Float !Fs !io = {
-  with handle CpuWait { wait_window(ms) => Thread.sleep(ms)
-    read_sample() => cpu_sample() }
-  cpu_percent_sampled(cell, max_age_s)
-}
+fn cpu_percent(cell: TtlCell, max_age_s: Int) -> Float !Fs !io =
+  io.with_clock_real(() => {
+    with handle CpuWait { wait_window(ms) => sleep_ms(ms)
+      read_sample() => cpu_sample() }
+    cpu_percent_sampled(cell, max_age_s)
+  })
 
-fn cpu_percent_sampled(cell: TtlCell, max_age_s: Int) -> Float !CpuWait !io = {
+fn cpu_percent_sampled(cell: TtlCell, max_age_s: Int) -> Float !CpuWait !io.Clock !io = {
   let prev = cpu_prev(cell, max_age_s)
   let cur = read_sample()
   let reading = match prev {
@@ -154,7 +155,7 @@ fn cpu_percent_sampled(cell: TtlCell, max_age_s: Int) -> Float !CpuWait !io = {
 # implementation cost. The SECOND sample is the one that goes in the cell: it is
 # the fresher of the two, and the next call's window should start at the end of
 # this one rather than before it.
-fn cpu_window(cell: TtlCell, first: (Int, Int)) -> Float !CpuWait !io = {
+fn cpu_window(cell: TtlCell, first: (Int, Int)) -> Float !CpuWait !io.Clock !io = {
   wait_window(CPU_WINDOW_MS)
   let second = read_sample()
   cpu_put(cell, second)
@@ -185,13 +186,13 @@ fn cpu_delta_pct(prev: (Int, Int), cur: (Int, Int)) -> Option[Float] = {
 # The snapshot rides in a TtlCell because a TtlCell is exactly a value with an
 # age bound on it: cache_get hands back nothing once the entry is older than the
 # bound asked for, which is the staleness rule already written down once.
-fn cpu_put(cell: TtlCell, s: (Int, Int)) -> Unit !io = {
+fn cpu_put(cell: TtlCell, s: (Int, Int)) -> Unit !io.Clock !io = {
   let (busy, total) = s
-  cache_put(cell, sample_payload(cpu_boot(), "${busy} ${total}"))
+  cache_put_clock(cell, sample_payload(cpu_boot(), "${busy} ${total}"))
 }
 
-fn cpu_prev(cell: TtlCell, max_age_s: Int) -> Option[(Int, Int)] !io =
-  match cache_get(cell, max_age_s) {
+fn cpu_prev(cell: TtlCell, max_age_s: Int) -> Option[(Int, Int)] !io.Clock !io =
+  match cache_get_clock(cell, max_age_s) {
     Some(s) -> match sample_from(s, cpu_boot()) { Some(counters) -> cpu_prev_of(counters)
       None -> None }
     None -> None
@@ -640,7 +641,10 @@ fn respack_collect(a: Auth, cell: TtlCell, started: Option[Result[PendingRespack
 
 # ---- vault: alive probe + version ----
 
-pub fn vault_block(alive_url: String, public_url: String) -> Json !Upstream !io = {
+pub fn vault_block(alive_url: String, public_url: String) -> Json !Upstream !io =
+  io.with_clock_real(() => vault_measured(alive_url, public_url))
+
+fn vault_measured(alive_url: String, public_url: String) -> Json !Upstream !io.Clock !io = {
   let base = if str.ends_with(alive_url, "/alive") {
     str.slice(alive_url, 0, len(alive_url) - 6)
   } else {
@@ -655,12 +659,12 @@ pub fn vault_block(alive_url: String, public_url: String) -> Json !Upstream !io 
   # twice rather than once. Both requests fail on the same deadline, in
   # parallel, and the block reads exactly as it did before.)
   let version_started = fetch_start("${base}/api/config", [])
-  let t0 = System.currentTimeMillis()
+  let t0 = io.now()
   match fetch(alive_url, []) {
     Ok(r) -> {
       let probe = [
         ("alive", jbool(r.status == 200)),
-        ("latency_ms", jint(System.currentTimeMillis() - t0)),
+        ("latency_ms", jint(elapsed_ms(t0))),
       ]
       let no_version: List[(String, Json)] = []
       let version_reply = match version_started {

@@ -12,7 +12,7 @@ use json/value.{Json}
 use site_core/util/jsonx.{obj, jint, jstr, jdatetime}
 use db/db.{DbConfig, with_db}
 use site_core/db/sql.{Db, PStr, ColInt, ColStr, query, int_at, str_at, first_str, first_map}
-use util/jwt.{sign, verify}
+use site_core/util/jwt.{sign, verify}
 use site_core/util/clock.{Clock, system_ms}
 use site_core/qiniu/creds.{Qiniu}
 
