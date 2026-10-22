@@ -1,0 +1,14 @@
+test "pct_encode matches Python urllib quote byte-for-byte" {
+  assert pct_encode("a b~c*.md") == "a%20b~c%2A.md"
+  assert pct_encode("文件 name.png") == "%E6%96%87%E4%BB%B6%20name.png"
+  assert pct_encode("A-Z_0.9") == "A-Z_0.9"
+  assert pct_encode("p@q#r") == "p%40q%23r"
+}
+
+test "yaml_scalar quotes only when needed" {
+  assert yaml_scalar("simple") == "simple"
+  assert yaml_scalar("has: colon") == "\"has: colon\""
+  assert yaml_scalar("") == "\"\""
+  assert yaml_scalar("-dash") == "\"-dash\""
+  assert yaml_scalar("trail ") == "\"trail \""
+}

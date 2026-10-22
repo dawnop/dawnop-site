@@ -91,8 +91,7 @@ for index in "${!mutants[@]}"; do
   owner="${owners[$index]}"
   project="$work/$mutant/backend-dawn"
   mkdir -p "$project"
-  cp "$BACKEND/dawn.toml" "$BACKEND/dawn.lock" "$project/"
-  cp -R "$BACKEND/src" "$project/src"
+  python3 "$BACKEND/scripts/test_project.py" --stage "$project"
   # mutate.py refuses a directory without this; see scripts/mutant_workdir.py
   : >"$project/.mutant-workdir"
   python3 "$MUTATOR" "$mutant" "$project"

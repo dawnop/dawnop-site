@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutant_workdir import require_workdir  # noqa: E402
+from test_project import source_path  # noqa: E402
 
 ARTICLE_TOUCH = "let _u = if after != before { touch_article(c, id)? } else { 0 }"
 PAGE_TOUCH = "let _u = if after != before { touch_page(c, id)? } else { 0 }"
@@ -159,9 +160,9 @@ def main() -> int:
     project = require_workdir(args.project)
 
     rel, old, new = MUTANTS[args.mutant]
-    replace_once(project / rel, old, new)
+    replace_once(source_path(project, rel), old, new)
     if args.mutant in ORPHANED_IMPORTS:
-        drop_import(project / rel, ORPHANED_IMPORTS[args.mutant])
+        drop_import(source_path(project, rel), ORPHANED_IMPORTS[args.mutant])
     return 0
 
 

@@ -1,0 +1,204 @@
+# Visualization-component admin (M6 knife 9, split out of api_admin2 2026-07-19).
+# Components are Vue SFCs compiled in the browser; the backend only stores the
+# source, the compiled output and the style, keyed by a slug.
+use std/str
+use db/sql.{DbConn, ColStr, open, exec, query, first_str_or}
+use web/types.{HttpError, Handler, http_error, as_http, as_http_with, opt_param_int, json_ok, json_response, text, body_text}
+use web/router.{Route, route_get, route_post, route_put, route_delete}
+use json/value.{Json, JArr}
+use db/db.{with_db}
+use svc/auth.{Auth, guarded}
+use site_core/util/jsonread.{body_obj, opt_str, str_or, present_null}
+use repo/repo_viz.{NewViz, valid_slug, slug_free, viz_exists, create_viz, set_viz_str, touch_viz, viz_sig, delete_viz, list_all, by_id}
+use site_core/util/errkind.{KConflict, conflict, split_kind}
+
+## GET /api/viz — all components (admin).
+pub fn viz_list(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () =>
+      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, c => list_all(c)), 500)?))))
+
+## GET /api/viz/admin/{viz_id} — one component, for the edit form; saves the
+## editor pulling the whole list just to find one row.
+pub fn viz_admin_get(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () =>
+      match opt_param_int(req, "viz_id") {
+        Some(id) ->
+          match as_http(with_db(a.db.path, a.db.ext, c => by_id(c, id)), 500)? {
+            Some(j) -> Ok(json_ok(j))
+            None -> Err(http_error(404, "组件不存在"))
+          }
+        None -> Err(http_error(422, "viz_id must be an integer"))
+      })
+
+## POST /api/viz — create (201). slug format + uniqueness + source required.
+pub fn viz_create(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () =>
+      {
+        let m = as_http(body_obj(body_text(req)?), 422)?
+        {
+          # _clean_slug lowercases+trims before the regex; slug carries max_length=255.
+          let slug = str.to_lower(str.trim(str_or(m, "slug", "")))
+          let source = str_or(m, "source", "")
+          if present_null(m, "name") || present_null(m, "compiled") || present_null(m, "style") || present_null(m, "source") {
+            Err(http_error(422, "字段不能为 null"))
+          } else if len(str_or(m, "slug", "")) > 255 {
+            Err(http_error(422, "slug 长度超出 255"))
+          } else if not valid_slug(slug) {
+            Err(http_error(422, "slug 格式非法"))
+          } else if str.trim(source) == "" {
+            Err(http_error(422, "source 不能为空"))
+          } else {
+            let nv = NewViz {
+              slug: slug, name: str_or(m, "name", ""), source: source,
+              compiled: str_or(m, "compiled", ""), style: str_or(m, "style", ""),
+            }
+            match as_http(with_db(a.db.path, a.db.ext, c => viz_create_read(c, nv)), 500)? {
+              Some(j) -> Ok(json_response(201, j))
+              None -> Err(http_error(409, "标识 ${slug} 已存在"))
+            }
+          }
+        }
+      })
+
+fn viz_create_read(c: DbConn, nv: NewViz) -> Result[Option[Json], String] !io = {
+  let free = slug_free(c, nv.slug, None)?
+  if not free {
+    Ok(None)
+  } else {
+    let id = create_viz(c, nv)?
+    by_id(c, id)
+  }
+}
+
+## PUT /api/viz/{viz_id} — partial update.
+pub fn viz_update(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () =>
+      match opt_param_int(req, "viz_id") {
+        Some(id) ->
+          {
+            let m = as_http(body_obj(body_text(req)?), 422)?
+            match as_http_with(with_db(a.db.path, a.db.ext, c => viz_update_read(c, id, m)), classify_viz)? {
+              Some(j) -> Ok(json_ok(j))
+              None -> Err(http_error(404, "组件不存在"))
+            }
+          }
+        None -> Err(http_error(422, "viz_id must be an integer"))
+      })
+
+# a slug collision is a 409, every other update failure a 422 (validation)
+fn classify_viz(msg: String) -> HttpError = {
+  let (k, t) = split_kind(msg)
+  match k {
+    KConflict -> http_error(409, t)
+    _ -> http_error(422, t)
+  }
+}
+
+fn viz_update_read(c: DbConn, id: Int, m: Map[String, Json]) -> Result[Option[Json], String] !io = {
+  let ex = viz_exists(c, id)?
+  if not ex {
+    Ok(None)
+  } else {
+    # PATCH semantics: a present, non-null field is applied; an explicit null is
+    # skipped (FastAPI's exclude_unset + `if value is not None`), NOT written as ""
+    # — writing "" here was silent data loss.
+    let before = viz_sig(c, id)?
+    let _sl = match opt_str(m, "slug") { Some(s) -> update_viz_slug(c, id, s)?, None -> 0 }
+    let _na = match opt_str(m, "name") { Some(s) -> set_viz_str(c, id, "name", s)?, None -> 0 }
+    let _so = match opt_str(m, "source") { Some(s) -> set_viz_source(c, id, s)?, None -> 0 }
+    let _co = match opt_str(m, "compiled") { Some(s) -> set_viz_str(c, id, "compiled", s)?, None -> 0 }
+    let _st = match opt_str(m, "style") { Some(s) -> set_viz_str(c, id, "style", s)?, None -> 0 }
+    # a save that changed nothing is not an edit, so updated_at stays put (the
+    # admin list is ordered by it) — see db/sql.row_sig
+    let after = viz_sig(c, id)?
+    let _t = if after != before { touch_viz(c, id)? } else { 0 }
+    by_id(c, id)
+  }
+}
+
+fn update_viz_slug(c: DbConn, id: Int, raw: String) -> Result[Int, String] !io = {
+  # _clean_slug lowercases+trims before validating; VizUpdate.slug is max_length=255
+  let slug = str.to_lower(str.trim(raw))
+  if len(raw) > 255 {
+    Err("slug 长度超出 255")
+  } else if not valid_slug(slug) {
+    Err("slug 格式非法")
+  } else {
+    let free = slug_free(c, slug, Some(id))?
+    if not free { Err(conflict("标识 ${slug} 已存在")) } else { set_viz_str(c, id, "slug", slug) }
+  }
+}
+
+# _clean_source: a present source must be non-blank (422), else stored verbatim
+fn set_viz_source(c: DbConn, id: Int, s: String) -> Result[Int, String] !io =
+  if str.trim(s) == "" { Err("组件源码不能为空") } else { set_viz_str(c, id, "source", s) }
+
+## DELETE /api/viz/{viz_id} — 204.
+pub fn viz_delete(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () =>
+      match opt_param_int(req, "viz_id") {
+        Some(id) ->
+          {
+            let n = as_http(with_db(a.db.path, a.db.ext, c => delete_viz(c, id)), 500)?
+            if n == 0 { Err(http_error(404, "组件不存在")) } else { Ok(text(204, "")) }
+          }
+        None -> Err(http_error(422, "viz_id must be an integer"))
+      })
+
+## The viz admin routes. Static paths precede /{id} captures.
+pub fn routes(a: Auth) -> List[Route] =
+  [
+    route_get("/api/viz", viz_list(a)),
+    route_get("/api/viz/admin/{viz_id}", viz_admin_get(a)),
+    route_post("/api/viz", viz_create(a)),
+    route_put("/api/viz/{viz_id}", viz_update(a)),
+    route_delete("/api/viz/{viz_id}", viz_delete(a)),
+  ]
+
+# ---- tests (need --cp lib/sqlite-jdbc-*.jar) ----
+#
+# updated_at only advances for a real edit, so these fix the stored timestamp at
+# a distinctly old value and check whether the update moved it. A wall-clock
+# comparison could not tell "not written" from "rewritten in the same second".
+
+const STALE: String = "2000-01-01 00:00:00"
+
+# a schema or seed typo must fail here, not as a puzzling assertion later
+fn must(r: Result[Int, String]) -> Int =
+  match r {
+    Ok(n) -> n
+    Err(m) -> panic(m)
+  }
+
+fn viz_test_db() -> DbConn !io = {
+  let c = open("jdbc:sqlite::memory:")
+  let _t = must(exec(c, "create table viz_components (id integer primary key, slug text unique, name text, source text, compiled text, style text, created_at text, updated_at text)", []))
+  let _r = must(exec(c, "insert into viz_components values (1, 'chart', 'Chart', 'SRC', 'CMP', 'STY', '2020-01-01 00:00:00', '${STALE}')", []))
+  c
+}
+
+fn viz_updated(c: DbConn) -> String !io =
+  match query(c, "select updated_at from viz_components where id = 1", [], [ColStr]) {
+    Ok(rows) -> first_str_or(rows, "")
+    Err(e) -> panic(e)
+  }
+
+# run one PUT body through the update path, failing loudly on anything but 200
+fn put_viz(c: DbConn, body: String) -> Unit !io = {
+  let m = match body_obj(body) {
+    Ok(x) -> x
+    Err(e) -> panic("bad test body: ${e}")
+  }
+  match viz_update_read(c, 1, m) {
+    Ok(Some(_j)) -> { }
+    Ok(None) -> panic("component vanished")
+    Err(e) -> panic(e)
+  }
+}
+
+const SAME_VIZ: String = "{\"slug\":\"chart\",\"name\":\"Chart\",\"source\":\"SRC\",\"compiled\":\"CMP\",\"style\":\"STY\"}"

@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutant_workdir import require_workdir  # noqa: E402
+from test_project import source_path  # noqa: E402
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
@@ -40,7 +41,7 @@ def main() -> int:
     args = parser.parse_args()
 
     project = require_workdir(args.project)
-    auth = project / "src/svc/auth.dawn"
+    auth = source_path(project, "src/svc/auth.dawn")
 
     if args.mutant == "case-sensitive-scheme":
         # What the code did before #270: exact-match the scheme, so `bearer`

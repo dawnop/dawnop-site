@@ -1,0 +1,17 @@
+test "last_nonzero skips trailing zeros" {
+  assert last_nonzero([1, 5, 0, 0]) == 5
+  assert last_nonzero([0, 0]) == 0
+  assert last_nonzero([]) == 0
+}
+
+test "min_str picks the earliest non-empty" {
+  assert min_str(["2026-09-01", "", "2026-08-01"]) == JStr("2026-08-01")
+  assert min_str([""]) == JNull
+}
+
+test "coercions accept ints, floats and strings" {
+  assert int_of(JStr("42")) == 42
+  assert num_of(JStr("1.5")) == 1.5
+  assert num_of(JInt(2)) == 2.0
+  assert int_of(JNull) == 0
+}

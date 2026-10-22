@@ -1,0 +1,17 @@
+test "Markdown validation counts UTF-8 bytes and preserves source" {
+  assert validate("", "你好\n", 7) == Ok(7)
+  match validate("", " \n", 7) { Err(e) -> { assert e.status == 422 }
+    _ -> { assert false } }
+  match validate("", "x\u{0}", 7) { Err(e) -> { assert e.status == 422 }
+    _ -> { assert false } }
+  match validate("", "x", 0) { Err(e) -> { assert e.status == 422 }
+    _ -> { assert false } }
+}
+test "source grouping accepts literals only and aggregates IPv6 /64" {
+  assert source_group("2001:db8:1:2::1") == source_group("2001:0db8:1:2::ffff")
+  assert source_group("::ffff:192.0.2.1") == source_group("192.0.2.1")
+  assert source_group("") == Ok("direct")
+  assert source_group("dead.beef.1.2") == Err("来源地址无效")
+  assert source_group("localhost") == Err("来源地址无效")
+  assert source_group("127.1") == Err("来源地址无效")
+}

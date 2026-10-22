@@ -1,0 +1,650 @@
+# File-manager handlers (M6 knife 11), pure-metadata subset: list, create-folder,
+# rename, move. These never touch qiniu (rename/move only rewrite paths); the
+# qiniu-mutating endpoints (upload/delete/copy/save) are added separately.
+use std/str
+use std/bytes
+use std/map
+use db/sql.{DbConn}
+use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, query, redirect, header, body_text}
+use site_core/util/multipart.{Part, boundary_of, parse_multipart, part_named}
+use util/http.{Upstream, fetch_stream, ok_stream, stream_response, close_stream, as_outbound, with_upstream}
+use web/router.{Route, route_get, route_post, tagged}
+use site_core/util/jsonx.{obj, jstr, jint}
+use db/db.{with_db}
+use svc/auth.{Auth, guarded, guarded_flexible}
+use site_core/util/jsonread.{body_obj, str_or, str_list, opt_int}
+use site_core/util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime, safe_persisted_mime, require_admissible_names}
+use repo/repo_fm.{fs_data, get_row, ledger_insert, search_files, entry_json, stats_db, validate_fm_ancestors, validate_fm_file_target, validate_register_preflight, finalize_register}
+use svc/files.{signed_url, gc_unreferenced, mk_folder, do_rename, do_move, do_copy, do_delete,
+  item_paths, merge_deleted, do_create_file, do_save, run_upload, sanitize_name, token_rel }
+use repo/repo_settings.{setting_int}
+use site_core/util/errkind.{KConflict, KUpstream, KTimeout, split_kind}
+use std/io.{Random, with_random_real}
+use site_core/util/crypto.{uuid_hex}
+use svc/export.{pct_encode}
+use site_core/qiniu/sign.{upload_token}
+use qiniu/rs.{stat}
+use qiniu/stats.{kodo_series, last_nonzero, field, int_of}
+use svc/monitor.{respack_cached}
+use util/ttl.{TtlCell, cache_get, cache_put, now_s}
+use json/value.{Json, JNull, JObj, JStr, JNum, JInt}
+use json/render.{render}
+use json/parser.{parse}
+
+# `guarded` with the production Upstream handler installed inside it, for the
+# routes that reach qiniu. It is a wrapper and not eight copies of the same four
+# arms, and it sits here rather than in svc/ because a route closure is the
+# innermost thing that owns a whole outbound unit of work: web's `Handler` type
+# is closed at `!io`, so a closure emitting `!Upstream` cannot BE a route (see
+# util/http). Routes that never call out keep plain `guarded`.
+fn guarded_out(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !Random !Upstream !io) -> Result[Response, HttpError] !io =
+  guarded(a, req, () => with_upstream(a.http, () => with_random_real(body)))
+
+## GET /api/fm?path= — directory listing (FsData).
+pub fn fm_list(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () => {
+    let path = match query(req, "path") {
+      Some(p) -> p
+      None -> ""
+    }
+    Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, c => fs_data(c, fm_split(path))), 500)?))
+  })
+
+## POST /api/fm/create-folder — {path, name}.
+pub fn create_folder(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () =>
+      {
+        let m = as_http(body_obj(body_text(req)?), 422)?
+        let cur = fm_split(str_or(m, "path", ""))
+        let name = fm_split(str_or(m, "name", ""))
+        if name == "" {
+          Err(http_error(400, "缺少 name"))
+        } else {
+          let rel = fm_join(cur, name)
+          let _n = require_admissible_names(rel)?
+          match as_http_with(with_db(a.db.path, a.db.ext, c => mk_folder(c, rel, cur)), conflict_or(500))? {
+            Some(j) -> Ok(json_ok(j))
+            None -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
+          }
+        }
+      })
+
+## POST /api/fm/rename — {path, item, name}.
+pub fn rename(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () =>
+      {
+        let m = as_http(body_obj(body_text(req)?), 422)?
+        let cur = fm_split(str_or(m, "path", ""))
+        let old = fm_split(str_or(m, "item", ""))
+        let new_name = str_or(m, "name", "")
+        if old == "" || new_name == "" {
+          Err(http_error(400, "缺少 item / name"))
+        } else if not valid_rename_name(new_name) {
+          Err(http_error(400, "name 必须是单段名称"))
+        } else {
+          let new_rel = fm_join(parent_rel(old), new_name)
+          let _n = require_admissible_names(new_rel)?
+          match as_http_with(with_db(a.db.path, a.db.ext, c => do_rename(c, old, new_rel, cur)), conflict_or(500))? {
+            Some(j) -> Ok(json_ok(j))
+            None -> Err(http_error(409, "已存在同名项：${basename(new_rel)}"))
+          }
+        }
+      })
+
+# Structural, and rename's alone: rename replaces the last segment in place, so
+# its `name` has to BE one segment. It sits beside `require_admissible_names`
+# rather than absorbing it, because the two answer different questions and have
+# different scopes. This one asks "is this one path segment", which is false for
+# create-folder and upload, where a name legitimately spells a subpath: a folder
+# upload sends the browser's webkitRelativePath as the name and expects the tree
+# under it to be rebuilt. The other asks "may this segment be stored", which
+# holds at every write entry and over every segment of the target.
+#
+# So the "." and ".." it used to reject here are gone from this predicate, not
+# from the endpoint: they ARE single segments, they pass this question honestly,
+# and `require_admissible_names(new_rel)` two lines below refuses them together
+# with every other write entry's target. One rule, one implementation. Adding
+# them back here would give the dot rule a second spelling that only rename
+# runs, which is how the two paths drifted apart in the first place.
+fn valid_rename_name(name: String) -> Bool =
+  name != "" && not str.contains(name, "/") && not str.contains(name, "\\")
+
+## POST /api/fm/move — {path, destination, sources[]}.
+pub fn move(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () =>
+      {
+        let m = as_http(body_obj(body_text(req)?), 422)?
+        let cur = fm_split(str_or(m, "path", ""))
+        let dest = fm_split(str_or(m, "destination", ""))
+        let sources = str_list(m, "sources")
+        let _n = check_relocation_targets(dest, sources, 0)?
+        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_move(c, sources, dest, cur, 0)), conflict_or(500))?))
+      })
+
+# Move and copy write `fm_join(dest, basename(src))` for each source. Those are
+# the destination's segments followed by one leaf name, so checking the two
+# ingredients checks the target exactly, without a second copy of the join that
+# could drift away from the one svc/files plans with.
+fn check_relocation_targets(dest: String, sources: List[String], i: Int) -> Result[Unit, HttpError] =
+  if i >= len(sources) {
+    require_admissible_names(dest)
+  } else {
+    let _leaf = require_admissible_names(basename(fm_split(sources[i])))?
+    check_relocation_targets(dest, sources, i + 1)
+  }
+
+# ---- qiniu URL / upload endpoints (read-only: sign & redirect, no mutation) ----
+
+## GET /api/fm/sign?path= — a signed URL for direct fetch (text preview).
+pub fn sign(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () => {
+    let rel = fm_split(qparam(req, "path"))
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
+      Some(o) ->
+        match o.key {
+          Some(k) -> Ok(json_ok(obj([("url", jstr(signed_url(a.qiniu, k, "")))])))
+          None -> Err(http_error(404, "文件不存在"))
+        }
+      None -> Err(http_error(404, "文件不存在"))
+    }
+  })
+
+## GET /api/fm/stats — storage usage: {used, used_local, used_remote, files,
+## dirs, quota}. Local (DB) figures are exact; remote is the 600s-cached qiniu
+## bucket space (null when unavailable); quota prefers the storage respack
+## capacity over the settings value, like the FastAPI handler.
+pub fn stats(a: Auth, space_cell: TtlCell, respack_cell: TtlCell) -> Handler =
+  req =>
+  guarded_out(a, req, () =>
+      {
+        let (used_local, files, dirs) = as_http(with_db(a.db.path, a.db.ext, c => stats_db(c)), 500)?
+        {
+          let remote = remote_space(a, space_cell)
+          let remote_n = int_of(remote)
+          let used = if used_local > remote_n { used_local } else { remote_n }
+          Ok(json_ok(obj([
+            ("used", jint(used)),
+            ("used_local", jint(used_local)),
+            ("used_remote", remote),
+            ("files", jint(files)),
+            ("dirs", jint(dirs)),
+            ("quota", jint(quota_bytes(a, respack_cell))),
+          ])))
+        }
+      })
+
+# qiniu bucket space through a 600s TTL cell: 7-day series, last non-zero point;
+# JNull on failure or no data (stats lag by up to an hour) — the null caches too
+fn remote_space(a: Auth, cell: TtlCell) -> Json !Upstream !io =
+  match cache_get(cell, 600) {
+    Some(s) ->
+      match parse(s) {
+        Ok(j) -> j
+        Err(_m) -> JNull
+      }
+    None -> {
+      let j = match kodo_series(a.qiniu, "space", 7) {
+        Ok(pair) -> {
+          let (_times, datas) = pair
+          let v = last_nonzero(datas)
+          if v == 0 { JNull } else { JInt(v) }
+        }
+        Err(_m) -> JNull
+      }
+      cache_put(cell, render(j))
+      j
+    }
+  }
+
+# quota: storage respack capacity when present, else the settings-table value
+fn quota_bytes(a: Auth, respack_cell: TtlCell) -> Int !Upstream !io = {
+  let cap = match respack_cached(a, respack_cell) {
+    Ok(j) -> int_of(field(field(j, "storage"), "capacity"))
+    Err(_m) -> 0
+  }
+  if cap > 0 {
+    cap
+  } else {
+    let gb = match with_db(a.db.path, a.db.ext, c => setting_int(c, "storage_quota_gb", a.storage_quota)) {
+      Ok(n) -> n
+      Err(_m) -> a.storage_quota
+    }
+    gb * 1024 * 1024 * 1024
+  }
+}
+
+## GET /api/fm/content?path= — proxy the object bytes through the backend (the
+## fallback when a cross-origin 302 to qiniu is CORS-blocked). Binary body (G6).
+pub fn content(a: Auth) -> Handler =
+  req =>
+  guarded_out(a, req, () => {
+    let rel = fm_split(qparam(req, "path"))
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
+      Some(o) ->
+        match o.key {
+          Some(k) -> {
+            let url = signed_url(a.qiniu, k, "")
+            let r = as_http_with(as_outbound(fetch_stream(url, [])), mutation_failure)?
+            # a non-2xx body is qiniu's error, not the file — serving it would
+            # hand the browser a JSON error under the file's content type. Close
+            # the stream (don't leak the connection) and map to an error.
+            if not ok_stream(r) {
+              close_stream(r.stream)
+              Err(http_error(502, "qiniu ${r.status}"))
+            } else {
+              Ok(stream_response(200, safe_persisted_mime(o.content_type), r.stream))
+            }
+          }
+          None -> Err(http_error(404, "文件不存在"))
+        }
+      None -> Err(http_error(404, "文件不存在"))
+    }
+  })
+
+# a name collision is a 409; everything else takes the caller's code (500 for a
+# database failure, 502 when the object store is the one that failed)
+fn conflict_or(other: Int) -> fn(String) -> HttpError =
+  msg => {
+    let (k, t) = split_kind(msg)
+    match k {
+      KConflict -> http_error(409, t)
+      _ -> http_error(other, t)
+    }
+  }
+
+fn mutation_failure(msg: String) -> HttpError = {
+  let (_k, t) = split_kind(msg)
+  http_error(mutation_status(msg), t)
+}
+
+fn mutation_status(msg: String) -> Int = {
+  let (k, _t) = split_kind(msg)
+  match k {
+    KConflict -> 409
+    KUpstream -> 502
+    # A peer that never answered is not a peer that refused us. 502 reads as "our
+    # credentials or that endpoint are wrong" and sends an admin to check keys;
+    # 504 reads as "it went quiet and we gave up", which is a network condition
+    # and worth retrying. See util/http.as_outbound, which is what tags these.
+    KTimeout -> 504
+    _ -> 500
+  }
+}
+
+## GET /api/fm/preview?path=&w=&h=&mode= — 302 to the signed URL (inline). For a
+## raster image with w/h given (and original >50KB) redirect to a seven-niu
+## imageView2 thumbnail instead of the original (省流量), mirroring serve.py.
+pub fn preview(a: Auth) -> Handler =
+  req =>
+  guarded_flexible(a, req, () => {
+    let (w, h, mode) = preview_params(req)?
+    let rel = fm_split(qparam(req, "path"))
+    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
+      Some(o) ->
+        match o.key {
+          Some(k) -> {
+            let suffix = match thumb_fop(o.content_type, o.size, w, h, mode) {
+              Some(fop) -> "?${fop}"
+              None -> ""
+            }
+            Ok(redirect(302, signed_url(a.qiniu, k, suffix)))
+          }
+          None -> Err(http_error(404, "文件不存在"))
+        }
+      None -> Err(http_error(404, "文件不存在"))
+    }
+  })
+
+# w/h are Query(ge=1, le=2000); mode is Query("fit", pattern=^(fit|fill)$).
+fn preview_params(req: Request) -> Result[(Option[Int], Option[Int], String), HttpError] = {
+  let w = bounded_opt(req, "w", 1, 2000)?
+  let h = bounded_opt(req, "h", 1, 2000)?
+  let mode = match query(req, "mode") { Some(mm) -> mm, None -> "fit" }
+  if mode != "fit" && mode != "fill" {
+    Err(http_error(422, "mode 只能是 fit 或 fill"))
+  } else {
+    Ok((w, h, mode))
+  }
+}
+
+fn bounded_opt(req: Request, name: String, lo: Int, hi: Int) -> Result[Option[Int], HttpError] =
+  match query(req, name) {
+    None -> Ok(None)
+    Some(s) -> match parse_int(s) {
+      None -> Err(http_error(422, "${name} must be an integer"))
+      Some(n) -> if n < lo || n > hi { Err(http_error(422, "${name} 超出范围")) } else { Ok(Some(n)) }
+    }
+  }
+
+# imageView2 fop for a raster thumbnail, or None (serve the original) when no w/h,
+# a non-raster type, or the original is already ≤50KB. Mirrors serve.py _thumb_fop.
+fn thumb_fop(content_type: String, size: Int, w: Option[Int], h: Option[Int], mode: String) -> Option[String] =
+  match (w, h) {
+    (None, None) -> None
+    _ ->
+      if not thumbable(content_type) {
+        None
+      } else if size <= 51200 { # 50 * 1024
+        None
+      } else {
+        let code = if mode == "fill" { "1" } else { "2" } # 1=裁剪铺满, 2=等比缩放
+        let ww = match w { Some(n) -> "/w/${n}", None -> "" }
+        let hh = match h { Some(n) -> "/h/${n}", None -> "" }
+        Some("imageView2/${code}${ww}${hh}/format/webp/q/82")
+      }
+  }
+
+# the raster formats seven-niu imageView2 can process (svg etc. excluded)
+fn thumbable(ct: String) -> Bool =
+  ct == "image/jpeg" || ct == "image/png" || ct == "image/webp" || ct == "image/gif" ||
+  ct == "image/bmp" || ct == "image/x-ms-bmp" || ct == "image/tiff"
+
+## GET /api/fm/download?path= — 302 to the signed URL with an attachment name.
+pub fn download(a: Auth) -> Handler =
+  req =>
+  guarded_flexible(a, req, () => {
+    let rel = fm_split(qparam(req, "path"))
+    redirect_to_named(a, rel)
+  })
+
+fn redirect_to_named(a: Auth, rel: String) -> Result[Response, HttpError] !io =
+  match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
+    Some(o) ->
+      match o.key {
+        Some(k) -> Ok(redirect(302, signed_url(a.qiniu, k, "?attname=${url_q(basename(rel))}")))
+        None -> Err(http_error(404, "文件不存在"))
+      }
+    None -> Err(http_error(404, "文件不存在"))
+  }
+
+fn url_q(s: String) -> String = pct_encode(s)
+
+## POST /api/fm/upload-token — mint a qiniu direct-upload token for a new key,
+## record the pending_uploads ledger row. {token, key, path, up_host}. The body is
+## {path: target dir, name: filename}: the returned `path` is the FULL file path
+## (dir joined with the sanitized name), which /register echoes back — so this must
+## join in `name`, not return the bare directory, and the key extension comes from
+## the filename. Mirrors app/api/fm/uploads.py.
+pub fn upload_token_ep(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () => {
+    let m = as_http(body_obj(body_text(req)?), 422)?
+    let raw_name = str_or(m, "name", "")
+    let rel = token_rel(str_or(m, "path", ""), raw_name)
+    # the token is minted for a path /register will later be handed back, so the
+    # name is refused here rather than after the client has spent the credential
+    let _n = require_admissible_names(rel)?
+    let _p = as_http_with(with_db(a.db.path, a.db.ext, c => upload_token_preflight(c, rel)), conflict_or(500))?
+    let e = ext(sanitize_name(raw_name))
+    let key = with_random_real(() => if e == "" { uuid_hex() } else { "${uuid_hex()}.${e}" })
+    let token = upload_token(a.qiniu, key, now_s() + a.qiniu.expires)
+    let _x = as_http(with_db(a.db.path, a.db.ext, c => ledger(c, key, rel)), 500)?
+    Ok(json_ok(obj([
+      ("token", jstr(token)),
+      ("key", jstr(key)),
+      ("path", jstr(full(rel))),
+      # the host this backend itself uploads to (QINIU_UP_HOST, defaulting to
+      # upload.qiniup.com), so a client that honours the field lands where the
+      # proxy path lands. Known divergence, not an oversight: FastAPI resolves
+      # the bucket's regional host via api.qiniu.com/v4/query and falls back to
+      # this default. Harmless while no client reads up_host (qiniu-js resolves
+      # the region itself) and production works on the default region. It
+      # becomes a real bug if the bucket moves off the default region.
+      ("up_host", jstr(a.qiniu.up_host)),
+    ])))
+  })
+
+fn ledger(c: DbConn, key: String, rel: String) -> Result[Int, String] !io =
+  ledger_insert(c, key, full(rel))
+
+fn upload_token_preflight(c: DbConn, rel: String) -> Result[Unit, String] !io = {
+  let _a = upload_token_ancestor_preflight(c, rel)?
+  validate_fm_file_target(c, rel)
+}
+
+fn upload_token_ancestor_preflight(c: DbConn, rel: String) -> Result[Unit, String] !io =
+  validate_fm_ancestors(c, rel)
+
+fn qparam(req: Request, name: String) -> String = unwrap_or(query(req, name), "")
+
+## POST /api/fm/delete: {path, items:[{path}]}. Atomically removes every
+## requested metadata subtree, then best-effort collects unreferenced objects.
+## Returns FsData + {deleted}.
+pub fn delete(a: Auth) -> Handler =
+  req =>
+  guarded_out(a, req, () =>
+      {
+        let m = as_http(body_obj(body_text(req)?), 422)?
+        let cur = fm_split(str_or(m, "path", ""))
+        let items = item_paths(m)
+        let deleted = as_http_with(with_db(a.db.path, a.db.ext, c => do_delete(a.qiniu, c, items, 0, [])), mutation_failure)?
+        let base = as_http(with_db(a.db.path, a.db.ext, c => fs_data(c, cur)), 500)?
+        Ok(json_ok(merge_deleted(base, deleted)))
+      })
+
+## POST /api/fm/create-file — {path, name}. Creates an empty file object.
+pub fn create_file(a: Auth) -> Handler =
+  req =>
+  guarded_out(a, req, () =>
+      {
+        let m = as_http(body_obj(body_text(req)?), 422)?
+        let cur = fm_split(str_or(m, "path", ""))
+        let name = fm_split(str_or(m, "name", ""))
+        if name == "" {
+          Err(http_error(400, "缺少 name"))
+        } else {
+          let rel = fm_join(cur, name)
+          let _n = require_admissible_names(rel)?
+          match as_http_with(do_create_file(a, rel, cur), mutation_failure)? {
+            Some(j) -> Ok(json_ok(j))
+            None -> Err(http_error(409, "已存在同名项：${basename(rel)}"))
+          }
+        }
+      })
+
+## POST /api/fm/save — {path, content}. Writes text to a NEW qiniu key (CDN
+## caches by URL, so overwrite would read stale), updates the DB, deletes the
+## old key. Returns {path}.
+pub fn save(a: Auth) -> Handler =
+  req =>
+  guarded_out(a, req, () =>
+      {
+        let m = as_http(body_obj(body_text(req)?), 422)?
+        let rel = fm_split(str_or(m, "path", ""))
+        let content = str_or(m, "content", "")
+        if rel == "" {
+          Err(http_error(400, "缺少 path"))
+        } else {
+          let _n = require_admissible_names(rel)?
+          Ok(json_ok(as_http_with(do_save(a, rel, content), mutation_failure)?))
+        }
+      })
+
+## POST /api/fm/copy — {path, destination, sources[]}. Copies each subtree;
+## files get a fresh qiniu object (new uuid key), dirs are recreated.
+pub fn copy(a: Auth) -> Handler =
+  req =>
+  guarded_out(a, req, () =>
+      {
+        let m = as_http(body_obj(body_text(req)?), 422)?
+        let cur = fm_split(str_or(m, "path", ""))
+        let dest = fm_split(str_or(m, "destination", ""))
+        let sources = str_list(m, "sources")
+        let _n = check_relocation_targets(dest, sources, 0)?
+        Ok(json_ok(as_http_with(with_db(a.db.path, a.db.ext, c => do_copy(a.qiniu, c, sources, dest, cur, 0)), mutation_failure)?))
+      })
+
+## POST /api/fm/register — {path, key, size?, content_type?}. Confirms the
+## object exists in qiniu (stat), records the FileObject with qiniu's authoritative
+## size/mime, clears the ledger row. Rejects if the object isn't really there.
+pub fn register(a: Auth) -> Handler =
+  req =>
+  guarded_out(a, req, () =>
+      {
+        let m = as_http(body_obj(body_text(req)?), 422)?
+        let rel = fm_split(str_or(m, "path", ""))
+        let key = str_or(m, "key", "")
+        if rel == "" || key == "" {
+          Err(http_error(400, "缺少 path / key"))
+        } else {
+          let _n = require_admissible_names(rel)?
+          let _preflight = as_http_with(register_preflight(a, rel, key), conflict_or(500))?
+          let r = as_http_with(as_outbound(stat(a.qiniu, key)), mutation_failure)?
+          if r.status == 200 {
+            Ok(json_ok(as_http_with(register_row(a, rel, key, r.body, opt_int(m, "size"), str_or(m, "content_type", "")), conflict_or(500))?))
+          } else {
+            Err(register_stat_failure(r.status))
+          }
+        }
+      })
+
+fn register_preflight(a: Auth, rel: String, key: String) -> Result[Unit, String] !io =
+  with_db(a.db.path, a.db.ext, c => validate_register_preflight(c, rel, key))
+
+fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint: Option[Int], ct_hint: String) -> Result[Json, String] !Upstream !io = {
+  # qiniu's stat is authoritative for size/mime; fall back to the client's
+  # reported values, then a name-based guess, exactly like FastAPI's
+  #   size = fsize or payload.size or 0
+  #   mime = mimeType or content_type or _guess_mime(basename)
+  let size = reg_size(stat_body, size_hint)
+  let mime = reg_mime(stat_body, ct_hint, rel)
+  let finalized = with_db(a.db.path, a.db.ext, c => finalize_register(c, rel, key, mime, size))?
+  let (row, outcome) = finalized
+  let _gc = gc_unreferenced(a, outcome.superseded_key)
+  Ok(entry_json(row))
+}
+
+fn register_stat_failure(status: Int) -> HttpError =
+  if status == 612 {
+    http_error(400, "对象未在七牛找到，注册被拒")
+  } else {
+    http_error(502, "七牛 stat 返回 ${status}")
+  }
+
+# fsize of 0 (absent or genuinely empty) falls through to the client hint, then 0
+fn reg_size(stat_body: String, hint: Option[Int]) -> Int !io = {
+  let fs = stat_int(stat_body, "fsize")
+  if fs != 0 { fs } else {
+    match hint { Some(n) -> n, None -> 0 }
+  }
+}
+
+fn reg_mime(stat_body: String, ct_hint: String, rel: String) -> String !io = {
+  let mt = stat_str(stat_body, "mimeType")
+  if mt != "" { mt } else if ct_hint != "" { ct_hint } else { guess_mime(rel) }
+}
+
+# read a numeric/string field out of qiniu's stat JSON
+fn stat_int(body: String, key: String) -> Int !io =
+  match parse(body) {
+    Ok(JObj(m)) ->
+      match map.get(m, key) {
+        Some(JInt(n)) -> n
+        Some(JNum(x)) -> to_int(x)
+        _ -> 0
+      }
+    _ -> 0
+  }
+
+fn stat_str(body: String, key: String) -> String !io =
+  match parse(body) {
+    Ok(JObj(m)) ->
+      match map.get(m, key) {
+        Some(JStr(s)) -> s
+        _ -> ""
+      }
+    _ -> ""
+  }
+
+## GET /api/fm/search?path=&filter=&deep= — filename search over the tree.
+pub fn fm_search(a: Auth) -> Handler =
+  req =>
+  guarded(a, req, () => {
+    let base = fm_split(qparam(req, "path"))
+    let needle = str.to_lower(str.trim(qparam(req, "filter")))
+    let deep = qparam(req, "deep") != ""
+    Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, c => search_files(c, base, needle, deep)), 500)?))
+  })
+
+## The fm routes (protected). Static paths precede any captures. The two TTL
+## cells memoize qiniu bucket-space (600s) and respack balances (300s, shared
+## with the monitor page) for the stats endpoint.
+## POST /api/fm/upload — multipart proxy upload (M6.5). Backup path for non-browser
+## clients; the web app direct-uploads (upload-token + register). The file bytes
+## ride through the backend (qiniu won't accept a client PUT), recovered byte-exact
+## from the raw request Bytes (Request.body) via the multipart parser, then
+## re-POSTed to qiniu. Matches FastAPI: form field `path` (target dir) + file part.
+pub fn upload(a: Auth) -> Handler =
+  req =>
+  guarded_out(a, req, () =>
+      match header(req, "content-type") {
+        None -> Err(http_error(422, "expected multipart/form-data"))
+        Some(ct) ->
+          match boundary_of(ct) {
+            None -> Err(http_error(422, "missing multipart boundary"))
+            Some(b) -> {
+              let parts = parse_multipart(req.body, b)
+              match part_named(parts, "file") {
+                None -> Err(http_error(422, "missing file part"))
+                Some(fp) -> do_upload(a, upload_path_field(parts)?, fp)
+              }
+            }
+          }
+      })
+
+# The `path` form field (target directory), decoded from the part's Bytes as
+# UTF-8. Bytes that are not UTF-8 cannot name a directory the client meant, so
+# they are a 422 like the endpoint's other malformed-form errors, not a U+FFFD
+# path silently created under a mangled name.
+fn upload_path_field(parts: List[Part]) -> Result[String, HttpError] !io =
+  match part_named(parts, "path") {
+    Some(pp) ->
+      match bytes.decode_utf8_checked(pp.content) {
+        Ok(s) -> Ok(s)
+        Err(_) -> Err(http_error(422, "path field is not valid UTF-8"))
+      }
+    None -> Ok("")
+  }
+
+fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpError] !Random !Upstream !io = {
+  let target = fm_split(path_field)
+  # fp.filename comes from the (UTF-8-decoded) part headers already
+  let name = sanitize_name(fp.filename)
+  let rel = fm_join(target, name)
+  # the filename rides in verbatim from the multipart headers (disp_filename),
+  # so this is the door a " a.txt" from a non-browser client arrives at
+  let _n = require_admissible_names(rel)?
+  # the part's declared type is a client-supplied string that ends up in the row
+  # and in the multipart body posted to qiniu, so it crosses the outbound boundary
+  # on the way in rather than being trusted because it arrived as a header
+  let mime = safe_persisted_mime(if fp.content_type != "" { fp.content_type } else { guess_mime(name) })
+  let size = len(fp.content)
+  Ok(json_ok(as_http_with(run_upload(a, rel, fp.content, mime, size), mutation_failure)?))
+}
+
+pub fn routes(a: Auth, space_cell: TtlCell, respack_cell: TtlCell) -> List[Route] =
+  [
+    route_get("/api/fm", fm_list(a)),
+    route_get("/api/fm/sign", sign(a)),
+    route_get("/api/fm/preview", preview(a)),
+    route_get("/api/fm/download", download(a)),
+    route_get("/api/fm/content", content(a)),
+    route_get("/api/fm/stats", stats(a, space_cell, respack_cell)),
+    route_get("/api/fm/search", fm_search(a)),
+    route_post("/api/fm/create-folder", create_folder(a)),
+    route_post("/api/fm/rename", rename(a)),
+    route_post("/api/fm/move", move(a)),
+    route_post("/api/fm/delete", delete(a)),
+    route_post("/api/fm/copy", copy(a)),
+    route_post("/api/fm/save", save(a)),
+    route_post("/api/fm/create-file", create_file(a)),
+    route_post("/api/fm/register", register(a)),
+    route_post("/api/fm/upload-token", upload_token_ep(a)),
+    # raw-body: multipart proxy upload carries file bytes (bounded by nginx).
+    tagged(route_post("/api/fm/upload", upload(a)), ["raw-body"]),
+  ]

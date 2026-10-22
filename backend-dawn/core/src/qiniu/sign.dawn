@@ -1,0 +1,78 @@
+# Qiniu Kodo request signing (M6 knife 11 foundation). Pure Dawn over the crypto
+# module — reproduces the official qiniu SDK's HMAC-SHA1 signatures so fm can
+# mint upload tokens, private download URLs, and management tokens without the
+# SDK (which drags okhttp+gson). Cross-checked against the Python qiniu.Auth.
+use std/str
+use util/crypto.{hmac_sha1_b64url, b64url_encode}
+use qiniu/creds.{Qiniu}
+
+# Every signing function takes the credentials record whole rather than the two
+# or three strings it reads out of it. They used to take `ak, sk[, bucket]` in a
+# row, and no type tells those apart: a caller that swapped a pair still built a
+# well-typed signature, which qiniu then rejected at runtime.
+
+## The EncodedEntryURI for a management op: base64url(bucket:key), with padding.
+pub fn entry_uri(q: Qiniu, key: String) -> String !io = b64url_encode("${q.bucket}:${key}")
+
+## Management token for an entry-based op (stat/delete/copy/move). `op` is the
+## verb path segment like "stat", "delete". Returns the QBox Authorization value.
+pub fn entry_token(q: Qiniu, op: String, entry: String) -> String !io =
+  management_token(q, "/${op}/${entry}\n")
+
+## General QiniuMacAuth (CDN / billing APIs too): `path_query` is the path with
+## its query string if any; `body` participates in the signature for JSON
+## requests (matches the SDK: body is appended when content-type is set and
+## not application/octet-stream).
+pub fn qiniu_mac(q: Qiniu, method: String, path_query: String, host: String, content_type: String, body: String) -> String !io = {
+  let signing = "${method} ${path_query}\nHost: ${host}\nContent-Type: ${content_type}\n\n${body}"
+  let sign = hmac_sha1_b64url(q.sk, signing)
+  "Qiniu ${q.ak}:${sign}"
+}
+
+## Upload token for a specific key (spec: putPolicy → base64 → HMAC-SHA1 → token).
+## putPolicy is {"scope":"bucket:key","deadline":<unix>} in that key order (the
+## qiniu SDK's dict order), so the base64 matches byte-for-byte.
+pub fn upload_token(q: Qiniu, key: String, deadline: Int) -> String !io = {
+  # compact JSON, no spaces — matches the qiniu SDK's json.dumps output so the
+  # base64 and therefore the signature match byte-for-byte
+  let policy = "{\"scope\":\"${q.bucket}:${key}\",\"deadline\":${deadline}}"
+  let encoded_policy = b64url_encode(policy)
+  let sign = hmac_sha1_b64url(q.sk, encoded_policy)
+  "${q.ak}:${sign}:${encoded_policy}"
+}
+
+## Upload token for an anonymous uploader (the drop links, svc/drop). Same scope
+## and signature as `upload_token`, plus the two putPolicy fields that make the
+## bucket itself enforce what the token may do:
+##
+##   insertOnly=1      the key can only be created, never overwritten, so a
+##                     token cannot be replayed to replace bytes already
+##                     registered under that key
+##   fsizeLimit=<n>    qiniu refuses (413) an upload larger than n bytes
+##
+## A separate function rather than optional fields on `upload_token`, so the
+## admin token's bytes (and every golden that spends one) stay exactly what
+## they were. Field order follows the SDK's dict order: scope and deadline
+## first, extra policy fields after.
+pub fn upload_token_limited(q: Qiniu, key: String, deadline: Int, fsize_limit: Int) -> String !io = {
+  let policy = "{\"scope\":\"${q.bucket}:${key}\",\"deadline\":${deadline},\"insertOnly\":1,\"fsizeLimit\":${fsize_limit}}"
+  let encoded_policy = b64url_encode(policy)
+  let sign = hmac_sha1_b64url(q.sk, encoded_policy)
+  "${q.ak}:${sign}:${encoded_policy}"
+}
+
+## A private download URL: append ?e=<deadline>, sign the whole thing, append
+## &token=ak:sign. `base_url` is the full https URL (with any imageView2 fop).
+pub fn private_url(q: Qiniu, base_url: String, deadline: Int) -> String !io = {
+  let sep = if str.contains(base_url, "?") { "&" } else { "?" }
+  let signed_url = "${base_url}${sep}e=${deadline}"
+  let sign = hmac_sha1_b64url(q.sk, signed_url)
+  "${signed_url}&token=${q.ak}:${sign}"
+}
+
+## Management token (QBox) for BucketManager ops. `signing_str` is
+## "<path>?<query>\n" (plus the form body when the content type is form-encoded).
+pub fn management_token(q: Qiniu, signing_str: String) -> String !io = {
+  let sign = hmac_sha1_b64url(q.sk, signing_str)
+  "QBox ${q.ak}:${sign}"
+}

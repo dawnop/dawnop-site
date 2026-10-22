@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutant_workdir import require_workdir  # noqa: E402
+from test_project import source_path  # noqa: E402
 
 MUTANTS = (
     "async-timeout-not-unwrapped",
@@ -47,7 +48,7 @@ def main() -> int:
 
     project = require_workdir(args.project)
 
-    http = project / "src/util/http.dawn"
+    http = source_path(project, "src/util/http.dawn")
 
     if args.mutant == "client-per-call":
         # "shared" goes back to being only a name: every call builds its own
@@ -98,12 +99,12 @@ def main() -> int:
     elif args.mutant == "edge-times-out-as-502":
         # One rule, both edges: a timeout collapses back into 502 on the wire.
         replace_once(
-            project / "src/api/api_fm.dawn",
+            source_path(project, "src/api/api_fm.dawn"),
             "    KTimeout -> 504\n",
             "    KTimeout -> 502\n",
         )
         replace_once(
-            project / "src/api/webdav.dawn",
+            source_path(project, "src/api/webdav.dawn"),
             "    KTimeout -> http_error(504, t)\n",
             "    KTimeout -> http_error(502, t)\n",
         )

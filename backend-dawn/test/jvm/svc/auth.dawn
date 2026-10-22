@@ -1,0 +1,60 @@
+test "verify_password accepts the \$2b hashes the shared users table holds" {
+  # seed_admin.py hashed with Python's bcrypt, which writes the $2b revision;
+  # util/bcrypt parses only $2a. The revisions are the same algorithm for
+  # passwords <= 72 bytes, so the fix is a prefix rewrite — pinned here because
+  # getting it wrong locks every existing account out with a 401. The hash is the
+  # contract fixture's admin row (cost 4), minted by Python, not by this code.
+  let b2 = "\$2b\$04\$fBm/BBrDqZMMZXAiEDQ8M.VGIhXSwMMKQPmceHoZj3xAZXVtG7YF2"
+  let a2 = "\$2a\$" ++ str.slice(b2, 4, len(b2))
+  assert verify_password("contract-fixture-pw", b2)
+  assert verify_password("contract-fixture-pw", a2)
+  assert not verify_password("wrong-password", b2)
+  # $2y$ is the third spelling of the same hash
+  assert verify_password("contract-fixture-pw", "\$2y\$" ++ str.slice(a2, 4, len(a2)))
+  # the trap: util/bcrypt refuses the $2b revision outright rather than ignoring
+  # it, so without the rewrite this is what every login would hit
+  assert not checkpw("contract-fixture-pw", b2)
+  # a malformed hash reads as "wrong password", never as a crash (401, not 500)
+  assert not verify_password("hunter2", "not-a-bcrypt-hash")
+  assert not verify_password("hunter2", "")
+}
+
+# ---- Authorization header shape (four rules, one test each) ----
+#
+# Split into one test per rule on purpose: each is owned by exactly one mutant in
+# scripts/auth-header-mutants, and a test covering two rules would let a mutant
+# that breaks one of them hide behind the other's failure.
+
+test "the auth scheme is matched case-insensitively" {
+  # The wire spelling varies by client; RFC 7235 says it must not matter, and
+  # FastAPI compares scheme.lower(). Dawn used to require exactly "Bearer ",
+  # so a client sending "bearer" got a 401 where FastAPI let it in.
+  assert scheme_param("Bearer abc", "bearer") == "abc"
+  assert scheme_param("BEARER abc", "bearer") == "abc"
+  assert scheme_param("BeArEr abc", "bearer") == "abc"
+  assert scheme_param("Basic dXNlcg==", "basic") == "dXNlcg=="
+}
+
+test "a credential with no scheme is not a credential" {
+  # `Authorization: <jwt>` used to authenticate here and 401 in FastAPI. It is
+  # not a well-formed Authorization header: with no space there is only a
+  # scheme, and that scheme is not "bearer".
+  assert scheme_param("eyJhbGciOiJIUzI1NiJ9.e30.sig", "bearer") == ""
+  assert scheme_param("", "bearer") == ""
+  assert scheme_param("bearer", "bearer") == ""
+}
+
+test "a different scheme yields no credential" {
+  assert scheme_param("basic dXNlcjpwdw==", "bearer") == ""
+  assert scheme_param("digest username=x", "bearer") == ""
+  assert scheme_param("bearer abc", "basic") == ""
+}
+
+test "the credential after the scheme is taken verbatim" {
+  # No trimming: the second space belongs to the credential, which then fails to
+  # verify. FastAPI's partition(" ") does the same, so both backends 401 here.
+  # Trimming would silently accept a header FastAPI rejects.
+  assert scheme_param("bearer  abc", "bearer") == " abc"
+  assert scheme_param("bearer abc ", "bearer") == "abc "
+  assert scheme_param("bearer a b", "bearer") == "a b"
+}

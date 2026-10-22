@@ -1,0 +1,99 @@
+use std/io
+# ---- tests (vectors cross-checked against Python hashlib/hmac) ----
+
+test "sha256 known vector" {
+  assert sha256_hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+}
+
+test "hmac vectors" {
+  let msg = "The quick brown fox jumps over the lazy dog"
+  assert hmac_sha256_hex("key", msg) == "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+  assert hmac_sha1_b64url("key", msg) == "3nybhbi3iqa8ino29wqQcBydtNk="
+  assert hmac_sha256_b64url_nopad("key", msg) == "97yD9DBThCSxMpjmqm-xQ-9NWaFJRhdZl0edvC0aPNg"
+}
+
+test "base64url round-trips, unpadded and multibyte" {
+  assert b64url_encode("f") == "Zg=="
+  assert b64url_encode("fo") == "Zm8="
+  assert b64url_encode("你好") == "5L2g5aW9"
+  assert b64url_decode("5L2g5aW9") == Ok("你好")
+  assert b64url_encode_nopad("f") == "Zg"
+  let nopad = b64url_encode_nopad("ab")
+  assert nopad == "YWI"
+  assert b64url_decode(nopad) == Ok("ab")
+  match b64url_decode("!!!!") {
+    Ok(_) -> { assert false }
+    Err(m) -> { assert str.contains(m, "base64") }
+  }
+  # valid base64 whose payload is not UTF-8 (a lone 0xFF) refuses too
+  match b64url_decode("_w") {
+    Ok(_) -> { assert false }
+    Err(m) -> { assert str.contains(m, "not UTF-8") }
+  }
+}
+
+test "constant-time equality" {
+  assert eq_const("same", "same")
+  assert not eq_const("same", "diff")
+  assert not eq_const("same", "sam")
+  assert not eq_const("sam", "same")
+  assert eq_const("", "")
+}
+
+# A handler that hands out 0, 1, 2, ... so the bytes a test sees are known.
+fn counting[T](body: fn() -> T !Random) -> T = {
+  with handle Random {
+    var next: Int = 0
+    random_bytes(n) => {
+      let start = next
+      let out = fold(range(0, n), bytes.buf(), (b, i) => bytes.put(b, (start + i) & 255))
+      next = next + n
+      bytes.freeze(out)
+    }
+  }
+  body()
+}
+
+test "uuid is a version 4 RFC 9562 string over fixed bytes" {
+  # bytes 00 01 02 03 04 05 | 06 -> 46 | 07 | 08 -> 88 | 09 .. 0f
+  assert counting(() => uuid()) == "00010203-0405-4607-8809-0a0b0c0d0e0f"
+  assert counting(() => uuid_hex()) == "000102030405460788090a0b0c0d0e0f"
+}
+
+test "uuid forces the version and variant bits whatever the source says" {
+  with handle Random {
+    random_bytes(n) => bytes.freeze(fold(range(0, n), bytes.buf(), (b, _i) => bytes.put(b, 255)))
+  }
+  assert uuid() == "ffffffff-ffff-4fff-bfff-ffffffffffff"
+  with handle Random {
+    random_bytes(n) => bytes.freeze(fold(range(0, n), bytes.buf(), (b, _i) => bytes.put(b, 0)))
+  }
+  assert uuid() == "00000000-0000-4000-8000-000000000000"
+}
+
+test "uuid under the real source is 36 chars and does not repeat" {
+  io.with_random_real(() => {
+    let u = uuid()
+    assert len(u) == 36
+    assert u != uuid()
+    assert len(uuid_hex()) == 32
+  })
+}
+
+test "a token is 43 chars of the base64url alphabet over fixed bytes" {
+  let t = counting(() => random_token())
+  assert len(t) == 43
+  assert t == "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+}
+
+test "random tokens do not repeat under the real source" {
+  io.with_random_real(() => {
+    let t = random_token()
+    assert len(t) == 43
+    assert t != random_token()
+    # base64url alphabet only: nothing that needs escaping in a header or a URL
+    assert not str.contains(t, "+")
+    assert not str.contains(t, "/")
+    assert not str.contains(t, "=")
+  })
+}

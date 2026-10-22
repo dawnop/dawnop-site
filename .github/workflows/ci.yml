@@ -89,7 +89,7 @@ jobs:
         run: >-
           shellcheck -x backend-dawn/deploy/*.sh backend-dawn/build.sh
           backend-dawn/scripts/mutant-shard.sh
-          backend-dawn/scripts/*/run.sh scripts/fetch-dawn.sh
+          backend-dawn/scripts/*/run.sh scripts/fetch-dawn*.sh
           deploy/*.sh
 
   backend:
@@ -135,15 +135,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/coursier
-          key: coursier-${{ hashFiles('backend-dawn/dawn.toml') }}
+          key: coursier-${{ hashFiles('backend-dawn/**/dawn.toml') }}
           restore-keys: coursier-
 
-      # build.sh = fetch the pinned dawn, then `dawn test .` and `dawn build .`.
+      # build.sh tests a temporary app/core mirror, then builds app/jvm directly.
       # The tests are hermetic (no .env, no DB, no libsimple, no live host);
       # `dawn build` fetches java-deps into backend-dawn/lib/ next to the jar,
       # which is what the jar's relative manifest Class-Path points at.
       - name: backend tests + jar
         run: ./backend-dawn/build.sh
+
+      - name: native core dependency closure and negative controls
+        run: python3 backend-dawn/scripts/check_core.py --negative-controls
 
       - name: Java FFI boundaries
         run: python3 backend-dawn/scripts/check-ffi-boundaries.py
@@ -314,7 +317,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/coursier
-          key: coursier-${{ hashFiles('backend-dawn/dawn.toml') }}
+          key: coursier-${{ hashFiles('backend-dawn/**/dawn.toml') }}
           restore-keys: coursier-
 
       # MUTANT_COVERAGE_OUT is what makes the shard accountable: it records the

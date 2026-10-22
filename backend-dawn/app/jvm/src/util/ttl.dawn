@@ -1,0 +1,45 @@
+# A TTL cache cell (M6 knife 12): the monitor page and fm stats memoize
+# third-party API snapshots (tencent / qiniu billing) the way the FastAPI
+# backend's TTLCache does. The cell holds "epoch|payload"; Dawn has no global
+# mutable state, so main creates cells and threads them into the route closures.
+use std/str
+use std/list
+use util/clock.{system_s}
+use java "java.util.concurrent.atomic.AtomicReference"
+use java "java.lang.String"
+
+pub opaque type TtlCell = AtomicReference
+
+pub fn new_cell() -> TtlCell !io = AtomicReference.new("")
+
+fn atomic(cell: TtlCell) -> AtomicReference = cell
+
+## The cached payload when the cell holds one younger than `ttl_s` seconds.
+pub fn cache_get(cell: TtlCell, ttl_s: Int) -> Option[String] !io = {
+  let s = String.valueOf(atomic(cell).get()!)!
+  if s == "" {
+    None
+  } else {
+    let parts = str.split(s, "|")
+    match parse_int(parts[0]) {
+      Some(ts) ->
+        if now_s() - ts < ttl_s {
+          Some(join(list.drop(parts, 1), "|"))
+        } else {
+          None
+        }
+      None -> None
+    }
+  }
+}
+
+## Store a payload with the current time. The payload may contain "|" (only the
+## first separator is structural).
+pub fn cache_put(cell: TtlCell, payload: String) -> Unit !io =
+  atomic(cell).set("${now_s()}|${payload}")
+
+## Wall-clock seconds since the epoch, from the machine. The cache stamps
+## entries with it, and so does everything that has not been migrated to the
+## Clock effect (qiniu URL deadlines, the monitor's boot time) — see
+## util/clock for which sites those are and why they stayed.
+pub fn now_s() -> Int !io = system_s()

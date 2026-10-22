@@ -45,6 +45,8 @@ fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/dawnop-cpu-sampling-mutants.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
+base_project="$work/base/backend-dawn"
+python3 "$BACKEND/scripts/test_project.py" --stage "$base_project"
 
 run_tests() {
   # $1 project dir, $2 log path; returns dawn's status, 124 on wedge
@@ -60,7 +62,7 @@ reds() {
 
 base_log="$work/base.test.log"
 base_status=0
-run_tests "$BACKEND" "$base_log" || base_status=$?
+run_tests "$base_project" "$base_log" || base_status=$?
 if [[ $base_status -eq 124 ]]; then
   printf 'FAIL  base suite exceeded %ss -- a timing assertion is hanging\n' \
     "$STEP_TIMEOUT" >&2
@@ -102,8 +104,7 @@ for index in "${!mutants[@]}"; do
   owners="${owner_sets[$index]}"
   project="$work/$mutant/backend-dawn"
   mkdir -p "$project"
-  cp "$BACKEND/dawn.toml" "$project/dawn.toml"
-  cp -R "$BACKEND/src" "$project/src"
+  python3 "$BACKEND/scripts/test_project.py" --stage "$project"
   # mutate.py refuses a directory without this; see scripts/mutant_workdir.py
   : >"$project/.mutant-workdir"
   python3 "$MUTATOR" "$mutant" "$project"

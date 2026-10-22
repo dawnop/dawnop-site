@@ -1,0 +1,42 @@
+test "a config integer outside its range refuses to start" {
+  # absent is the only silence the default speaks for
+  assert int_in_range(None, 1, 86400, 3600) == Ok(3600)
+  # both ends are inside
+  assert int_in_range(Some("1"), 1, 86400, 3600) == Ok(1)
+  assert int_in_range(Some("86400"), 1, 86400, 3600) == Ok(86400)
+  assert int_in_range(Some(" 7200 "), 1, 86400, 3600) == Ok(7200)
+  assert not range_accepted(int_in_range(Some("0"), 1, 86400, 3600))
+  assert not range_accepted(int_in_range(Some("-1"), 1, 86400, 3600))
+  assert not range_accepted(int_in_range(Some("86401"), 1, 86400, 3600))
+  assert not range_accepted(int_in_range(Some("36000000"), 1, 86400, 3600))
+  # and the refusal is a refusal, not the default wearing one
+  assert int_in_range(Some("0"), 1, 86400, 3600) != Ok(3600)
+  assert int_in_range(Some("86401"), 1, 86400, 3600) != Ok(3600)
+}
+
+test "a config integer that is not a number refuses to start" {
+  assert not range_accepted(int_in_range(Some(""), 1, 86400, 3600))
+  assert not range_accepted(int_in_range(Some("abc"), 1, 86400, 3600))
+  assert not range_accepted(int_in_range(Some("3600.0"), 1, 86400, 3600))
+  assert not range_accepted(int_in_range(Some("36 00"), 1, 86400, 3600))
+  assert not range_accepted(int_in_range(Some("1h"), 1, 86400, 3600))
+  assert int_in_range(Some("abc"), 1, 86400, 3600) != Ok(3600)
+  # a value that is a number is still read
+  assert int_in_range(Some("3600"), 1, 86400, 3600) == Ok(3600)
+}
+
+test "parse env: comments, quotes, spacing, embedded =" {
+  let c = Config {
+    values: parse_env("# comment\nA=1\n B = two words \nURL=\"jdbc:sqlite:/x?y=1\"\nEMPTY=\n"),
+  }
+  assert map.get(c.values, "A") == Some("1")
+  assert map.get(c.values, "B") == Some("two words")
+  assert map.get(c.values, "URL") == Some("jdbc:sqlite:/x?y=1")
+  assert map.get(c.values, "EMPTY") == Some("")
+}
+
+test "get_or falls back" {
+  let c = Config { values: map.from([("X", "set")]) }
+  assert get_or(c, "X", "def") == "set"
+  assert get_or(c, "Y", "def") == "def"
+}

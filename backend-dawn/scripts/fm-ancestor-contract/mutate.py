@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutant_workdir import require_workdir  # noqa: E402
+from test_project import source_path  # noqa: E402
 
 MUTANTS = (
     "immediate-tx-as-deferred",
@@ -138,16 +139,16 @@ def main() -> int:
 
     project = require_workdir(args.project)
 
-    repo = project / "src/repo/repo_fm.dawn"
-    db_sql = project / "src/db/sql.dawn"
-    service = project / "src/svc/files.dawn"
-    fm_api = project / "src/api/api_fm.dawn"
-    webdav = project / "src/api/webdav.dawn"
-    qiniu_rs = project / "src/qiniu/rs.dawn"
-    multipart = project / "src/util/multipart.dawn"
-    paths = project / "src/util/paths.dawn"
-    jsonread = project / "src/util/jsonread.dawn"
-    config = project / "src/config.dawn"
+    repo = source_path(project, "src/repo/repo_fm.dawn")
+    db_sql = source_path(project, "src/db/sql.dawn")
+    service = source_path(project, "src/svc/files.dawn")
+    fm_api = source_path(project, "src/api/api_fm.dawn")
+    webdav = source_path(project, "src/api/webdav.dawn")
+    qiniu_rs = source_path(project, "src/qiniu/rs.dawn")
+    multipart = source_path(project, "src/util/multipart.dawn")
+    paths = source_path(project, "src/util/paths.dawn")
+    jsonread = source_path(project, "src/util/jsonread.dawn")
+    config = source_path(project, "src/config.dawn")
 
     if args.mutant == "immediate-tx-as-deferred":
         replace_once(

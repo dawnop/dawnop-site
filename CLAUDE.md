@@ -55,33 +55,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```
 dawnop-site/
-├── backend-dawn/               # 生产后端（Dawn → JVM 字节码）。src/ 内联 test 块
-│   ├── src/                    # 按层分目录，依赖单向向下：util → db → qiniu → repo → tencent → svc → api → 根
-│   │   ├── main.dawn           # 入口：读 config、装路由/中间件、绑 127.0.0.1:8001
-│   │   ├── config.dawn         # 根只留这两个
-│   │   ├── api/                # HTTP 表面：api_public/articles/settings/tags/pages/viz/fm/drop/paste/monitor + webdav
-│   │   ├── svc/                # 服务层：auth search export monitor files（文件树操作，api_fm 与 webdav 共用）drop（上传链接）paste（公开 Markdown 与额度）
-│   │   ├── repo/               # 数据层：repo_article/page/tag/pagetag/viz/settings/fm/drop/paste/write
-│   │   ├── db/                 # db（每请求一连接）sql（JDBC 薄包装）
-│   │   ├── qiniu/              # 对象存储（丢前缀）：creds 凭据记录 / sign 签名 / rs 管理 REST / stats 用量统计
-│   │   ├── tencent/            # 腾讯云（丢前缀）：sign TC3 签名 / client v3 请求装配
-│   │   ├── util/               # crypto jwt ttl slugify multipart paths ferr errkind
-│   │   │                       #   http（出站 HTTP 客户端；出站是具名效果 Upstream，生产 handler
-│   │   │                       #     = with_upstream，装在 api_fm/webdav/api_monitor/api_drop 四处路由边界）
-│   │   │                       #   jsonx/jsonread（构造 wire 形状 / 读请求体字段）
-│   │   # 文件系统是 std 的具名效果 Fs（dawn 0.72.0 起），生产 handler = io.with_fs_real，
-│   │   # 只装两处：main.dawn 罩 config.load、api_monitor 路由闭包罩 server_block（读 /proc）
-│   │   # json、web、web_jvm 与 sha2 由 dawn.toml 的 [deps.*] 指向
-│   │   # dawn-lang 仓库 tag 归档（url + hash + subdir），实体在 dawn-lang/packages/
-│   ├── dawn.toml               # [java-deps]（sqlite-jdbc，coursier 解析；bcrypt 已是纯 Dawn 的 util/bcrypt）
-│   ├── build.sh                # 按 .dawn-version 取编译器 → dawn test → dawn build（生成 lib/）
-│   ├── scripts/contract_*.py   # 只读/边界/WebDAV/七牛 契约 golden（fixture + run + golden/*.json）
-│   │                           # contract_qiniu_fake.py = 本地假七牛桶，让对象存储路径进 CI
-│   └── deploy/
-│       ├── dawnop-dawn.service     # systemd 单元（生产）
-│       ├── deploy.sh               # 从 CI artifact 部署 + 健康检查 + 自动回滚
-│       └── rollback-to-fastapi.sh  # 应急回滚
-│   # backend-dawn.jar 与 lib/ 是构建产物，不入库（CI 出 artifact，deploy.sh 拉取）
+├── backend-dawn/               # 生产后端（Dawn → JVM 字节码）
+│   ├── core/                   # 可移植包 site_core，19 个模块；无 Java 依赖
+│   │   ├── src/                # config、qiniu/{creds,sign}、tencent/sign 与纯 util
+│   │   └── dawn.toml           # web/json/sha2，保持 v0.97.0 tag/hash
+│   ├── app/jvm/                # JVM 应用，38 个模块；路径依赖 ../../core
+│   │   ├── src/                # main、api/repo/svc/db 与 Clock/TTL/HTTP 接缝
+│   │   ├── dawn.toml           # web_jvm、sqlite-jdbc 与 site_core
+│   │   └── dawn.lock           # 原 JDBC artifact 锁，内容不变
+│   ├── test/{core,jvm}/        # 按原模块路径保存测试与专用夹具
+│   ├── build.sh                # 临时镜像跑测试 → 直接 build app/jvm
+│   ├── scripts/test_project.py # 生成同模块白盒测试镜像，不扩大私有 API
+│   ├── scripts/check_core.py   # native check 与源码依赖闭包门禁，含真实负控
+│   ├── scripts/contract_*.py   # 355 golden + 7 具名 skip，本地假七牛
+│   └── deploy/                # 既有部署与回滚脚本，S1 不改
+│   # backend-dawn.jar 与 lib/ 保持原位置，CI artifact 与部署接口不变
 ├── backend/                    # FastAPI（已 disable，回滚目标 + 契约参照）。逐文件树见 backend/
 │   ├── app/{main,config,database,deps}.py  api/  core/  models/  schemas/
 │   ├── tests/                  # pytest（CI 钉 Python 3.10）
@@ -284,8 +272,10 @@ dawnop-site/
 
 ```bash
 # ---- 后端：Dawn（生产用的这套）----
-./backend-dawn/build.sh                 # 取编译器 → 跑内联测试 → 打 jar（+ lib/）
+./backend-dawn/build.sh                 # 取编译器 → 跑 test/ 白盒测试 → 打 jar（+ lib/）
 java -jar backend-dawn/backend-dawn.jar # 跑起来（lib/ 须在 jar 旁边）
+python3 backend-dawn/scripts/test_project.py # 独立运行全量白盒单测
+python3 backend-dawn/scripts/check_core.py --negative-controls # core native 门禁
 
 # 编译器版本由 .dawn-version 钉住，scripts/fetch-dawn.sh 自动下载并缓存到 .dawn/。
 # **升钉是两个文件一起改**：.dawn-version 换 tag，.dawn-version.sha256 补该 tag 的

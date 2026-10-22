@@ -1,0 +1,155 @@
+use std/str
+use std/char
+use util/http.{new_client, with_upstream}
+use site_core/util/paths.{FALLBACK_MIME}
+use java "java.io.File"
+use java "java.io.FileOutputStream"
+use java "java.io.ByteArrayOutputStream"
+use java "com.sun.net.httpserver.HttpServer"
+use java "java.net.InetSocketAddress"
+
+# ---- tests ----
+
+test "Qiniu upload multipart replaces unsafe persisted MIME wholesale" {
+  let nl = from_code_points(['\r', '\n'])
+  let framed = (mime: String) => mp_head("tok", "k.bin", mime)
+
+  # a shippable type is framed verbatim, parameters and all
+  assert str.contains(framed("text/plain; charset=utf-8"), "Content-Type: text/plain; charset=utf-8${nl}${nl}")
+
+  # a stored CRLF would close the Content-Type line and open an attacker-chosen
+  # one inside a token-signed request. The whole value is dropped, so neither the
+  # injected header nor the prefix that carried it appears anywhere in the body.
+  let injected = framed("text/plain${nl}X-Injected: 1")
+  assert str.contains(injected, "Content-Type: ${FALLBACK_MIME}${nl}${nl}")
+  assert not str.contains(injected, "X-Injected")
+  assert not str.contains(injected, "text/plain")
+  # exactly one Content-Type line survives in the file part's header block
+  assert len(str.split(injected, "${nl}Content-Type: ")) == 2
+
+  # an empty stored type, and the JDK low-byte aliases of CR/LF that an 8-bit
+  # decode turns a line break into, take the same wholesale replacement
+  assert str.contains(framed(""), "Content-Type: ${FALLBACK_MIME}${nl}${nl}")
+  let low_byte = match (char.of(0x010D), char.of(0x010A)) {
+    (Some(cr), Some(lf)) -> from_code_points([cr, lf])
+    _ -> ""
+  }
+  let aliased = framed("text/plain${low_byte}X-Injected: 1")
+  assert str.contains(aliased, "Content-Type: ${FALLBACK_MIME}${nl}${nl}")
+  assert not str.contains(aliased, "X-Injected")
+}
+
+test "the streaming multipart body goes on the wire byte-exactly, across many chunks" {
+  # 20000 bytes: many times over the chunk size ofFile reads with, so the file
+  # part really arrives in pieces — the case a single-chunk test would not catch.
+  let payload = join(map(range(0, 2000), i => "0123456789"), "")
+  let src = File.createTempFile("dawn-test-src-", ".bin")!
+  let out = FileOutputStream.new(src)
+  out.write(bytes.utf8(payload))
+  out.close()
+  let src_path = src.getPath()!
+
+  # up_host is filled in once the stub server has a port; the upload token does
+  # not cover the host, so the expected body can be built before that.
+  let creds = Qiniu {
+    ak: "test-ak",
+    sk: "test-sk",
+    bucket: "test-bucket",
+    domain: "",
+    expires: 3600,
+    rs_host: "",
+    up_host: "",
+  }
+  let key = "many-chunks.bin"
+  let mime = "application/octet-stream"
+  let deadline = 1234567890
+  let expected = multipart(upload_token(creds, key, deadline), key, bytes.utf8(payload), mime)
+
+  # The server accepts only an exact body and exact Content-Length. A successful
+  # upload therefore proves the public upload_file path kept both contracts.
+  let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
+  server.createContext("/", ex => {
+    let buf = ByteArrayOutputStream.new()
+    let _n = ex.getRequestBody()!.transferTo(buf)
+    let got = buf.toByteArray()!
+    let content_length = ex.getRequestHeaders()!.getFirst("Content-Length")!
+    let exact = got == expected && content_length == "${len(expected)}"
+    let status = if exact { 200 } else { 422 }
+    let response = if exact { bytes.utf8("{}") } else { bytes.utf8("mismatch") }
+    ex.sendResponseHeaders(status, len(response))
+    let os = ex.getResponseBody()!
+    os.write(response)
+    os.close()
+  })
+  server.start()
+  let port = server.getAddress()!.getPort()
+  let q = Qiniu { ..creds, up_host: "http://127.0.0.1:${port}" }
+
+  match with_upstream(new_client(), () => upload_file(q, key, src_path, mime, deadline)) {
+    Err(m) -> panic("byte-exact upload failed: ${m}")
+    Ok(_) -> ()
+  }
+  server.stop(0)
+
+  # A transport error passes through post_body unchanged. upload_file must not
+  # add its operation label to a failure that occurs after body construction.
+  match with_upstream(new_client(), () => upload_file(q, key, src_path, mime, deadline)) {
+    Ok(_) -> panic("a stopped server must refuse the upload")
+    Err(m) -> {
+      assert not str.starts_with(m, "upload_file: ")
+      ()
+    }
+  }
+  let _b = File.new(src_path).delete()
+  ()
+}
+
+test "a missing upload file keeps the upload_file error prefix" {
+  let src = File.createTempFile("dawn-test-missing-", ".bin")!
+  let path = src.getPath()!
+  let _deleted = src.delete()
+  let q = Qiniu {
+    ak: "ak",
+    sk: "sk",
+    bucket: "bucket",
+    domain: "",
+    expires: 3600,
+    rs_host: "",
+    up_host: "http://127.0.0.1:1",
+  }
+  match with_upstream(new_client(), () => upload_file(q, "key", path, "application/octet-stream", 1234567890)) {
+    Ok(_) -> panic("a missing file must not produce a request body")
+    Err(m) -> {
+      assert str.starts_with(m, "upload_file: ")
+      ()
+    }
+  }
+}
+
+test "a refused qiniu call is an Err, not Ok(false)" {
+  # The regression this pins: these operations used to end in `Ok(r.status == 200)`,
+  # so a 401 came back as Ok(false). Every caller discarded the Bool, so
+  # /api/fm/create-file recorded a FileObject for an object qiniu never accepted.
+  match ok_status(HttpResp { status: 200, body: "{}" }, "upload") {
+    Ok(_) -> ()
+    Err(m) -> panic("a 200 must be Ok, got ${m}")
+  }
+
+  match ok_status(HttpResp { status: 401, body: "{\"error\":\"bad token\"}" }, "upload") {
+    Ok(_) -> panic("a 401 must not be Ok")
+    Err(m) -> {
+      # the status and qiniu's own message survive into the error
+      assert str.contains(m, "upload")
+      assert str.contains(m, "401")
+      assert str.contains(m, "bad token")
+    }
+  }
+
+  match ok_status(HttpResp { status: 503, body: "down" }, "upload_file") {
+    Ok(_) -> panic("a refused file upload must not be Ok")
+    Err(m) -> {
+      assert m == "upload_file: qiniu 503 down"
+      ()
+    }
+  }
+}

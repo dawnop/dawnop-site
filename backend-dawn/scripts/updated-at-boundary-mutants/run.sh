@@ -159,7 +159,7 @@ anchor_probe="$work/anchors/backend-dawn"
 for mutant in "${mutants[@]}"; do
   rm -rf "$work/anchors"
   mkdir -p "$anchor_probe"
-  cp -R "$BACKEND/src" "$anchor_probe/src"
+  python3 "$BACKEND/scripts/test_project.py" --stage "$anchor_probe"
   # mutate.py refuses a directory without this; see scripts/mutant_workdir.py
   : >"$anchor_probe/.mutant-workdir"
   if ! python3 "$MUTATOR" "$mutant" "$anchor_probe" >"$work/$mutant.anchor.log" 2>&1; then
@@ -178,7 +178,7 @@ fi
 # ---- base ----
 
 base_test_log="$work/base.test.log"
-if ! "$DAWN" test "$BACKEND" >"$base_test_log" 2>&1; then
+if ! python3 "$BACKEND/scripts/test_project.py" --dawn "$DAWN" >"$base_test_log" 2>&1; then
   cat "$base_test_log" >&2
   exit 1
 fi
@@ -251,8 +251,7 @@ for i in "${!mutants[@]}"; do
 
   project="$work/$mutant/backend-dawn"
   mkdir -p "$project"
-  cp "$BACKEND/dawn.toml" "$BACKEND/dawn.lock" "$project/"
-  cp -R "$BACKEND/src" "$project/src"
+  python3 "$BACKEND/scripts/test_project.py" --stage "$project"
   # mutate.py refuses a directory without this; see scripts/mutant_workdir.py
   : >"$project/.mutant-workdir"
   python3 "$MUTATOR" "$mutant" "$project"

@@ -42,7 +42,7 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/dawnop-db-conn-mutants.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
 base_test="$work/base.test.log"
-if ! "$DAWN" test "$BACKEND" >"$base_test" 2>&1; then
+if ! python3 "$BACKEND/scripts/test_project.py" --dawn "$DAWN" >"$base_test" 2>&1; then
   cat "$base_test" >&2
   exit 1
 fi
@@ -81,8 +81,7 @@ for index in "${!mutants[@]}"; do
   shard_record "$mutant"
   project="$work/$mutant/backend-dawn"
   mkdir -p "$project"
-  cp "$BACKEND/dawn.toml" "$project/dawn.toml"
-  cp -R "$BACKEND/src" "$project/src"
+  python3 "$BACKEND/scripts/test_project.py" --stage "$project"
   # mutate.py refuses a directory without this; see scripts/mutant_workdir.py
   : >"$project/.mutant-workdir"
   python3 "$MUTATOR" "$mutant" "$project"

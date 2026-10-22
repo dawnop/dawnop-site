@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutant_workdir import require_workdir  # noqa: E402
+from test_project import source_path  # noqa: E402
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
@@ -43,8 +44,8 @@ def main() -> int:
 
     project = require_workdir(args.project)
 
-    http = project / "src/util/http.dawn"
-    api_fm = project / "src/api/api_fm.dawn"
+    http = source_path(project, "src/util/http.dawn")
+    api_fm = source_path(project, "src/api/api_fm.dawn")
     if args.mutant == "make-response-stream-transparent":
         replace_once(
             http,

@@ -1,0 +1,453 @@
+# Thin JDBC wrapper for SQLite (M6 knife 2b). Pure Dawn over java.sql — the
+# driver jar rides on --cp (lib/sqlite-jdbc-*.jar). Expected SQL failures
+# (bad statement, constraint) come back as Err via catch_fault; connection-level
+# failures (cannot open, driver missing) panic — they are deploy bugs.
+use std/str
+use std/map
+use site_core/util/ferr.{catch_text}
+use java "java.sql.Connection"
+use java "java.sql.DriverManager"
+use java "java.sql.PreparedStatement"
+use java "java.sql.ResultSet"
+use java "java.util.Properties"
+
+## A database connection whose JDBC representation is owned by this module.
+pub opaque type DbConn = Connection
+
+fn raw(c: DbConn) -> Connection = c
+
+## A bind parameter. Dawn lists are homogeneous, so mixed-type binds travel
+## in this ADT: `[PInt(1), PStr("x"), PNull]`.
+pub type SqlV =
+  | PInt(v: Int)
+  | PFloat(v: Float)
+  | PStr(v: String)
+  | PNull
+
+## Expected static type of one selected column, in select-list order.
+pub type Col =
+  | ColInt
+  | ColFloat
+  | ColStr
+
+## One cell of a fetched row. NULL is VNull regardless of the declared column type.
+pub type Cell =
+  | VInt(v: Int)
+  | VFloat(v: Float)
+  | VStr(v: String)
+  | VNull
+derive Show
+
+## A fetched row that knows its column names, so cells can be read by name
+## (`row.col_int("views")`) instead of by a fragile positional index. `names`
+## maps a column label to its 0-based position and is shared across all rows of
+## one result (the map is immutable). Names come straight from the JDBC result
+## metadata — a rename in the SELECT flows through with no hand-kept name list.
+pub type Row = { cells: List[Cell], names: Map[String, Int] }
+
+## Open a database. Panics when the connection cannot be made — a service
+## that cannot reach its database has no useful degraded mode.
+pub fn open(url: String) -> DbConn !io =
+  DriverManager.getConnection(url).expect("db connect failed: ${url}")
+
+## Open with `enable_load_extension` so `select load_extension(...)` works
+## (the FTS `simple` tokenizer rides in via this).
+pub fn open_ext(url: String) -> DbConn !io = {
+  let props = Properties.new()
+  props.setProperty("enable_load_extension", "true")
+  DriverManager.getConnection(url, props).expect("db connect failed: ${url}")
+}
+
+## Run `body` and close the connection on both normal and panic paths.
+pub fn with_connection[T, !e](c: DbConn, body: fn(DbConn) -> T !e !io) -> T !e !io =
+  bracket(c, h => close_conn(h), body)
+
+fn close_conn(c: DbConn) -> Unit !io = raw(c).close()
+
+fn bind(st: PreparedStatement, ps: List[SqlV]) -> Unit !io = {
+  for i in range(0, len(ps)) {
+    match ps[i] {
+      PInt(n) -> st.setLong(i + 1, n)
+      PFloat(x) -> st.setDouble(i + 1, x)
+      PStr(s) -> st.setString(i + 1, s)
+      PNull -> st.setNull(i + 1, 0) # 0 = java.sql.Types.NULL (static fields are not importable)
+    }
+  }
+}
+
+fn cell_of(rs: ResultSet, col: Col, i: Int) -> Cell !io =
+  match col {
+    ColInt -> {
+      let n = rs.getLong(i)
+      if rs.wasNull() { VNull } else { VInt(n) }
+    }
+    ColFloat -> {
+      let x = rs.getDouble(i)
+      if rs.wasNull() { VNull } else { VFloat(x) }
+    }
+    ColStr ->
+      match rs.getString(i) {
+        Some(s) -> VStr(s)
+        None -> VNull
+      }
+  }
+
+fn row_of(rs: ResultSet, cols: List[Col]) -> List[Cell] !io =
+  map(range(0, len(cols)), i => cell_of(rs, cols[i], i + 1))
+
+fn rows_of(rs: ResultSet, cols: List[Col]) -> List[List[Cell]] !io =
+  if rs.next() { [row_of(rs, cols)] ++ rows_of(rs, cols) } else { [] }
+
+## Run a select; `cols` declares the select list's types in order.
+## Rows are fully materialized and the statement is closed before returning.
+pub fn query(c: DbConn, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[List[Cell]], String] !io =
+  catch_text(() => {
+    let st = raw(c).prepareStatement(q)!
+    bind(st, ps)
+    let rs = st.executeQuery()!
+    let rows = rows_of(rs, cols)
+    st.close()
+    rows
+  })
+
+## Column label -> 0-based position, read from the result metadata (available
+## before the first row is fetched). Duplicate labels resolve to the last one.
+fn names_of(rs: ResultSet) -> Map[String, Int] !io = {
+  let md = rs.getMetaData()!
+  let n = md.getColumnCount()
+  map.from(map(range(0, n), i => (md.getColumnLabel(i + 1)!, i)))
+}
+
+## Like `query`, but each row carries its column names for read-by-name access
+## (`row.col_int("id")`, `row.col_opt_str("summary")`, ...). `cols` still declares
+## the select list's types in order; the names come from the driver's metadata.
+pub fn query_rows(c: DbConn, q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[Row], String] !io =
+  catch_text(() => {
+    let st = raw(c).prepareStatement(q)!
+    bind(st, ps)
+    let rs = st.executeQuery()!
+    let names = names_of(rs)
+    let rows = map(rows_of(rs, cols), cells => Row { cells: cells, names: names })
+    st.close()
+    rows
+  })
+
+## Run an insert/update/delete/DDL; Ok carries the affected row count.
+pub fn exec(c: DbConn, q: String, ps: List[SqlV]) -> Result[Int, String] !io =
+  catch_text(() => {
+    let st = raw(c).prepareStatement(q)!
+    bind(st, ps)
+    let n = st.executeUpdate()
+    st.close()
+    n
+  })
+
+## Single-value convenience: first column of the first row as Int.
+## Err when the query fails or returns no rows.
+pub fn scalar_int(c: DbConn, q: String, ps: List[SqlV]) -> Result[Int, String] !io = {
+  let rows = query(c, q, ps, [ColInt])?
+  match first_row(rows) {
+    Some(row) -> Ok(int_at(row, 0))
+    None -> Err("scalar query returned no rows: ${q}")
+  }
+}
+
+## rowid of the last insert on this connection.
+pub fn last_id(c: DbConn) -> Result[Int, String] !io =
+  scalar_int(c, "select last_insert_rowid()", [])
+
+# Whether a failed statement failed because a transaction was already open.
+#
+# SQLite is the only thing that can answer "is this connection in a
+# transaction". sqlite-jdbc keeps a JDBC-level autoCommit flag of its own, and
+# every transaction below is opened with a raw `begin immediate`, which never
+# touches that flag — measured, and pinned by the test below: inside
+# `with_immediate_tx`'s body, `getAutoCommit()` still reads true. A nested
+# `begin` IS an error, so asking SQLite means trying to begin one and reading
+# the refusal.
+#
+# One needle, read from here by everything that needs the answer, so that the
+# entry guards and `require_tx` cannot end up disagreeing about what an open
+# transaction looks like.
+fn nested_tx_refusal(m: String) -> Bool = str.contains(m, "within a transaction")
+
+# Is a transaction open on this connection? Inside one the probe's `begin` fails
+# and changes nothing; outside one it opens a deferred transaction, which takes
+# no lock, and rolls it straight back. A failure that is not the nested refusal
+# (a closed connection, say) is reported as "no transaction" here; `require_tx`
+# is the caller that needs to tell that case apart and does so itself.
+fn in_tx(c: DbConn) -> Bool !io =
+  match exec(c, "begin", []) {
+    Ok(_) -> {
+      let _r = exec(c, "rollback", [])
+      false
+    }
+    Err(m) -> nested_tx_refusal(m)
+  }
+
+## Run `body` in a transaction: commit on Ok, roll back on Err. Refuses, rather
+## than starting, when the connection already has a transaction open.
+##
+## Refusing is deliberate. Until #254 the entry read `if not getAutoCommit()`
+## and rolled back whatever it found, which could not fire (the flag is blind to
+## a raw `begin immediate`, see nested_tx_refusal) and would have been the wrong
+## move if it had: the transaction it would discard belongs to a caller further
+## out, and throwing away someone else's uncommitted writes to make room is a
+## silent corruption where refusing is a loud, bounded failure. Measured before
+## the change: on a connection carrying a raw `begin immediate`, the old entry
+## sailed past its guard into `setAutoCommit(false)` and died there with an
+## uncaught SQLiteException — a panic, not even an Err.
+##
+## NOTE: this helper has no production callers (2026-08-15; every transaction in
+## this backend goes through `with_immediate_tx`). It is kept because it is the
+## generic shape and is exercised by the tests below, but nothing depends on it.
+pub fn with_tx[T, !e](c: DbConn, body: fn() -> Result[T, String] !e !io) -> Result[T, String] !e !io = {
+  let conn = raw(c)
+  if in_tx(c) {
+    Err("with_tx entered with a transaction already open on this connection")
+  } else {
+    conn.setAutoCommit(false)
+    let r = body()
+    match r {
+      Ok(v) -> {
+        conn.commit()
+        conn.setAutoCommit(true)
+        Ok(v)
+      }
+      Err(m) -> {
+        conn.rollback()
+        conn.setAutoCommit(true)
+        Err(m)
+      }
+    }
+  }
+}
+
+## Run `body` after acquiring SQLite's write reservation up front. Repository
+## primitives use this when validation and the following metadata mutation must
+## observe one stable tree shape rather than beginning as a deferred reader.
+##
+## There is no separate entry probe here: `begin immediate` is the probe. It
+## fails exactly when a transaction is already open, so the refusal costs
+## nothing on the path that matters (every write on the site takes it) and, like
+## `with_tx`, it leaves the transaction it found alone.
+pub fn with_immediate_tx[T, !e](c: DbConn, body: fn() -> Result[T, String] !e !io) -> Result[T, String] !e !io =
+  match exec(c, "begin immediate", []) {
+    Err(m) ->
+      if nested_tx_refusal(m) {
+        Err("with_immediate_tx entered with a transaction already open on this connection")
+      } else {
+        Err(m)
+      }
+    Ok(_) -> bracket(c, h => rollback_immediate(h), _h => finish_immediate_tx(c, body))
+  }
+
+## Confirm the caller is inside an open transaction. A read that has to observe
+## the write it describes calls this, so that moving it after the commit becomes
+## a loud failure instead of a plausible-looking wrong answer.
+##
+## `getAutoCommit()` cannot answer the question — see nested_tx_refusal, which
+## is where that judgement lives now and which the two transaction entries read
+## as well. This adds to `in_tx` only the part it needs: telling "SQLite refused
+## because we are inside a transaction" from "the probe itself broke".
+##
+## What it pins is "a transaction is open on this connection", not "the one that
+## wrote the row": nothing SQLite exposes names a transaction. The two readings
+## come apart only for a caller that opens a second transaction for the read, not
+## for a read that leaves the transaction altogether.
+pub fn require_tx(c: DbConn, what: String) -> Result[Unit, String] !io =
+  match exec(c, "begin", []) {
+    Ok(_) -> {
+      let _r = exec(c, "rollback", [])
+      Err("${what} ran outside a transaction")
+    }
+    Err(m) ->
+      if nested_tx_refusal(m) {
+        Ok(())
+      } else {
+        Err("${what} could not confirm its transaction: ${m}")
+      }
+  }
+
+fn rollback_immediate(c: DbConn) -> Unit !io = {
+  let _r = exec(c, "rollback", [])
+  ()
+}
+
+fn finish_immediate_tx[T, !e](c: DbConn, body: fn() -> Result[T, String] !e !io) -> Result[T, String] !e !io =
+  match body() {
+    Ok(v) ->
+      match exec(c, "commit", []) {
+        Ok(_) -> Ok(v)
+        Err(m) -> {
+          let _r = exec(c, "rollback", [])
+          Err(m)
+        }
+      }
+    Err(m) ->
+      match exec(c, "rollback", []) {
+        Ok(_) -> Err(m)
+        Err(r) -> Err("${m}; rollback failed: ${r}")
+      }
+  }
+
+# ---- typed row accessors (mismatch = repo-layer bug, hence panic) ----
+
+pub fn int_at(row: List[Cell], i: Int) -> Int =
+  match row[i] {
+    VInt(n) -> n
+    other -> panic("column ${i} is not an Int: ${to_string(other)}")
+  }
+
+pub fn float_at(row: List[Cell], i: Int) -> Float =
+  match row[i] {
+    VFloat(x) -> x
+    other -> panic("column ${i} is not a Float: ${to_string(other)}")
+  }
+
+pub fn str_at(row: List[Cell], i: Int) -> String =
+  match row[i] {
+    VStr(s) -> s
+    other -> panic("column ${i} is not a String: ${to_string(other)}")
+  }
+
+## SQLite stores booleans as 0/1 integers.
+pub fn bool_at(row: List[Cell], i: Int) -> Bool = int_at(row, i) != 0
+
+## The write direction of `bool_at`: a Bool as the 0/1 integer to bind.
+pub fn bool_int(b: Bool) -> Int = if b { 1 } else { 0 }
+
+pub fn opt_str_at(row: List[Cell], i: Int) -> Option[String] =
+  match row[i] {
+    VStr(s) -> Some(s)
+    VNull -> None
+    other -> panic("column ${i} is not a nullable String: ${to_string(other)}")
+  }
+
+pub fn opt_int_at(row: List[Cell], i: Int) -> Option[Int] =
+  match row[i] {
+    VInt(n) -> Some(n)
+    VNull -> None
+    other -> panic("column ${i} is not a nullable Int: ${to_string(other)}")
+  }
+
+# ---- first-row shortcuts ----
+# `query` hands back every matching row, but most repo lookups select at most one
+# and then read a single column out of it. These fold the `match get(rows, 0)`
+# preamble away; the `_or` variants take the value used when the query matched
+# nothing, which is the shape a repo function almost always wants.
+
+## The first row of a result, if the query matched anything.
+pub fn first_row(rows: List[List[Cell]]) -> Option[List[Cell]] = get(rows, 0)
+
+## First row's first column as Int, or `dflt` when there is no row.
+pub fn first_int_or(rows: List[List[Cell]], dflt: Int) -> Int =
+  match get(rows, 0) {
+    Some(r) -> int_at(r, 0)
+    None -> dflt
+  }
+
+## First row's first column as Bool (SQLite 0/1), or `dflt` when there is no row.
+pub fn first_bool_or(rows: List[List[Cell]], dflt: Bool) -> Bool =
+  match get(rows, 0) {
+    Some(r) -> bool_at(r, 0)
+    None -> dflt
+  }
+
+## First row's first column as String, or `dflt` when there is no row.
+pub fn first_str_or(rows: List[List[Cell]], dflt: String) -> String =
+  match get(rows, 0) {
+    Some(r) -> str_at(r, 0)
+    None -> dflt
+  }
+
+## First row's first column as Int, None when the query matched nothing.
+pub fn first_int(rows: List[List[Cell]]) -> Option[Int] =
+  match get(rows, 0) {
+    Some(r) -> Some(int_at(r, 0))
+    None -> None
+  }
+
+## First row's first column as Bool, None when the query matched nothing.
+pub fn first_bool(rows: List[List[Cell]]) -> Option[Bool] =
+  match get(rows, 0) {
+    Some(r) -> Some(bool_at(r, 0))
+    None -> None
+  }
+
+## First row's first column as String, None when the query matched nothing.
+pub fn first_str(rows: List[List[Cell]]) -> Option[String] =
+  match get(rows, 0) {
+    Some(r) -> Some(str_at(r, 0))
+    None -> None
+  }
+
+## The first row mapped through `f`, None when the query matched nothing —
+## the "load one record into its JSON shape" lookup.
+pub fn first_map[T](rows: List[List[Cell]], f: fn(List[Cell]) -> T !io) -> Option[T] !io =
+  match get(rows, 0) {
+    Some(r) -> Some(f(r))
+    None -> None
+  }
+
+## `first_map` for the read-by-name flavour (`query_rows`).
+pub fn first_named_map[T](rows: List[Row], f: fn(Row) -> T !io) -> Option[T] !io =
+  match get(rows, 0) {
+    Some(r) -> Some(f(r))
+    None -> None
+  }
+
+# ---- read-by-name accessors (Row from query_rows) ----
+# A missing name is a repo-layer bug (the column is not in the select list),
+# hence panic — same stance as a positional type mismatch above.
+
+fn col_idx(r: Row, name: String) -> Int =
+  match map.get(r.names, name) {
+    Some(i) -> i
+    None -> panic("no such column: ${name} (have ${to_string(map.keys(r.names))})")
+  }
+
+pub fn col_int(r: Row, name: String) -> Int = int_at(r.cells, col_idx(r, name))
+pub fn col_float(r: Row, name: String) -> Float = float_at(r.cells, col_idx(r, name))
+pub fn col_str(r: Row, name: String) -> String = str_at(r.cells, col_idx(r, name))
+pub fn col_bool(r: Row, name: String) -> Bool = bool_at(r.cells, col_idx(r, name))
+pub fn col_opt_str(r: Row, name: String) -> Option[String] = opt_str_at(r.cells, col_idx(r, name))
+pub fn col_opt_int(r: Row, name: String) -> Option[Int] = opt_int_at(r.cells, col_idx(r, name))
+
+# ---- edit detection ----
+# A PUT must advance `updated_at` only when it really changed a column; a save
+# that rewrites every field with the value already stored is not an edit (this
+# is what SQLAlchemy does for free on the FastAPI side: at flush time it diffs
+# the columns and emits no UPDATE at all when none of them moved, so `onupdate`
+# never fires). `changes()` cannot answer this — SQLite counts a row as changed
+# whenever an UPDATE matches it, even when old and new values are identical —
+# so the row is read before and after the writes and the two reads compared.
+#
+# Reading afterwards, rather than checking each incoming field against the
+# stored one, is deliberate: several writes are derived rather than literal
+# (slug goes through unique_slug, created_at through datetime(), title is
+# trimmed), and it is the stored result that decides whether anything moved.
+
+## The `cols` of one row as a single comparable string, for `row_sig`. `quote`
+## renders each value as an unambiguous SQL literal — NULL included, embedded
+## quotes doubled — because plain `||` would collapse the whole string to NULL
+## as soon as one column were NULL. The `'|'` separators keep two unquoted
+## integer columns from aliasing (1,23 vs 12,3).
+pub fn sig_expr(cols: List[String]) -> String =
+  match cols {
+    [] -> "''"
+    _ -> fold(cols, "", (acc, c) => join_sig(acc, quoted(c)))
+  }
+
+fn quoted(col: String) -> String = "quote(${col})"
+
+fn join_sig(acc: String, q: String) -> String = if acc == "" { q } else { "${acc} || '|' || ${q}" }
+
+## Snapshot `cols` of the row `id` in `table`. Compare a before- and after-write
+## snapshot to tell an edit from a no-op save. `table`/`cols` are module-owned
+## literals, never request data.
+pub fn row_sig(c: DbConn, table: String, cols: List[String], id: Int) -> Result[String, String] !io = {
+  let expr = sig_expr(cols)
+  let rows = query(c, "select ${expr} from ${table} where id = ?", [PInt(id)], [ColStr])?
+  Ok(first_str_or(rows, ""))
+}

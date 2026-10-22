@@ -3,7 +3,10 @@
 
 import argparse
 import re
+import tempfile
 from pathlib import Path
+
+from test_project import stage_project
 
 HTTP_ASSERTION = "ffi.java-net-http-confined"
 HTTP_OWNER = Path("src/util/http.dawn")
@@ -59,11 +62,17 @@ STREAMING_SYMBOL_IDENTIFIERS = frozenset({"streaming"})
 TOKENIZER_SELF_TEST_ASSERTION = "ffi.dawn-code-tokenizer-self-test"
 
 
+def source_files(root: Path) -> list[Path]:
+    return sorted((root / "src").rglob("*.dawn")) + sorted(
+        (root / "core/src").rglob("*.dawn")
+    )
+
+
 def import_violations(
     root: Path, owner: Path, pattern: re.Pattern[str]
 ) -> list[tuple[Path, int, str]]:
     found: list[tuple[Path, int, str]] = []
-    for source in sorted((root / "src").rglob("*.dawn")):
+    for source in source_files(root):
         relative = source.relative_to(root)
         if relative == owner:
             continue
@@ -278,7 +287,7 @@ def code_token_violations(
     root: Path, owner: Path, identifiers: frozenset[str]
 ) -> list[tuple[Path, int, str, str]]:
     found: list[tuple[Path, int, str, str]] = []
-    for source in sorted((root / "src").rglob("*.dawn")):
+    for source in source_files(root):
         relative = source.relative_to(root)
         if relative == owner:
             continue
@@ -299,7 +308,7 @@ def explicit_input_stream_violations(
     root: Path, owner: Path
 ) -> list[tuple[Path, int, str, str]]:
     found = code_token_violations(root, owner, frozenset({INPUT_STREAM_IDENTIFIER}))
-    for source in sorted((root / "src").rglob("*.dawn")):
+    for source in source_files(root):
         relative = source.relative_to(root)
         if relative == owner:
             continue
@@ -658,6 +667,15 @@ def main() -> int:
     args = parser.parse_args()
 
     root = args.root.resolve()
+    if (root / "app/jvm").is_dir():
+        with tempfile.TemporaryDirectory(prefix="dawnop-ffi-") as temporary:
+            staged = Path(temporary) / "backend-dawn"
+            stage_project(staged, root)
+            return check_root(staged)
+    return check_root(root)
+
+
+def check_root(root: Path) -> int:
     results = [
         report_import_assertion(
             HTTP_ASSERTION,

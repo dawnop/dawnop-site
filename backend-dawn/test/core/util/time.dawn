@@ -1,0 +1,58 @@
+test "output matches the java.time implementation it replaced, row by row" {
+  var i = 0
+  while i < len(OLD_IMPL_ROWS) {
+    assert check_row(OLD_IMPL_ROWS[i])
+    i = i + 1
+  }
+  assert len(OLD_IMPL_ROWS) == 28
+}
+
+test "the Shanghai day rolls over at 16:00 UTC" {
+  # 2025-10-14 15:59:59 UTC is still the 14th in Shanghai, one second later is the 15th
+  assert local_compact_datetime(1760457599) == "20251014235959"
+  assert local_compact_datetime(1760457600) == "20251015000000"
+  assert local_date(1760457599) == "2025-10-14"
+  assert local_date(1760457600) == "2025-10-15"
+  assert parse_local("2025-10-15 00:00:00") == Some(1760457600)
+  assert parse_local("2025-10-14 23:59:59") == Some(1760457599)
+}
+
+test "leap days and year ends" {
+  assert is_leap(2000) && is_leap(2024) && not is_leap(1900) && not is_leap(2100)
+  assert days_in_month(2024, 2) == 29 && days_in_month(2023, 2) == 28
+  assert http_date(951782400) == "Tue, 29 Feb 2000 00:00:00 GMT"
+  assert http_date(1709164800) == "Thu, 29 Feb 2024 00:00:00 GMT"
+  assert http_date(1735689599) == "Tue, 31 Dec 2024 23:59:59 GMT"
+  assert http_date(1735689600) == "Wed, 01 Jan 2025 00:00:00 GMT"
+  assert parse_local("2024-02-29 08:00:00") == Some(1709164800)
+  assert parse_local("2023-02-29 08:00:00") == None
+  assert parse_local("2100-02-29 08:00:00") == None
+}
+
+test "civil conversion round-trips over a wide span" {
+  var d = -800000
+  var ok = true
+  while d < 800000 {
+    let (y, m, dd) = civil_from_days(d)
+    if days_from_civil(y, m, dd) != d || dd < 1 || dd > days_in_month(y, m) {
+      ok = false
+    }
+    d = d + 997
+  }
+  assert ok
+  assert civil_from_days(0) == (1970, 1, 1)
+  assert civil_from_days(-1) == (1969, 12, 31)
+}
+
+test "malformed wall times are rejected, not guessed" {
+  assert parse_local("") == None
+  assert parse_local("2024-02-29T08:00:00") == None
+  assert parse_local("2024-13-01 00:00:00") == None
+  assert parse_local("2024-00-10 00:00:00") == None
+  assert parse_local("2024-01-10 24:00:00") == None
+  assert parse_local("2024-01-10 0a:00:00") == None
+  assert parse_local("2024-01-10 -1:00:00") == None
+  assert parse_local("2024-01-10 +1:00:00") == None
+  # the SQLite DATETIME may carry a fractional part; callers cut it to 19 chars
+  assert parse_local("2024-01-10 12:00:00.123") == None
+}

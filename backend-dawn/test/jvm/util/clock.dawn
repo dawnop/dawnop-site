@@ -1,0 +1,14 @@
+test "the installed handler is what the readers see" {
+  with handle Clock { now_ms() => 1551113065789 }
+  assert now_ms() == 1551113065789
+  # seconds truncate rather than round: 789ms does not carry
+  assert now_s() == 1551113065
+}
+
+test "a frozen clock does not move and the system clock does not leak in" {
+  with handle Clock { now_ms() => 0 }
+  assert now_s() == 0
+  assert now_ms() == 0
+  # the machine clock is well past the epoch, so this is a real distinction
+  assert system_s() > 1700000000
+}

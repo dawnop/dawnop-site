@@ -1,0 +1,117 @@
+test "parse a two-field multipart body (a text field and a file)" {
+  let nl = from_code_points(['\r', '\n'])
+  let b = "----DawnTest"
+  let body =
+    "--${b}${nl}" ++
+    "Content-Disposition: form-data; name=\"path\"${nl}${nl}qiniu://pics${nl}" ++
+    "--${b}${nl}" ++
+    "Content-Disposition: form-data; name=\"file\"; filename=\"a.txt\"${nl}Content-Type: text/plain${nl}${nl}hello${nl}" ++
+    "--${b}--${nl}"
+  let parts = parse_multipart(bytes.utf8(body), b)
+  assert len(parts) == 2
+  match part_named(parts, "path") {
+    Some(p) -> {
+      assert bytes.decode_utf8_lossy(p.content) == "qiniu://pics"
+      assert p.filename == ""
+    }
+    None -> { assert false }
+  }
+  match part_named(parts, "file") {
+    Some(p) -> {
+      assert p.filename == "a.txt"
+      assert bytes.decode_utf8_lossy(p.content) == "hello"
+    }
+    None -> { assert false }
+  }
+}
+
+# One file part with the given header lines, in the shape a real client sends:
+# several headers, a blank line, then the content.
+fn one_file_part(header_lines: List[String]) -> Option[Part] = {
+  let nl = crlf()
+  let b = "BB"
+  let block = join(header_lines, nl)
+  let body = "--${b}${nl}" ++ block ++ "${nl}${nl}" ++ "payload${nl}" ++ "--${b}--${nl}"
+  part_named(parse_multipart(bytes.utf8(body), b), "file")
+}
+
+fn part_ctype_of(header_lines: List[String]) -> String =
+  match one_file_part(header_lines) {
+    Some(p) -> p.content_type
+    None -> "<no part>"
+  }
+
+test "a declared part Content-Type survives every legal header spelling" {
+  # #241: these three parts declare the same header. The parser used to find only
+  # the first, so the other two reached the upload endpoint looking like parts
+  # with no declared type at all and were stored as a guess from the filename.
+  let cd = "Content-Disposition: form-data; name=\"file\"; filename=\"explicit.html\""
+  assert part_ctype_of([cd, "Content-Type: text/plain"]) == "text/plain"
+  assert part_ctype_of([cd, "content-type: text/plain"]) == "text/plain"
+  assert part_ctype_of([cd, "CONTENT-TYPE: text/plain"]) == "text/plain"
+  assert part_ctype_of([cd, "Content-Type:text/plain"]) == "text/plain"
+  assert part_ctype_of([cd, "Content-Type:   text/plain  "]) == "text/plain"
+
+  # parameters ride along with the type, and are not confused for the next header
+  assert part_ctype_of([cd, "Content-Type: text/plain; charset=utf-8"]) ==
+    "text/plain; charset=utf-8"
+  assert part_ctype_of(["Content-Type: application/x-dawn-contract", cd]) ==
+    "application/x-dawn-contract"
+
+  # the shape the harness sends: several headers, one of them non-ASCII, with the
+  # declared type neither first nor last
+  assert part_ctype_of([
+    "X-Note: 中文",
+    cd,
+    "content-type: application/x-dawn-contract",
+    "Content-Transfer-Encoding: binary",
+  ]) == "application/x-dawn-contract"
+
+  # a part that really declares nothing still reports nothing — the endpoint's
+  # filename guess must stay reachable
+  assert part_ctype_of([cd]) == ""
+  assert part_ctype_of([cd, "X-Not-A-Content-Type: text/plain"]) == ""
+}
+
+test "Content-Disposition is read case-insensitively too" {
+  match one_file_part([
+    "content-disposition: form-data; name=\"file\"; filename=\"a.txt\"",
+    "Content-Type: text/plain",
+  ]) {
+    Some(p) -> {
+      assert p.filename == "a.txt"
+      assert p.content_type == "text/plain"
+    }
+    None -> { assert false }
+  }
+}
+
+test "a part whose header block is not UTF-8 is refused, not decoded lossily" {
+  let nl = crlf()
+  let b = "BB"
+  let head = "--${b}${nl}Content-Disposition: form-data; name=\"f"
+  let tail = "\"${nl}${nl}payload${nl}--${b}--${nl}"
+  # a lone 0xFF spliced into the header block (inside the field name)
+  let buf = bytes.put_bytes(bytes.put(bytes.put_bytes(bytes.buf(), bytes.utf8(head)), 0xFF), bytes.utf8(tail))
+  assert len(parse_multipart(bytes.freeze(buf), b)) == 0
+}
+
+test "boundary_of parses and unquotes" {
+  assert boundary_of("multipart/form-data; boundary=----X") == Some("----X")
+  assert boundary_of("multipart/form-data; boundary=\"a b\"") == Some("a b")
+  assert boundary_of("application/json") == None
+}
+
+test "file content with embedded CRLF is preserved, only the trailing one dropped" {
+  let nl = from_code_points(['\r', '\n'])
+  let b = "BB"
+  let payload = "line1${nl}line2" # an internal CRLF that must survive
+  let body =
+    "--${b}${nl}" ++
+    "Content-Disposition: form-data; name=\"file\"; filename=\"f\"${nl}${nl}${payload}${nl}" ++
+    "--${b}--${nl}"
+  match part_named(parse_multipart(bytes.utf8(body), b), "file") {
+    Some(p) -> { assert bytes.decode_utf8_lossy(p.content) == payload }
+    None -> { assert false }
+  }
+}

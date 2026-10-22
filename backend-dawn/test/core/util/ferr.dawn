@@ -1,0 +1,10 @@
+test "fe_text matches Throwable.toString() rendering" {
+  let with_msg = ForeignError {
+    kind: "java.lang.NumberFormatException",
+    message: "For input string: \"x\"",
+    cause: None
+  }
+  assert fe_text(with_msg) == "java.lang.NumberFormatException: For input string: \"x\""
+  let no_msg = ForeignError { kind: "java.io.EOFException", message: "", cause: None }
+  assert fe_text(no_msg) == "java.io.EOFException"
+}

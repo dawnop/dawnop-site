@@ -1,0 +1,20 @@
+schema = 1
+name = "site_core"
+
+[deps.web]
+url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.97.0.zip"
+version = "7.2.0"
+hash = "d1:db5372fa1cf508be6efcf9185fb58c9d669b93c59bce7bd5eef915871b826c37"
+subdir = "packages/web"
+
+[deps.json]
+url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.97.0.zip"
+version = "2.0.2"
+hash = "d1:db5372fa1cf508be6efcf9185fb58c9d669b93c59bce7bd5eef915871b826c37"
+subdir = "packages/json"
+
+[deps.sha2]
+url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.97.0.zip"
+version = "2.0.1"
+hash = "d1:db5372fa1cf508be6efcf9185fb58c9d669b93c59bce7bd5eef915871b826c37"
+subdir = "packages/sha2"

@@ -1,0 +1,52 @@
+use db/sql.{scalar_int}
+test "PUT page: re-saving every field with the stored value is not an edit" {
+  let c = page_test_db("content")
+  put_page(c, SAME_PAGE)
+  assert page_updated(c) == STALE
+  # the slug went through unique_slug and came back unchanged, so it did not
+  # count as an edit — the regenerated value is what decides, not its presence
+  assert scalar_int(c, "select count(*) from pages where slug = 'notes'", []) == Ok(1)
+}
+
+test "PUT page: an empty body is not an edit" {
+  let c = page_test_db("content")
+  put_page(c, "{}")
+  assert page_updated(c) == STALE
+}
+
+test "PUT page: changing one field advances updated_at" {
+  let c = page_test_db("content")
+  put_page(c, "{\"title\":\"Notebook\"}")
+  assert page_updated(c) != STALE
+  assert scalar_int(c, "select count(*) from pages where title = 'Notebook'", []) == Ok(1)
+}
+
+test "PUT page: each editable field on its own counts as an edit" {
+  for body in [
+    "{\"title\":\"T2\"}",
+    "{\"slug\":\"other\"}",
+    "{\"type\":\"article_list\"}",
+    "{\"description\":\"D2\"}",
+    "{\"content\":\"C2\"}",
+    "{\"nav_visible\":false}",
+    "{\"nav_order\":9}",
+    "{\"auto_title\":true}",
+    "{\"created_at\":\"2021-02-03T04:05:06Z\"}",
+  ] {
+    let c = page_test_db("content")
+    put_page(c, body)
+    assert page_updated(c) != STALE
+  }
+}
+
+test "PUT page: fields a builtin page ignores cannot advance its updated_at" {
+  let c = page_test_db("builtin")
+  # slug/type/description/content/auto_title/created_at are stripped for builtin
+  # pages, so a PUT carrying only those changes nothing at all
+  put_page(c, "{\"slug\":\"moved\",\"type\":\"content\",\"description\":\"D2\",\"content\":\"C2\",\"auto_title\":true}")
+  assert page_updated(c) == STALE
+  assert scalar_int(c, "select count(*) from pages where slug = 'notes' and type = 'builtin'", []) == Ok(1)
+  # the nav fields it does accept still count
+  put_page(c, "{\"nav_order\":7}")
+  assert page_updated(c) != STALE
+}

@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutant_workdir import require_workdir  # noqa: E402
+from test_project import source_path  # noqa: E402
 
 MUTANTS = (
     "drop-dot-check",
@@ -66,7 +67,7 @@ def main() -> int:
 
     project = require_workdir(args.project)
 
-    source = project / "src/api/webdav.dawn"
+    source = source_path(project, "src/api/webdav.dawn")
     if args.mutant == "drop-dot-check":
         replace_once(source, '  s == "." || s == ".."\n', '  s == ".."\n')
     elif args.mutant == "drop-dotdot-check":

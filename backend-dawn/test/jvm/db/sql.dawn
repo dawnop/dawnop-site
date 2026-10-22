@@ -1,0 +1,297 @@
+# ---- tests (need --cp lib/sqlite-jdbc-*.jar) ----
+
+test "with_connection closes on both paths" {
+  let ok_conn = open("jdbc:sqlite::memory:")
+  assert with_connection(ok_conn, _h => 7) == 7
+  assert raw(ok_conn).isClosed()
+
+  let bad_conn = open("jdbc:sqlite::memory:")
+  let r: Result[Int, ForeignError] = catch_panic(() => with_connection(bad_conn, _h => panic("boom")))
+  match r {
+    Ok(_) -> { assert false }
+    Err(e) -> { assert str.contains(e.message, "boom") }
+  }
+  assert raw(bad_conn).isClosed()
+}
+
+test "exec and query round-trip, nulls map to VNull" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table t (a integer, b text, x real)", []) == Ok(0)
+  assert exec(c, "insert into t values (?, ?, ?)", [PInt(42), PStr("hi"), PFloat(1.5)]) == Ok(1)
+  assert exec(c, "insert into t values (?, null, null)", [PInt(7)]) == Ok(1)
+  match query(c, "select a, b, x from t order by a", [], [ColInt, ColStr, ColFloat]) {
+    Ok(rows) -> {
+      assert len(rows) == 2
+      assert int_at(rows[0], 0) == 7
+      assert opt_str_at(rows[0], 1) == None
+      assert int_at(rows[1], 0) == 42
+      assert str_at(rows[1], 1) == "hi"
+      assert float_at(rows[1], 2) == 1.5
+    }
+    Err(m) -> panic(m)
+  }
+}
+
+test "query_rows reads cells by column name (order-independent)" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table t (id integer, title text, summary text, views integer)", []) == Ok(0)
+  assert exec(c, "insert into t values (?, ?, ?, ?)", [PInt(1), PStr("hi"), PNull, PInt(9)]) == Ok(1)
+  assert exec(c, "insert into t values (?, ?, ?, ?)", [PInt(2), PStr("yo"), PStr("s"), PInt(0)]) == Ok(1)
+  # select list order deliberately differs from table order — names still resolve
+  match query_rows(c, "select views, id, summary, title from t order by id",
+    [], [ColInt, ColInt, ColStr, ColStr]) {
+    Ok(rows) -> {
+      assert len(rows) == 2
+      assert rows[0].col_int("id") == 1
+      assert rows[0].col_str("title") == "hi"
+      assert rows[0].col_opt_str("summary") == None
+      assert rows[0].col_int("views") == 9
+      assert rows[1].col_opt_str("summary") == Some("s")
+      # an aliased expression is addressable by its alias
+      match query_rows(c, "select count(*) as n from t", [], [ColInt]) {
+        Ok(rs2) -> { assert rs2[0].col_int("n") == 2 }
+        Err(m) -> panic(m)
+      }
+      # a table-qualified column (`x.id`) is addressable by its bare name — this is
+      # what repo_article's `select t.id, t.name, ...` tag query relies on
+      match query_rows(c, "select x.id, x.title from t x where x.id = 1", [], [ColInt, ColStr]) {
+        Ok(rs3) -> {
+          assert rs3[0].col_int("id") == 1
+          assert rs3[0].col_str("title") == "hi"
+        }
+        Err(m) -> panic(m)
+      }
+    }
+    Err(m) -> panic(m)
+  }
+}
+
+test "an SQL error is an Err, not a crash" {
+  let c = open("jdbc:sqlite::memory:")
+  match query(c, "select * from missing_table", [], []) {
+    Ok(_) -> { assert false }
+    Err(m) -> { assert str.contains(m, "SQL") }
+  }
+}
+
+test "scalar_int and last_id" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table t (id integer primary key, v text)", []) == Ok(0)
+  assert exec(c, "insert into t (v) values ('a')", []) == Ok(1)
+  assert last_id(c) == Ok(1)
+  assert scalar_int(c, "select count(*) from t", []) == Ok(1)
+}
+
+test "with_tx commits on Ok and rolls back on Err" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table t (v integer)", []) == Ok(0)
+  let ok: Result[Bool, String] = with_tx(c, () => {
+    let _n = exec(c, "insert into t values (1)", [])?
+    Ok(true)
+  })
+  assert ok == Ok(true)
+  let failed: Result[Bool, String] = with_tx(c, () => {
+    let _n = exec(c, "insert into t values (2)", [])?
+    Err("abort")
+  })
+  assert failed == Err("abort")
+  assert scalar_int(c, "select count(*) from t", []) == Ok(1)
+}
+
+test "with_immediate_tx reserves the writer before its body" {
+  let c1 = open("jdbc:sqlite:file:immediate_tx_contract?mode=memory&cache=shared")
+  let c2 = open("jdbc:sqlite:file:immediate_tx_contract?mode=memory&cache=shared")
+  assert exec(c1, "create table immediate_items (v integer)", []) == Ok(0)
+  let held: Result[Unit, String] = with_immediate_tx(c1, () =>
+      match exec(c2, "insert into immediate_items values (1)", []) {
+        Ok(_) -> Err("second writer entered an immediate transaction")
+        Err(_) -> Ok(())
+      })
+  match held {
+    Ok(_) -> { assert true }
+    Err(_) -> { assert false }
+  }
+  assert scalar_int(c1, "select count(*) from immediate_items", []) == Ok(0)
+}
+
+test "with_immediate_tx rolls back when its body panics" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table panic_items (v integer)", []) == Ok(0)
+  let failed: Result[Result[Unit, String], ForeignError] = catch_panic(() =>
+      with_immediate_tx(c, () => {
+        let _i = exec(c, "insert into panic_items values (1)", [])?
+        panic("transaction body panic")
+      }))
+  match failed {
+    Ok(_) -> { assert false }
+    Err(e) -> { assert str.contains(e.message, "transaction body panic") }
+  }
+  assert scalar_int(c, "select count(*) from panic_items", []) == Ok(0)
+  # and nothing is left open on the connection: the bracket's release runs on the
+  # panic path too. Asked of SQLite, because getAutoCommit cannot see this
+  # transaction (see nested_tx_refusal); this is the assertion the removed entry
+  # guard was supposedly the backstop for.
+  assert not in_tx(c)
+  assert with_immediate_tx(c, () => exec(c, "insert into panic_items values (2)", [])) == Ok(1)
+  assert scalar_int(c, "select sum(v) from panic_items", []) == Ok(2)
+}
+
+test "getAutoCommit is blind to a raw begin immediate; SQLite is not" {
+  # The measurement the two transaction entries used to be built on the wrong
+  # side of. Their guard was `if not conn.getAutoCommit()`, and the transaction
+  # it was there to catch is one this backend opens with a raw `begin immediate`
+  # — which sqlite-jdbc's flag never sees. So the guard could not fire on the
+  # only leak it named.
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table blind_probe (v integer)", []) == Ok(0)
+  assert not in_tx(c)
+  assert raw(c).getAutoCommit()
+
+  assert exec(c, "begin immediate", []) == Ok(0)
+  assert exec(c, "insert into blind_probe values (1)", []) == Ok(1)
+  # a transaction is open, and holds an uncommitted row
+  assert in_tx(c)
+  # ... and the JDBC flag says the connection is autocommitting
+  assert raw(c).getAutoCommit()
+
+  let _r = exec(c, "rollback", [])
+  assert not in_tx(c)
+}
+
+test "both transaction entries refuse an already-open transaction by name" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table refuse_probe (v integer)", []) == Ok(0)
+  assert exec(c, "begin immediate", []) == Ok(0)
+  assert exec(c, "insert into refuse_probe values (1)", []) == Ok(1)
+
+  match with_immediate_tx(c, () => exec(c, "insert into refuse_probe values (2)", [])) {
+    Ok(_) -> panic("a second immediate transaction must not start")
+    Err(m) -> { assert str.contains(m, "already open") }
+  }
+
+  # with_tx used to reach setAutoCommit(false) with the transaction still open
+  # and die there with an uncaught SQLiteException. An Err was not on the table;
+  # a panic out of a repo primitive is a 500 with no message anyone can act on.
+  match with_tx(c, () => exec(c, "insert into refuse_probe values (3)", [])) {
+    Ok(_) -> panic("with_tx must not start on top of an open transaction")
+    Err(m) -> { assert str.contains(m, "already open") }
+  }
+
+  let _r = exec(c, "rollback", [])
+}
+
+test "a refused entry leaves the transaction it found alone" {
+  # Refusing, not recovering, is the whole change. The transaction on this
+  # connection belongs to a caller further out; rolling it back on entry — what
+  # the old guard's doc comment promised it did — would silently discard writes
+  # this call never made, turning a loud bounded failure into a quiet wrong
+  # answer. Measured here: after both refusals the transaction is still open and
+  # still holds its row.
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table keep_probe (v integer)", []) == Ok(0)
+  assert exec(c, "begin immediate", []) == Ok(0)
+  assert exec(c, "insert into keep_probe values (1)", []) == Ok(1)
+
+  let _a: Result[Int, String] = with_immediate_tx(c, () => exec(c, "insert into keep_probe values (2)", []))
+  assert in_tx(c)
+  assert scalar_int(c, "select count(*) from keep_probe", []) == Ok(1)
+
+  let _b: Result[Int, String] = with_tx(c, () => exec(c, "insert into keep_probe values (3)", []))
+  assert in_tx(c)
+  assert scalar_int(c, "select count(*) from keep_probe", []) == Ok(1)
+
+  # and it is still the caller's to commit
+  match exec(c, "commit", []) {
+    Ok(_) -> ()
+    Err(m) -> panic("the caller could not commit its own transaction: ${m}")
+  }
+  assert not in_tx(c)
+  assert scalar_int(c, "select count(*) from keep_probe", []) == Ok(1)
+}
+
+test "with_immediate_tx closes its transaction on every exit path" {
+  # Why the removed entry guard had nothing to recover: no exit leaves a
+  # transaction for the next caller to find. Asked of SQLite rather than argued
+  # from the source. The panic path is the neighbouring test's, not this one's —
+  # it owns the mutant that deletes the bracket, and two owners for one mutant
+  # is a red set the fm-ancestor harness (rightly) refuses.
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table exit_probe (v integer)", []) == Ok(0)
+
+  let _ok: Result[Int, String] = with_immediate_tx(c, () => exec(c, "insert into exit_probe values (1)", []))
+  assert not in_tx(c)
+
+  let _err: Result[Int, String] = with_immediate_tx(c, () => Err("abort"))
+  assert not in_tx(c)
+
+  # a nested call fails, and the OUTER transaction is what rolls back — the
+  # inner one never started, so there is nothing of its own to undo
+  let nested: Result[Int, String] = with_immediate_tx(c, () => {
+    let _i = exec(c, "insert into exit_probe values (9)", [])?
+    with_immediate_tx(c, () => exec(c, "insert into exit_probe values (10)", []))
+  })
+  match nested {
+    Ok(_) -> panic("a nested immediate transaction must not start")
+    Err(m) -> { assert str.contains(m, "already open") }
+  }
+  assert not in_tx(c)
+  assert scalar_int(c, "select count(*) from exit_probe", []) == Ok(1)
+}
+
+test "require_tx tells a transaction from no transaction" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table tx_probe (v integer)", []) == Ok(0)
+  match require_tx(c, "probe") {
+    Ok(_) -> { assert false }
+    Err(m) -> { assert str.contains(m, "ran outside a transaction") }
+  }
+  # the refusal leaves nothing open: the next statement still autocommits
+  assert exec(c, "insert into tx_probe values (1)", []) == Ok(1)
+  assert scalar_int(c, "select sum(v) from tx_probe", []) == Ok(1)
+  let inside: Result[Bool, String] = with_immediate_tx(c, () => {
+    let _t = require_tx(c, "probe")?
+    let _i = exec(c, "insert into tx_probe values (2)", [])?
+    Ok(true)
+  })
+  assert inside == Ok(true)
+  # and the probe did not disturb the transaction it confirmed
+  assert scalar_int(c, "select sum(v) from tx_probe", []) == Ok(3)
+}
+
+test "unique constraint violation is an expected Err" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table t (slug text unique)", []) == Ok(0)
+  assert exec(c, "insert into t values ('a')", []) == Ok(1)
+  match exec(c, "insert into t values ('a')", []) {
+    Ok(_) -> { assert false }
+    Err(m) -> { assert str.contains(m, "UNIQUE") }
+  }
+}
+
+test "sig_expr quotes every column and separates them" {
+  assert sig_expr([]) == "''"
+  assert sig_expr(["a"]) == "quote(a)"
+  assert sig_expr(["a", "b", "c"]) == "quote(a) || '|' || quote(b) || '|' || quote(c)"
+}
+
+test "row_sig reads through NULLs and never aliases two different rows" {
+  let c = open("jdbc:sqlite::memory:")
+  assert exec(c, "create table t (id integer primary key, a integer, b integer, s text)", []) == Ok(0)
+  assert exec(c, "insert into t values (1, 1, 23, null)", []) == Ok(1)
+  assert exec(c, "insert into t values (2, 12, 3, null)", []) == Ok(1)
+  # a NULL column does not swallow the signature (plain `||` would have made the
+  # whole string NULL, i.e. every row with a NULL would look identical)
+  assert row_sig(c, "t", ["a", "b", "s"], 1) == Ok("1|23|NULL")
+  # and the separator keeps the two unquoted integers from running together into
+  # the same "123" as row 1
+  assert row_sig(c, "t", ["a", "b", "s"], 2) == Ok("12|3|NULL")
+  # a quote or a separator inside the text stays inside the quoted literal
+  assert exec(c, "insert into t values (3, 0, 0, '|''x')", []) == Ok(1)
+  assert row_sig(c, "t", ["s"], 3) == Ok("'|''x'")
+  # text '1' and integer 1 are not the same value, and do not sign the same
+  assert exec(c, "insert into t values (4, 0, 0, '1')", []) == Ok(1)
+  assert row_sig(c, "t", ["s"], 4) == Ok("'1'")
+  assert row_sig(c, "t", ["a"], 1) == Ok("1")
+  # a row that is not there has no signature
+  assert row_sig(c, "t", ["a"], 99) == Ok("")
+}

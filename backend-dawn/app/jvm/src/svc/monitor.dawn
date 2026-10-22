@@ -1,0 +1,662 @@
+# Monitor page backend (M6 knife 12), mirroring backend/app/api/monitor.py:
+# four independent, fault-tolerant blocks — local server (/proc, psutil
+# semantics), Tencent Lighthouse (TC3), qiniu (kodo series + CDN + respack),
+# Vaultwarden probe. A failing item lands in its own *_error field, never 500s.
+use std/str
+use std/io
+use std/io.{Fs}
+use std/list
+use java "java.lang.System"
+use java "java.lang.Thread"
+use java "java.io.File"
+use svc/auth.{Auth}
+use tencent/client
+use util/ttl.{TtlCell, cache_get, cache_put, now_s}
+use util/clock.{Clock, system_ms}
+use site_core/util/time.{utc_datetime}
+use qiniu/stats.{field, int_of, last_nonzero, PendingQ, PendingRespack, kodo_series_start, kodo_series_finish, flow_series_start, flow_series_finish, cdn_domains_start, cdn_domains_finish, cdn_tune_start, cdn_tune_finish, respack_start, respack_finish, respack_summary}
+use tencent/client.{PendingTc}
+use util/http.{Upstream, fetch, fetch_start, await_resp}
+use json/value.{Json, JNull, JNum, JInt, JStr, JArr, JObj}
+use json/render.{render}
+use json/parser.{parse}
+use site_core/util/jsonread.{parse_text}
+use site_core/util/jsonx.{obj, jint, jstr, jbool}
+
+# ---- server: the local machine, read from /proc (production is Linux) ----
+#
+# Everything but the disk comes from /proc, which is what the host sees and what
+# the dashboard means by "server". There is no JVM fallback any more: on a host
+# without /proc (a macOS dev machine) the block answers `source: "none"` with
+# zeroed numbers and a null load, and the page says the local metrics are
+# unavailable. The old fallback reported JVM heap and JMX load as if they were
+# the machine's, which is a different thing wearing the same labels. Disk is the
+# one reading with no /proc file behind it (statvfs), so it still asks the OS
+# through java.io.File on both paths.
+
+pub fn server_block(cpu_cell: TtlCell) -> Json !Fs !io = {
+  let root = File.new("/")
+  let dtotal = root.getTotalSpace()
+  let dfree = root.getUsableSpace()
+  let disk = obj([
+    ("total", jint(dtotal)),
+    ("used", jint(dtotal - dfree)),
+    ("percent", JNum(pct(dtotal - dfree, dtotal))),
+  ])
+  match io.read_file("/proc/stat") {
+    Ok(stat) -> obj([
+      ("source", jstr("proc")),
+      ("cpu_percent", JNum(cpu_percent(cpu_cell, CPU_SNAPSHOT_MAX_AGE_S))),
+      ("cpu_count", jint(cpu_count_of(stat))),
+      ("load", loadavg()),
+      ("mem", meminfo()),
+      ("disk", disk),
+      ("net", net_totals()),
+      ("boot_time", jint(now_s() - uptime_s())),
+      ("uptime", jint(uptime_s())),
+    ])
+    Err(_m) -> no_proc_server(disk)
+  }
+}
+
+## The block for a host with no /proc: the same keys, zero numbers, null load.
+## `source` is what the page keys off to say the local metrics are unavailable.
+fn no_proc_server(disk: Json) -> Json = obj([
+  ("source", jstr("none")),
+  ("cpu_percent", JNum(0.0)),
+  ("cpu_count", jint(0)),
+  ("load", JArr([JNull, JNull, JNull])),
+  ("mem", obj([("total", jint(0)), ("used", jint(0)), ("percent", JNum(0.0))])),
+  ("disk", disk),
+  ("net", obj([("sent", jint(0)), ("recv", jint(0))])),
+  ("boot_time", jint(0)),
+  ("uptime", jint(0)),
+])
+
+## Logical CPUs in /proc/stat text: the per-CPU `cpuN` lines, not the aggregate
+## `cpu` line. Runtime.availableProcessors() also honoured cgroup CPU limits; the
+## production host is a plain VM, where the two agree, and the dashboard wants the
+## host's cores for the load-per-core percentages anyway.
+fn cpu_count_of(stat: String) -> Int =
+  len(filter(str.split(stat, "\n"), l => is_cpu_n_line(l)))
+
+fn is_cpu_n_line(l: String) -> Bool =
+  str.starts_with(l, "cpu") && len(l) > 3 && str.slice(l, 3, 4) >= "0" && str.slice(l, 3, 4) <= "9"
+
+# How long a window a call opens when it has nothing to difference against, and
+# how old a snapshot may be before it stops describing "now". The window is
+# psutil's cpu_percent(interval=0.3), which this endpoint used to pay on every
+# call; the age bound is what keeps a delta a current reading rather than the
+# average since whenever the dashboard was last opened.
+const CPU_WINDOW_MS: Int = 300
+const CPU_SNAPSHOT_MAX_AGE_S: Int = 300
+
+## Host CPU usage as a percentage: one /proc/stat sample, differenced against
+## the snapshot the previous call left in `cell`. This is psutil's
+## cpu_percent(interval=None), not its interval=0.3 form.
+##
+## Every call used to open a 300ms window of its own. Once the endpoint's
+## third-party requests went out concurrently, that window stopped being an
+## idle wait and started overlapping the endpoint's own work, so the number
+## reported was biased by the act of reporting it. It was also a hard 300ms
+## floor on the cache-hit path, where there is nothing else to wait for.
+## Differencing against the previous call removes both in one move: the window
+## is the interval between calls, which is time this process was not spending
+## on the measurement.
+##
+## `max_age_s` is a parameter rather than the constant read directly so a test
+## can ask for the stale path without waiting it out. Production passes
+## CPU_SNAPSHOT_MAX_AGE_S.
+##
+## Ordering here is load-bearing, not incidental: the previous snapshot is read
+## BEFORE this call takes its sample. /proc/stat counters only move forward, so
+## a snapshot read first was necessarily taken before the sample differenced
+## against it, and the delta cannot come out negative however many virtual
+## threads are inside this function at once. The cell is an AtomicReference, so
+## the read and the write are each atomic and neither can be seen half done;
+## two concurrent calls may read the same snapshot and both report a legitimate
+## (if short) window, and the later write wins, which only means the next call's
+## window starts a little earlier than it otherwise would. The cases that
+## ordering rules out are still checked rather than assumed, in cpu_delta_pct.
+fn cpu_percent(cell: TtlCell, max_age_s: Int) -> Float !Fs !io = {
+  let prev = cpu_prev(cell, max_age_s)
+  let cur = cpu_sample()
+  let reading = match prev {
+    Some(p) -> cpu_delta_pct(p, cur)
+    None -> None
+  }
+  match reading {
+    Some(x) -> {
+      cpu_put(cell, cur)
+      x
+    }
+    # first call after start, a snapshot too old to describe now, or a pair too
+    # close together to divide by: open a window of our own, this once
+    None -> cpu_window(cell, cur)
+  }
+}
+
+# The old behaviour, kept for the calls that have nothing to difference
+# against. `first` is the sample the caller already took, so this costs one
+# sleep and one extra read of /proc/stat, which is what the previous
+# implementation cost. The SECOND sample is the one that goes in the cell: it is
+# the fresher of the two, and the next call's window should start at the end of
+# this one rather than before it.
+fn cpu_window(cell: TtlCell, first: (Int, Int)) -> Float !Fs !io = {
+  Thread.sleep(CPU_WINDOW_MS)
+  let second = cpu_sample()
+  cpu_put(cell, second)
+  match cpu_delta_pct(first, second) {
+    Some(x) -> x
+    None -> 0.0
+  }
+}
+
+## The busy share of the window between two /proc/stat samples, or None when the
+## pair cannot yield one: no window at all (equal totals, two calls inside the
+## same jiffy), or a counter that moved backwards. The backwards cases are not
+## reachable -- these counters are monotonic and `prev` is always read before
+## `cur` -- which is the reason to pin that the answer to one is the fallback
+## rather than a negative or above-100 percentage on the dashboard.
+fn cpu_delta_pct(prev: (Int, Int), cur: (Int, Int)) -> Option[Float] = {
+  let (pbusy, ptotal) = prev
+  let (busy, total) = cur
+  let dtotal = total - ptotal
+  let dbusy = busy - pbusy
+  if dtotal <= 0 || dbusy < 0 || dbusy > dtotal {
+    None
+  } else {
+    Some(round1(to_float(dbusy) * 100.0 / to_float(dtotal)))
+  }
+}
+
+# The snapshot rides in a TtlCell because a TtlCell is exactly a value with an
+# age bound on it: cache_get hands back nothing once the entry is older than the
+# bound asked for, which is the staleness rule already written down once.
+fn cpu_put(cell: TtlCell, s: (Int, Int)) -> Unit !io = {
+  let (busy, total) = s
+  cache_put(cell, "${busy} ${total}")
+}
+
+fn cpu_prev(cell: TtlCell, max_age_s: Int) -> Option[(Int, Int)] !io =
+  match cache_get(cell, max_age_s) {
+    Some(s) -> cpu_prev_of(s)
+    None -> None
+  }
+
+fn cpu_prev_of(s: String) -> Option[(Int, Int)] = {
+  let fs = fields_of(s)
+  if len(fs) != 2 {
+    None
+  } else {
+    match parse_int(fs[0]) {
+      Some(busy) ->
+        match parse_int(fs[1]) {
+          Some(total) -> Some((busy, total))
+          None -> None
+        }
+      None -> None
+    }
+  }
+}
+
+# (busy, total) jiffies from the aggregate cpu line; idle = idle + iowait
+fn cpu_sample() -> (Int, Int) !Fs =
+  match io.read_file("/proc/stat") {
+    Ok(text) -> cpu_of(text)
+    Err(_m) -> (0, 0)
+  }
+
+fn cpu_of(text: String) -> (Int, Int) = {
+  let fs = fields_of(str.split(text, "\n")[0])
+  let upto = if len(fs) < 9 { len(fs) } else { 9 }
+  let total = fold(range(1, upto), 0, (acc, i) => acc + parse_or0(fs[i]))
+  let idle = if len(fs) > 5 { parse_or0(fs[4]) + parse_or0(fs[5]) } else { 0 }
+  (total - idle, total)
+}
+
+fn loadavg() -> Json !Fs =
+  match io.read_file("/proc/loadavg") {
+    Ok(text) -> loadavg_of(text)
+    Err(_m) -> JArr([JNull, JNull, JNull])
+  }
+
+fn loadavg_of(text: String) -> Json = {
+  let fs = fields_of(text)
+  JArr(map(range(0, 3), i =>
+      match parse_float(fs[i]) {
+        Some(x) -> JNum(x)
+        None -> JNull
+      }))
+}
+
+# MemTotal/MemAvailable in kB; used/percent match psutil (total - available)
+fn meminfo() -> Json !Fs =
+  match io.read_file("/proc/meminfo") {
+    Ok(text) -> meminfo_of(text)
+    Err(_m) -> obj([("total", jint(0)), ("used", jint(0)), ("percent", JNum(0.0))])
+  }
+
+fn meminfo_of(text: String) -> Json = {
+  let total = meminfo_kb(text, "MemTotal") * 1024
+  let avail = meminfo_kb(text, "MemAvailable") * 1024
+  obj([
+    ("total", jint(total)),
+    ("used", jint(total - avail)),
+    ("percent", JNum(pct(total - avail, total))),
+  ])
+}
+
+fn meminfo_kb(text: String, key: String) -> Int =
+  fold(str.split(text, "\n"), 0, (acc, line) =>
+      if str.starts_with(line, "${key}:") {
+        let fs = fields_of(line)
+        if len(fs) > 1 { parse_or0(fs[1]) } else { acc }
+      } else {
+        acc
+      })
+
+# cumulative bytes over every interface (psutil net_io_counters aggregates all)
+fn net_totals() -> Json !Fs =
+  match io.read_file("/proc/net/dev") {
+    Ok(text) -> net_totals_of(text)
+    Err(_m) -> obj([("sent", jint(0)), ("recv", jint(0))])
+  }
+
+fn net_totals_of(text: String) -> Json = {
+  let (sent, recv) = fold(str.split(text, "\n"), (0, 0), (acc: (Int, Int), line) =>
+      if str.contains(line, ":") {
+        let (s, r) = acc
+        let parts = str.split(line, ":")
+        let fs = fields_of(join(list.drop(parts, 1), ":"))
+        if len(fs) > 8 {
+          (s + parse_or0(fs[8]), r + parse_or0(fs[0]))
+        } else {
+          acc
+        }
+      } else {
+        acc
+      })
+  obj([("sent", jint(sent)), ("recv", jint(recv))])
+}
+
+fn uptime_s() -> Int !Fs =
+  match io.read_file("/proc/uptime") {
+    Ok(text) -> uptime_of(text)
+    Err(_m) -> 0
+  }
+
+fn uptime_of(text: String) -> Int =
+  match parse_float(fields_of(text)[0]) {
+    Some(x) -> to_int(x)
+    None -> 0
+  }
+
+fn fields_of(line: String) -> List[String] = filter(str.split(line, " "), s => s != "")
+
+fn parse_or0(s: String) -> Int =
+  match parse_int(s) {
+    Some(n) -> n
+    None -> 0
+  }
+
+fn pct(used: Int, total: Int) -> Float =
+  if total == 0 { 0.0 } else { round1(to_float(used) * 100.0 / to_float(total)) }
+
+fn round1(x: Float) -> Float = to_float(to_int(x * 10.0)) / 10.0
+
+fn clip100(x: Float) -> Float = if x > 100.0 { 100.0 } else { x }
+
+# ---- lighthouse: traffic package + instance + cpu trend (each fault-isolated) ----
+#
+# The three calls do not depend on each other, so the block is a start phase
+# that puts all three on the wire and a collect phase that reads them. Fault
+# isolation is unchanged and is still per call: each request is carried as its
+# own Result, so a start that fails lands in the same *_error field a transport
+# failure or an API-level Error would, and the other two still answer.
+
+## The three lighthouse requests in flight.
+pub type LighthousePending = {
+  traffic: Result[PendingTc, String],
+  instance: Result[PendingTc, String],
+  trend: Result[PendingTc, String],
+}
+
+## Issue lighthouse's three requests. None when it is not configured -- that
+## block is a constant and asks nothing of the network.
+##
+## This is where the real clock is installed for everything TC3: the three
+## signatures below are stamped with the second this runs in. It is the
+## outermost function that owns a complete unit of Tencent work, and stopping
+## here is what keeps `!Clock` out of api_monitor and off every route closure
+## (a route closure cannot carry it at all -- see util/clock).
+pub fn lighthouse_start(secret_id: String, secret_key: String, region: String, instance: String) -> Option[LighthousePending] !Upstream !io = {
+  with handle Clock { now_ms() => system_ms() }
+  if secret_id == "" || secret_key == "" {
+    None
+  } else {
+    Some(LighthousePending {
+      traffic: traffic_start(secret_id, secret_key, region, instance),
+      instance: instance_start(secret_id, secret_key, region, instance),
+      trend: cpu_trend_start(secret_id, secret_key, region, instance),
+    })
+  }
+}
+
+## Read what `lighthouse_start` issued.
+pub fn lighthouse_collect(started: Option[LighthousePending]) -> Json !io =
+  match started {
+    None -> obj([("configured", jbool(false))])
+    Some(s) -> {
+      let traffic = match traffic_finish(s.traffic) {
+        Ok(t) -> [("traffic", t)]
+        Err(m) -> [("traffic_error", jstr(m))]
+      }
+      let inst = match instance_finish(s.instance) {
+        Ok(v) -> [("instance", v)]
+        Err(m) -> [("instance_error", jstr(m))]
+      }
+      let trend = match cpu_trend_finish(s.trend) {
+        Ok(v) -> [("cpu_trend", v)]
+        Err(m) -> [("cpu_trend_error", jstr(m))]
+      }
+      obj([("configured", jbool(true))] ++ traffic ++ inst ++ trend)
+    }
+  }
+
+pub fn lighthouse_block(secret_id: String, secret_key: String, region: String, instance: String) -> Json !Upstream !io =
+  lighthouse_collect(lighthouse_start(secret_id, secret_key, region, instance))
+
+# the Response body, or Err on an API-level Error (Code + Message)
+fn tc_resp(action: String, j: Json) -> Result[Json, String] = {
+  let resp = field(j, "Response")
+  match field(resp, "Error") {
+    JObj(_e) -> {
+      let err = field(resp, "Error")
+      Err("${action} 失败: ${jstr_plain(field(err, "Code"))} ${jstr_plain(field(err, "Message"))}")
+    }
+    _ -> Ok(resp),
+  }
+}
+
+fn jstr_plain(j: Json) -> String =
+  match j {
+    JStr(s) -> s
+    _ -> "",
+  }
+
+fn traffic_start(id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !Clock !Upstream !io =
+  client.call_start(id, key, "lighthouse", "DescribeInstancesTrafficPackages", "2020-03-24", region, "{\"InstanceIds\":[\"${instance}\"]}")
+
+fn traffic_finish(started: Result[PendingTc, String]) -> Result[Json, String] !io = {
+  let j = client.call_finish(started?)?
+  let resp = tc_resp("DescribeInstancesTrafficPackages", j)?
+  match arr0(field(resp, "InstanceTrafficPackageSet")) {
+    Some(inst) ->
+      match arr0(field(inst, "TrafficPackageSet")) {
+        Some(p) -> Ok(obj([
+          ("used", JInt(int_of(field(p, "TrafficUsed")))),
+          ("total", JInt(int_of(field(p, "TrafficPackageTotal")))),
+          ("remaining", JInt(int_of(field(p, "TrafficPackageRemaining")))),
+          ("overflow", JInt(int_of(field(p, "TrafficOverflow")))),
+          ("start", field(p, "StartTime")),
+          ("end", field(p, "EndTime")),
+          ("status", field(p, "Status")),
+        ]))
+        None -> Err("流量包列表为空")
+      }
+    None -> Err("未找到该实例的流量包")
+  }
+}
+
+fn instance_start(id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !Clock !Upstream !io =
+  client.call_start(id, key, "lighthouse", "DescribeInstances", "2020-03-24", region, "{\"InstanceIds\":[\"${instance}\"]}")
+
+fn instance_finish(started: Result[PendingTc, String]) -> Result[Json, String] !io = {
+  let j = client.call_finish(started?)?
+  let resp = tc_resp("DescribeInstances", j)?
+  match arr0(field(resp, "InstanceSet")) {
+    Some(s) -> {
+      let ip = match arr0(field(s, "PublicAddresses")) {
+        Some(a) -> a
+        None -> JNull
+      }
+      Ok(obj([
+        ("name", field(s, "InstanceName")),
+        ("cpu", JInt(int_of(field(s, "CPU")))),
+        ("memory_gb", JInt(int_of(field(s, "Memory")))),
+        ("state", field(s, "InstanceState")),
+        ("ip", ip),
+        ("disk_gb", JInt(int_of(field(field(s, "SystemDisk"), "DiskSize")))),
+        ("expired_at", field(s, "ExpiredTime")),
+        ("created_at", field(s, "CreatedTime")),
+      ]))
+    }
+    None -> Err("未找到实例")
+  }
+}
+
+# QCE/LIGHTHOUSE CpuUsage, daily points over 30 days, via the monitor service
+fn cpu_trend_start(id: String, key: String, region: String, instance: String) -> Result[PendingTc, String] !Clock !Upstream !io = {
+  let now = now_s()
+  let start = now - 30 * 86400
+  let payload = "{\"Namespace\":\"QCE/LIGHTHOUSE\",\"MetricName\":\"CpuUsage\",\"Period\":86400,\"StartTime\":\"${utc_datetime(start)}+00:00\",\"EndTime\":\"${utc_datetime(now)}+00:00\",\"Instances\":[{\"Dimensions\":[{\"Name\":\"InstanceId\",\"Value\":\"${instance}\"}]}]}"
+  client.call_start(id, key, "monitor", "GetMonitorData", "2018-07-24", region, payload)
+}
+
+fn cpu_trend_finish(started: Result[PendingTc, String]) -> Result[Json, String] !io = {
+  let j = client.call_finish(started?)?
+  let resp = tc_resp("GetMonitorData", j)?
+  match arr0(field(resp, "DataPoints")) {
+    Some(dp) -> {
+      let ts = arr_of(field(dp, "Timestamps"))
+      let vs = arr_of(field(dp, "Values"))
+      let n = if len(ts) < len(vs) { len(ts) } else { len(vs) }
+      Ok(JArr(map(range(0, n), i => obj([
+        ("t", JInt(int_of(ts[i]))),
+        ("v", vs[i]),
+      ]))))
+    }
+    None -> Ok(JArr([]))
+  }
+}
+
+fn arr0(j: Json) -> Option[Json] =
+  match j {
+    JArr(xs) -> get(xs, 0)
+    _ -> None,
+  }
+
+fn arr_of(j: Json) -> List[Json] =
+  match j {
+    JArr(xs) -> xs
+    _ -> [],
+  }
+
+# ---- qiniu: kodo series + CDN + respack (three fault-isolated groups) ----
+
+## The qiniu requests in flight, one field per fault-isolated group, so a group
+## that fails to start fails exactly where it would have failed in transport.
+##
+## `respack` is None when the 300s cell already held the answer: the billing API
+## is rate-limited, and a start phase that asked it anyway would defeat the cell
+## it shares with fm stats.
+pub type QiniuPending = {
+  kodo: Result[KodoPending, String],
+  domains: Result[PendingQ, String],
+  respack: Option[Result[PendingRespack, String]],
+}
+
+## The four kodo series requests. They are one Result because they are one
+## fault-isolation group: any of them failing is the block's single `error`.
+pub type KodoPending = { space: PendingQ, count: PendingQ, flow: PendingQ, hits: PendingQ }
+
+## Issue every qiniu request the block needs. None when it is not configured.
+pub fn qiniu_start(a: Auth, respack_cell: TtlCell) -> Option[QiniuPending] !Upstream !io =
+  if a.qiniu.ak == "" {
+    None
+  } else {
+    Some(QiniuPending {
+      kodo: kodo_start(a),
+      domains: cdn_domains_start(a.qiniu),
+      respack: match cache_get(respack_cell, 300) {
+        Some(_s) -> None
+        None -> Some(respack_start(a.qiniu))
+      },
+    })
+  }
+
+## The qiniu block WITHOUT quota — the caller injects quota from the settings
+## table after the cache, exactly like the FastAPI handler.
+pub fn qiniu_collect(a: Auth, respack_cell: TtlCell, started: Option[QiniuPending]) -> Json !Upstream !io =
+  match started {
+    None -> obj([("configured", jbool(false))])
+    Some(s) -> {
+      let base = [("configured", jbool(true)), ("bucket", jstr(a.qiniu.bucket))]
+      let main = match kodo_stats(s.kodo) {
+        Ok(entries) -> entries
+        Err(m) -> [("error", jstr(m))]
+      }
+      let cdn = match cdn_stats(a, s.domains) {
+        Ok(entries) -> entries
+        Err(m) -> [("cdn_error", jstr(m))]
+      }
+      let packs = match respack_collect(a, respack_cell, s.respack) {
+        Ok(j) -> [("cdn_pack", field(j, "cdn")), ("storage_pack", field(j, "storage"))]
+        Err(m) -> [("respack_error", jstr(m))]
+      }
+      obj(base ++ main ++ cdn ++ packs)
+    }
+  }
+
+pub fn qiniu_block(a: Auth, respack_cell: TtlCell) -> Json !Upstream !io =
+  qiniu_collect(a, respack_cell, qiniu_start(a, respack_cell))
+
+fn kodo_start(a: Auth) -> Result[KodoPending, String] !Upstream !io = {
+  let space = kodo_series_start(a.qiniu, "space", 30)?
+  let count = kodo_series_start(a.qiniu, "count", 30)?
+  let flow = flow_series_start(a.qiniu, "flow", 30)?
+  let hits = flow_series_start(a.qiniu, "hits", 30)?
+  Ok(KodoPending { space: space, count: count, flow: flow, hits: hits })
+}
+
+fn kodo_stats(started: Result[KodoPending, String]) -> Result[List[(String, Json)], String] !io = {
+  let s = started?
+  let (stimes, sdatas) = kodo_series_finish(s.space)?
+  let (_ctimes, cdatas) = kodo_series_finish(s.count)?
+  let flow = flow_series_finish(s.flow, "flow")?
+  let hits = flow_series_finish(s.hits, "hits")?
+  Ok([
+    ("space", jint(last_nonzero(sdatas))),
+    ("count", jint(last_nonzero(cdatas))),
+    ("flow_30d", jint(sum_snd(flow))),
+    ("hits_30d", jint(sum_snd(hits))),
+    ("space_trend", trend_int(stimes, sdatas)),
+    ("flow_trend", JArr(map(flow, p => {
+      let (t, v) = p
+      obj([("t", jstr(t)), ("v", jint(v))])
+    }))),
+  ])
+}
+
+fn sum_snd(xs: List[(String, Int)]) -> Int =
+  fold(xs, 0, (acc, p) => {
+    let (_t, v) = p
+    acc + v
+  })
+
+fn cdn_stats(a: Auth, started: Result[PendingQ, String]) -> Result[List[(String, Json)], String] !Upstream !io = {
+  let domains = cdn_domains_finish(started?)?
+  # The tune queries name the domains, so these two cannot go out until the
+  # listing lands. Issuing them together is what holds this group to two round
+  # trips instead of three.
+  let flux = cdn_tune_start(a.qiniu, "flux", 30, domains)?
+  let bandwidth = cdn_tune_start(a.qiniu, "bandwidth", 30, domains)?
+  let (ftimes, fvalues) = cdn_tune_finish(flux)?
+  let (_btimes, bvalues) = cdn_tune_finish(bandwidth)?
+  let peak = fold(bvalues, 0, (acc, v) => if v > acc { v } else { acc })
+  Ok([
+    ("cdn_flow_30d", jint(fold(fvalues, 0, (acc, v) => acc + v))),
+    ("cdn_peak_bps", jint(peak)),
+    ("cdn_domains", JArr(map(domains, d => JStr(d)))),
+    ("cdn_trend", trend_int(ftimes, fvalues)),
+  ])
+}
+
+fn trend_int(times: List[Int], values: List[Int]) -> Json = {
+  let n = if len(times) < len(values) { len(times) } else { len(values) }
+  JArr(map(range(0, n), i => obj([("t", jint(times[i])), ("v", jint(values[i]))])))
+}
+
+## respack balances through a 300s TTL cell (the billing API is rate-limited;
+## fm stats shares this cell so directory listings stay cheap). For fm stats,
+## which has one call and nothing to overlap it with.
+pub fn respack_cached(a: Auth, cell: TtlCell) -> Result[Json, String] !Upstream !io = {
+  let started = match cache_get(cell, 300) {
+    Some(_s) -> None
+    None -> Some(respack_start(a.qiniu))
+  }
+  respack_collect(a, cell, started)
+}
+
+# `respack_cached` split across the start/collect phases: None means the start
+# phase found the cell warm and asked the billing API nothing.
+fn respack_collect(a: Auth, cell: TtlCell, started: Option[Result[PendingRespack, String]]) -> Result[Json, String] !Upstream !io =
+  match started {
+    # Warm a moment ago, so all but certainly warm now. The fallback covers the
+    # sliver where the entry aged out between the two phases; it costs a
+    # blocking call on a request that was going to make one anyway.
+    None ->
+      match cache_get(cell, 300) {
+        Some(s) -> parse_text(s)
+        None -> respack_summary(a.qiniu)
+      }
+    Some(r) -> {
+      let j = respack_finish(r?)?
+      cache_put(cell, render(j))
+      Ok(j)
+    }
+  }
+
+# ---- vault: alive probe + version ----
+
+pub fn vault_block(alive_url: String, public_url: String) -> Json !Upstream !io = {
+  let base = if str.ends_with(alive_url, "/alive") {
+    str.slice(alive_url, 0, len(alive_url) - 6)
+  } else {
+    alive_url
+  }
+  let head = [("url", jstr(base)), ("public_url", jstr(public_url))]
+  # The version request does not depend on the probe's answer, so it goes out
+  # first and is read after the probe. The probe itself stays a blocking call:
+  # `latency_ms` has to be the duration of that exchange, and a started request
+  # can only report how long it was until somebody got round to reading it.
+  # (One consequence, and it is deliberate: a vault that is down is now asked
+  # twice rather than once. Both requests fail on the same deadline, in
+  # parallel, and the block reads exactly as it did before.)
+  let version_started = fetch_start("${base}/api/config", [])
+  let t0 = System.currentTimeMillis()
+  match fetch(alive_url, []) {
+    Ok(r) -> {
+      let probe = [
+        ("alive", jbool(r.status == 200)),
+        ("latency_ms", jint(System.currentTimeMillis() - t0)),
+      ]
+      let no_version: List[(String, Json)] = []
+      let version_reply = match version_started {
+        Ok(p) -> await_resp(p)
+        Err(m) -> Err(m)
+      }
+      let version = match version_reply {
+        Ok(c) ->
+          match parse(c.body) {
+            Ok(cfg) -> [("version", field(cfg, "version"))]
+            Err(_m) -> no_version
+          }
+        Err(_m) -> no_version,
+      }
+      obj(head ++ probe ++ version)
+    }
+    Err(m) -> obj(head ++ [("alive", jbool(false)), ("error", jstr(m))])
+  }
+}

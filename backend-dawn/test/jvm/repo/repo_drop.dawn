@@ -1,0 +1,58 @@
+test "the schema is created once and creating it again is a no-op" {
+  let c = drop_test_db()
+  assert ensure_schema(c) == Ok(())
+  assert scalar_int(c, "select count(*) from sqlite_master where name in ('upload_drops', 'drop_pending')", []) == Ok(2)
+}
+
+test "upgrading hash-only links discards capabilities but preserves files and orphan accounting" {
+  let c = drop_test_db()
+  let _old = exec(c, "alter table upload_drops drop column token", [])
+  let _link = exec(c, "insert into upload_drops (id, token_hash, dir, created_at, expires_at, max_files, max_file_bytes, max_total_bytes) values (1, 'old-hash', '', '2026-10-01', 9999999999, 10, 100, 1000)", [])
+  let _pending = exec(c, "insert into drop_pending values ('old-key', 1, 'old.txt', 100, '2026-10-01')", [])
+  let _ledger = exec(c, "insert into pending_uploads values ('old-key', 'qiniu://old.txt', '2026-10-01')", [])
+  let _file = exec(c, "insert into files values (1, 'saved.txt', 0, 'saved-key', 'text/plain', 5, '2026-10-01', '2026-10-01')", [])
+  assert ensure_schema(c) == Ok(())
+  assert scalar_int(c, "select count(*) from upload_drops", []) == Ok(0)
+  assert scalar_int(c, "select count(*) from drop_pending", []) == Ok(0)
+  assert scalar_int(c, "select count(*) from pending_uploads", []) == Ok(1)
+  assert scalar_int(c, "select count(*) from files", []) == Ok(1)
+  let _b = exec(c, "begin immediate", [])
+  let _new = insert_drop(c, "new-hash", "new", "", 9999999999, 10, 100, 1000, "saved-token")
+  let _e = exec(c, "commit", [])
+  assert ensure_schema(c) == Ok(())
+  match drop_by_hash(c, "new-hash") {
+    Ok(Some(d)) -> { assert d.token == "saved-token" }
+    _ -> { assert false }
+  }
+}
+
+test "a reservation is visible only to the drop that made it" {
+  let c = drop_test_db()
+  let _b = exec(c, "begin immediate", [])
+  let _r = reserve_key(c, "k1", 7, "in/a.txt", 100)
+  let _e = exec(c, "commit", [])
+  match pending_for(c, "k1", 7) {
+    Ok(Some(p)) -> {
+      assert p.rel == "in/a.txt"
+      assert p.size_limit == 100
+    }
+    _ -> { assert false }
+  }
+  assert pending_for(c, "k1", 8) == Ok(None)
+  assert pending_for(c, "other", 7) == Ok(None)
+  # the orphan ledger sees it too, under the full path
+  assert scalar_int(c, "select count(*) from pending_uploads where key = 'k1' and path = 'qiniu://in/a.txt'", []) == Ok(1)
+}
+
+test "a reserved name is not free for another key, but is for its own" {
+  let c = drop_test_db()
+  let _b = exec(c, "begin immediate", [])
+  let _r = reserve_key(c, "k1", 7, "in/a.txt", 100)
+  let _e = exec(c, "commit", [])
+  assert rel_free(c, "in/a.txt", "k2") == Ok(false)
+  assert rel_free(c, "in/a.txt", "k1") == Ok(true)
+  # an orphan descendant blocks the name as surely as a row at it
+  let _o = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('in/b.txt/x', 0, 'kx', 'text/plain', 1, 'now', 'now')", [])
+  assert rel_free(c, "in/b.txt", "") == Ok(false)
+  assert rel_free(c, "in/c.txt", "") == Ok(true)
+}
