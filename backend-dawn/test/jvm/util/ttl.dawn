@@ -1,7 +1,15 @@
 test "cache: put then get within ttl, miss when empty" {
-  let cell = new_cell()
+  let cell = test_cell()
   assert cache_get(cell, 60) == None
   cache_put(cell, "{\"a\":1}|tail")
   assert cache_get(cell, 60) == Some("{\"a\":1}|tail")
   assert cache_get(cell, 0) == None
+}
+
+# Isolated real SQLite storage for the original cell and CPU assertions.
+pub fn test_cell() -> TtlCell !io = {
+  let path = match io.with_fs_real(() => io.temp_file("", "cache-test-")) { Ok(p) -> p
+    Err(e) -> panic(e.message) }
+  init_cache(path)
+  new_cell(path, "test.v1")
 }

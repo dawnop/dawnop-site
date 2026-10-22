@@ -11,6 +11,7 @@ use java "java.lang.Thread"
 use java "java.io.File"
 use svc/auth.{Auth}
 use tencent/client
+use site_core/util/cache.{sample_payload, sample_from}
 use util/ttl.{TtlCell, cache_get, cache_put, now_s}
 use util/clock.{Clock, system_ms}
 use site_core/util/time.{utc_datetime}
@@ -112,8 +113,8 @@ const CPU_SNAPSHOT_MAX_AGE_S: Int = 300
 ## BEFORE this call takes its sample. /proc/stat counters only move forward, so
 ## a snapshot read first was necessarily taken before the sample differenced
 ## against it, and the delta cannot come out negative however many virtual
-## threads are inside this function at once. The cell is an AtomicReference, so
-## the read and the write are each atomic and neither can be seen half done;
+## threads are inside this function at once. SQLite reads and short UPSERT
+## transactions are each atomic, so neither can be seen half done;
 ## two concurrent calls may read the same snapshot and both report a legitimate
 ## (if short) window, and the later write wins, which only means the next call's
 ## window starts a little earlier than it otherwise would. The cases that
@@ -175,14 +176,22 @@ fn cpu_delta_pct(prev: (Int, Int), cur: (Int, Int)) -> Option[Float] = {
 # bound asked for, which is the staleness rule already written down once.
 fn cpu_put(cell: TtlCell, s: (Int, Int)) -> Unit !io = {
   let (busy, total) = s
-  cache_put(cell, "${busy} ${total}")
+  cache_put(cell, sample_payload(cpu_boot(), "${busy} ${total}"))
 }
 
 fn cpu_prev(cell: TtlCell, max_age_s: Int) -> Option[(Int, Int)] !io =
   match cache_get(cell, max_age_s) {
-    Some(s) -> cpu_prev_of(s)
+    Some(s) -> match sample_from(s, cpu_boot()) { Some(counters) -> cpu_prev_of(counters)
+      None -> None }
     None -> None
   }
+
+# A machine reboot invalidates persisted counters even when wall time is fresh.
+fn cpu_boot() -> String !io =
+  io.with_fs_real(() => match io.read_file("/proc/sys/kernel/random/boot_id") {
+    Ok(s) -> str.trim(s)
+    Err(_) -> ""
+  })
 
 fn cpu_prev_of(s: String) -> Option[(Int, Int)] = {
   let fs = fields_of(s)

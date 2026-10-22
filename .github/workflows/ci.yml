@@ -151,6 +151,9 @@ jobs:
       - name: native SQLite handler check build test and contracts
         run: backend-dawn/scripts/native-sqlite/run.sh
 
+      - name: SQLite TTL cache dual arm and cross process contracts
+        run: backend-dawn/scripts/ttl-cache/run.sh
+
       - name: Java FFI boundaries
         run: python3 backend-dawn/scripts/check-ffi-boundaries.py
 

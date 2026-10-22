@@ -15,10 +15,11 @@
 # svc/monitor.lighthouse_start and svc/auth (login / auth_with).
 #
 # Sites still reading the machine clock directly, deliberately: the fm/webdav
-# qiniu deadlines, the ttl cache, the monitor's boot time and its elapsed-time
+# qiniu deadlines, the monitor's boot time and its elapsed-time
 # probes, qiniu/stats' day windows. Each is reached only from inside a route
 # closure, so threading Clock there would put `!Clock` on the whole api/ surface
 # and then hit the wall above; and none of them has an assertion worth freezing.
+# The persistent cache instead uses std/io.Clock and millisecond fake clocks.
 use java "java.lang.System"
 
 ## Wall-clock milliseconds since the epoch, from whichever clock the caller's

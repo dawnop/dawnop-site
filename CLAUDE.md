@@ -56,11 +56,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 dawnop-site/
 ├── backend-dawn/               # 生产后端（Dawn → JVM 字节码）
-│   ├── core/                   # 可移植包 site_core，33 个模块；无 Java 依赖
+│   ├── core/                   # 可移植包 site_core，34 个模块；无 Java 依赖
 │   │   ├── src/                # config、db/sql、repo、svc/{search,export,paste} 与纯 util/qiniu/tencent
 │   │   └── dawn.toml           # web/json/sha2，保持 v0.97.0 tag/hash
 │   ├── app/jvm/                # JVM 应用，25 个模块；路径依赖 ../../core
-│   │   ├── src/                # main、api、其余 svc 与 JDBC/Clock/TTL/HTTP 接缝
+│   │   ├── src/                # main、api、其余 svc 与 JDBC/Clock/HTTP 接缝及缓存地址包装
 │   │   ├── dawn.toml           # web_jvm、sqlite-jdbc 与 site_core
 │   │   └── dawn.lock           # 原 JDBC artifact 锁，内容不变
 │   ├── app/native/             # site_sqlite：独立 Db handler；sqlite 0.1.0 固定 URL/hash/subdir
@@ -344,6 +344,9 @@ python3 backend-dawn/scripts/mutants_coverage.py --self-test
 #   backend/scripts/updated_at_mutants.py   # 「updated_at 只由显式编辑推进」那一族判词
 #   backend/scripts/rollback_chain_mutants.py  # 回滚安全链（见 deploy/README.md「四」）
 ```
+
+SQLite 五槽缓存的表、语义与验证命令见 `backend-dawn/README.md` 监控段；
+`backend-dawn/scripts/ttl-cache/run.sh` 验证双臂、跨进程与只读命中。
 
 ## 10. 工程约定（机器强制的部分）
 

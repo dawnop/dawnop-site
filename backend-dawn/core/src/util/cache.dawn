@@ -1,0 +1,46 @@
+# Persistent single-slot caches. All access uses the caller's Db capability.
+use std/str
+use std/io.{Clock, now_wall_ns}
+use db/sql.{Db, execute, query, ColInt, ColStr, PInt, PStr, int_at, str_at, with_immediate_tx}
+
+pub type CacheSlot = { namespace: String, key: String }
+
+pub fn slot(namespace: String) -> CacheSlot = CacheSlot { namespace: namespace, key: "value" }
+
+pub fn ensure_schema() -> Result[Unit, String] !Db =
+  execute("create table if not exists runtime_cache(namespace text not null, cache_key text not null, payload text not null, created_ms integer not null, primary key(namespace, cache_key)) without rowid", [])
+
+## A hit is only a SELECT, including when the row has expired or time reversed.
+pub fn cache_get(cell: CacheSlot, ttl_s: Int) -> Result[Option[String], String] !Db !Clock = {
+  let now = now_wall_ns() / 1000000
+  let rows = match query("select payload, created_ms from runtime_cache where namespace = ? and cache_key = ?", [PStr(cell.namespace), PStr(cell.key)], [ColStr, ColInt]) {
+    Ok(rows) -> rows
+    # A restored database can predate this additive table. Reads never create it.
+    Err(m) -> if str.contains(m, "no such table: runtime_cache") { return Ok(None) } else { return Err(m) }
+  }
+  match get(rows, 0) {
+    Some(row) -> {
+      let created = int_at(row, 1)
+      let age = now - created
+      Ok(if now >= created && ttl_s > 0 && age < ttl_s * 1000 { Some(str_at(row, 0)) } else { None })
+    }
+    None -> Ok(None)
+  }
+}
+
+## No upstream work belongs inside this transaction. A put replaces one slot.
+pub fn cache_put(cell: CacheSlot, payload: String) -> Result[Unit, String] !Db !Clock !io = {
+  let created = now_wall_ns() / 1000000
+  with_immediate_tx(() => {
+    ensure_schema()?
+    execute("insert into runtime_cache(namespace, cache_key, payload, created_ms) values(?,?,?,?) on conflict(namespace, cache_key) do update set payload=excluded.payload, created_ms=excluded.created_ms", [PStr(cell.namespace), PStr(cell.key), PStr(payload), PInt(created)])
+  })
+}
+
+## Persist CPU counters only with a known boot identity; another boot is stale.
+pub fn sample_payload(boot: String, counters: String) -> String = "${boot}|${counters}"
+
+pub fn sample_from(payload: String, boot: String) -> Option[String] = {
+  let parts = str.split(payload, "|")
+  if boot != "" && len(parts) == 2 && parts[0] == boot { Some(parts[1]) } else { None }
+}

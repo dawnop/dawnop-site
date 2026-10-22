@@ -355,3 +355,21 @@ fn failed_result[T, E](r: Result[T, E]) -> Bool = match r {
   Ok(_) -> false
   Err(_) -> true
 }
+
+use cache_scenarios.{cache_suite}
+
+fn run_cache_case(mode: String) -> Unit !io =
+  with_connection(open_ext("jdbc:sqlite::memory:"), () => {
+    let r = cache_suite(mode)
+    match r { Ok(_) -> ()
+      Err(m) -> panic(m) }
+  })
+
+test "cache five slot millisecond boundaries" { run_cache_case("cache-boundary") }
+test "cache rejects a backwards clock" { run_cache_case("cache-backwards") }
+test "cache isolates namespaces and keys" { run_cache_case("cache-namespaces") }
+test "cache hits remain read only and never renew" { run_cache_case("cache-readonly") }
+test "cache CPU samples require the same boot and replace their timestamp" { run_cache_case("cache-cpu") }
+test "cache writes finish short transactions and roll back failures" { run_cache_case("cache-transaction") }
+
+test "cache handles database replacement without DDL on reads or hiding errors" { run_cache_case("cache-schema") }
