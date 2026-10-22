@@ -71,7 +71,7 @@ dawnop-site/
 │   │   │                       #   jsonx/jsonread（构造 wire 形状 / 读请求体字段）
 │   │   # 文件系统是 std 的具名效果 Fs（dawn 0.72.0 起），生产 handler = io.with_fs_real，
 │   │   # 只装两处：main.dawn 罩 config.load、api_monitor 路由闭包罩 server_block（读 /proc）
-│   │   # json 与 web 已不再 vendored：dawn.toml 的 [deps.json]/[deps.web] 指向
+│   │   # json、web、web_jvm 与 sha2 由 dawn.toml 的 [deps.*] 指向
 │   │   # dawn-lang 仓库 tag 归档（url + hash + subdir），实体在 dawn-lang/packages/
 │   ├── dawn.toml               # [java-deps]（sqlite-jdbc，coursier 解析；bcrypt 已是纯 Dawn 的 util/bcrypt）
 │   ├── build.sh                # 按 .dawn-version 取编译器 → dawn test → dawn build（生成 lib/）

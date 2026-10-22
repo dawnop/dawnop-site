@@ -7,7 +7,8 @@ use db/db.{Db, with_db}
 use db/sql.{with_immediate_tx}
 use repo/repo_paste
 use util/clock.{system_s}
-use web/server.{serve_app_with, ServerConfig, DEFAULT_MAX_BODY}
+use web_jvm/server.{serve_app_with, ServerConfig}
+use web/types.{DEFAULT_MAX_BODY}
 use util/jsonx.{fastapi_errors}
 use web/middleware.{with_logging, with_cors, with_body_limit}
 use api/api_public

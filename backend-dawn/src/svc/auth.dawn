@@ -7,7 +7,7 @@ use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_
 # db/sql exports a `query` too, so web's is reached through the module name.
 use web/types as wtypes
 use web/router.{Route, route_get, route_post}
-use web/server.{parse_form, form_value}
+use web/wire.{parse_form, form_value}
 use json/value.{Json}
 use util/jsonx.{obj, jint, jstr, jdatetime}
 use db/db.{Db, with_db}
