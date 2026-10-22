@@ -1,0 +1,40 @@
+use db/sql.{scalar_int}
+test "PUT viz: re-saving every field with the stored value is not an edit" {
+  let c = viz_test_db()
+  put_viz(c, SAME_VIZ)
+  assert viz_updated(c) == STALE
+}
+
+test "PUT viz: an empty body is not an edit" {
+  let c = viz_test_db()
+  put_viz(c, "{}")
+  assert viz_updated(c) == STALE
+}
+
+test "PUT viz: changing one field advances updated_at" {
+  let c = viz_test_db()
+  put_viz(c, "{\"name\":\"Chart 2\"}")
+  assert viz_updated(c) != STALE
+  assert scalar_int(c, "select count(*) from viz_components where name = 'Chart 2'", []) == Ok(1)
+}
+
+test "PUT viz: each field on its own counts as an edit" {
+  for body in [
+    "{\"slug\":\"other\"}",
+    "{\"name\":\"N\"}",
+    "{\"source\":\"S2\"}",
+    "{\"compiled\":\"C2\"}",
+    "{\"style\":\"T2\"}",
+  ] {
+    let c = viz_test_db()
+    put_viz(c, body)
+    assert viz_updated(c) != STALE
+  }
+}
+
+test "PUT viz: an explicit null is skipped so it is not an edit either" {
+  let c = viz_test_db()
+  put_viz(c, "{\"name\":null,\"style\":null}")
+  assert viz_updated(c) == STALE
+  assert scalar_int(c, "select count(*) from viz_components where name = 'Chart' and style = 'STY'", []) == Ok(1)
+}

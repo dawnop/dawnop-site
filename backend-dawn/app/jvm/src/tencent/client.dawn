@@ -1,0 +1,102 @@
+# Tencent Cloud v3 client (M6 knife 12) for the monitor page. Assembles the full
+# TC3-HMAC-SHA256 canonical request / string-to-sign / Authorization and POSTs
+# via the http client. Signing is tencent/sign (byte-for-byte vs the reference);
+# every call is read-only (DescribeInstances*, GetMonitorData) — safe.
+use std/str
+use site_core/util/time.{utc_date}
+use site_core/util/crypto.{sha256_hex}
+use util/clock.{Clock, now_s}
+use site_core/tencent/sign.{tc3_signature}
+use util/http.{Pending, Upstream, post_start, await_resp}
+use json/value.{Json}
+use site_core/util/jsonread.{parse_text}
+
+## Call a Tencent Cloud v3 action. `payload` is a compact JSON body string.
+## Returns the parsed Response JSON, or Err on transport / non-200. The caller
+## supplies the clock the signature is stamped with (svc/monitor installs it).
+pub fn call(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[Json, String] !Clock !Upstream !io =
+  call_finish(call_start(secret_id, secret_key, service, action, version, region, payload)?)
+
+## A Tencent action on the wire. The action name rides along because the
+## non-200 message names it and the call is off the stack by then.
+pub type PendingTc = { p: Pending, action: String }
+
+## Issue a Tencent Cloud v3 action without waiting. The monitor page makes three
+## independent ones; the signature is stamped with the current second, so a
+## started call must be read through the PendingTc it returned.
+pub fn call_start(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[PendingTc, String] !Clock !Upstream !io = {
+  let host = tc_host(service)
+  let headers = tc3_headers(secret_id, secret_key, service, action, version, region, payload)
+  let p = post_start("https://${host}", headers, payload)?
+  Ok(PendingTc { p: p, action: action })
+}
+
+## The host a service's v3 endpoint lives on. It is also the `host` the
+## signature covers, so the two can never drift apart.
+pub fn tc_host(service: String) -> String = "${service}.tencentcloudapi.com"
+
+## The full header list for a Tencent Cloud v3 POST, Authorization included.
+## Split out of `call_start` so the whole TC3 assembly — canonical request,
+## scope, string-to-sign, signature — is a value a test can hold to a golden;
+## the timestamp comes from the installed Clock, so freezing the clock freezes
+## every byte of the result.
+pub fn tc3_headers(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> List[(String, String)] !Clock !io = {
+  let host = tc_host(service)
+  let ts = now_s()
+  let date = utc_date(ts)
+  let ct = "application/json; charset=utf-8"
+
+  let canonical_headers = "content-type:${ct}\nhost:${host}\nx-tc-action:${str.to_lower(action)}\n"
+  let signed_headers = "content-type;host;x-tc-action"
+  let payload_hash = sha256_hex(payload)
+  let canonical_request = "POST\n/\n\n${canonical_headers}\n${signed_headers}\n${payload_hash}"
+
+  let scope = "${date}/${service}/tc3_request"
+  let string_to_sign = "TC3-HMAC-SHA256\n${ts}\n${scope}\n${sha256_hex(canonical_request)}"
+  let signature = tc3_signature(secret_key, date, service, string_to_sign)
+  let auth = "TC3-HMAC-SHA256 Credential=${secret_id}/${scope}, SignedHeaders=${signed_headers}, Signature=${signature}"
+
+  # no explicit Host header: java.net.http restricts it and auto-sets it from
+  # the URI, which equals the signed canonical host
+  [
+    ("Authorization", auth),
+    ("Content-Type", ct),
+    ("X-TC-Action", action),
+    ("X-TC-Version", version),
+    ("X-TC-Timestamp", to_string(ts)),
+    ("X-TC-Region", region),
+  ]
+}
+
+## Read a started Tencent action: the parsed Response JSON, or Err on transport
+## / non-200.
+pub fn call_finish(t: PendingTc) -> Result[Json, String] !io = {
+  let r = await_resp(t.p)?
+  if r.status == 200 {
+    parse_text(r.body)
+  } else {
+    Err("tencent ${t.action} HTTP ${to_string(r.status)}: ${r.body}")
+  }
+}
+
+# ---- TC3 assembly, against a frozen clock ----
+#
+# This module had no tests at all before the Clock effect, for the obvious
+# reason: every byte it produces depends on the second it ran in. With the
+# clock installed by the caller, a test installs a frozen one and the whole
+# assembly becomes a constant.
+#
+# The expected values below are NOT recorded from this code. They come from an
+# independent implementation of the published TC3-HMAC-SHA256 algorithm, in
+# Python, which was first checked against Tencent's own worked example
+# (SecretKey "Gu5t9xGARNpq86cd98joQYCN3*******", 2019-02-25, cvm,
+# DescribeInstances) and reproduces its documented signature
+# 2230eefd229f582d8b1b891af7107b91597240707d778ab3738f756258d7652c. The same
+# script was then pointed at the canonical request this module assembles — which
+# differs from the doc's example by signing x-tc-action as well — to get the
+# signature pinned here. The script is in the batch's report.
+#
+# The frozen instant is 1551113065000ms, the doc example's timestamp, so the
+# UTC date derivation (1551113065 -> "2019-02-25") is pinned by the same vector.
+
+const FROZEN_MS: Int = 1551113065000

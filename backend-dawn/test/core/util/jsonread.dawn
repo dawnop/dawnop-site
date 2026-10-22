@@ -1,0 +1,21 @@
+test "reads fields and honors presence" {
+  match body_obj("{\"title\":\"Hi\",\"published\":true,\"page_id\":3,\"tags\":[\"a\",\"b\"]}") {
+    Ok(m) -> {
+      assert str_or(m, "title", "") == "Hi"
+      assert bool_or(m, "published", false)
+      assert opt_int(m, "page_id") == Some(3)
+      assert str_list(m, "tags") == ["a", "b"]
+      assert has(m, "title")
+      assert not has(m, "missing")
+      assert opt_int(m, "missing") == None
+    }
+    Err(e) -> panic(e)
+  }
+}
+
+test "null page_id reads as None" {
+  match body_obj("{\"page_id\":null}") {
+    Ok(m) -> { assert opt_int(m, "page_id") == None }
+    Err(e) -> panic(e)
+  }
+}

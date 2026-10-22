@@ -1,0 +1,137 @@
+test "the initial state is the digits of pi at the table boundaries" {
+  assert len(INIT) == 1042
+  assert INIT[0] == 0x243F6A88
+  assert INIT[17] == 0x8979FB1B
+  assert INIT[S0] == 0xD1310BA6
+  assert INIT[S1] == 0x4B7A70E9
+  assert INIT[S2] == 0xE93D5A68
+  assert INIT[S3] == 0x3A39CE37
+  assert INIT[1041] == 0x3AC372E6
+}
+
+test "bcrypt base64 round trips and uses bcrypt's alphabet, not RFC 4648's" {
+  let raw = [0, 1, 2, 250, 251, 252, 253, 254, 255, 16, 32, 64, 128, 7, 8, 9]
+  let text = encode64(raw, 16)
+  assert str_len(text) == 22
+  let back = decode64(bytes.utf8(text), 0, 22, 16)
+  assert back == Some(raw)
+  assert encode64([0, 0, 0], 3) == "...."
+  assert encode64([255, 255, 255], 3) == "9999"
+  assert decode64(bytes.utf8("a+b"), 0, 3, 2) == None
+}
+
+fn str_len(s: String) -> Int = len(bytes.utf8(s))
+
+test "published bcrypt vectors verify" {
+  assert checkpw("", "\$2a\$06\$DCq7YPn5Rq63x1Lad4cll.TV4S6ytwfsfvkgY8jIucDrjc8deX1s.")
+  assert checkpw("a", "\$2a\$06\$m0CrhHm10qJ3lXRY.5zDGO3rS2KdeeWLuGmsfGlMfOxih58VYVfxe")
+  assert checkpw("abc", "\$2a\$06\$If6bvum7DFjUnE9p2uDeDu0YHzrHM6tf.iqN8.yx.jNN1ILEf7h0i")
+  assert checkpw("abcdefghijklmnopqrstuvwxyz", "\$2a\$06\$.rCVZVOThsIa97pEDOxvGuRRgzG64bvtJ0938xuqzv18d3ZpQhstC")
+  assert checkpw("~!@#\$%^&*()      ~!@#\$%^&*()PNBFRD", "\$2a\$06\$fPIsBO8qRqkjj273rfaOI.HtSV9jLDpTbZn782DC6/t7qT67P6FfO")
+}
+
+test "the hash seeded by Python's bcrypt verifies once its revision is spelled 2a" {
+  # The contract fixture's admin row, written by Python's bcrypt (an
+  # implementation independent of this one), cost 4. auth.dawn does the 2b to 2a
+  # rewrite before calling in.
+  assert checkpw("contract-fixture-pw", "\$2a\$04\$fBm/BBrDqZMMZXAiEDQ8M.VGIhXSwMMKQPmceHoZj3xAZXVtG7YF2")
+  assert not checkpw("contract-fixture-px", "\$2a\$04\$fBm/BBrDqZMMZXAiEDQ8M.VGIhXSwMMKQPmceHoZj3xAZXVtG7YF2")
+}
+
+test "wrong passwords and malformed hashes are false, never a fault" {
+  let good = "\$2a\$06\$m0CrhHm10qJ3lXRY.5zDGO3rS2KdeeWLuGmsfGlMfOxih58VYVfxe"
+  assert not checkpw("b", good)
+  assert not checkpw("", good)
+  assert not checkpw("a", "")
+  assert not checkpw("a", "not-a-bcrypt-hash")
+  # one character short, one over, a non-alphabet character, a cost out of range
+  assert not checkpw("a", "\$2a\$06\$m0CrhHm10qJ3lXRY.5zDGO3rS2KdeeWLuGmsfGlMfOxih58VYVfx")
+  assert not checkpw("a", good ++ "e")
+  assert not checkpw("a", "\$2a\$06\$m0CrhHm10qJ3lXRY.5zDG+3rS2KdeeWLuGmsfGlMfOxih58VYVfxe")
+  assert not checkpw("a", "\$2a\$03\$m0CrhHm10qJ3lXRY.5zDGO3rS2KdeeWLuGmsfGlMfOxih58VYVfxe")
+  assert not checkpw("a", "\$2a\$32\$m0CrhHm10qJ3lXRY.5zDGO3rS2KdeeWLuGmsfGlMfOxih58VYVfxe")
+  # $2b$ is not understood here: the caller rewrites it
+  assert not checkpw("a", "\$2b\$06\$m0CrhHm10qJ3lXRY.5zDGO3rS2KdeeWLuGmsfGlMfOxih58VYVfxe")
+}
+
+test "hash_with_salt produces a hash checkpw accepts, and a different salt a different one" {
+  let s1 = bytes.freeze(fold([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], bytes.buf(), (b, x) => bytes.put(b, x)))
+  let s2 = bytes.freeze(fold([16, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 1], bytes.buf(), (b, x) => bytes.put(b, x)))
+  let h1 = hash_with_salt("hunter2", s1, 4)
+  assert str_len(h1) == 60
+  assert checkpw("hunter2", h1)
+  assert not checkpw("hunter3", h1)
+  assert hash_with_salt("hunter2", s2, 4) != h1
+}
+
+# 41 hashes minted by jBCrypt 0.4 (costs 4 to 7; empty, unicode, 71/72/73/100 byte
+# and random passwords), kept so the port stays byte-identical to the library it
+# replaced. Every password here verifies; the ones under the 72-byte key limit
+# must also reject an altered password (past it, jBCrypt ignores the tail too).
+fn jbcrypt_cases() -> List[(String, String)] = [
+  ("", "\$2a\$04\$JJ2.Z.i.qod/jiU5350Yse8/yKBu.vtD.A1a8kssrzg4FFTVLBkgK"),
+  ("a", "\$2a\$05\$Lf7z/BC2qMQxh9TS42mrOOY6WaF3QnE4IW4NsYE495lgLlgVPWrlC"),
+  ("pässwörd", "\$2a\$06\$Q8Erme8G9gwhOlP9e1cmX.jSLaorjYo9VwPdIAzlRHTxjRyqOWEZa"),
+  ("密码🔑", "\$2a\$07\$P/FDRDZbgnUNRujTebB1qOR93y1fLaEI9f2zWaQZNxSlTR9dOkPUq"),
+  ("日本語パスワード", "\$2a\$04\$immTNusFk4wHp8jvsqxIZu2hAY.ow88U4CoMvZOVSXTyH2fJxV8Za"),
+  ("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrs", "\$2a\$05\$YgSgT.BdN1H0HZnHBWzgFuQXIcFP76dqjs8ExN4aFzZ2//2xRggRy"),
+  ("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrst", "\$2a\$06\$Sm9oVLcm.9WE321gX8P6x.XZgKHU55.70ZtYLTBRZq//4N8BbjmkS"),
+  ("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstu", "\$2a\$07\$wW.xuRUKvgNQ5xOjJ/174.jAWatdX1Kb6PlZ/XrUX6CiTgjFkLC7K"),
+  ("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuv", "\$2a\$04\$MqwUl4Ogt1sXaB9b6WT6QO0tZFKJMP4GfALG4sDzvCHJy5NAuh/Hm"),
+  ("mXxj9Mb.LPtdM5ux&cuPBqPC>+7,", "\$2a\$05\$WXJzmmPv9HojGFZG/ynE8uksqIO8If/ddCyGk0vq/SvJbdnhgXGWC"),
+  ("r/s:Ae@o*K[M@", "\$2a\$06\$ydOd4Fo0s/xkXphzdeOJre1FJsR9JHxiFPJ6z24wulgHbyCtaYICW"),
+  ("0N+T2PD4*E5oTw\$LPTB&sZOe=b:yhZT7Ag**", "\$2a\$07\$uZNFaSPa0IcM3gZGF/9Pnu0emKVnPoZV.OQZxrc0NsfSPYRsxhSlS"),
+  ("@Gj4n6{I<NyWp2s!PiR2-WsEV0}d3AN)", "\$2a\$04\$BSo4OBwnNPDxVuJI95J9n.B0PF.F14/z4DUaDz8BREKC8r25wpg0q"),
+  ("/7", "\$2a\$05\$417XN51juUCFCro4FG6zZe51gEQohRqZfJhMeqghY8aIjtb5byhZ6"),
+  ("s)EnR6XteL96*w9gbSvh3d=,29ybKS6c.ejD\$9", "\$2a\$06\$oLwXuOvpCTpjEo4KXoT1/uGKnPW1zCz6P.BVTCMzlulclXxJPqvk6"),
+  ("/%!rRC]9Gh+9M?mIIFmd:C1HbB>07", "\$2a\$07\$/CzKv7v8xAIh4QI4uySb7eBHUoYoh4AOLSKHgqBafleYcZ9X5rubO"),
+  ("eLv<[-0Yj", "\$2a\$04\$rYgEmcRCZ0uw4Z8BaUGBbeNX1kFcYP4kUr2CBTTInf8dLg6Nb1i7e"),
+  ("!(", "\$2a\$05\$wCOcycnR/ve1QnOea0DDCu8WVeUn/mSFm5nhbHAoSysZuZu3mlINe"),
+  ("}9%trW3Y[BC/!F2Ec", "\$2a\$06\$RLgSZhShd8cPYYwmSd.S5u/dVy9TbNKzv.Yu.p1iaQ.sPA8d6JKo2"),
+  ("8nGRg^aXshJ*AohIvfnpqZ", "\$2a\$07\$swQDfJ6260qt1N8YjsRPOuX/rmZ6FCJ8Mj.qjSLWMgBy.PrGVtWMq"),
+  ("0_AB;W&W!.:\$v0w]!", "\$2a\$04\$o2NhhODEjCiT56ChalgxuunN4DUz2SzqkxKklhSXrbE6dCm0vX5JK"),
+  (",bzF^VGuMG", "\$2a\$05\$acUOD5LYTHy8JeOqQ.i.z.91r3HDuiE8W3XgBP04VFvIBKuJVjFSe"),
+  ("yZcxNUoF{\$#Y3Vm3Q+ky6V>TAsLlk\$huADgj\$>", "\$2a\$06\$ygibvyyiKvSv/2yW6VafFu/9oIT.P0qAMqFt05u7tUKhh50zEpfu6"),
+  (",%Arnu#<n*>+QI=C(D{]#&%{bQVrm&e_.=", "\$2a\$07\$rlqeCTMw1ITBwzcbM6cntur.iLfi4Va0kMNmCJHwDImGMoJXaKdZy"),
+  ("u0}7hYV;miDoY#EvIknEzG0mN!S{kFjjG=&%", "\$2a\$04\$mhHAh0wpgw5nWP/Cy8XdFO6CtwHiHshfoi.m.EegNke0FJFFvU9.u"),
+  ("e2Oth2G+?qki].:Sn0G%Y0-y", "\$2a\$05\$QlvzacJaS6ps2wU3QSnDK.QC.qVojaFFsu0ZoNqZyewidlByPkZuS"),
+  ("^gw", "\$2a\$06\$qqxJxeaiOVDQQ3zexffOHOosjgAzGAWq.mU4LsBrUCQeK297Ur4vC"),
+  ("?H=]9:\$r.dl@3z&2aMtt)", "\$2a\$07\$BR.J866zX3Aw3Pstdk6Rmu.jhf8xwrmC5wX7Y/8r8dpq8bghUNHRW"),
+  ("_Dz*@F[?eS.v,=G@KSL8oRxEP@q6AaaL9_2kl0-z", "\$2a\$04\$9IqPx/69Y7gzhhg4YGnUpe26fzULw82aKOXOHgZukKcjCxc5Ta8Iq"),
+  ("GL\$uMBE?&dUi->", "\$2a\$05\$wTTGTfy3C1altMT.e2kRP.z31hom0.Vla3V6BJailJctH7E3aYvee"),
+  ("BpG#KgcgSCP+Wd<MU.:=S?7Y3^ND>kBkhp[*3P", "\$2a\$06\$kxUr96eLXIS5zrODxBLZ3e9jycukv2JcvdLLRCz/p5mBg72lrK8DK"),
+  ("ocs<", "\$2a\$07\$2FVAGjd76wHWl66K75KvWOnkiaQ/XmktZRkfWk0FoYdt8GJFS2yiO"),
+  ("j4cu,6kS!}k@hho@in)550ieD@hb", "\$2a\$04\$I.GByPLsVJcMzjiE0e17MugLoRZUuLlQ5lz2kR3KZso.2BbBu4fNq"),
+  ("DdM0H;nw;]QMJEru[l", "\$2a\$05\$9RHVKXy/nJTgGcfZ39QeBe6iBcIeRaHPuUxXiIVLWAM4USIhmnMHW"),
+  ("?*u2^dNQ.6iS;tB_tq_pvrT4W!=9iCJ", "\$2a\$06\$BBOCMQig12MG7FP3.dI4kuNvAKgdWsOEkPBd33SLtg0qfOp7spUbu"),
+  ("e92]uWUY2)lz4)ia&J5[+Ph", "\$2a\$07\$zW4GQp/vSzLUUsEZCAWZzO2dIr5pqeegGN1Q.DfY6VWOwEPx/QycO"),
+  ("pwIvATsu8s5=D", "\$2a\$04\$Mp9ilSTE7o0j4Efs54Y5heBkLfn8Ger29vsIls3NBB51/oODXiUpe"),
+  ("-5OA9fVgog:C1Q", "\$2a\$05\$MX7Ww.8Vh.P96CkIEtbUi.Nn/EydTu7.EAl6gsz8A9HaHqYAhNgru"),
+  ("Tx)rnI", "\$2a\$06\$tCg82UUnLoPRfqbcAwP1pedVBqimSt5fqMRG/CkrKA6hl7pIWOyKi"),
+  ("8=7J0G=5<y,YgxjeP%i-V)?", "\$2a\$07\$mXj5tRuafbj4v7tf8sztbemuE4INIUBM55p3FV3.U5RKIaNRq/mo."),
+  ("!}rx:;pek)B;/.JwCu;I0:J7br^rsI99I(i#Q", "\$2a\$04\$pYbjWj5SdpNVEqBgbyida.eAyPus2wP84.gbLl/bOcs6bjhiRUizq")
+]
+
+test "41 jBCrypt hashes verify, and a changed password is refused below the 72 byte limit" {
+  for (pw, h) in jbcrypt_cases() {
+    assert checkpw(pw, h)
+    if len(bytes.utf8(pw)) < 72 {
+      assert not checkpw(pw ++ "x", h)
+    }
+  }
+  assert len(jbcrypt_cases()) == 41
+}
+
+test "a cost 12 hash minted by jBCrypt verifies" {
+  assert checkpw("correct horse battery staple", "\$2a\$12\$abcdefghijklmnopqrstuu0sDWleciW5uGBGYwxpcgAsh9WK4bWNy")
+  assert not checkpw("correct horse battery stapl", "\$2a\$12\$abcdefghijklmnopqrstuu0sDWleciW5uGBGYwxpcgAsh9WK4bWNy")
+}
+
+test "the state buffer is private to each call: the same input hashes the same every time" {
+  let salt = bytes.utf8("0123456789abcdef")
+  let h1 = hash_with_salt("hunter2", salt, 4)
+  let other = hash_with_salt("another password", salt, 5)
+  let h2 = hash_with_salt("hunter2", salt, 4)
+  assert h1 == h2
+  assert other != h1
+}

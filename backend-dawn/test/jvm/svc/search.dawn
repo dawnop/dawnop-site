@@ -1,0 +1,10 @@
+test "html_escape and title highlight" {
+  assert html_escape("a<b>&\"'") == "a&lt;b&gt;&amp;&quot;&#x27;"
+  assert title_html("Dawnop-site", ["dawn"]) == "<mark>Dawn</mark>op-site"
+  assert mark("hello world", ["WORLD"]) == "hello <mark>world</mark>"
+}
+
+test "strip_md removes fences and symbols" {
+  assert strip_md("# Title\n\n```\ncode\n```\ntext `x` here") == "Title text here"
+  assert strip_md("a [link](http://x) b") == "a link b"
+}

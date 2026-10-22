@@ -145,7 +145,7 @@ fi
 printf 'PASS  mutate.py rejects unknown mutants\n'
 
 base_log="$work/base.log"
-if ! "$DAWN" test "$BACKEND" >"$base_log" 2>&1; then
+if ! python3 "$BACKEND/scripts/test_project.py" --dawn "$DAWN" >"$base_log" 2>&1; then
   cat "$base_log" >&2
   exit 1
 fi
@@ -174,7 +174,7 @@ done <"$MATRIX"
 
 if printf '%s\n' "${roles[@]}" | grep -qx qiniu; then
   base_build_log="$work/base.build.log"
-  if ! "$DAWN" build "$BACKEND" -o "$work/base.jar" >"$base_build_log" 2>&1; then
+  if ! "$DAWN" build "$BACKEND/app/jvm" -o "$work/base.jar" >"$base_build_log" 2>&1; then
     cat "$base_build_log" >&2
     exit 1
   fi
@@ -200,8 +200,7 @@ for index in "${!mutants[@]}"; do
   owner="${owners[$index]}"
   project="$work/$mutant/backend-dawn"
   mkdir -p "$project"
-  cp "$BACKEND/dawn.toml" "$BACKEND/dawn.lock" "$project/"
-  cp -R "$BACKEND/src" "$project/src"
+  python3 "$BACKEND/scripts/test_project.py" --stage "$project"
   # mutate.py refuses a directory without this; see scripts/mutant_workdir.py
   : >"$project/.mutant-workdir"
   python3 "$MUTATOR" "$mutant" "$project"

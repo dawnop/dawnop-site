@@ -1,0 +1,11 @@
+test "valid_slug accepts clean slugs, rejects the rest" {
+  assert valid_slug("dawn-trait-orphan")
+  assert valid_slug("about-timeline")
+  assert valid_slug("abc123")
+  assert not valid_slug("-lead")
+  assert not valid_slug("trail-")
+  assert not valid_slug("dou--ble")
+  assert not valid_slug("Upper")
+  assert not valid_slug("has space")
+  assert not valid_slug("")
+}

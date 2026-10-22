@@ -1,0 +1,7 @@
+test "word_count mixes CJK chars and ascii runs" {
+  assert word_count("hello world") == 2
+  assert word_count("你好世界") == 4
+  assert word_count("dawn 语言 v2") == 4
+  assert word_count("") == 0
+  assert word_count("a-b-c") == 3
+}

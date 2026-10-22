@@ -1,0 +1,156 @@
+use db/sql.{open, exec, scalar_int}
+test "a link is judged revoked, then expired, then exhausted, then by its directory" {
+  let fresh = row(0, 0)
+  assert status_of(fresh, 999, true) == Active
+  # expiry is inclusive of the instant itself
+  assert status_of(fresh, 1000, true) == Expired
+  assert status_of(DropRow { ..fresh, revoked: true }, 0, true) == Revoked
+  assert status_of(DropRow { ..fresh, revoked: true }, 5000, false) == Revoked
+  assert status_of(row(3, 0), 0, true) == Exhausted
+  assert status_of(row(0, 250), 0, true) == Exhausted
+  assert status_of(fresh, 0, false) == DirMissing
+  assert status_text(DirMissing) == "dir_missing"
+}
+
+test "quota admits a file only when it fits every limit" {
+  assert quota_refusal(row(0, 0), 100) == None
+  assert quota_refusal(row(0, 0), 0) == None
+  assert quota_refusal(row(0, 0), 101) == Some(TooLarge("文件超过单文件上限（100 字节）"))
+  assert quota_refusal(row(0, 0), -1) == Some(Unprocessable("size 不能为负数"))
+  assert quota_refusal(row(2, 200), 50) == None
+  assert quota_refusal(row(2, 200), 51) == Some(TooLarge("超出上传链接的总额度（剩余 50 字节）"))
+  assert quota_refusal(row(3, 0), 1) == Some(Gone("上传链接的文件数已达上限"))
+}
+
+fn cp(n: Int) -> String =
+  match char.of(n) {
+    Some(c) -> from_code_points([c])
+    None -> ""
+  }
+
+test "a drop name is one plain path segment" {
+  assert name_refusal("report.pdf") == None
+  assert name_refusal("报告 v2.pdf") == None
+  assert name_refusal(".hidden") == None
+  assert name_refusal("") == Some("文件名不能为空")
+  assert name_refusal(".") == Some("文件名不能是 . 或 ..")
+  assert name_refusal("..") == Some("文件名不能是 . 或 ..")
+  assert name_refusal("../x") == Some("文件名不能包含 / 或 \\")
+  assert name_refusal("a/b") == Some("文件名不能包含 / 或 \\")
+  assert name_refusal("a\\b") == Some("文件名不能包含 / 或 \\")
+  assert name_refusal("a" ++ cp(0x00) ++ "b") == Some("文件名不能包含控制字符")
+  assert name_refusal("a" ++ cp(0x0A) ++ "b") == Some("文件名不能包含控制字符")
+  assert name_refusal("a" ++ cp(0x7F)) == Some("文件名不能包含控制字符")
+  assert name_refusal("a" ++ cp(0x85) ++ "b") == Some("文件名不能包含控制字符")
+  # the write guard still runs: edge whitespace is refused there
+  assert name_refusal(" a.txt") == Some("名称不能以空白开头或结尾")
+  assert name_refusal("   ") == Some("名称不能只由空白组成")
+  # 255 bytes is the cap, counted in UTF-8 (each 中 is three)
+  assert name_refusal(join(map(range(0, 85), _i => "中"), "")) == None
+  assert name_refusal(join(map(range(0, 86), _i => "中"), "")) == Some("文件名不能超过 255 字节")
+}
+
+test "a taken name is retried with a counter before the extension" {
+  assert candidate_name("a.txt", 0) == "a.txt"
+  assert candidate_name("a.txt", 1) == "a (1).txt"
+  assert candidate_name("a.tar.gz", 2) == "a.tar (2).gz"
+  assert candidate_name("README", 3) == "README (3)"
+  assert candidate_name(".env", 1) == ".env (1)"
+}
+
+test "only a short alphanumeric extension reaches the object key" {
+  assert key_ext_ok("pdf")
+  assert key_ext_ok("JPG")
+  assert not key_ext_ok("")
+  assert not key_ext_ok("p f")
+  assert not key_ext_ok("中文")
+  assert not key_ext_ok("abcdefghijklmnopq")
+}
+
+test "a direct credential lives at most an hour and never past the link" {
+  assert direct_deadline(1000, 100000, 3600) == 4600
+  assert direct_deadline(1000, 100000, 86400) == 4600
+  assert direct_deadline(1000, 100000, 60) == 1060
+  assert direct_deadline(1000, 2000, 3600) == 2000
+  assert direct_size_limit(row(0, 0)) == 100
+  assert direct_size_limit(row(1, 200)) == 50
+}
+
+fn spec() -> DropSpec =
+  DropSpec {
+    dir: "in", label: "", expires_in_s: DEFAULT_EXPIRES_S, max_files: DEFAULT_MAX_FILES,
+    max_file_bytes: DEFAULT_MAX_FILE_BYTES, max_total_bytes: DEFAULT_MAX_TOTAL_BYTES,
+  }
+
+test "link parameters are held to their ranges" {
+  assert spec_refusal(spec()) == None
+  assert spec_refusal(DropSpec { ..spec(), expires_in_s: 59 }) != None
+  assert spec_refusal(DropSpec { ..spec(), expires_in_s: 60 }) == None
+  assert spec_refusal(DropSpec { ..spec(), expires_in_s: 2592001 }) != None
+  assert spec_refusal(DropSpec { ..spec(), max_files: 0 }) != None
+  assert spec_refusal(DropSpec { ..spec(), max_files: 1001 }) != None
+  assert spec_refusal(DropSpec { ..spec(), max_file_bytes: 5368709121 }) != None
+  assert spec_refusal(DropSpec { ..spec(), max_total_bytes: 53687091201 }) != None
+  assert spec_refusal(DropSpec { ..spec(), label: join(map(range(0, 100), _i => "标"), "") }) == None
+  assert spec_refusal(DropSpec { ..spec(), label: join(map(range(0, 101), _i => "标"), "") }) != None
+}
+
+fn commit_test_db() -> DbConn !io = {
+  let c = open("jdbc:sqlite::memory:")
+  let _t = exec(c, "create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null)", [])
+  let _p = exec(c, "create table pending_uploads (key text primary key, path text not null, created_at text not null)", [])
+  let _s = ensure_schema(c)
+  let _d = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('in', 1, null, '', 0, 'now', 'now')", [])
+  let _f = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('in/a.txt', 0, 'old-key', 'text/plain', 3, 'now', 'now')", [])
+  let _l = exec(c, "insert into upload_drops (id, token_hash, dir, created_at, expires_at, max_files, max_file_bytes, max_total_bytes) values (1, 'h', 'in', 'now', 1000, 3, 100, 250)", [])
+  c
+}
+
+fn committed(r: Result[Result[(String, Int), Refusal], String]) -> Option[String] =
+  match r {
+    Ok(Ok(pair)) -> {
+      let (name, _size) = pair
+      Some(name)
+    }
+    _ -> None
+  }
+
+test "the final write never overwrites: a taken name gets the next counter" {
+  let c = commit_test_db()
+  let r = with_immediate_tx(c, () => commit_tx(c, 1, "a.txt", "k1", None, "text/plain", 10, 0))
+  assert committed(r) == Some("a (1).txt")
+  # the original row is untouched
+  assert scalar_int(c, "select count(*) from files where path = 'in/a.txt' and key = 'old-key' and size = 3", []) == Ok(1)
+  assert scalar_int(c, "select count(*) from files where path = 'in/a (1).txt' and key = 'k1'", []) == Ok(1)
+  assert scalar_int(c, "select used_files * 1000 + used_bytes from upload_drops where id = 1", []) == Ok(1010)
+}
+
+test "the final write re-checks quota with the real size and writes nothing on refusal" {
+  let c = commit_test_db()
+  let _u = exec(c, "update upload_drops set used_files = 2, used_bytes = 200 where id = 1", [])
+  let r = with_immediate_tx(c, () => commit_tx(c, 1, "b.txt", "k2", None, "text/plain", 51, 0))
+  assert r == Ok(Err(TooLarge("超出上传链接的总额度（剩余 50 字节）")))
+  assert scalar_int(c, "select count(*) from files where key = 'k2'", []) == Ok(0)
+  assert scalar_int(c, "select used_files * 1000 + used_bytes from upload_drops where id = 1", []) == Ok(2200)
+}
+
+test "the final write consumes a reservation once and refuses its replay" {
+  let c = commit_test_db()
+  let p = DropPending { key: "k3", drop_id: 1, rel: "in/c.txt", size_limit: 100 }
+  let _r = with_immediate_tx(c, () => reserve_key(c, "k3", 1, "in/c.txt", 100))
+  let first = with_immediate_tx(c, () => commit_tx(c, 1, "c.txt", "k3", Some(p), "text/plain", 5, 0))
+  assert committed(first) == Some("c.txt")
+  assert scalar_int(c, "select count(*) from drop_pending", []) == Ok(0)
+  assert scalar_int(c, "select count(*) from pending_uploads", []) == Ok(0)
+  let replay = with_immediate_tx(c, () => commit_tx(c, 1, "c.txt", "k3", Some(p), "text/plain", 5, 0))
+  assert replay == Ok(Err(NotFound("上传凭证不存在或已登记")))
+  assert scalar_int(c, "select count(*) from files where key = 'k3'", []) == Ok(1)
+}
+
+test "the final write refuses an expired or revoked link" {
+  let c = commit_test_db()
+  assert with_immediate_tx(c, () => commit_tx(c, 1, "d.txt", "k4", None, "text/plain", 1, 1000)) == Ok(Err(Gone("上传链接已过期")))
+  let _v = exec(c, "update upload_drops set revoked = 1 where id = 1", [])
+  assert with_immediate_tx(c, () => commit_tx(c, 1, "d.txt", "k4", None, "text/plain", 1, 0)) == Ok(Err(Gone("上传链接已被吊销")))
+  assert scalar_int(c, "select count(*) from files where key = 'k4'", []) == Ok(0)
+}

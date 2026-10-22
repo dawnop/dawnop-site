@@ -1,0 +1,521 @@
+use java "java.lang.String"
+use std/bytes
+use site_core/qiniu/creds.{Qiniu}
+use util/ttl.{new_cell}
+use util/http.{HttpCell, HttpResp, new_client, with_upstream, pending, no_answer}
+use db/db.{Db}
+use java "java.util.concurrent.atomic.AtomicReference"
+use java "com.sun.net.httpserver.HttpServer"
+use java "java.net.InetSocketAddress"
+
+# ---- tests: the /proc readers, fed fixed sample text ----
+#
+# The four blocks above read a file and hand the text to a pure parser; these
+# pin the parsers. Sample text is copied from a real Ubuntu 22.04 host, so a
+# column-index slip (which is how these break) fails here rather than silently
+# reporting plausible-looking numbers in production.
+
+test "cpu_of takes busy/total jiffies off the aggregate cpu line" {
+  let stat = "cpu  100 20 30 800 40 0 5 0 0 0\ncpu0 50 10 15 400 20 0 2 0 0 0\nintr 12345\n"
+  # fields 1..8 sum to total; idle = field 4 (idle) + field 5 (iowait) = 800 + 40
+  let (busy, total) = cpu_of(stat)
+  assert total == 100 + 20 + 30 + 800 + 40 + 0 + 5 + 0
+  assert busy == total - 840
+  # a short line must not index past the end
+  assert cpu_of("cpu  1 2\n") == (3, 3)
+  assert cpu_of("") == (0, 0)
+}
+
+test "cpu_count_of counts cpuN lines and not the aggregate or other cpu-prefixed keys" {
+  let stat = "cpu  100 20 30 800 40 0 5 0 0 0\ncpu0 50 10 15 400 20 0 2 0 0 0\ncpu1 50 10 15 400 20 0 3 0 0 0\nintr 1\n"
+  assert cpu_count_of(stat) == 2
+  assert cpu_count_of("cpu  1 2 3\n") == 0
+  assert cpu_count_of("") == 0
+  assert cpu_count_of("cpu12 1 2\ncpu13 1 2\ncpufreq 1\n") == 2
+}
+
+test "a host without /proc answers the same keys with nothing in them" {
+  let disk = obj([("total", jint(10)), ("used", jint(4)), ("percent", JNum(40.0))])
+  let j = no_proc_server(disk)
+  assert field(j, "source") == JStr("none")
+  assert field(j, "cpu_count") == jint(0)
+  assert field(j, "load") == JArr([JNull, JNull, JNull])
+  assert field(j, "uptime") == jint(0)
+  assert field(j, "disk") == disk
+}
+
+test "loadavg_of reads the three averages, and only those" {
+  assert loadavg_of("0.52 0.31 0.28 1/394 21755\n") == JArr([JNum(0.52), JNum(0.31), JNum(0.28)])
+}
+
+test "meminfo_of reports used = total - available, in bytes" {
+  let mem = "MemTotal:        4000000 kB\nMemFree:          500000 kB\nMemAvailable:    1000000 kB\nBuffers:          100000 kB\n"
+  # psutil's "used" is total - available, not total - free
+  assert meminfo_of(mem) == obj([
+    ("total", jint(4000000 * 1024)),
+    ("used", jint(3000000 * 1024)),
+    ("percent", JNum(75.0)),
+  ])
+  # a missing key reads 0 rather than throwing
+  assert meminfo_of("MemTotal:  0 kB\n") == obj([("total", jint(0)), ("used", jint(0)), ("percent", JNum(0.0))])
+}
+
+test "net_totals_of sums every interface (recv = field 0, sent = field 8)" {
+  let dev = "Inter-|   Receive                                                |  Transmit\n" ++
+    " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n" ++
+    "    lo:    1000      10    0    0    0     0          0         0     2000      20    0    0    0     0       0          0\n" ++
+    "  eth0:  300000    3000    0    0    0     0          0         0   400000    4000    0    0    0     0       0          0\n"
+  # the two header lines contain a "|" but the second also contains ":" in "face |bytes";
+  # it has fewer than 9 numeric fields, so it contributes nothing
+  assert net_totals_of(dev) == obj([("sent", jint(402000)), ("recv", jint(301000))])
+}
+
+test "uptime_of takes the first float, truncated to whole seconds" {
+  assert uptime_of("123456.78 987654.32\n") == 123456
+  assert uptime_of("bad\n") == 0
+}
+
+# ---- tests: CPU sampling as a delta between calls ----
+#
+# The reading is the difference between this call's /proc/stat sample and the
+# snapshot the previous call left behind. Two things can go wrong here without
+# changing a single byte of the response: the delta path can quietly stop being
+# taken (the fallback still answers, just slowly and biased by whatever else the
+# request is doing), and the snapshot can quietly stop being refreshed (the
+# window then drifts out to whatever the cache TTL happens to impose). Neither
+# is visible in the shape or in the value, so both are asserted by timing the
+# call and by reading the cell back.
+
+test "cpu_delta_pct is the busy share of the window it spans" {
+  # 50 busy jiffies out of a 200-jiffy window
+  assert cpu_delta_pct((100, 400), (150, 600)) == Some(25.0)
+  assert cpu_delta_pct((100, 400), (100, 600)) == Some(0.0)
+  assert cpu_delta_pct((100, 400), (300, 600)) == Some(100.0)
+  # no window at all: two samples inside the same jiffy cannot be divided by
+  assert cpu_delta_pct((100, 400), (100, 400)) == None
+  # counters that moved backwards. /proc/stat's do not, and the previous
+  # snapshot is always read before the current sample, so none of these three is
+  # reachable; what is pinned is that an unreachable input answers "no reading"
+  # rather than a negative or above-100 percentage
+  assert cpu_delta_pct((100, 400), (100, 399)) == None
+  assert cpu_delta_pct((100, 400), (99, 600)) == None
+  assert cpu_delta_pct((100, 400), (900, 600)) == None
+}
+
+test "a snapshot survives the cell verbatim, and ages out of it" {
+  let cell = new_cell()
+  assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) == None
+  cpu_put(cell, (1234, 5678))
+  assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) == Some((1234, 5678))
+  # older than the bound asked for is not a current reading, and is not offered
+  assert cpu_prev(cell, 0) == None
+  # anything else in the cell reads as no snapshot, never as (0, 0) -- which
+  # would be a delta against the boot of the machine
+  assert cpu_prev_of("") == None
+  assert cpu_prev_of("12") == None
+  assert cpu_prev_of("12 34 56") == None
+  assert cpu_prev_of("busy total") == None
+}
+
+test "a reading with a snapshot to difference against opens no window of its own" {
+  let cell = new_cell()
+
+  # the genuine first call: nothing recorded yet, so this one has to sample a
+  # window and pays for it
+  let t0 = System.currentTimeMillis()
+  let first = io.with_fs_real(() => cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S))
+  let first_ms = System.currentTimeMillis() - t0
+  assert first >= 0.0
+  assert first_ms >= CPU_WINDOW_MS
+
+  # let the jiffy counters move, so the next call has a window to report on
+  Thread.sleep(120)
+
+  let t1 = System.currentTimeMillis()
+  let second = io.with_fs_real(() => cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S))
+  let second_ms = System.currentTimeMillis() - t1
+  assert second >= 0.0
+  # the whole point of the change: the second call reports the 120ms above
+  # instead of sleeping through 300ms of its own. This is the assertion the
+  # cache-hit path's old 300ms floor failed.
+  assert second_ms < CPU_WINDOW_MS
+}
+
+test "every reading leaves its own snapshot behind" {
+  let cell = new_cell()
+  # a plausible snapshot, young enough that this call takes the delta path
+  cpu_put(cell, (0, 0))
+  let _x = io.with_fs_real(() => cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S))
+  # the next call's window has to start here. A reading that differenced and
+  # left the cell alone would keep widening its window until the snapshot aged
+  # out, which is the drift this design exists to remove -- and it would look
+  # exactly like this one from the outside.
+  assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) != Some((0, 0))
+  assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) != None
+}
+
+test "a snapshot too old to describe now sends the call back to sampling" {
+  let cell = new_cell()
+  # present, and usable at the production bound
+  cpu_put(cell, (0, 0))
+  assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) != None
+  # ... but a call that accepts nothing older than 0s has to refuse it and open
+  # its own window. Differencing against a snapshot from an hour ago would put
+  # the hour's average on the dashboard and call it live.
+  let t0 = System.currentTimeMillis()
+  let stale = io.with_fs_real(() => cpu_percent(cell, 0))
+  let stale_ms = System.currentTimeMillis() - t0
+  assert stale >= 0.0
+  assert stale_ms >= CPU_WINDOW_MS
+}
+
+# ---- fault isolation across the collect phase ----
+#
+# The blocks make their calls concurrently now: every request goes on the wire
+# before any reply is read. The property that must survive that is the one this
+# endpoint has always had -- a sub-call that fails lands in its own *_error
+# field and the others still answer -- because a version where one failure takes
+# the whole response with it is strictly worse than the serial code it replaced.
+#
+# These drive the collect phase directly, with hand-built pending requests
+# aimed at a loopback peer. That is deliberate: the start functions sign for the
+# real qiniu and Tencent hosts, so a test that went through them would either
+# reach the internet or test nothing. What is under test here is the collecting,
+# which is where the isolation lives and where a rewrite would break it.
+
+## A loopback peer answering a fixed (status, body) per path. Anything not
+## listed answers 500, which is how a test fails exactly one sub-call.
+fn stub_server(routes: List[(String, String)]) -> (HttpServer, Int) !io = {
+  let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
+  server.createContext("/", ex => {
+    let path = String.valueOf(ex.getRequestURI()!.getPath()!)!
+    let nothing: Option[String] = None
+    let hit = fold(routes, nothing, (acc: Option[String], r) => {
+      let (p, body) = r
+      if p == path { Some(body) } else { acc }
+    })
+    let (status, text) = match hit {
+      Some(body) -> (200, body)
+      None -> (500, "{\"error\":\"no such stub route\"}")
+    }
+    let payload = bytes.utf8(text)
+    ex.sendResponseHeaders(status, len(payload))
+    let os = ex.getResponseBody()!
+    os.write(payload)
+    os.close()
+  })
+  server.start()
+  (server, server.getAddress()!.getPort())
+}
+
+fn stub_q(port: Int, path: String, fail: String) -> PendingQ !Upstream !io =
+  match fetch_start("http://127.0.0.1:${port}${path}", []) {
+    Ok(p) -> PendingQ { p: p, fail: fail }
+    Err(m) -> panic("stub start failed: ${m}")
+  }
+
+fn stub_tc(port: Int, path: String, action: String) -> Result[PendingTc, String] !Upstream !io =
+  match fetch_start("http://127.0.0.1:${port}${path}", []) {
+    Ok(p) -> Ok(PendingTc { p: p, action: action })
+    Err(m) -> panic("stub start failed: ${m}")
+  }
+
+fn test_auth_with(cl: HttpCell, ak: String) -> Auth =
+  Auth {
+    db: Db { path: "", ext: "" },
+    secret: "test",
+    expire_min: 1,
+    storage_quota: 10,
+    qiniu: Qiniu {
+      ak: ak,
+      sk: "test-sk",
+      bucket: "test-bucket",
+      domain: "",
+      expires: 3600,
+      rs_host: "",
+      up_host: "",
+    },
+    http: cl,
+  }
+
+fn test_auth(cl: HttpCell) -> Auth = test_auth_with(cl, "test-ak")
+
+fn key_present(j: Json, key: String) -> Bool = field(j, key) != JNull
+
+# Whether a start phase issued anything. `== None` cannot ask this any more: a
+# Pending holds the thunk that delivers its reply, and functions do not compare.
+fn nothing_started[T](o: Option[T]) -> Bool =
+  match o {
+    None -> true
+    Some(_v) -> false
+  }
+
+test "a failing qiniu sub-fetch reports itself and leaves the other groups whole" {
+  let (server, port) = stub_server([
+    ("/series", "{\"times\":[1000,2000],\"datas\":[10,20]}"),
+    ("/flow", "[{\"time\":\"2026-08-01\",\"values\":{\"flow\":5,\"hits\":7}}]"),
+    # no domains means the two tune queries are never issued, so this test
+    # needs no stand-in for fusion and stays hermetic
+    ("/domains", "{\"domains\":[]}"),
+    ("/respack-list", "{\"data\":[{\"status\":2,\"respack_name\":\"流量包\",\"used_amount\":1,\"total_amount\":4,\"effective_end\":\"2026-12-01\"}]}"),
+    ("/respack-overview", "{\"data\":[{\"item_name\":\"存储包\",\"total_surplus\":3}]}"),
+  ])
+  let cl = new_client()
+  let a = test_auth(cl)
+  let cell = new_cell()
+
+  # one of the four kodo requests points at a path the stub refuses
+  let j = with_upstream(cl, () => {
+    let started = QiniuPending {
+      kodo: Ok(KodoPending {
+        space: stub_q(port, "/series", "七牛统计失败 /v6/space"),
+        count: stub_q(port, "/missing", "七牛统计失败 /v6/count"),
+        flow: stub_q(port, "/flow", "七牛统计失败 /v6/blob_io"),
+        hits: stub_q(port, "/flow", "七牛统计失败 /v6/blob_io"),
+      }),
+      domains: Ok(stub_q(port, "/domains", "七牛 CDN 接口失败 /domain")),
+      respack: Some(Ok(PendingRespack {
+        listing: stub_q(port, "/respack-list", "七牛 CDN 接口失败 /billing-api/v1/respack/list"),
+        overview: stub_q(port, "/respack-overview", "七牛 CDN 接口失败 /billing-api/v1/respack/month-overview"),
+      })),
+    }
+    qiniu_collect(a, cell, Some(started))
+  })
+  server.stop(0)
+
+  # the kodo group failed, and said so in its own field, naming the request
+  assert field(j, "error") == JStr("七牛统计失败 /v6/count: 500")
+  # ... it did not become the whole answer: the block is still a block
+  assert field(j, "configured") == jbool(true)
+  assert field(j, "bucket") == JStr("test-bucket")
+  # ... the failing group contributed nothing else
+  assert not key_present(j, "space")
+  assert not key_present(j, "flow_30d")
+  # ... and both other groups answered in full
+  assert field(j, "cdn_domains") == JArr([])
+  assert field(j, "cdn_flow_30d") == JInt(0)
+  assert not key_present(j, "cdn_error")
+  assert key_present(j, "cdn_pack")
+  assert key_present(j, "storage_pack")
+  assert not key_present(j, "respack_error")
+  # the respack answer really was read, not defaulted away
+  assert field(field(j, "cdn_pack"), "total") == JInt(4 * 1073741824)
+  # and a success refills the shared cell, as the serial version did
+  assert cache_get(cell, 300) != None
+}
+
+test "each qiniu group fails alone, whichever one it is" {
+  # The negative control for the test above: with the failure moved to another
+  # group, the fields that survived there are the ones that now fail, and the
+  # kodo numbers come back. A collect phase that let any one failure escape
+  # would fail both tests; one that special-cased kodo would fail this one.
+  let (server, port) = stub_server([
+    ("/series", "{\"times\":[1000,2000],\"datas\":[10,20]}"),
+    ("/flow", "[{\"time\":\"2026-08-01\",\"values\":{\"flow\":5,\"hits\":7}}]"),
+    ("/domains", "{\"domains\":[]}"),
+  ])
+  let cl = new_client()
+  let a = test_auth(cl)
+  let cell = new_cell()
+  let j = with_upstream(cl, () => {
+    let started = QiniuPending {
+      kodo: Ok(KodoPending {
+        space: stub_q(port, "/series", "七牛统计失败 /v6/space"),
+        count: stub_q(port, "/series", "七牛统计失败 /v6/count"),
+        flow: stub_q(port, "/flow", "七牛统计失败 /v6/blob_io"),
+        hits: stub_q(port, "/flow", "七牛统计失败 /v6/blob_io"),
+      }),
+      domains: Ok(stub_q(port, "/domains", "七牛 CDN 接口失败 /domain")),
+      # this time it is respack that cannot be reached
+      respack: Some(Ok(PendingRespack {
+        listing: stub_q(port, "/missing", "七牛 CDN 接口失败 /billing-api/v1/respack/list"),
+        overview: stub_q(port, "/missing", "七牛 CDN 接口失败 /billing-api/v1/respack/month-overview"),
+      })),
+    }
+    qiniu_collect(a, cell, Some(started))
+  })
+  server.stop(0)
+
+  assert field(j, "respack_error") == JStr("七牛 CDN 接口失败 /billing-api/v1/respack/list: 500")
+  assert not key_present(j, "cdn_pack")
+  assert not key_present(j, "storage_pack")
+  # the groups that did answer are all there
+  assert not key_present(j, "error")
+  assert field(j, "space") == JInt(20)
+  assert field(j, "count") == JInt(20)
+  assert field(j, "flow_30d") == JInt(5)
+  assert field(j, "hits_30d") == JInt(7)
+  assert field(j, "cdn_domains") == JArr([])
+  # a failed respack must NOT poison the cell it shares with fm stats
+  assert cache_get(cell, 300) == None
+}
+
+test "a lighthouse call that fails to start is isolated like one that fails in flight" {
+  # A start can fail too (a malformed URL, a client that refuses the request),
+  # and it happens before any thread is involved. It has to land in the same
+  # per-call *_error field, or the concurrent version would have a failure mode
+  # the serial one did not.
+  let (server, port) = stub_server([
+    ("/instances", "{\"Response\":{\"InstanceSet\":[{\"InstanceName\":\"box\",\"CPU\":4,\"Memory\":4,\"InstanceState\":\"RUNNING\",\"PublicAddresses\":[\"203.0.113.9\"],\"SystemDisk\":{\"DiskSize\":60},\"ExpiredTime\":\"2027-01-01T00:00:00Z\",\"CreatedTime\":\"2026-01-01T00:00:00Z\"}]}}"),
+    ("/trend", "{\"Response\":{\"DataPoints\":[{\"Timestamps\":[1000,2000],\"Values\":[1.5,2.5]}]}}"),
+  ])
+  let cl = new_client()
+  let started = with_upstream(cl, () => Some(LighthousePending {
+    # never started at all
+    traffic: Err("流量包请求未发出"),
+    instance: stub_tc(port, "/instances", "DescribeInstances"),
+    trend: stub_tc(port, "/trend", "GetMonitorData"),
+  }))
+  let j = lighthouse_collect(started)
+  server.stop(0)
+
+  assert field(j, "configured") == jbool(true)
+  assert field(j, "traffic_error") == JStr("流量包请求未发出")
+  assert not key_present(j, "traffic")
+  # the other two are untouched by it
+  assert not key_present(j, "instance_error")
+  assert field(field(j, "instance"), "name") == JStr("box")
+  assert field(field(j, "instance"), "cpu") == JInt(4)
+  assert not key_present(j, "cpu_trend_error")
+  assert field(j, "cpu_trend") == JArr([
+    obj([("t", JInt(1000)), ("v", JNum(1.5))]),
+    obj([("t", JInt(2000)), ("v", JNum(2.5))]),
+  ])
+}
+
+test "an API-level Error is still one call's failure, not the block's" {
+  # Tencent answers 200 with an Error object in the body; tc_resp turns that
+  # into an Err. It must isolate exactly like a transport failure does.
+  let (server, port) = stub_server([
+    ("/denied", "{\"Response\":{\"Error\":{\"Code\":\"AuthFailure\",\"Message\":\"签名过期\"},\"RequestId\":\"x\"}}"),
+    ("/trend", "{\"Response\":{\"DataPoints\":[]}}"),
+    ("/instances", "{\"Response\":{\"InstanceSet\":[{\"InstanceName\":\"box\",\"CPU\":4,\"Memory\":4,\"InstanceState\":\"RUNNING\",\"PublicAddresses\":[],\"SystemDisk\":{\"DiskSize\":60},\"ExpiredTime\":\"\",\"CreatedTime\":\"\"}]}}"),
+  ])
+  let cl = new_client()
+  let j = lighthouse_collect(with_upstream(cl, () => Some(LighthousePending {
+    traffic: stub_tc(port, "/denied", "DescribeInstancesTrafficPackages"),
+    instance: stub_tc(port, "/instances", "DescribeInstances"),
+    trend: stub_tc(port, "/trend", "GetMonitorData"),
+  })))
+  server.stop(0)
+
+  assert field(j, "traffic_error") == JStr("DescribeInstancesTrafficPackages 失败: AuthFailure 签名过期")
+  assert field(field(j, "instance"), "name") == JStr("box")
+  assert field(j, "cpu_trend") == JArr([])
+}
+
+test "an unconfigured block asks nothing and answers the constant" {
+  let cl = new_client()
+  let cell = new_cell()
+  let blank = test_auth_with(cl, "")
+  # no credentials means no request is started at all -- the start phase is
+  # where that decision is made, so it is the start phase that must make it.
+  # A Pending carries the thunk that will deliver its reply, so these Options
+  # hold a function and cannot be compared; `nothing_started` asks the only
+  # question this is about.
+  let (no_key, no_id, no_ak) = with_upstream(cl, () => (
+    lighthouse_start("", "key", "ap-guangzhou", "lhins-x"),
+    lighthouse_start("id", "", "ap-guangzhou", "lhins-x"),
+    qiniu_start(blank, cell),
+  ))
+  assert nothing_started(no_key)
+  assert nothing_started(no_id)
+  assert nothing_started(no_ak)
+  assert lighthouse_collect(None) == obj([("configured", jbool(false))])
+  assert with_upstream(cl, () => qiniu_collect(blank, cell, None)) ==
+    obj([("configured", jbool(false))])
+}
+
+# ---- concurrency, asserted without a clock ----
+#
+# `util/http` proves that `sendAsync` really overlaps, against three peers that
+# each stall for a second. What it cannot prove is that THIS caller starts
+# everything before it reads anything: a version that awaited each reply before
+# issuing the next would still pass every assertion about the block's contents,
+# and the only signal left would be the wall clock -- which is what the http
+# test spends a second on and what turns red on a loaded machine.
+#
+# The Upstream handler makes the order itself observable. `exchange_start` runs
+# when a request goes out and the thunk it returns runs when the reply is read,
+# so the log below is the interleaving, exactly.
+
+## An append-only string an arm can write to. Dawn has no global mutable state;
+## this is the shape util/ttl's cells already use.
+fn log_new() -> AtomicReference !io = AtomicReference.new("")
+
+fn log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!
+
+fn log_add(r: AtomicReference, s: String) -> Unit !io = r.set("${log_read(r)}${s};")
+
+fn header_value(hs: List[(String, String)], name: String) -> String =
+  fold(hs, "", (acc, kv) => {
+    let (k, v) = kv
+    if k == name { v } else { acc }
+  })
+
+# One canned Tencent reply per action, so the block is assembled from real
+# replies rather than from a single constant every arm returns.
+fn tc_canned(action: String) -> String =
+  if action == "DescribeInstancesTrafficPackages" {
+    "{\"Response\":{\"InstanceTrafficPackageSet\":[{\"TrafficPackageSet\":[{\"TrafficUsed\":7,\"TrafficPackageTotal\":10,\"TrafficPackageRemaining\":3,\"TrafficOverflow\":0,\"StartTime\":\"a\",\"EndTime\":\"b\",\"Status\":\"NETWORK_NORMAL\"}]}]}}"
+  } else if action == "DescribeInstances" {
+    "{\"Response\":{\"InstanceSet\":[{\"InstanceName\":\"box\",\"CPU\":4,\"Memory\":4,\"InstanceState\":\"RUNNING\",\"PublicAddresses\":[\"203.0.113.9\"],\"SystemDisk\":{\"DiskSize\":60},\"ExpiredTime\":\"\",\"CreatedTime\":\"\"}]}}"
+  } else if action == "GetMonitorData" {
+    "{\"Response\":{\"DataPoints\":[{\"Timestamps\":[1000],\"Values\":[1.5]}]}}"
+  } else {
+    "{\"Response\":{\"Error\":{\"Code\":\"NoSuchAction\",\"Message\":\"${action}\"}}}"
+  }
+
+test "the three lighthouse calls all go out before any reply is read" {
+  let seen = log_new()
+  let j = {
+    with handle Upstream {
+      exchange(req) => Err(no_answer("exchange"))
+      exchange_bytes(req) => Err(no_answer("exchange_bytes"))
+      exchange_stream(req) => Err(no_answer("exchange_stream"))
+      exchange_start(req) => {
+        let action = header_value(req.headers, "X-TC-Action")
+        log_add(seen, "start ${action}")
+        Ok(pending(req.budget_s, () => {
+          log_add(seen, "await ${action}")
+          Ok(HttpResp { status: 200, body: tc_canned(action) })
+        }))
+      }
+    }
+    lighthouse_collect(lighthouse_start("id", "key", "ap-guangzhou", "lhins-x"))
+  }
+
+  # Three starts, then three awaits. A serial phase would read
+  # "start X;await X;start Y;await Y;..." and no stopwatch is involved either
+  # way. The action names come off the wire, so an arm answering a constant
+  # would not produce three different ones.
+  assert log_read(seen) ==
+    "start DescribeInstancesTrafficPackages;start DescribeInstances;start GetMonitorData;" ++
+    "await DescribeInstancesTrafficPackages;await DescribeInstances;await GetMonitorData;"
+
+  # ... and the block really was assembled out of those three replies
+  assert field(field(j, "traffic"), "used") == JInt(7)
+  assert field(field(j, "instance"), "name") == JStr("box")
+  assert field(j, "cpu_trend") == JArr([obj([("t", JInt(1000)), ("v", JNum(1.5))])])
+}
+
+test "an unconfigured lighthouse block puts nothing on the wire at all" {
+  # The negative control for the log above: with no credentials the same
+  # handler must record nothing, which is what makes "three starts" a
+  # measurement rather than a description of the arm.
+  let seen = log_new()
+  let j = {
+    with handle Upstream {
+      exchange(req) => Err(no_answer("exchange"))
+      exchange_bytes(req) => Err(no_answer("exchange_bytes"))
+      exchange_stream(req) => Err(no_answer("exchange_stream"))
+      exchange_start(req) => {
+        log_add(seen, "start ${req.url}")
+        Err(no_answer("exchange_start"))
+      }
+    }
+    lighthouse_collect(lighthouse_start("", "", "ap-guangzhou", "lhins-x"))
+  }
+  assert log_read(seen) == ""
+  assert j == obj([("configured", jbool(false))])
+}

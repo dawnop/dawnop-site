@@ -1,0 +1,59 @@
+use std/str
+use std/bytes
+use site_core/util/errkind.{upstream, timeout}
+test "the drop token is read from its header only, and once" {
+  let none: Map[String, List[String]] = map.empty()
+  let base = Request {
+    method: "GET", path: "/api/drop", raw_path: "/api/drop", params: none,
+    query: map.from([("token", ["t"])]),
+    headers: map.from([("authorization", ["Bearer t"])]),
+    body: bytes.utf8(""), body_file: None, route: None,
+  }
+  # neither the query string nor Authorization counts
+  assert drop_token(base) == Ok("")
+  assert drop_token(Request { ..base, headers: map.from([("x-drop-token", ["t"])]) }) == Ok("t")
+  match drop_token(Request { ..base, headers: map.from([("x-drop-token", ["t", "u"])]) }) {
+    Err(e) -> { assert e.status == 400 }
+    Ok(_) -> { assert false }
+  }
+}
+
+test "Content-Length is required exactly once, plain decimal, and never with chunking" {
+  let none: Map[String, List[String]] = map.empty()
+  let base = Request {
+    method: "PUT", path: "/", raw_path: "/", params: none, query: none, headers: none,
+    body: bytes.utf8(""), body_file: None, route: None,
+  }
+  let req_with = (hs: List[(String, List[String])]) => Request { ..base, headers: map.from(hs) }
+  assert declared_length(req_with([("content-length", ["12"])])) == Some(12)
+  assert declared_length(req_with([("content-length", ["0"])])) == Some(0)
+  assert declared_length(base) == None
+  assert declared_length(req_with([("content-length", ["12", "12"])])) == None
+  assert declared_length(req_with([("content-length", ["-1"])])) == None
+  assert declared_length(req_with([("content-length", ["1e3"])])) == None
+  assert declared_length(req_with([("content-length", ["12"]), ("transfer-encoding", ["chunked"])])) == None
+  assert declared_length(req_with([("transfer-encoding", ["chunked"])])) == None
+}
+
+test "each refusal kind has its own status" {
+  assert refusal_error(NotFound("x")).status == 404
+  assert refusal_error(Gone("x")).status == 410
+  assert refusal_error(TooLarge("x")).status == 413
+  assert refusal_error(Invalid("x")).status == 400
+  assert refusal_error(Unprocessable("x")).status == 422
+  assert refusal_error(LengthRequired("x")).status == 411
+  assert refusal_error(NoFreeName("x")).status == 409
+  assert drop_error(Failed("database is locked")).status == 500
+}
+
+test "the uploader is told the status of a failure, never its text" {
+  let leaky = Failed("drop reservation consume count changed: 0123abcd.txt")
+  assert public_error(leaky).status == 500
+  assert public_error(leaky).message == "服务器内部错误"
+  let upstream_fail = Failed(upstream("stat http://rs/stat/YnVja2V0OmtleQ== refused"))
+  assert public_error(upstream_fail).status == 502
+  assert not str.contains(public_error(upstream_fail).message, "YnVja2V0")
+  assert public_error(Failed(timeout("outbound HTTP timed out after 10s: x"))).status == 504
+  # refusals are the uploader's to read and pass through as written
+  assert public_error(Refused(Gone("上传链接已过期"))).message == "上传链接已过期"
+}

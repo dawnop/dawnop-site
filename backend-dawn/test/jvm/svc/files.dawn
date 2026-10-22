@@ -1,0 +1,205 @@
+use java "java.lang.String"
+use db/sql.{open, exec}
+use util/http.{HttpResp, MANAGEMENT_TIMEOUT_S, no_answer}
+use java "java.lang.System"
+use java "java.lang.Thread"
+use java "java.util.concurrent.atomic.AtomicReference"
+
+test "upload-token path joins the filename (not the bare dir)" {
+  # subdir upload: full file path, key extension from the filename
+  assert full(token_rel("qiniu://docs", "pic.png")) == "qiniu://docs/pic.png"
+  assert ext(sanitize_name("pic.png")) == "png"
+  # root upload: the file lands at root, not the empty directory
+  assert full(token_rel("", "a.txt")) == "qiniu://a.txt"
+  assert full(token_rel("qiniu://", "a.txt")) == "qiniu://a.txt"
+  # folder upload keeps internal subpath; ext still from the trailing name
+  assert full(token_rel("qiniu://up", "sub/b.md")) == "qiniu://up/sub/b.md"
+  assert ext(sanitize_name("sub/b.md")) == "md"
+  # extensionless file: no dot appended (caller uses a bare uuid key)
+  assert ext(sanitize_name("README")) == ""
+}
+
+test "a text save carries only a short alphanumeric extension into the key" {
+  let id = "0123456789abcdef0123456789abcdef"
+  # ordinary extensions survive, case kept, from the last segment only
+  assert key_for_save(id, "docs/a.txt") == "${id}.txt"
+  assert key_for_save(id, "a.MD") == "${id}.MD"
+  assert key_for_save(id, "a.tar.gz") == "${id}.gz"
+  # no extension, or a leading-dot name: a bare uuid, no trailing dot
+  assert key_for_save(id, "docs/README") == id
+  assert key_for_save(id, ".env") == id
+  # U+010A and U+010D are the JDK low-byte aliases of LF and CR: on web 5.1 they
+  # reached the 302 Location as a real line break
+  assert key_for_save(id, "a.p\u{010A}x") == id
+  assert key_for_save(id, "a.p\u{010D}x") == id
+  # non-ASCII, punctuation, and more than 16 characters
+  assert key_for_save(id, "a.中文") == id
+  assert key_for_save(id, "a.p f") == id
+  assert key_for_save(id, "a.abcdefghijklmnopq") == id
+  assert key_for_save(id, "a.abcdefghijklmnop") == "${id}.abcdefghijklmnop"
+}
+
+test "rebase moves a subtree row onto its new root" {
+  assert rebase("a", "b", "a") == "b"
+  assert rebase("a", "b", "a/c/d.txt") == "b/c/d.txt"
+  assert rebase("docs/x", "arch/y", "docs/x/deep/f.md") == "arch/y/deep/f.md"
+}
+
+test "text save size counts UTF-8 bytes" {
+  assert text_byte_size("ascii") == 5
+  assert text_byte_size("中文") == 6
+  assert text_byte_size("A😀") == 5
+}
+
+test "rename service rejects a parent change" {
+  assert rename_parent_unchanged("dirty/missing/old.txt", "dirty/missing/new.txt")
+  assert not rename_parent_unchanged("old.txt", "missing/deep/new.txt")
+}
+
+test "best-effort GC isolates success, errors, and panics" {
+  let _success: Unit = best_effort_gc(() => Ok(()))
+  let _error: Unit = best_effort_gc(() => Err("expected GC error"))
+  let _panic: Unit = best_effort_gc(() => panic("expected GC panic"))
+  assert true
+}
+
+# ---- the SQLite write-lock window, asserted ----
+#
+# util/http spends seventeen lines arguing that a hung qiniu endpoint stops
+# every write on the site: `gc_unreferenced_on` deletes the object from inside
+# `BEGIN IMMEDIATE`, SQLite has one writer, and a request deadline is the only
+# thing bounding how long that lock is held. Nothing asserted any of it. Doing
+# so needed a real database, a peer that really hangs, and a real clock, and the
+# last two are what made it unaffordable.
+#
+# With the delete behind `Upstream`, the peer is an arm, and the window becomes
+# three things a test can read off it: how many calls go out under the lock,
+# which budget each asked for, and whether the lock is back when gc returns.
+# One call times the management ceiling is the bound.
+#
+# What is deliberately NOT asserted here: that the writer is *reserved* while
+# the call is in flight. An arm can see that -- probe a second connection from
+# inside it -- but two mutants already own that rule at other layers, and the FM
+# ancestor harness holds a test-role mutant to exactly one red assertion and a
+# contract-role mutant to a green Dawn layer. Asserting it a third time here
+# reddens `immediate-tx-as-deferred` (test, owned by db/sql's
+# "with_immediate_tx reserves the writer before its body") and
+# `object-gc-release-lock-before-delete` (contract, owned by
+# webdav.overwrite.gc-after-switch) -- a real dependency that harness would have
+# to call collateral. Owed: either it learns multi-layer ownership, or this
+# stays split across the three layers it is split across today.
+
+fn gc_ok(r: Result[Unit, String]) -> Bool =
+  match r {
+    Ok(_u) -> true
+    Err(_m) -> false
+  }
+
+fn gc_log_new() -> AtomicReference !io = AtomicReference.new("")
+
+fn gc_log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!
+
+fn gc_log_add(r: AtomicReference, s: String) -> Unit !io = r.set("${gc_log_read(r)}${s};")
+
+fn gc_test_qiniu() -> Qiniu =
+  Qiniu {
+    ak: "ak", sk: "sk", bucket: "b", domain: "",
+    expires: 3600, rs_host: "http://127.0.0.1:1", up_host: "http://127.0.0.1:1",
+  }
+
+# Whether a second connection can start its own write transaction right now.
+# It is the only question that matters here, and the only one a connection other
+# than the holder can ask; it rolls back whatever it took.
+fn writer_free(probe: DbConn) -> Bool !io =
+  match exec(probe, "begin immediate", []) {
+    Err(_m) -> false
+    Ok(_n) -> {
+      let _r = exec(probe, "rollback", [])
+      true
+    }
+  }
+
+fn gc_tables(c: DbConn) -> Unit !io = {
+  let _f = exec(c, "create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null)", [])
+  let _p = exec(c, "create table pending_uploads (key text primary key, path text not null, created_at text not null)", [])
+  ()
+}
+
+test "gc's write transaction spans one outbound call, on the management budget" {
+  let c = open("jdbc:sqlite:file:gc_lock_window?mode=memory&cache=shared")
+  let probe = open("jdbc:sqlite:file:gc_lock_window?mode=memory&cache=shared")
+  gc_tables(c)
+  assert writer_free(probe)
+
+  let seen = gc_log_new()
+  let stall_ms = 120
+  let t0 = System.currentTimeMillis()
+  let outcome = {
+    with handle Upstream {
+      exchange(req) => {
+        # what a hung rs endpoint looks like from inside the transaction
+        gc_log_add(seen, "${req.method} budget=${to_string(req.budget_s)}")
+        Thread.sleep(stall_ms)
+        Ok(HttpResp { status: 200, body: "{}" })
+      }
+      exchange_bytes(req) => Err(no_answer("exchange_bytes"))
+      exchange_stream(req) => Err(no_answer("exchange_stream"))
+      exchange_start(req) => Err(no_answer("exchange_start"))
+    }
+    gc_unreferenced_on(gc_test_qiniu(), c, Some("orphan-key"))
+  }
+  let elapsed = System.currentTimeMillis() - t0
+
+  assert gc_ok(outcome)
+  # Exactly one call goes out, on the management budget. That is the window
+  # bound in one line: one call (a retry would be a second entry) times the
+  # ceiling the call asked for (the transfer tier would read 3600 here) is the
+  # longest the site's single writer can be stopped for.
+  assert gc_log_read(seen) ==
+    "POST budget=${to_string(MANAGEMENT_TIMEOUT_S)};"
+  # the window is that call's duration and nothing else is serialised behind it
+  assert elapsed >= stall_ms
+  assert elapsed < stall_ms * 5
+  # the lock is gone by the time gc returns, for this connection ...
+  assert with_immediate_tx(c, () => exec(c, "insert into pending_uploads values ('k', 'p', 'now')", [])) == Ok(1)
+  # ... and for everyone else
+  assert writer_free(probe)
+}
+
+test "a delete that times out leaves the writer free, it does not wedge the site" {
+  # The failure mode the deadline exists for, now assertable without waiting for
+  # one: the arm answers what an expired budget raises, instantly. gc is
+  # best-effort, so the site's answer is still Ok -- what must not survive is a
+  # held lock.
+  let c = open("jdbc:sqlite:file:gc_lock_timeout?mode=memory&cache=shared")
+  let probe = open("jdbc:sqlite:file:gc_lock_timeout?mode=memory&cache=shared")
+  gc_tables(c)
+
+  let t0 = System.currentTimeMillis()
+  let outcome = {
+    with handle Upstream {
+      exchange(req) => Err(ForeignError {
+        kind: "java.net.http.HttpTimeoutException",
+        message: "request timed out",
+        cause: None,
+      })
+      exchange_bytes(req) => Err(no_answer("exchange_bytes"))
+      exchange_stream(req) => Err(no_answer("exchange_stream"))
+      exchange_start(req) => Err(no_answer("exchange_start"))
+    }
+    gc_unreferenced_on(gc_test_qiniu(), c, Some("orphan-key"))
+  }
+  let elapsed = System.currentTimeMillis() - t0
+
+  assert gc_ok(outcome)
+  assert writer_free(probe)
+  assert with_immediate_tx(c, () => exec(c, "insert into pending_uploads values ('k', 'p', 'now')", [])) == Ok(1)
+  # the whole failure, at the speed of a function call instead of ten seconds
+  assert elapsed < 1000
+}
+
+# The third half of the window claim -- that a still-referenced key makes no
+# outbound call at all -- is the FM ancestor contract case
+# `object-gc.live-key-reference` (mutant `gc-skip-live-key-reference`), which is
+# contract-role and therefore needs this Dawn layer to stay green. Asserting it
+# here too would redden it.

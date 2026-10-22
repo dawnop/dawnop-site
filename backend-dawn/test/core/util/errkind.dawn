@@ -1,0 +1,39 @@
+test "a tagged message keeps its wire text byte for byte" {
+  let (k, t) = split_kind(conflict("已存在同名项：a.txt"))
+  assert k == KConflict
+  assert t == "已存在同名项：a.txt"
+  let (k2, t2) = split_kind(invalid("所属页面不存在或不是文章列表页"))
+  assert k2 == KInvalid
+  assert t2 == "所属页面不存在或不是文章列表页"
+  let (k3, t3) = split_kind(upstream("copy: qiniu 401 {}"))
+  assert k3 == KUpstream
+  assert t3 == "copy: qiniu 401 {}"
+}
+
+test "a precondition tag survives for HTTP 412 mapping" {
+  let (k, t) = split_kind(precondition("目标已出现"))
+  assert k == KPrecondition
+  assert t == "目标已出现"
+}
+
+test "an untagged message passes through unchanged" {
+  let (k, t) = split_kind("java.sql.SQLException: database is locked")
+  assert k == KPlain
+  assert t == "java.sql.SQLException: database is locked"
+  # a message that happens to contain the old Chinese needles is no longer
+  # special — classification comes from the tag, not from the wording
+  let (k2, t2) = split_kind("已存在")
+  assert k2 == KPlain
+  assert t2 == "已存在"
+}
+
+test "a timeout is its own kind, not another upstream failure" {
+  # The whole point of the tag: these two travel the same Result[T, String] and
+  # used to arrive at the edge indistinguishable, so both answered 502.
+  let (k, t) = split_kind(timeout("outbound HTTP timed out after 10s: ..."))
+  assert k == KTimeout
+  assert t == "outbound HTTP timed out after 10s: ..."
+  let (k2, _t2) = split_kind(upstream("stat: qiniu 401 {}"))
+  assert k2 == KUpstream
+  assert k != k2
+}

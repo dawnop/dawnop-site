@@ -1,0 +1,405 @@
+use web/types.{response_headers}
+use site_core/util/errkind.{precondition, upstream, timeout}
+test "dav_rel joins the tail segments and refuses one holding a slash" {
+  # the ordinary path, unchanged
+  assert dav_rel(rest_req(["a", "b", "c"])) == Ok("a/b/c")
+  # the bare mount point
+  assert dav_rel(rest_req([])) == Ok("")
+  # empty segments still collapse, as path_join always did
+  assert dav_rel(rest_req(["a", "", "b"])) == Ok("a/b")
+  # /dav/a%2Fb/c: one segment holding a literal "/". web2 handed the tail over
+  # pre-joined, so this reached here as "a/b/c" and served the same object as
+  # /dav/a/b/c; there is no object whose path segment contains "/", so refuse it
+  match dav_rel(rest_req(["a/b", "c"])) {
+    Err(e) -> { assert e.status == 400 }
+    Ok(_) -> { assert false }
+  }
+}
+
+# The same bare request, carrying the Destination header MOVE/COPY read.
+fn dest_req_at(dest: String, host: String, prefix: String) -> Request =
+  Request {
+    method: "MOVE", path: "/dav", raw_path: "/dav",
+    params: map.from([("rest", ["x"])]),
+    query: map.empty(), headers: map.from([
+      ("destination", [dest]),
+      ("host", [host]),
+      ("x-dav-prefix", [prefix]),
+    ]),
+    body: bytes.utf8(""), body_file: None, route: None,
+  }
+
+fn dest_req(dest: String) -> Request = dest_req_at(dest, "dav.example", "/dav")
+
+# The same request with the Host header repeated, or absent — neither shape is
+# expressible through dest_req_at, which carries exactly one value.
+fn dest_req_hosts(dest: String, hosts: List[String]) -> Request =
+  Request {
+    method: "MOVE", path: "/dav", raw_path: "/dav",
+    params: map.from([("rest", ["x"])]),
+    query: map.empty(), headers: map.from([
+      ("destination", [dest]),
+      ("host", hosts),
+      ("x-dav-prefix", ["/dav"]),
+    ]),
+    body: bytes.utf8(""), body_file: None, route: None,
+  }
+
+fn protocol_req(method: String, header_name: String, header_value: String, body: String) -> Request =
+  Request {
+    method: method, path: "/dav/source", raw_path: "/dav/source",
+    params: map.from([("rest", ["source"])]),
+    query: map.empty(),
+    headers: if header_name == "" { map.empty() } else { map.from([(header_name, [header_value])]) },
+    body: bytes.utf8(body), body_file: None, route: None,
+  }
+
+fn dest_error(r: Result[Option[String], HttpError], message: String) -> Bool =
+  match r {
+    Err(e) -> e.status == 400 && e.message == message
+    Ok(_) -> false
+  }
+
+fn unit_error_status(r: Result[Unit, HttpError], status: Int) -> Bool =
+  match r {
+    Err(e) -> e.status == status
+    Ok(_) -> false
+  }
+
+fn unit_ok(r: Result[Unit, HttpError]) -> Bool =
+  match r {
+    Ok(_) -> true
+    Err(_) -> false
+  }
+
+fn bool_error_status(r: Result[Bool, HttpError], status: Int) -> Bool =
+  match r {
+    Err(e) -> e.status == status
+    Ok(_) -> false
+  }
+
+test "dest_rel decodes each Destination segment and refuses one holding a slash" {
+  # an absolute Destination, which is what most clients send
+  assert dest_rel(dest_req("http://dav.example/dav/a/b/c")) == Ok(Some("a/b/c"))
+  # unquote semantics, per segment: a literal '+' stays '+' and never becomes a space
+  assert dest_rel(dest_req("/dav/a+b")) == Ok(Some("a+b"))
+  # no header at all is not a refusal; the caller turns that into 缺少 Destination
+  assert dest_rel(rest_req([])) == Ok(None)
+  # /dav/a%2Fb/c: decoding the whole path first made this "a/b/c", so a MOVE
+  # landed where its URL did not say. Split first, and the segment holding "/"
+  # names no object, exactly as on the request path
+  match dest_rel(dest_req("/dav/a%2Fb/c")) {
+    Err(e) -> { assert e.status == 400 }
+    Ok(_) -> { assert false }
+  }
+}
+
+test "dest_rel accepts supported HTTP schemes" {
+  assert dest_rel(dest_req("http://dav.example/dav/a")) == Ok(Some("a"))
+  assert dest_rel(dest_req("https://dav.example/dav/b")) == Ok(Some("b"))
+}
+
+test "dest_rel rejects unsupported schemes" {
+  assert dest_error(dest_rel(dest_req("ftp://dav.example/dav/a")), "Destination scheme 不受支持")
+}
+
+test "dest_rel compares authority hosts case-insensitively" {
+  assert dest_rel(dest_req_at("HTTP://DAV.EXAMPLE/dav/a", "dav.example", "/dav")) == Ok(Some("a"))
+  assert dest_rel(dest_req_at("http://dav.example/dav/b", "DAV.EXAMPLE", "/dav")) == Ok(Some("b"))
+}
+
+test "dest_rel normalizes default HTTP ports" {
+  assert dest_rel(dest_req_at("http://dav.example:80/dav/a", "dav.example", "/dav")) == Ok(Some("a"))
+  assert dest_rel(dest_req_at("http://dav.example/dav/b", "dav.example:80", "/dav")) == Ok(Some("b"))
+  assert dest_rel(dest_req_at("http://[::1]:80/dav/c", "[::1]", "/dav")) == Ok(Some("c"))
+}
+
+test "destination default ports are scheme-correct" {
+  assert destination_default_port("http") == 80
+  assert destination_default_port("https") == 443
+  assert destination_default_port("ftp") == -1
+}
+
+test "dest_rel rejects a foreign authority" {
+  let wrong = "Destination 不属于当前服务器"
+  assert dest_error(dest_rel(dest_req("http://evil.example/dav/a")), wrong)
+  assert dest_error(dest_rel(dest_req("http://dav.example:81/dav/a")), wrong)
+  assert dest_error(dest_rel(dest_req("http://user@dav.example/dav/a")), wrong)
+  assert dest_error(dest_rel(dest_req("http:///dav/a")), wrong)
+  assert dest_error(dest_rel(dest_req_at("http://dav.example/dav/a", "dav.example/path", "/dav")), wrong)
+}
+
+test "dest_rel needs a Host header to place an absolute Destination" {
+  # Refused because the request named no local authority, not because the one it
+  # named was somebody else's — before this rule the two were the same answer.
+  assert dest_error(
+    dest_rel(dest_req_hosts("http://dav.example/dav/a", [])),
+    "缺少 Host 头，无法判断 Destination 是否属于当前服务器")
+  # A path-absolute Destination never consults Host, so it is unaffected.
+  assert dest_rel(dest_req_hosts("/dav/a", [])) == Ok(Some("a"))
+  assert dest_rel(dest_req_hosts("http://dav.example/dav/a", ["dav.example"])) == Ok(Some("a"))
+}
+
+test "dest_rel refuses a repeated Host header in either order" {
+  let repeated = "Host 头只能出现一次"
+  # first-wins used to accept this one and refuse the next, on header order alone
+  assert dest_error(
+    dest_rel(dest_req_hosts("http://dav.example/dav/a", ["dav.example", "evil.example"])), repeated)
+  assert dest_error(
+    dest_rel(dest_req_hosts("http://dav.example/dav/a", ["evil.example", "dav.example"])), repeated)
+  # two spellings of the same authority still have no single value
+  assert dest_error(
+    dest_rel(dest_req_hosts("http://dav.example/dav/a", ["dav.example", "dav.example"])), repeated)
+  assert dest_error(
+    dest_rel(dest_req_hosts("http://dav.example/dav/a", ["dav.example", "DAV.EXAMPLE"])), repeated)
+  assert dest_error(
+    dest_rel(dest_req_hosts("http://dav.example/dav/a", ["dav.example", "dav.example", "dav.example"])), repeated)
+}
+
+test "dest_rel maps malformed Host syntax to 400" {
+  let wrong = "Destination 不属于当前服务器"
+  assert dest_error(dest_rel(dest_req_at("http://dav.example/dav/a", "[bad", "/dav")), wrong)
+  assert dest_rel(dest_req_at("http://dav.example/dav/a", "dav.example", "/dav")) == Ok(Some("a"))
+}
+
+test "dest_rel rejects non-Simple-ref relative forms" {
+  let message = "Destination 必须是绝对路径或 absolute URI"
+  assert dest_error(dest_rel(dest_req("dav/a")), message)
+  assert dest_error(dest_rel(dest_req("//dav.example/dav/a")), message)
+  assert dest_error(dest_rel(dest_req("///dav/a")), message)
+  assert dest_rel(dest_req("/dav/a")) == Ok(Some("a"))
+}
+
+test "dest_rel maps malformed URI syntax to 400" {
+  assert dest_error(dest_rel(dest_req("http://[bad")), "非法目标")
+  assert dest_error(dest_rel(dest_req("/dav/%zz")), "非法目标")
+  assert dest_rel(dest_req("/dav/percent%25name")) == Ok(Some("percent%name"))
+}
+
+test "dest_rel rejects opaque URI forms" {
+  assert dest_error(dest_rel(dest_req("urn:dawnop:target")), "Destination 必须是分层 URI")
+  assert dest_error(dest_rel(dest_req("http:dav/a")), "Destination 必须是分层 URI")
+}
+
+test "dest_rel rejects query components" {
+  let message = "Destination 不支持查询参数"
+  assert dest_error(dest_rel(dest_req("/dav/a?rev=1")), message)
+  assert dest_error(dest_rel(dest_req("/dav/a?")), message)
+  assert dest_rel(dest_req("/dav/a%3Frev")) == Ok(Some("a?rev"))
+}
+
+test "dest_rel rejects fragment components" {
+  let message = "Destination 不支持片段"
+  assert dest_error(dest_rel(dest_req("/dav/a#part")), message)
+  assert dest_error(dest_rel(dest_req("/dav/a#")), message)
+  assert dest_rel(dest_req("/dav/a%23part")) == Ok(Some("a#part"))
+}
+
+test "dest_rel confines paths to the DAV prefix" {
+  let message = "Destination 不在 WebDAV 根下"
+  assert dest_error(dest_rel(dest_req("/davx")), message)
+  assert dest_error(dest_rel(dest_req("/outside")), message)
+  assert dest_error(dest_rel(dest_req("/d%2Fav/reserved")), message)
+  assert dest_error(dest_rel(dest_req("http://dav.example/dav%2Freserved")), message)
+  assert dest_rel(dest_req("/dav")) == Ok(Some(""))
+  assert dest_rel(dest_req("/dav/a")) == Ok(Some("a"))
+  assert dest_rel(dest_req_at("/a", "dav.example", "/")) == Ok(Some("a"))
+}
+
+test "dest_rel normalizes unreserved prefix octets" {
+  assert dest_rel(dest_req("/d%61v/path-form")) == Ok(Some("path-form"))
+  assert dest_rel(dest_req("http://dav.example/d%61v/absolute-form")) == Ok(Some("absolute-form"))
+  assert dest_rel(dest_req_at("/dav/prefix-form", "dav.example", "/d%61v")) == Ok(Some("prefix-form"))
+}
+
+test "dest_rel rejects invalid percent UTF-8 without aliasing" {
+  let invalid = "Destination 包含非法 UTF-8"
+  assert dest_error(dest_rel(dest_req("/dav/%FF")), invalid)
+  assert dest_error(dest_rel(dest_req("/dav/%FE")), invalid)
+  assert dest_error(dest_rel(dest_req("/dav/%C0%AF")), invalid)
+  assert dest_error(dest_rel(dest_req("/dav/%ED%A0%80")), invalid)
+  assert dest_error(dest_rel(dest_req("/dav/%F4%90%80%80")), invalid)
+  assert dest_rel(dest_req("/dav/%EF%BF%BD")) == Ok(Some("�"))
+  assert dest_rel(dest_req("/dav/%E5%9B%BE%E7%89%87")) == Ok(Some("图片"))
+  assert dest_rel(dest_req("/dav/a+b%3F%23")) == Ok(Some("a+b?#"))
+}
+
+test "dest_rel rejects XML-forbidden decoded characters" {
+  let invalid = "Destination 包含 XML 1.0 禁止字符"
+  assert dest_error(dest_rel(dest_req("/dav/nul%00name")), invalid)
+  assert dest_error(dest_rel(dest_req("/dav/control%01name")), invalid)
+  assert dest_error(dest_rel(dest_req("/dav/control%0Bname")), invalid)
+  assert dest_error(dest_rel(dest_req("/dav/nonchar%EF%BF%BE")), invalid)
+  assert dest_rel(dest_req("/dav/tab%09line%0Areturn%0D")) == Ok(Some("tab\tline\nreturn\r"))
+}
+
+test "MOVE and COPY reject invalid Overwrite tokens" {
+  assert overwrite_requested(protocol_req("MOVE", "", "", "")) == Ok(true)
+  assert overwrite_requested(protocol_req("MOVE", "overwrite", "T", "")) == Ok(true)
+  assert overwrite_requested(protocol_req("COPY", "overwrite", "t", "")) == Ok(true)
+  assert overwrite_requested(protocol_req("MOVE", "overwrite", "F", "")) == Ok(false)
+  assert overwrite_requested(protocol_req("COPY", "overwrite", "f", "")) == Ok(false)
+  assert bool_error_status(overwrite_requested(protocol_req("COPY", "overwrite", "true", "")), 400)
+  assert bool_error_status(overwrite_requested(protocol_req("MOVE", "overwrite", "garbage", "")), 400)
+}
+
+test "WebDAV precondition errors map to 412 at preflight and final edges" {
+  let preflight = conflict_or(500)
+  assert preflight(precondition("目标已出现")).status == 412
+  assert mutation_error(precondition("目标已出现")).status == 412
+}
+
+test "a WebDAV client is told to retry a timeout, not to check its credentials" {
+  # Both of these used to be 502, which reads to whoever mounted the share as
+  # "the object store rejected us". A deadline we gave up on is 504: nothing is
+  # misconfigured and the same PUT may well work on the next try.
+  assert mutation_error(upstream("upload_file: qiniu 401 {}")).status == 502
+  assert mutation_error(timeout("outbound HTTP timed out after 3600s: ...")).status == 504
+  # and it is the classifier, not the wording, that decides which one
+  assert mutation_error(tag_outbound("outbound HTTP timed out after 3600s: ...")).status == 504
+  assert mutation_error(tag_outbound("upload_file: qiniu 401 {}")).status == 502
+}
+
+# PROPFIND with the given Depth values, none at all for an empty list.
+fn depth_req(values: List[String]) -> Request =
+  Request {
+    method: "PROPFIND", path: "/dav/source", raw_path: "/dav/source",
+    params: map.from([("rest", ["source"])]),
+    query: map.empty(),
+    headers: if len(values) == 0 { map.empty() } else { map.from([("depth", values)]) },
+    body: bytes.utf8(""), body_file: None, route: None,
+  }
+
+fn depth_error_status(r: Result[String, HttpError], status: Int) -> Bool =
+  match r {
+    Err(e) -> e.status == status
+    Ok(_) -> false
+  }
+
+test "PROPFIND rejects unsupported singleton Depth values" {
+  # a missing header still means Depth 1, the reading every client already has
+  assert propfind_depth(depth_req([])) == Ok("1")
+  assert propfind_depth(depth_req(["0"])) == Ok("0")
+  assert propfind_depth(depth_req(["1"])) == Ok("1")
+  # anything else is a Depth this server cannot honour, and used to be served as
+  # a Depth 1 listing because the old reader only ever compared against "0"
+  assert depth_error_status(propfind_depth(depth_req(["garbage"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["infinity"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["INFINITY"])), 400)
+  assert depth_error_status(propfind_depth(depth_req([""])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["2"])), 400)
+  # exact match only: no trimming, no case folding, no prefix acceptance
+  assert depth_error_status(propfind_depth(depth_req([" 0"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["1 "])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["0,1"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["01"])), 400)
+}
+
+test "PROPFIND rejects repeated Depth headers" {
+  # two Depth headers carry no single value, so neither "first wins" nor "last
+  # wins" is a reading of the request — every order is refused
+  assert depth_error_status(propfind_depth(depth_req(["0", "1"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["1", "0"])), 400)
+  # including when the repetition agrees with itself, or when every copy is one
+  # of the two values this server does support
+  assert depth_error_status(propfind_depth(depth_req(["0", "0"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["1", "1"])), 400)
+  # and when one copy is valid and the other is not, in either position
+  assert depth_error_status(propfind_depth(depth_req(["0", "infinity"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["infinity", "0"])), 400)
+  assert depth_error_status(propfind_depth(depth_req(["1", "0", "1"])), 400)
+}
+
+test "MOVE Depth only accepts infinity" {
+  assert unit_ok(require_move_depth(protocol_req("MOVE", "", "", "")))
+  assert unit_ok(require_move_depth(protocol_req("MOVE", "depth", "infinity", "")))
+  assert unit_ok(require_move_depth(protocol_req("MOVE", "depth", "INFINITY", "")))
+  assert unit_error_status(require_move_depth(protocol_req("MOVE", "depth", "0", "")), 400)
+  assert unit_error_status(require_move_depth(protocol_req("MOVE", "depth", "1", "")), 400)
+}
+
+test "COPY Depth accepts file zero and rejects invalid values" {
+  assert unit_ok(require_copy_depth(protocol_req("COPY", "", "", ""), false))
+  assert unit_ok(require_copy_depth(protocol_req("COPY", "depth", "infinity", ""), true))
+  assert unit_ok(require_copy_depth(protocol_req("COPY", "depth", "INFINITY", ""), true))
+  assert unit_ok(require_copy_depth(protocol_req("COPY", "depth", "0", ""), false))
+  assert unit_error_status(require_copy_depth(protocol_req("COPY", "depth", "1", ""), false), 400)
+  assert unit_error_status(require_copy_depth(protocol_req("COPY", "depth", "garbage", ""), true), 400)
+}
+
+test "COPY collection Depth zero fails closed" {
+  assert unit_error_status(require_copy_depth(protocol_req("COPY", "depth", "0", ""), true), 501)
+}
+
+test "MOVE and COPY reject non-empty raw bodies" {
+  assert unit_ok(reject_move_copy_body(protocol_req("MOVE", "", "", "")))
+  assert unit_error_status(reject_move_copy_body(protocol_req("MOVE", "", "", "extension-body")), 415)
+  assert unit_error_status(reject_move_copy_body(protocol_req("COPY", "", "", "<extension/>")), 415)
+}
+
+fn is_dot_segment_error(r: Result[Option[String], HttpError]) -> Bool =
+  match r {
+    Err(e) -> e.status == 400 && e.message == "path contains a dot segment"
+    Ok(_) -> false
+  }
+
+test "dest_rel rejects one-dot segments after one decode" {
+  assert is_dot_segment_error(dest_rel(dest_req("/dav/.")))
+  assert is_dot_segment_error(dest_rel(dest_req("/dav/%2e")))
+}
+
+test "dest_rel rejects two-dot segments after one decode" {
+  assert is_dot_segment_error(dest_rel(dest_req("/dav/..")))
+  assert is_dot_segment_error(dest_rel(dest_req("/dav/%2E%2E")))
+}
+
+test "dest_rel accepts names that merely contain dots" {
+  assert dest_rel(dest_req("/dav/.hidden")) == Ok(Some(".hidden"))
+  assert dest_rel(dest_req("/dav/a..b")) == Ok(Some("a..b"))
+  assert dest_rel(dest_req("/dav/...")) == Ok(Some("..."))
+  assert dest_rel(dest_req("/dav/notes%2Ebak")) == Ok(Some("notes.bak"))
+}
+
+fn parent_row(path: String, is_dir: Bool) -> FileRow =
+  FileRow {
+    path: path,
+    is_dir: is_dir,
+    key: None,
+    content_type: "",
+    size: 0,
+    updated_at: "2026-01-01 00:00:00",
+  }
+
+test "parent check accepts root and directories but rejects missing rows" {
+  assert parent_is_directory("", None)
+  assert parent_is_directory("docs", Some(parent_row("docs", true)))
+  assert not parent_is_directory("missing", None)
+}
+
+test "range_pair parses the WebDAV Range forms against a total size" {
+  # explicit start-end (inclusive), clamped to total-1
+  assert range_pair("0", "1023", 5000) == Some((0, 1023))
+  assert range_pair("100", "999999", 5000) == Some((100, 4999))
+  # open-ended start-
+  assert range_pair("500", "", 5000) == Some((500, 4999))
+  # suffix -N = last N bytes
+  assert range_pair("", "500", 5000) == Some((4500, 4999))
+  assert range_pair("", "999999", 5000) == Some((0, 4999))
+  # unsatisfiable / malformed
+  assert range_pair("5000", "", 5000) == None
+  assert range_pair("", "0", 5000) == None
+  assert range_pair("x", "", 5000) == None
+}
+
+test "OPTIONS advertises DAV class 1,2 and an Allow matching the routed verbs" {
+  # `DAV: 1, 2` is the header a client reads to decide the mount is writable
+  # (class 2 = LOCK). Losing it degrades macOS Finder to read-only while every
+  # verb keeps working, so no functional test would notice — pin it explicitly.
+  # Note the wire spelling is `Dav: 1, 2`: the JDK http server title-cases header
+  # names on emission. Field names are case-insensitive (RFC 9110 §5.1), so that
+  # is conforming, but a case-sensitive `grep '^DAV:'` will miss it.
+  assert response_headers(options_response()) ==
+    [("DAV", "1, 2"), ("Allow", ALLOW), ("MS-Author-Via", "DAV"), ("Content-Length", "0")]
+  # Allow cannot drift from the verbs dav_routes actually registers.
+  assert ALLOW == fold(DAV_VERBS, "", (acc, v) => if acc == "" { v } else { acc ++ ", " ++ v })
+}

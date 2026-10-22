@@ -1,0 +1,22 @@
+test "IPv4 literals" {
+  assert hx("1.2.3.4") == "01020304"
+  assert hx("010.1.1.1") == "0a010101"
+  assert hx("256.1.1.1") == "err"
+  assert hx("1.2.3") == "err"
+  assert hx("") == "err"
+  assert hx("localhost") == "err"
+}
+
+test "IPv6 literals, compression and embedded IPv4" {
+  assert hx("2001:db8::1") == "20010db8000000000000000000000001"
+  assert hx("::") == "00000000000000000000000000000000"
+  assert hx("1:2:3:4:5:6:7:8") == "00010002000300040005000600070008"
+  assert hx("::1.2.3.4") == "00000000000000000000000001020304"
+  assert hx("1:2:3:4:5:6:7:8:9") == "err"
+  assert hx("1::2::3") == "err"
+  assert hx("12345::1") == "err"
+}
+
+test "IPv4-mapped IPv6 comes back as four bytes, like getByName" {
+  assert hx("::ffff:1.2.3.4") == "01020304"
+}

@@ -1,0 +1,66 @@
+test "hierarchical URIs expose the raw parts the backend reads" {
+  match parse("http://u:p@Example.COM:8080/dav/x%20y?q#f") {
+    Err(_) -> { assert false }
+    Ok(u) -> {
+      assert u.scheme == Some("http")
+      assert u.authority == Some("u:p@Example.COM:8080")
+      assert u.user_info == Some("u:p")
+      assert u.host == Some("Example.COM")
+      assert u.port == 8080
+      assert u.path == Some("/dav/x%20y")
+      assert u.query == Some("q")
+      assert u.fragment == Some("f")
+      assert not is_opaque(u)
+    }
+  }
+}
+
+test "path-only and empty-authority references" {
+  assert host_of("/dav/a%2Fb/c") == "null|-1|</dav/a%2Fb/c>"
+  assert host_of("///x") == "null|-1|</x>"
+  assert host_of("") == "null|-1|<>"
+  assert host_of("//h/x") == "<h>|-1|</x>"
+}
+
+test "opaque URIs have no path" {
+  match parse("urn:dawnop:target") {
+    Ok(u) -> { assert is_opaque(u) }
+    Err(_) -> { assert false }
+  }
+  match parse("http:dav/a") {
+    Ok(u) -> { assert is_opaque(u) }
+    Err(_) -> { assert false }
+  }
+}
+
+test "a registry-based authority keeps the authority but has no host" {
+  assert host_of("http://a_b.com/x") == "null|-1|</x>"
+  assert host_of("http://256.1.1.1/x") == "null|-1|</x>"
+  assert host_of("http://h:99999999999/x") == "null|-1|</x>"
+}
+
+test "IPv6 authorities" {
+  assert host_of("http://[::1]:80/x") == "<[::1]>|80|</x>"
+  assert host_of("http://[fe80::1%25eth0]/x") == "<[fe80::1%25eth0]>|-1|</x>"
+  assert host_of("http://[1:2:3:4:5:6:7:8:9]/x") == "err"
+  assert host_of("http://[::1/x") == "err"
+}
+
+test "syntax the JDK refuses" {
+  assert host_of("http://") == "err"
+  assert host_of("/a b") == "err"
+  assert host_of("/a%zz") == "err"
+  assert host_of("http://exa mple/x") == "err"
+  assert host_of("1x:y") == "err"
+  assert host_of(":x") == "err"
+}
+
+test "percent decoding keeps '+', decodes UTF-8 runs and refuses bad escapes" {
+  assert percent_decode("a+b%20c") == Ok("a+b c")
+  assert percent_decode("%E4%B8%AD%e6%96%87") == Ok("中文")
+  assert percent_decode("x%F0%9F%98%80y") == Ok("x😀y")
+  assert percent_decode("%2B") == Ok("+")
+  assert percent_decode("%4") == Err("Incomplete trailing escape (%) pattern")
+  assert percent_decode("%zz") == Err("Illegal hex characters in escape (%) pattern")
+  assert percent_decode("%") == Err("Incomplete trailing escape (%) pattern")
+}

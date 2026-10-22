@@ -1,0 +1,65 @@
+use site_core/util/paths.{name_verdict, NameAccepted}
+use site_core/util/errkind.{conflict, upstream, timeout}
+# Where an upload lands: the target directory joined with the sanitized name.
+# The endpoint calls this — the test below drives the same function rather than a
+# copy of the same expression, which is how the copy drifted last time.
+test "register size/mime fall back like FastAPI (stat -> client hint -> guess)" {
+  # qiniu stat is authoritative when present
+  assert reg_size("{\"fsize\":123}", Some(9)) == 123
+  assert reg_mime("{\"mimeType\":\"image/png\"}", "text/plain", "a/b.md") == "image/png"
+  # missing/zero fsize -> client hint -> 0
+  assert reg_size("{}", Some(9)) == 9
+  assert reg_size("{}", None) == 0
+  # missing mimeType -> client content_type -> name-based guess
+  assert reg_mime("{}", "text/plain", "a/b.md") == "text/plain"
+  assert reg_mime("{}", "", "a/b.md") == "text/markdown"
+}
+
+# The one place the two name rules are compared, so the difference between them
+# is written down where a reader meets both. It is a difference of question, not
+# of strictness:
+#
+#   rename   asks "is this one path segment" -> structural, rename's alone
+#   the guard asks "may a write store this segment" -> every write entry, every
+#                                                     segment of the target
+#
+# Nothing here asserts that "." is refused; that claim belongs to the guard's
+# own tests in util/paths.dawn, and repeating it would make this test a second
+# owner of the mutants that break it.
+test "rename asks for one segment; storing a subpath is create's business" {
+  assert valid_rename_name("new.txt")
+  assert not valid_rename_name("")
+  # rename rewrites the last segment in place, so a subpath is not a new name
+  # for the row it was handed
+  assert not valid_rename_name("missing/deep.txt")
+  assert not valid_rename_name("missing\\deep.txt")
+  # "." and ".." pass the structural question honestly: each is one segment.
+  # The guard on `new_rel` is what refuses them, the same guard that refuses
+  # them at every other write entry.
+  assert valid_rename_name(".")
+  assert valid_rename_name("..")
+  # the other half of the difference, and a drift alarm rather than a rule: a
+  # multi-segment name IS admissible, because folder upload sends one
+  # (webkitRelativePath) and create-folder joins it under the current
+  # directory. Whoever makes this line fail is proposing that create-folder,
+  # create-file and upload-token all become single-segment endpoints, which is
+  # a product decision and not a tidy-up.
+  assert name_verdict("a/b") == NameAccepted
+}
+
+test "FM mutation errors keep DB failures distinct from upstream failures" {
+  assert mutation_status(conflict("collision")) == 409
+  assert mutation_status(upstream("qiniu unavailable")) == 502
+  # a deadline that expired is a 504, not another 502: the two answer different
+  # questions about what went wrong upstream
+  assert mutation_status(timeout("outbound HTTP timed out after 10s: ...")) == 504
+  assert mutation_status(upstream("qiniu unavailable")) != mutation_status(timeout("x"))
+  assert mutation_status("database is locked") == 500
+}
+
+test "register stat maps only missing objects to a client error" {
+  assert register_stat_failure(612).status == 400
+  assert register_stat_failure(401).status == 502
+  assert register_stat_failure(429).status == 502
+  assert register_stat_failure(503).status == 502
+}

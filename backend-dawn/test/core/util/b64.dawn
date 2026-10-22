@@ -1,0 +1,28 @@
+test "padding is optional but must be exact" {
+  assert hex_or_err(decode("aGk=", false)) == "6869"
+  assert hex_or_err(decode("aGk", false)) == "6869"
+  assert hex_or_err(decode("aG==", false)) == "68"
+  assert hex_or_err(decode("aG", false)) == "68"
+  assert hex_or_err(decode("", false)) == ""
+  assert hex_or_err(decode("a", false)) == "err"
+  assert hex_or_err(decode("aGk==", false)) == "err"
+  assert hex_or_err(decode("aG=", false)) == "err"
+  assert hex_or_err(decode("=", false)) == "err"
+  assert hex_or_err(decode("aGk=a", false)) == "err"
+}
+
+test "spare trailing bits are not checked, as in the JDK" {
+  # std/bytes.from_base64 refuses these; the backend always accepted them
+  assert hex_or_err(decode("aGl=", false)) == "6869"
+  assert hex_or_err(decode("aH==", false)) == "68"
+}
+
+test "each decoder reads only its own alphabet and no whitespace" {
+  assert hex_or_err(decode("-_8=", true)) == "fbff"
+  assert hex_or_err(decode("-_8=", false)) == "err"
+  assert hex_or_err(decode("+/8=", false)) == "fbff"
+  assert hex_or_err(decode("+/8", true)) == "err"
+  assert hex_or_err(decode("aG k=", false)) == "err"
+  assert hex_or_err(decode("aGk=\n", false)) == "err"
+  assert hex_or_err(decode("é", false)) == "err"
+}

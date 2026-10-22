@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutant_workdir import require_workdir  # noqa: E402
+from test_project import source_path  # noqa: E402
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
@@ -28,8 +29,8 @@ def main() -> int:
 
     project = require_workdir(args.project)
 
-    http = project / "src/util/http.dawn"
-    qiniu = project / "src/qiniu/rs.dawn"
+    http = source_path(project, "src/util/http.dawn")
+    qiniu = source_path(project, "src/qiniu/rs.dawn")
     if args.mutant == "swap-file-tail":
         replace_once(
             http,

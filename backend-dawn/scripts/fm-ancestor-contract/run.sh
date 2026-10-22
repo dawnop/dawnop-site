@@ -245,7 +245,7 @@ anchor_probe="$work/anchor-probe"
 for mutant in "${all_mutants[@]}"; do
   rm -rf "$anchor_probe"
   mkdir -p "$anchor_probe"
-  cp -R "$BACKEND/src" "$anchor_probe/src"
+  python3 "$BACKEND/scripts/test_project.py" --stage "$anchor_probe"
   # mutate.py refuses a directory without this; see scripts/mutant_workdir.py
   : >"$anchor_probe/.mutant-workdir"
   if ! python3 "$MUTATOR" "$mutant" "$anchor_probe" >"$work/$mutant.anchor.log" 2>&1; then
@@ -258,7 +258,7 @@ rm -rf "$anchor_probe"
 printf 'PASS  all %s mutants still find their anchors\n' "${#all_mutants[@]}"
 
 base_test_log="$work/base.test.log"
-if ! "$DAWN" test "$BACKEND" >"$base_test_log" 2>&1; then
+if ! python3 "$BACKEND/scripts/test_project.py" --dawn "$DAWN" >"$base_test_log" 2>&1; then
   cat "$base_test_log" >&2
   exit 1
 fi
@@ -277,7 +277,7 @@ printf 'PASS  base Dawn assertions\n'
 base_jar="$work/base/backend-dawn.jar"
 mkdir -p "$(dirname -- "$base_jar")"
 base_build_log="$work/base.build.log"
-if ! "$DAWN" build "$BACKEND" -o "$base_jar" >"$base_build_log" 2>&1; then
+if ! "$DAWN" build "$BACKEND/app/jvm" -o "$base_jar" >"$base_build_log" 2>&1; then
   cat "$base_build_log" >&2
   exit 1
 fi
@@ -359,8 +359,7 @@ for index in "${!mutants[@]}"; do
   shard_record "$mutant"
   project="$work/$mutant/backend-dawn"
   mkdir -p "$project"
-  cp "$BACKEND/dawn.toml" "$BACKEND/dawn.lock" "$project/"
-  cp -R "$BACKEND/src" "$project/src"
+  python3 "$BACKEND/scripts/test_project.py" --stage "$project"
   # mutate.py refuses a directory without this; see scripts/mutant_workdir.py
   : >"$project/.mutant-workdir"
   python3 "$MUTATOR" "$mutant" "$project"

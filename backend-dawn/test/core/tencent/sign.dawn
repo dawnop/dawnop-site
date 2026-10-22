@@ -1,0 +1,5 @@
+test "tc3 signature matches the Python reference" {
+  let sts = "TC3-HMAC-SHA256\n1783976183\n2026-07-14/monitor/tc3_request\nabc123"
+  assert tc3_signature("SKtest", "2026-07-14", "monitor", sts) ==
+    "3d2b40c014c22aee60a41993e40980a1e563a93d9a7d10d3800207bb4bcd2aac"
+}

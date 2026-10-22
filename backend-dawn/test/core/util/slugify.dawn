@@ -1,0 +1,14 @@
+test "slugify matches the Python vectors" {
+  assert slugify("Hello World!") == "hello-world"
+  assert slugify("你好 世界 -- test") == "你好-世界-test"
+  assert slugify("  Mixed_CASE 123  ") == "mixed_case-123"
+  assert slugify("---") == "article"
+  assert slugify("café résumé") == "café-résumé"
+  assert slugify("a...b") == "a-b"
+  assert slugify("A \u{10428} \u{1D7E0}!") == "a-\u{10428}-\u{1D7E0}"
+}
+
+test "slugify is a pure function value" {
+  let pure_slugify: fn(String) -> String = slugify
+  assert pure_slugify("Pure Context") == "pure-context"
+}

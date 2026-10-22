@@ -5,11 +5,11 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 迁移期 nginx 按路由灰度切流，**2026-07 已全量切到 Dawn**（uvicorn 退役、只回滚时拉起）。
 `/api` 全部端点已迁移。M6 期间逐路由与 FastAPI 对拍过，但**今天的契约是 `scripts/golden/*.json`
 而不是 FastAPI**：钉住的是 Dawn 自己的答案，其中若干处与 FastAPI 刻意不同，见
-[「与 FastAPI 的已知分歧」](#与-fastapi-的已知分歧)。曾留待 M6.5 的 **WebDAV**（`src/api/webdav.dawn`）
-与 `POST /api/fm/upload`（multipart 代理上传，`src/util/multipart.dawn`）**也已落地**。
+[「与 FastAPI 的已知分歧」](#与-fastapi-的已知分歧)。曾留待 M6.5 的 **WebDAV**（`app/jvm/src/api/webdav.dawn`）
+与 `POST /api/fm/upload`（multipart 代理上传，`core/src/util/multipart.dawn`）**也已落地**。
 
 契约由 `scripts/golden/*.json` 钉住（`scripts/contract_run.py`，CI 每次 push 都跑）：
-播种固定 fixture → 起后端 → 345 条响应比对（read 48 / edge 102 / webdav 104 / qiniu 91）。
+播种固定 fixture → 起后端 → 355 条响应比对（read 58 / edge 102 / webdav 104 / qiniu 91）。
 
 **比的是什么，别当成「逐字节」**——三种粒度，各自的理由写在 `contract_golden.py` 与
 `contract_webdav.py` 的注释里：
@@ -52,7 +52,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   json 与 sha2 都来自同版 tag 归档。入口使用 `web_jvm/server`，表单解析使用
   `web/wire`；HTTP owner 在 `stream_response` 内用 `input_source` 把私有
   InputStream 转成 web 的 BodySource。
-- 依赖：在 [`dawn.toml`](dawn.toml) 的 `[java-deps]` 里声明（现只剩 `sqlite-jdbc`；`jbcrypt` 已由纯 Dawn 的 `util/bcrypt` 取代——零传递依赖
+- 依赖：在 [`app/jvm/dawn.toml`](app/jvm/dawn.toml) 的 `[java-deps]` 里声明（现只剩 `sqlite-jdbc`；`jbcrypt` 已由纯 Dawn 的 `util/bcrypt` 取代——零传递依赖
   白名单，见 m6.md §2 G1）。`dawn run/test/build` 自动从 Maven 拉取并挂上 classpath；
   `dawn build` 另把它们复制进 jar 同级的 `lib/`，jar 的 manifest `Class-Path` 以相对路径引用它，
   **部署时保持 `lib/` 与 jar 同目录**（形态与从前一致）。`lib/` 是构建产物，不入库。
@@ -61,10 +61,13 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   **jar 与 `lib/` 都是构建产物，不入库**——jar 曾经入库，结果是它悄悄落后于 `src/`（要靠手动
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
-- 测试：`dawn test .`（`src/` 共 47 个 Dawn 源文件、258 个本仓单测，连 web/json/sha2 三个包
-  共 339 个；`use java` import 共 79 条、分布在 15 个文件，另有 11 条 FFI 边界断言；无需 .env / 库 /
-  libsimple / 网络，CI 每次 push 都跑）。用到 SQLite 的几个跑内存库（`jdbc:sqlite::memory:`），
-  自带建表，不碰 fixture。
+- 测试：`python3 scripts/test_project.py`，由 build.sh 自动调用。test/{core,jvm} 的
+  白盒测试与夹具在一次性 core/app 镜像内接回同名模块，调用私有函数无需扩大生产 API。
+  镜像仍使用 Dawn 路径依赖，生产构建直接消费原始 app/jvm，测试目录不进入部署 jar。
+  保留原有全部 433 项（含依赖包）及 11 条 FFI 断言；无需 .env、外部库或真实服务。
+- core 门禁：`python3 scripts/check_core.py --negative-controls`。对整个 core 根运行
+  发布版 native dawnc check，再扫描所有可达源码包的完整源码及 manifest，拒绝 Java、
+  java-deps、web_jvm 与回指 app/test 的本地依赖。CI 先证明 Java 导入与 app 导入负控会红。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
   绑定 `127.0.0.1:$DAWN_PORT`，默认 8001）。
 
@@ -111,7 +114,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   手工拉起一个不带哨兵的 uvicorn 就够得着。回滚脚本会放哨兵，手起的进程不会。
   **不要为此去改 `backend/`**：那棵树是冻结的回滚目标，给它加准入是没人要的行为变更。
   没有 golden 钉住这道门（假七牛那套录的是 `register` 的成功、对象不存在、对端不响应三条），
-  钉住它的是 `src/repo/repo_fm.dawn` 里那两条单测。
+  钉住它的是 `test/jvm/repo/repo_fm.dawn` 里那两条单测。
 
 - **缺查询参数 `path` 时的状态码。** `GET /api/fm/{sign,content,preview,download}` 完全不带
   `path` 时，Dawn 的 `qparam()` 把缺失参数取成空串、落到「文件不存在」的 404；FastAPI 把它声明成
@@ -129,7 +132,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 - **`fm_split` 的寻址是无损的。** Dawn 的 `full` 与 `fm_split` 互为逆，`"a.txt "` 与 `"a.txt"` 是
   两个地址，指不到行就 404；FastAPI 冻结的 `_split` 末尾仍是 `.strip()`，两个拼写会塌到同一行，
-  这正是「删 a.txt 删掉了 a.txt」的来源。理由写在 `src/util/paths.dawn`。
+  这正是「删 a.txt 删掉了 a.txt」的来源。理由写在 `core/src/util/paths.dawn`。
 
 - **`QINIU_TOKEN_EXPIRES` 的边界只有 Dawn 有**，见上面「关键环境变量」。FastAPI 那边只有 pydantic
   的类型检查，`0`、负数、`36000000` 它都收下。两套读同一份 .env，所以回滚会把一个让 Dawn 拒绝启动
@@ -137,8 +140,15 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 ## 模块地图
 
-`src/` 按层分目录，依赖单向向下：`util → db → qiniu → repo → tencent → svc → api → (根)`。
-根只留 `main.dawn` 与 `config.dawn`。`qiniu_*`/`tencent_*` 进目录后丢前缀
+S1 采用 `core/src`、`app/jvm/src`、`test/{core,jvm}` 三类物理根。
+core 是名为 site_core 的 Dawn 包，app 通过 `[deps] site_core = "../../core"` 消费，
+跨根导入写为 `use site_core/...`。core 的 19 个模块是整个业务源码图中今天可移植的最大
+闭包：config、qiniu/creds、qiniu/sign、tencent/sign 与 15 个 util 模块。
+其余 38 个模块因直接或传递依赖 JDBC、Clock、TTL、Upstream 而留在 app，后续分刀迁移。
+
+以下模块名按原相对路径记：core 中的模块在 core/src 下，其余在 app/jvm/src 下，
+对应测试在 test/core 或 test/jvm。main 属于 app，config 属于 core。
+`qiniu_*`/`tencent_*` 进目录后丢前缀
 （`qiniu/sign`、`tencent/client`），`api_*`/`repo_*` 保留前缀——api 与 repo 是唯一会同名对撞的两层。
 
 **基础设施（预备刀 1–5）**

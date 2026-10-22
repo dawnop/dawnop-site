@@ -1,0 +1,44 @@
+# HMAC (RFC 2104) over raw bytes, for the two hashes this backend signs with.
+# It replaces javax.crypto.Mac. Keys and digests stay `Bytes` end to end, so the
+# Tencent TC3 chain (each digest keys the next) needs no hex round trip. Both
+# hashes have a 64-byte block, which is the only parameter HMAC needs from them.
+use std/bytes
+use sha2/sha256
+use util/sha1
+
+const BLOCK: Int = 64
+
+## SHA-256 as raw bytes. The sha2 package only renders hex, so the digest is
+## parsed back; the hex is always 64 valid digits, so the empty arm is dead.
+fn sha256_raw(b: Bytes) -> Bytes =
+  match bytes.from_hex(sha256.hex(b)) {
+    Some(d) -> d
+    None -> bytes.utf8("")
+  }
+
+# key ^ pad_byte, with the key zero-extended to one block (hashed first when it
+# is longer than a block), followed by the message.
+fn pad_with(key: Bytes, pad_byte: Int, msg: Bytes) -> Bytes = {
+  var out = bytes.buf()
+  var i = 0
+  while i < BLOCK {
+    let k = if i < len(key) { bytes.at(key, i) } else { 0 }
+    out = bytes.put(out, k ^ pad_byte)
+    i = i + 1
+  }
+  bytes.freeze(bytes.put_bytes(out, msg))
+}
+
+fn mac(hash: fn(Bytes) -> Bytes, key: Bytes, msg: Bytes) -> Bytes = {
+  let k = if len(key) > BLOCK { hash(key) } else { key }
+  hash(pad_with(k, 0x5c, hash(pad_with(k, 0x36, msg))))
+}
+
+## HMAC-SHA256, 32 raw bytes.
+pub fn mac_sha256(key: Bytes, msg: Bytes) -> Bytes = mac(sha256_raw, key, msg)
+
+## HMAC-SHA1, 20 raw bytes.
+pub fn mac_sha1(key: Bytes, msg: Bytes) -> Bytes = mac(sha1.digest, key, msg)
+
+fn hex_of(key: String, msg: String, f: fn(Bytes, Bytes) -> Bytes) -> String =
+  bytes.to_hex(f(bytes.utf8(key), bytes.utf8(msg)))

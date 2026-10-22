@@ -1,0 +1,50 @@
+test "signatures match the qiniu SDK byte-for-byte" {
+  # cross-checked against qiniu.Auth("AKtest","SKtest") with fixed deadline
+  let q = Qiniu {
+    ak: "AKtest",
+    sk: "SKtest",
+    bucket: "mybucket",
+    domain: "",
+    expires: 3600,
+    rs_host: "",
+    up_host: "",
+  }
+  assert upload_token(q, "path/to/key.jpg", 1783976183) ==
+    "AKtest:LdlhAwhBCGjF3a-wmS6FRzyLyik=:eyJzY29wZSI6Im15YnVja2V0OnBhdGgvdG8va2V5LmpwZyIsImRlYWRsaW5lIjoxNzgzOTc2MTgzfQ=="
+  assert private_url(q, "https://cdn.example.com/a.jpg", 1783976183) ==
+    "https://cdn.example.com/a.jpg?e=1783976183&token=AKtest:qds6pILEK2BxpimglNVjrgvF1nU="
+  assert management_token(q, "/stat/abc\n") == "QBox AKtest:uq4LtkfJVo-ZNXoftWh9gv1-zVs="
+  assert entry_uri(q, "path/to/file.jpg") == "bXlidWNrZXQ6cGF0aC90by9maWxlLmpwZw=="
+  let entry = entry_uri(q, "path/to/file.jpg")
+  assert entry_token(q, "stat", entry) == "QBox AKtest:a7a0HH5stgcmowbc-vWoHroXYJU="
+  assert entry_token(q, "delete", entry) == "QBox AKtest:-7Eh_fzs9TcII1AZPjkouLF26fc="
+  assert qiniu_mac(q, "GET", "/v6/space?bucket=mybucket&begin=20260701000000&end=20260714120000&g=day", "api.qiniuapi.com", "application/x-www-form-urlencoded", "") ==
+    "Qiniu AKtest:4tea02U1hxRrkWbTP1pUcrBOqmo="
+  # cross-checked against qiniu.QiniuMacAuth("AKtest","SKtest").token_of_request
+  assert qiniu_mac(q, "POST", "/v2/tune/flux", "fusion.qiniuapi.com", "application/json",
+    "{\"domains\":\"a.com;b.com\",\"startDate\":\"2026-06-14\",\"endDate\":\"2026-07-14\",\"granularity\":\"day\"}") ==
+    "Qiniu AKtest:716FuHT8Wo0muPljCsrV9uNPuxE="
+  assert qiniu_mac(q, "GET", "/domain?limit=100", "api.qiniu.com", "application/json", "") ==
+    "Qiniu AKtest:NkIHWnHFAVdnaXMKYl-2OE1foYk="
+  assert qiniu_mac(q, "GET", "/billing-api/v1/respack/list", "api.qiniu.com", "application/json", "") ==
+    "Qiniu AKtest:0ymmWdvrL7R-Ru70v3DT0glRFic="
+}
+
+test "a limited upload token carries insertOnly and fsizeLimit after scope and deadline" {
+  # expected bytes computed with Python hmac/base64 over the literal policy
+  # {"scope":"mybucket:path/to/key.jpg","deadline":1783976183,"insertOnly":1,"fsizeLimit":1048576}
+  let q = Qiniu {
+    ak: "AKtest",
+    sk: "SKtest",
+    bucket: "mybucket",
+    domain: "",
+    expires: 3600,
+    rs_host: "",
+    up_host: "",
+  }
+  assert upload_token_limited(q, "path/to/key.jpg", 1783976183, 1048576) ==
+    "AKtest:6zGYQhyncrYVUlKVvSiVDuIgP0Q=:eyJzY29wZSI6Im15YnVja2V0OnBhdGgvdG8va2V5LmpwZyIsImRlYWRsaW5lIjoxNzgzOTc2MTgzLCJpbnNlcnRPbmx5IjoxLCJmc2l6ZUxpbWl0IjoxMDQ4NTc2fQ=="
+  # the admin token is untouched by the new function: same policy as before
+  assert upload_token(q, "path/to/key.jpg", 1783976183) ==
+    "AKtest:LdlhAwhBCGjF3a-wmS6FRzyLyik=:eyJzY29wZSI6Im15YnVja2V0OnBhdGgvdG8va2V5LmpwZyIsImRlYWRsaW5lIjoxNzgzOTc2MTgzfQ=="
+}

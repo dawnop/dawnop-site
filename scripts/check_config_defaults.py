@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """两个后端读同一个 .env，那它们对「没写这个键」的理解也必须是同一个。
 
-**为什么存在。** `backend-dawn/src/main.dawn` 里有一句注释：
+**为什么存在。** `backend-dawn/app/jvm/src/main.dawn` 里有一句注释：
 
     # defaults mirror app/config.py (Settings field defaults)
 
@@ -22,7 +22,7 @@
 「照抄这一行」就是两种行为。三张表逐键对齐，这三种谎话才都说不出口。
 
 模板还有一条只有它才有的约束：两个后端用**两个不同的解析器**读同一个 .env。
-`backend-dawn/src/config.dawn` 的 `parse_env` 会 trim 键值、剥成对引号，但不处理行内注释、
+`backend-dawn/core/src/config.dawn` 的 `parse_env` 会 trim 键值、剥成对引号，但不处理行内注释、
 不认 `export`、不认 `${VAR}` 插值；python-dotenv（pydantic-settings 用的那个）四样都做。
 于是 `SECRET_KEY=abc#def` 在 FastAPI 读作 `abc`、在 Dawn 读作 `abc#def`。模板是给人抄的，
 所以它必须整份落在两个解析器读法相同的子集里，越界就报 Unreadable 并点名到行号。
@@ -50,7 +50,7 @@ import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-DAWN_SRC = REPO / "backend-dawn" / "src"
+DAWN_SRC = REPO / "backend-dawn" / "app" / "jvm" / "src"
 PY_CONFIG = REPO / "backend" / "app" / "config.py"
 TEMPLATE = REPO / "backend" / ".env.example"
 

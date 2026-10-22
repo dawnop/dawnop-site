@@ -1,0 +1,100 @@
+# Crypto primitives for auth/qiniu/JWT (M6 knife 3). SHA-256 comes from the
+# Dawn sha2 package; std/bytes handles the canonical hex and Base64 encoders.
+# HMAC-SHA1/SHA256 and constant-time equality are pure Dawn (util/hmac); the
+# Base64 decoder (which must keep the JDK's lenient acceptance set) is util/b64.
+# Randomness comes from std/io's `Random` effect (unpredictable bytes from the
+# host, or fixed ones in a test); the UUID and token shapes are built on it here,
+# in plain Dawn, so this file has no JDK call left. `!Random` is installed with
+# `with_random_real` where the unit of work starts, next to `with_upstream`.
+use std/str
+use std/bytes
+use sha2/sha256
+use util/b64
+use util/hmac
+use std/io.{Random, random_bytes}
+
+## SHA-256 of a UTF-8 string, lowercase hex.
+pub fn sha256_hex(s: String) -> String !io = sha256.hex(bytes.utf8(s))
+
+## HMAC-SHA256, lowercase hex (Tencent Cloud style digests).
+pub fn hmac_sha256_hex(key: String, msg: String) -> String =
+  bytes.to_hex(hmac.mac_sha256(bytes.utf8(key), bytes.utf8(msg)))
+
+## HMAC-SHA256, URL-safe base64 without padding (JWT HS256 signatures).
+pub fn hmac_sha256_b64url_nopad(key: String, msg: String) -> String =
+  bytes.to_base64(hmac.mac_sha256(bytes.utf8(key), bytes.utf8(msg)), enc: bytes.UrlRaw)
+
+## HMAC-SHA1, URL-safe base64 with padding (qiniu signatures).
+pub fn hmac_sha1_b64url(key: String, msg: String) -> String =
+  pad4(bytes.to_base64(hmac.mac_sha1(bytes.utf8(key), bytes.utf8(msg)), enc: bytes.UrlRaw))
+
+## URL-safe base64 of a UTF-8 string, with padding (qiniu policy blobs).
+pub fn b64url_encode(s: String) -> String !io =
+  pad4(bytes.to_base64(bytes.utf8(s), enc: bytes.UrlRaw))
+
+## URL-safe base64 without padding (JWT segments).
+pub fn b64url_encode_nopad(s: String) -> String !io =
+  bytes.to_base64(bytes.utf8(s), enc: bytes.UrlRaw)
+
+## Decode URL-safe base64 (padding optional) back to a UTF-8 string. Both bad
+## base64 and payload bytes that are not UTF-8 refuse: the callers are JWT
+## segments, which must arrive intact or not at all, never patched with U+FFFD.
+pub fn b64url_decode(s: String) -> Result[String, String] !io =
+  # Normalize optional padding before decoding.
+  match b64.decode(pad4(s), true) {
+    Err(e) -> Err(e)
+    Ok(raw) ->
+      match bytes.decode_utf8_checked(raw) {
+        Ok(t) -> Ok(t)
+        Err(u) -> Err("payload is not UTF-8 (byte ${u.offset})")
+      }
+  }
+
+fn pad4(s: String) -> String =
+  match len(s) - len(s) / 4 * 4 {
+    0 -> s
+    2 -> s ++ "=="
+    3 -> s ++ "="
+    _ -> s # length % 4 == 1 is never valid base64; let the decoder report it
+  }
+
+## Constant-time equality of two strings (signature comparison). It always
+## walks the longer input, so neither the position of the first difference nor
+## which input is shorter changes how much work is done.
+pub fn eq_const(a: String, b: String) -> Bool = {
+  let x = bytes.utf8(a)
+  let y = bytes.utf8(b)
+  let n = if len(x) > len(y) { len(x) } else { len(y) }
+  var diff = len(x) ^ len(y)
+  var i = 0
+  while i < n {
+    let p = if i < len(x) { bytes.at(x, i) } else { 0 }
+    let q = if i < len(y) { bytes.at(y, i) } else { 0 }
+    diff = diff | (p ^ q)
+    i = i + 1
+  }
+  diff == 0
+}
+
+## A random version 4 UUID in its 36-char dashed form (upload ids, opaque keys).
+pub fn uuid() -> String !Random = {
+  let h = uuid_hex()
+  join([str.slice(h, 0, 8), str.slice(h, 8, 12), str.slice(h, 12, 16), str.slice(h, 16, 20), str.slice(h, 20, 32)], "-")
+}
+
+## The same UUID with the dashes removed, the shape fm and WebDAV mint qiniu
+## object keys in (an opaque 32-hex name, optionally suffixed with the file
+## extension). RFC 9562 section 5.4: 122 random bits, the version nibble of
+## byte 6 set to 4 and the two top bits of byte 8 set to 10 (the variant).
+pub fn uuid_hex() -> String !Random = {
+  let raw = random_bytes(16)
+  let fixed = fold(range(0, 16), bytes.buf(), (b, i) => {
+    let x = bytes.at(raw, i)
+    bytes.put(b, if i == 6 { (x & 15) | 64 } else if i == 8 { (x & 63) | 128 } else { x })
+  })
+  bytes.to_hex(bytes.freeze(fixed))
+}
+
+## A bearer secret for a capability link: 32 random bytes (256 bits) as
+## unpadded base64url, 43 characters, safe in a URL fragment and a header.
+pub fn random_token() -> String !Random = bytes.to_base64(random_bytes(32), enc: bytes.UrlRaw)

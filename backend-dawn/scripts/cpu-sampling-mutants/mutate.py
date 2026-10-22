@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutant_workdir import require_workdir  # noqa: E402
+from test_project import source_path  # noqa: E402
 
 MUTANTS = (
     "accept-backwards-counters",
@@ -40,7 +41,7 @@ def main() -> int:
     args = parser.parse_args()
 
     project = require_workdir(args.project)
-    monitor = project / "src/svc/monitor.dawn"
+    monitor = source_path(project, "src/svc/monitor.dawn")
 
     if args.mutant == "always-sample-a-window":
         # The state this task found the code in, reached without deleting

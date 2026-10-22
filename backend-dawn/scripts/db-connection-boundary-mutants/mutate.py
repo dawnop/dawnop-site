@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutant_workdir import require_workdir  # noqa: E402
+from test_project import source_path  # noqa: E402
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
@@ -60,7 +61,7 @@ def main() -> int:
 
     project = require_workdir(args.project)
 
-    sql = project / "src/db/sql.dawn"
+    sql = source_path(project, "src/db/sql.dawn")
     if args.mutant == "make-dbconn-transparent":
         replace_once(
             sql,
@@ -68,7 +69,7 @@ def main() -> int:
             "pub alias DbConn = Connection\n",
         )
     elif args.mutant == "leak-java-sql":
-        repo = project / "src/repo/repo_tag.dawn"
+        repo = source_path(project, "src/repo/repo_tag.dawn")
         replace_once(
             repo,
             "use db/sql.{DbConn, ",

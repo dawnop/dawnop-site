@@ -1,0 +1,178 @@
+# Substring search (fm_split/parent_rel/basename/ext) now uses the builtin
+# `index_of`/`last_index_of` (core/string): code-point indices, consistent with
+# `substring`. The hand-written code-point recursion this file used to carry is gone.
+
+test "path helpers" {
+  assert fm_split("qiniu://a/b/c.txt") == "a/b/c.txt"
+  assert fm_split("/x/") == "x"
+  assert fm_split("") == ""
+  assert full("a/b") == "qiniu://a/b"
+  assert full("") == "qiniu://"
+  assert parent_rel("a/b/c") == "a/b"
+  assert parent_rel("a") == ""
+  assert basename("a/b/c.txt") == "c.txt"
+  assert fm_join("a/b", "c") == "a/b/c"
+  assert fm_join("", "c") == "c"
+  assert ext("c.txt") == "txt"
+  assert ext("noext") == ""
+  assert ext(".hidden") == ""
+}
+
+# a single-code-point string, for the control characters a source file should not
+# carry literally
+fn cp(n: Int) -> String =
+  match char.of(n) {
+    Some(c) -> from_code_points([c])
+    None -> ""
+  }
+
+test "a name is admitted exactly when it equals its own trim" {
+  assert name_verdict("a.txt") == NameAccepted
+  assert name_verdict("docs/a.txt") == NameAccepted
+  # internal whitespace is a legal name, only the edges are refused
+  assert name_verdict("my notes.txt") == NameAccepted
+  assert name_verdict("a b/c d.txt") == NameAccepted
+  # the root and an empty segment: "" is its own trim, and emptiness is checked
+  # elsewhere
+  assert name_verdict("") == NameAccepted
+  assert name_verdict("a//b") == NameAccepted
+  assert name_verdict("a.txt ") == NameEdgeBlank
+  assert name_verdict(" a.txt") == NameEdgeBlank
+  assert name_verdict("\ta.txt") == NameEdgeBlank
+  assert name_verdict("a.txt\n") == NameEdgeBlank
+  # any segment, not only the last
+  assert name_verdict("docs /a.txt") == NameEdgeBlank
+  assert name_verdict("docs/ sub/a.txt") == NameEdgeBlank
+  # whitespace all the way through is its own verdict: it reads as empty
+  assert name_verdict("   ") == NameAllBlank
+  assert name_verdict("docs/   ") == NameAllBlank
+  assert name_verdict("\t") == NameAllBlank
+}
+
+test "the admitted whitespace set is str.trim's, not the invisible characters" {
+  # U+3000 IDEOGRAPHIC SPACE is inside Character.isWhitespace, so it is refused
+  assert name_verdict("a.txt" ++ cp(0x3000)) == NameEdgeBlank
+  assert name_verdict(cp(0x2028) ++ "a.txt") == NameEdgeBlank
+  assert name_verdict(cp(0x205F) ++ "a.txt") == NameEdgeBlank
+  assert name_verdict(cp(0x001C) ++ "a.txt") == NameEdgeBlank
+  # the non-breaking spaces and the zero-width characters are outside it. This
+  # is the claim the doc comment makes; pinning it here keeps the comment from
+  # drifting into "rejects invisible characters", which would be false.
+  assert name_verdict("a.txt" ++ cp(0x00A0)) == NameAccepted
+  assert name_verdict("a.txt" ++ cp(0x2007)) == NameAccepted
+  assert name_verdict("a.txt" ++ cp(0x202F)) == NameAccepted
+  assert name_verdict("a.txt" ++ cp(0x200B)) == NameAccepted
+  assert name_verdict("a.txt" ++ cp(0xFEFF)) == NameAccepted
+  assert name_verdict("a.txt" ++ cp(0x0085)) == NameAccepted
+}
+
+test "the write guard maps each verdict to its own 400" {
+  match require_admissible_names("docs/a.txt") {
+    Ok(_) -> { assert true }
+    Err(_) -> { assert false }
+  }
+  match require_admissible_names("docs/a.txt ") {
+    Err(e) -> {
+      assert e.status == 400
+      assert e.message == "名称不能以空白开头或结尾"
+    }
+    Ok(_) -> { assert false }
+  }
+  match require_admissible_names("docs/   ") {
+    Err(e) -> {
+      assert e.status == 400
+      assert e.message == "名称不能只由空白组成"
+    }
+    Ok(_) -> { assert false }
+  }
+}
+
+# The two dot verdicts are pinned in two tests, one per spelling, and nothing
+# else in this repo asserts on either. That is what lets the matrix own each
+# half separately: a guard that accepts "." while still refusing ".." is a
+# distinct defect from its mirror, and one test covering both could not tell
+# them apart.
+test "a `.` segment is refused: it names a row WebDAV can never address" {
+  assert name_verdict(".") == NameDotSegment
+  assert name_verdict("docs/.") == NameDotSegment
+  assert name_verdict("./a.txt") == NameDotSegment
+  # only the whole segment is a dot segment
+  assert name_verdict(".hidden") == NameAccepted
+  assert name_verdict("a.b/c.txt") == NameAccepted
+  # " ." is not its own trim and is not a dot segment either; it is refused as
+  # what it is
+  assert name_verdict(" .") == NameEdgeBlank
+  match require_admissible_names("docs/.") {
+    Err(e) -> {
+      assert e.status == 400
+      assert e.message == "名称不能是 . 或 .."
+    }
+    Ok(_) -> { assert false }
+  }
+}
+
+test "a `..` segment is refused: it names a row WebDAV can never address" {
+  assert name_verdict("..") == NameDotSegment
+  assert name_verdict("docs/..") == NameDotSegment
+  assert name_verdict("../a.txt") == NameDotSegment
+  # nothing here resolves the segment, so this is not traversal defence: the
+  # neighbouring spellings are ordinary names and stay accepted
+  assert name_verdict("...") == NameAccepted
+  assert name_verdict("a..b") == NameAccepted
+  assert name_verdict(".. ") == NameEdgeBlank
+  match require_admissible_names("docs/..") {
+    Err(e) -> {
+      assert e.status == 400
+      assert e.message == "名称不能是 . 或 .."
+    }
+    Ok(_) -> { assert false }
+  }
+}
+
+test "safe_persisted_mime ships printable ASCII verbatim" {
+  assert safe_persisted_mime("text/plain") == "text/plain"
+  assert safe_persisted_mime("text/plain; charset=utf-8") == "text/plain; charset=utf-8"
+  assert safe_persisted_mime("application/x-dawn-contract") == "application/x-dawn-contract"
+  # the bounds of the accepted range, both ends inclusive
+  assert safe_persisted_mime(cp(0x20)) == cp(0x20)
+  assert safe_persisted_mime(cp(0x7E)) == cp(0x7E)
+}
+
+test "safe_persisted_mime replaces an unshippable value whole, never cleans it" {
+  # the empty string is not a content type
+  assert safe_persisted_mime("") == FALLBACK_MIME
+  # a real CRLF: the injection this boundary exists for. Note what a sanitising
+  # boundary would have produced here — "text/plainX-Injected: 1" — and that this
+  # one produces nothing of the original at all.
+  let injected = "text/plain" ++ cp(0x0D) ++ cp(0x0A) ++ "X-Injected: 1"
+  assert safe_persisted_mime(injected) == FALLBACK_MIME
+  assert not str.contains(safe_persisted_mime(injected), "X-Injected")
+  assert not str.contains(safe_persisted_mime(injected), "text/plain")
+  # a lone control character anywhere in the value condemns the whole value
+  assert safe_persisted_mime("text/" ++ cp(0x00) ++ "plain") == FALLBACK_MIME
+  assert safe_persisted_mime(cp(0x09) ++ "text/plain") == FALLBACK_MIME
+  assert safe_persisted_mime("text/plain" ++ cp(0x1F)) == FALLBACK_MIME
+  assert safe_persisted_mime("text/plain" ++ cp(0x7F)) == FALLBACK_MIME
+  # the JDK low-byte aliases of CR and LF, and non-ASCII in general
+  assert safe_persisted_mime("text/plain" ++ cp(0x010D)) == FALLBACK_MIME
+  assert safe_persisted_mime("text/plain" ++ cp(0x010A)) == FALLBACK_MIME
+  assert safe_persisted_mime("text/plain" ++ cp(0x00A0)) == FALLBACK_MIME
+  assert safe_persisted_mime("文本/纯") == FALLBACK_MIME
+}
+
+test "guess_mime takes a bare name or a path, and defaults to octet-stream" {
+  # pre-existing divergence, pinned rather than fixed here: all three copies
+  # matched the extension verbatim, so an upper-case suffix misses the table
+  # where Python's mimetypes would case-fold it
+  assert guess_mime("a.PNG") == "application/octet-stream"
+  assert guess_mime("cover.png") == "image/png"
+  assert guess_mime("docs/img/cover.png") == "image/png"
+  assert guess_mime("notes.md") == "text/markdown"
+  assert guess_mime("data.csv") == "text/csv"
+  assert guess_mime("app.mjs") == "text/javascript"
+  assert guess_mime("archive.tar") == "application/x-tar"
+  assert guess_mime("README") == "application/octet-stream"
+  assert guess_mime("blob.unknown") == "application/octet-stream"
+  # a dot in a directory name is not the file's extension
+  assert guess_mime("v1.2/notes") == "application/octet-stream"
+}
