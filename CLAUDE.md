@@ -63,9 +63,9 @@ dawnop-site/
 │   │   ├── src/                # main、api、其余 svc 与 JDBC/Clock/HTTP 接缝及缓存地址包装
 │   │   ├── dawn.toml           # web_jvm、sqlite-jdbc 与 site_core
 │   │   └── dawn.lock           # 原 JDBC artifact 锁，内容不变
-│   ├── app/native/             # site_sqlite：独立 Db handler；sqlite 0.1.0 固定 URL/hash/subdir
+│   ├── app/native/             # site_sqlite：独立 Db 与 curl Upstream handler
 │   ├── test/{core,jvm}/        # 按原模块路径保存测试与专用夹具
-│   ├── test/{sql,native}/      # 共用 SQL 场景与 native 测试 consumer
+│   ├── test/{sql,native,transport}/ # 共用 SQL/HTTP 场景与 native consumer
 │   ├── build.sh                # 临时镜像跑测试 → 直接 build app/jvm
 │   ├── scripts/test_project.py # 生成同模块白盒测试镜像，不扩大私有 API
 │   ├── scripts/check_core.py   # native check 与源码依赖闭包门禁，含真实负控
@@ -355,7 +355,7 @@ SQLite 五槽缓存的表、语义与验证命令见 `backend-dawn/README.md` �
 
 - **CI**（`.github/workflows/ci.yml`，push main + PR 触发）：`secrets`（三道守卫 + shellcheck）、
   `backend`（Dawn 测试 + 打 jar 传 artifact + 四套 golden）、
-  `native-acceptance`（S4/S5/S6 双臂验收，含完整负控与 sanitizer）、`mutants`（**19 个并行分片**，
+  `native-acceptance`（S4/S5/S6/S8 双臂验收，含完整负控、资源实测与 sanitizer）、`mutants`（**19 个并行分片**，
   跑九个变异体 harness 共 161 个变异体）、`mutants-complete`（断言各分片并集覆盖全矩阵）、
   `python-backend`（**钉 Python 3.10**，对齐生产 + ruff）、`frontend`（lint/format/build）。
   任一红都别合。
