@@ -1,0 +1,36 @@
+# Preserve the established JVM application's response metadata on the wire.
+# web/exchange still owns parsing, validation, framing and body pumping.
+use std/list
+use std/bytes
+use std/str
+use std/io
+use site_core/util/time.{http_date}
+use web/exchange.{Transport, stdio_transport}
+
+fn first_write() -> Int !io = extern c "site_wire_first_write" else 0
+
+# Date and framing come first, then the stable application header order used
+# by the JVM owner. Unknown headers retain their original order and values.
+const ORDER: List[String] = ["date", "transfer-encoding", "last-modified", "content-type", "etag", "content-length", "accept-ranges", "vary"]
+
+fn name(line: String) -> String = match str.split_once(line, ":") {
+  Some((key, _)) -> str.to_lower(key)
+  None -> ""
+}
+
+fn head(raw: Bytes) -> Bytes !io = {
+  let lines = str.split(bytes.decode_utf8_lossy(raw), "\r\n")
+  let status = str.replace(unwrap_or(get(lines, 0), ""), "207 Multi-Status", "207 ")
+  let date = io.with_clock_real(() => http_date(io.now_wall_ns() / 1000000000))
+  let fields = ["Date: ${date}"] ++ filter(list.drop(lines, 1), line => line != "" && name(line) != "connection" && name(line) != "date")
+  let ordered = fold(ORDER, [], (acc: List[String], key) => acc ++ filter(fields, line => name(line) == key)) ++ filter(fields, line => not list.any(ORDER, key => key == name(line)))
+  bytes.utf8(status ++ "\r\n" ++ join(ordered, "\r\n") ++ "\r\n\r\n")
+}
+
+pub fn application_transport() -> Transport = {
+  let wire = stdio_transport()
+  Transport {
+    read: wire.read,
+    write: raw => wire.write(if first_write() == 1 { head(raw) } else { raw }),
+  }
+}

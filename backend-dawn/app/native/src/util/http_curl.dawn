@@ -255,7 +255,7 @@ fn perform(dir: String, req: OutReq, small: Bool, start: io.Instant) -> Result[I
 }
 
 fn validate_reply(dir: String, req: OutReq, small: Bool, status: Int) -> Result[Int, ForeignError] !io.Fs = {
-  if status < 100 || status > 599 { return Err(fault("ResponseError", "curl returned no HTTP status")) }
+  if status < 100 || status > 999 { return Err(fault("ResponseError", "curl returned no HTTP status")) }
   if io.file_size(dir ++ "/response-headers")? > HEADER_LIMIT {
     return Err(fault("ResponseError", "outbound headers exceed limit"))
   }

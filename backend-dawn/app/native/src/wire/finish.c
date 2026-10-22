@@ -45,3 +45,11 @@ dawn_adt *DAWN_EXTERN(site_finish_exchange)(void) {
   }
   return dawn_ffi_ok(dawn_ffi_box_int(bytes));
 }
+
+/* One process owns one exchange. Only its first transport write is a head. */
+int64_t DAWN_EXTERN(site_wire_first_write)(void) {
+  static int first = 1;
+  int result = first;
+  first = 0;
+  return result;
+}

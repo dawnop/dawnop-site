@@ -2,6 +2,7 @@
 
 import argparse
 import base64
+import email.utils
 import hashlib
 import json
 import os
@@ -67,11 +68,30 @@ def expected(status, body, *, vary=True, headers=(), head=False, content_type=No
         413: "Request Entity Too Large",
     }
     ct = content_type or "application/json; charset=utf-8"
-    extra = list(headers) + ([("Vary", "Origin")] if vary else [])
+    extra = (
+        [("Content-Type", ct), ("Content-Length", str(len(body)))]
+        + ([("Vary", "Origin")] if vary else [])
+        + list(headers)
+    )
+    order = [
+        "date",
+        "transfer-encoding",
+        "last-modified",
+        "content-type",
+        "etag",
+        "content-length",
+        "accept-ranges",
+        "vary",
+    ]
+    extra.sort(
+        key=lambda kv: (
+            order.index(kv[0].lower()) if kv[0].lower() in order else len(order)
+        )
+    )
     return (
-        f"HTTP/1.1 {status} {reasons[status]}\r\nContent-Type: {ct}\r\n".encode()
+        f"HTTP/1.1 {status} {reasons[status]}\r\n".encode()
         + b"".join(f"{key}: {value}\r\n".encode() for key, value in extra)
-        + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+        + b"\r\n"
         + (b"" if head else body)
     )
 
@@ -91,10 +111,24 @@ def pipe(binary, env, data=b"", argv=()):
     return result, elapsed
 
 
+def checked_date(wire):
+    # Date is newly emitted by the application boundary. Validate it separately
+    # before comparing every remaining byte; contract normalizers are unchanged.
+    head, sep, body = wire.partition(b"\r\n\r\n")
+    lines = head.split(b"\r\n")
+    dates = [line for line in lines if line.lower().startswith(b"date:")]
+    check(len(dates) == 1, "one-valid-date", repr(dates))
+    date = email.utils.parsedate_to_datetime(
+        dates[0].split(b":", 1)[1].decode().strip()
+    )
+    check(abs(date.timestamp() - time.time()) < 5, "current-http-date")
+    return b"\r\n".join(line for line in lines if line not in dates) + sep + body
+
+
 def exact(binary, env, data, wire, label):
     result, _ = pipe(binary, env, data)
     check(result.returncode == 0, label, result.stderr)
-    check(result.stdout == wire, label, repr(result.stdout))
+    check(checked_date(result.stdout) == wire, label, repr(result.stdout))
     check(not result.stderr.startswith(b"HTTP/"), "stderr-is-log")
     return result
 
@@ -146,7 +180,9 @@ def early(binary, env, *, pending=False, late=False):
             wire = receive(client)
         except (OSError, TimeoutError) as error:
             raise AssertionError(f"guard-cancel-propagates: {error}") from error
-        check(wire == expected_wire, "guard-cancel-propagates", repr(wire))
+        check(
+            checked_date(wire) == expected_wire, "guard-cancel-propagates", repr(wire)
+        )
         if late:
             client.sendall(BLOCK)
             client.shutdown(socket.SHUT_WR)
@@ -617,7 +653,8 @@ def cold(binary, env, db):
     for _ in range(100):
         result, elapsed = pipe(binary, env, request("GET", "/api/health"))
         check(
-            result.returncode == 0 and result.stdout == expected(200, HEALTH),
+            result.returncode == 0
+            and checked_date(result.stdout) == expected(200, HEALTH),
             "cold-wire",
         )
         samples.append(elapsed)
