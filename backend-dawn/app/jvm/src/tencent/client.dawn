@@ -7,7 +7,7 @@ use site_core/util/time.{utc_date}
 use site_core/util/crypto.{sha256_hex}
 use util/clock.{Clock, now_s}
 use site_core/tencent/sign.{tc3_signature}
-use util/http.{Pending, Upstream, post_start, await_resp}
+use site_core/util/http.{Pending, Upstream, post_start, await_resp}
 use json/value.{Json}
 use site_core/util/jsonread.{parse_text}
 

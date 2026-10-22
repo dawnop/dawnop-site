@@ -1,6 +1,7 @@
+use util/http_jvm.{new_client, with_upstream}
 use std/str
 use std/char
-use util/http.{new_client, with_upstream}
+
 use site_core/util/paths.{FALLBACK_MIME}
 use java "java.io.File"
 use java "java.io.FileOutputStream"

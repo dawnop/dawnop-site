@@ -8,7 +8,7 @@ use std/str
 use std/map
 use util/clock.{system_s}
 use site_core/util/time.{parse_local, local_date, local_compact_date, local_compact_datetime}
-use util/http.{Pending, Upstream, fetch_start, post_start, await_resp}
+use site_core/util/http.{Pending, Upstream, fetch_start, post_start, await_resp}
 use site_core/qiniu/creds.{Qiniu}
 use site_core/qiniu/sign.{qiniu_mac}
 use json/value.{Json, JNull, JNum, JInt, JStr, JArr, JObj}

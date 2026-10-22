@@ -1,8 +1,9 @@
+use util/http_jvm.{new_client, with_upstream}
 use java "java.lang.String"
 use std/bytes
 use site_core/qiniu/creds.{Qiniu}
 use util/ttl.{test_cell}
-use util/http.{HttpCell, HttpResp, new_client, with_upstream, pending, no_answer}
+use site_core/util/http.{HttpResp, pending, no_answer}
 use db/db.{DbConfig}
 use java "java.util.concurrent.atomic.AtomicReference"
 use java "com.sun.net.httpserver.HttpServer"
@@ -220,7 +221,7 @@ fn stub_tc(port: Int, path: String, action: String) -> Result[PendingTc, String]
     Err(m) -> panic("stub start failed: ${m}")
   }
 
-fn test_auth_with(cl: HttpCell, ak: String) -> Auth =
+fn test_auth_with(ak: String) -> Auth =
   Auth {
     db: DbConfig { path: "", ext: "" },
     secret: "test",
@@ -235,10 +236,9 @@ fn test_auth_with(cl: HttpCell, ak: String) -> Auth =
       rs_host: "",
       up_host: "",
     },
-    http: cl,
   }
 
-fn test_auth(cl: HttpCell) -> Auth = test_auth_with(cl, "test-ak")
+fn test_auth() -> Auth = test_auth_with("test-ak")
 
 fn key_present(j: Json, key: String) -> Bool = field(j, key) != JNull
 
@@ -261,7 +261,7 @@ test "a failing qiniu sub-fetch reports itself and leaves the other groups whole
     ("/respack-overview", "{\"data\":[{\"item_name\":\"存储包\",\"total_surplus\":3}]}"),
   ])
   let cl = new_client()
-  let a = test_auth(cl)
+  let a = test_auth()
   let cell = test_cell()
 
   # one of the four kodo requests points at a path the stub refuses
@@ -315,7 +315,7 @@ test "each qiniu group fails alone, whichever one it is" {
     ("/domains", "{\"domains\":[]}"),
   ])
   let cl = new_client()
-  let a = test_auth(cl)
+  let a = test_auth()
   let cell = test_cell()
   let j = with_upstream(cl, () => {
     let started = QiniuPending {
@@ -407,7 +407,7 @@ test "an API-level Error is still one call's failure, not the block's" {
 test "an unconfigured block asks nothing and answers the constant" {
   let cl = new_client()
   let cell = test_cell()
-  let blank = test_auth_with(cl, "")
+  let blank = test_auth_with("")
   # no credentials means no request is started at all -- the start phase is
   # where that decision is made, so it is the start phase that must make it.
   # A Pending carries the thunk that will deliver its reply, so these Options

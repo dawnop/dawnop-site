@@ -1,6 +1,7 @@
 # backend-dawn entry point (M6). Reads config, wires routes and middleware,
 # binds 127.0.0.1:PORT. nginx terminates TLS and reverse-proxies /api here
 # during the gradual cutover from the FastAPI backend.
+use util/http_jvm.{new_client}
 use std/io
 use site_core/config.{load, get_or, require_int_in_range}
 use db/db.{DbConfig, with_db}
@@ -27,7 +28,6 @@ use site_core/qiniu/creds.{Qiniu}
 use api/webdav.{dav_routes}
 use util/ttl.{new_cell, init_cache}
 use site_core/svc/dav_auth
-use util/http.{new_client}
 
 pub fn main() -> Unit !io = {
   # Every default below mirrors app/config.py (Settings field defaults) for the
@@ -78,10 +78,11 @@ pub fn main() -> Unit !io = {
   # only place with a lifetime longer than a request: it owns the connection
   # pool, so building one per call (which is what this used to do) meant a fresh
   # TCP connection, and against qiniu a fresh TLS handshake, on every outbound
-  # call. See util/http.HttpCell.
+  # call. See util/http_jvm.HttpCell.
+  let http = new_client()
   let a = Auth {
     db: db, secret: secret, expire_min: expire_min,
-    storage_quota: storage_quota, qiniu: qiniu, http: new_client(),
+    storage_quota: storage_quota, qiniu: qiniu,
   }
   let moncfg = MonCfg {
     tencent_id: get_or(cfg, "TENCENT_SECRET_ID", ""),
@@ -120,7 +121,7 @@ pub fn main() -> Unit !io = {
   # static /admin, /reorder, /merge, /cleanup paths win over the {slug} capture
   serve_app_with(ServerConfig {
     host: "127.0.0.1", port: port, max_body: DEFAULT_MAX_BODY, errors: fastapi_errors(),
-  }, api_articles.routes(a) ++ api_settings.routes(a) ++ api_tags.routes(a) ++ api_pages.routes(a) ++ api_viz.routes(a) ++ api_fm.routes(a, space_cell, respack_cell) ++ api_drop.routes(a) ++ api_paste.routes(a) ++ mon_routes(a, moncfg, mon_cell, respack_cell, cpu_cell) ++ api_public.routes(db, a) ++ routes(a) ++ dav_routes(a), [
+  }, api_articles.routes(a) ++ api_settings.routes(a) ++ api_tags.routes(a) ++ api_pages.routes(a) ++ api_viz.routes(a) ++ api_fm.routes(a, http, space_cell, respack_cell) ++ api_drop.routes(a, http) ++ api_paste.routes(a) ++ mon_routes(a, http, moncfg, mon_cell, respack_cell, cpu_cell) ++ api_public.routes(db, a) ++ routes(a) ++ dav_routes(a, http), [
     with_logging,
     next => with_cors(origin, next),
     next => with_body_limit(2000000, next),

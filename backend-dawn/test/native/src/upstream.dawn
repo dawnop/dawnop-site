@@ -1,0 +1,102 @@
+# Portable consumer of the S7 protocol, independent of a network transport.
+use std/bytes
+use std/io
+use std/str
+use site_core/util/http.{FileSpan, request_body, request_parts, ResponseStream, response_stream, stream_response, close_stream,
+  Upstream, HttpResp, BytesResp, StreamResp, NoBody, TextBody, fetch, post, post_bytes, fetch_bytes, fetch_stream,
+  fetch_start, await_resp, pending, as_outbound }
+use site_core/util/errkind.{KTimeout, split_kind}
+use web/types.{BodySource, response_body, Stream}
+use web/source.{bytes_source, file_source}
+use web/exchange.{pump_with, PumpPanicked}
+
+fn source_of(s: ResponseStream) -> BodySource =
+  match response_body(stream_response(200, "application/octet-stream", s)) {
+    Stream(source, _) -> source
+    _ -> panic("expected source")
+  }
+
+test "native outbound bodies contain bytes and file positions without JVM values" {
+  let span = FileSpan { path: "/unopened", offset: 17, length: 123 }
+  let parts = request_parts(request_body(bytes.utf8("h\u{0}"), span, bytes.utf8("t")))
+  assert parts.file == span
+  assert parts.head == bytes.utf8("h\u{0}")
+  assert parts.tail == bytes.utf8("t")
+}
+
+test "native callers use the same effect budgets and Pending thunk" {
+  with handle Upstream {
+    exchange(req) => {
+      let budget = match req.body { TextBody(_) -> 10
+        NoBody -> 10
+        _ -> 3600 }
+      assert req.budget_s == budget
+      Ok(HttpResp { status: 201, body: req.url })
+    }
+    exchange_bytes(req) => {
+      assert req.budget_s == 3600
+      Ok(BytesResp { status: 206, bytes: bytes.utf8("\u{0}data") })
+    }
+    exchange_stream(req) => {
+      assert req.budget_s == 3600
+      Ok(StreamResp { status: 206, stream: response_stream(bytes_source(bytes.utf8("abcdef"))) })
+    }
+    exchange_start(req) => {
+      assert req.budget_s == 10
+      let url = req.url
+      Ok(pending(req.budget_s, () => Ok(HttpResp { status: 202, body: url })))
+    }
+  }
+  assert fetch("get", []) == Ok(HttpResp { status: 201, body: "get" })
+  assert post("post", [], "text") == Ok(HttpResp { status: 201, body: "post" })
+  assert post_bytes("binary", [], bytes.utf8("\u{0}")) == Ok(HttpResp { status: 201, body: "binary" })
+  assert fetch_bytes("bytes", []) == Ok(BytesResp { status: 206, bytes: bytes.utf8("\u{0}data") })
+  let stream = match fetch_stream("stream", []) { Ok(r) -> r.stream
+    Err(m) -> panic(m) }
+  let source = source_of(stream)
+  assert source.read(0, 2) == bytes.utf8("ab")
+  assert source.read(2, 3) == bytes.utf8("cde")
+  assert source.read(5, 8) == bytes.utf8("f")
+  assert len(source.read(6, 8)) == 0
+  close_stream(stream)
+  let started = match fetch_start("started", []) { Ok(p) -> p
+    Err(m) -> panic(m) }
+  assert await_resp(started) == Ok(HttpResp { status: 202, body: "started" })
+}
+
+test "native Pending failures retain their budget and timeout classification" {
+  let p = pending(10, () => Err(ForeignError {
+    kind: "transport.TimeoutException", message: "deadline", cause: None,
+  }))
+  match as_outbound(await_resp(p)) {
+    Ok(_) -> { assert false }
+    Err(m) -> {
+      let (kind, text) = split_kind(m)
+      assert kind == KTimeout
+      assert text == "outbound HTTP timed out after 10s: transport.TimeoutException: deadline"
+    }
+  }
+}
+
+test "native missing file sources preserve read errors and close on consumption" {
+  let path = match io.with_fs_real(() => io.temp_file("", "upstream-source-")) {
+    Ok(p) -> p
+    Err(e) -> panic(e.message)
+  }
+  let original = file_source(path ++ ".absent")
+  let stream = response_stream(BodySource {
+    read: original.read,
+    close: () => io.with_fs_real(() => {
+      let _ = io.write_file(path, "closed")
+      ()
+    }),
+  })
+  assert io.with_fs_real(() => io.read_file(path)) == Ok("")
+  let source = source_of(stream)
+  assert io.with_fs_real(() => io.read_file(path)) == Ok("")
+  let outcome = pump_with(source, None, s => len(s.read(0, 8)))
+  assert match outcome { PumpPanicked(m) -> str.contains(m, "file_source:")
+    _ -> false }
+  assert io.with_fs_real(() => io.read_file(path)) == Ok("closed")
+  let _ = io.with_fs_real(() => io.delete(path))
+}

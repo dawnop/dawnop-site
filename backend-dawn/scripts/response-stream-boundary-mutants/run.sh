@@ -42,6 +42,7 @@ expected_rows=(
   'bypass-owner-adapter|ffi.web3-response-body-seam-confined'
   'bypass-streaming-symbol|ffi.web3-streaming-symbol-confined'
   'bypass-interpolated-streaming|ffi.web3-streaming-symbol-confined'
+  'discard-source-error|a response source keeps its error until consumption and closes after failure'
 )
 declare -a rows=()
 declare -a mutants=()
@@ -116,29 +117,38 @@ for index in "${!mutants[@]}"; do
   fi
   printf 'PASS  %s compiler answers version: %s\n' "$mutant" "$version"
 
+  test_log="$work/$mutant.test.log"
+  : >"$test_log"
+  test_status=0
+  if [[ "$mutant" == discard-source-error ]]; then
+    set +e
+    "$DAWN" test "$project" >"$test_log" 2>&1
+    test_status=$?
+    set -e
+  fi
   ffi_log="$work/$mutant.ffi.log"
   set +e
   python3 "$FFI_CHECK" --root "$project" >"$ffi_log" 2>&1
   ffi_status=$?
   set -e
 
-  mapfile -t failures < <(sed -n 's/^FAIL  //p' "$ffi_log")
-  if [[ $ffi_status -eq 0 ]]; then
+  mapfile -t failures < <(sed -n 's/^FAIL  //p' "$ffi_log" "$test_log")
+  if [[ $ffi_status -eq 0 && $test_status -eq 0 ]]; then
     printf 'FAIL  %s did not turn its owner red\n' "$mutant" >&2
     exit 1
   fi
   if [[ ${#failures[@]} -ne 1 ]]; then
     printf 'FAIL  %s produced %s red assertions, expected one\n' \
       "$mutant" "${#failures[@]}" >&2
-    cat "$ffi_log" >&2
+    cat "$ffi_log" "$test_log" >&2
     exit 1
   fi
 
   actual="${failures[0]}"
-  if [[ "$actual" != "$owner" ]]; then
+  if [[ "$actual" != "$owner" && "$actual" != *" :: $owner" ]]; then
     printf 'FAIL  %s turned the wrong assertion red: %s\n' \
       "$mutant" "$actual" >&2
-    cat "$ffi_log" >&2
+    cat "$ffi_log" "$test_log" >&2
     exit 1
   fi
   printf 'PASS  %s uniquely turns red: %s\n' "$mutant" "$owner"

@@ -9,7 +9,7 @@ from pathlib import Path
 from test_project import stage_project
 
 HTTP_ASSERTION = "ffi.java-net-http-confined"
-HTTP_OWNER = Path("src/util/http.dawn")
+HTTP_OWNER = Path("src/util/http_jvm.dawn")
 JAVA_NET_HTTP = re.compile(r'^\s*use java "java\.net\.http(?:\.|\")')
 SQL_ASSERTION = "ffi.java-sql-confined"
 SQL_OWNER = Path("src/db/jdbc.dawn")
@@ -24,37 +24,25 @@ DB_CONN_REPRESENTATION = re.compile(
 )
 RAW_DECLARATION = "fn raw(c: DbConn) -> Connection = c"
 INPUT_STREAM_TOKEN_ASSERTION = "ffi.java-input-stream-explicit-token-confined"
-INPUT_STREAM_OWNER = Path("src/util/http.dawn")
+INPUT_STREAM_OWNER = HTTP_OWNER
+SOURCE_OWNER = Path("src/util/http.dawn")
 INPUT_STREAM_IDENTIFIER = "InputStream"
 INPUT_STREAM_IMPORT_PATTERN = re.compile(
     r'^\s*use\s+java\s+"java\.io\.InputStream"\s*(?:#.*)?$'
 )
 RESPONSE_STREAM_OPAQUE_ASSERTION = "ffi.response-stream-opaque"
-RESPONSE_STREAM_OPAQUE_DECLARATION = "pub opaque type ResponseStream = InputStream"
+RESPONSE_STREAM_OPAQUE_DECLARATION = "pub opaque type ResponseStream = BodySource"
 RESPONSE_STREAM_RAW_ASSERTION = "ffi.response-stream-raw-confined"
 INPUT_STREAM_IMPORT = 'use java "java.io.InputStream"'
-RESPONSE_STREAM_REPRESENTATION = re.compile(
-    r"^(?:pub opaque type|pub alias) ResponseStream = InputStream$"
-)
 RESPONSE_STREAM_CAST = "let got: Result[InputStream, ForeignError] = cast(resp.body()!)"
-# `bytes_stream`'s widening. A ByteArrayInputStream is an InputStream, but Dawn
-# has no Java upcast, so the only way to hand one to `ResponseStream` is the
-# same `cast` the response body uses. It is approved by its exact spelling, like
-# the other three, and stays test-only: nothing in production calls it.
-RESPONSE_STREAM_BYTES_CAST = "let raw: Result[InputStream, ForeignError] = cast(boxed)"
-RAW_RESPONSE_STREAM_DECLARATION = (
-    "fn raw_response_stream(s: ResponseStream) -> InputStream = s"
-)
 RESPONSE_STREAM_ADAPTER_ASSERTION = "ffi.response-stream-owner-adapter"
-WEB_STREAM_IMPORT = "use web/types.{Response, streaming}"
+WEB_STREAM_IMPORT = "use web/types.{Response, BodySource, streaming}"
 WEB_INPUT_SOURCE_IMPORT = "use web_jvm/server.{input_source}"
 STREAM_RESPONSE_DECLARATION = (
     "pub fn stream_response(status: Int, content_type: String, "
     "stream: ResponseStream) -> Response ="
 )
-STREAM_RESPONSE_FORWARD = (
-    "streaming(status, content_type, input_source(raw_response_stream(stream)))"
-)
+STREAM_RESPONSE_FORWARD = "streaming(status, content_type, raw_response_source(stream))"
 RESPONSE_BODY_SEAM_ASSERTION = "ffi.web3-response-body-seam-confined"
 RESPONSE_BODY_SEAM_IDENTIFIERS = frozenset({"Stream", "ResponseBody"})
 STREAMING_SYMBOL_ASSERTION = "ffi.web3-streaming-symbol-confined"
@@ -413,7 +401,7 @@ def report_raw_connection_assertion(root: Path) -> bool:
 
 
 def report_response_stream_opaque_assertion(root: Path) -> bool:
-    owner = root / INPUT_STREAM_OWNER
+    owner = root / SOURCE_OWNER
     matches = [
         line
         for line in owner.read_text(encoding="utf-8").splitlines()
@@ -425,22 +413,15 @@ def report_response_stream_opaque_assertion(root: Path) -> bool:
 
     print(f"FAIL  {RESPONSE_STREAM_OPAQUE_ASSERTION}")
     print(
-        f"  {INPUT_STREAM_OWNER}: expected exactly "
+        f"  {SOURCE_OWNER}: expected exactly "
         f"`{RESPONSE_STREAM_OPAQUE_DECLARATION}`, found {len(matches)}"
     )
     return False
 
 
 def response_stream_seam(tokens: list[str]) -> str | None:
-    representation = " ".join(tokens)
-    if RESPONSE_STREAM_REPRESENTATION.fullmatch(representation):
-        return "ResponseStream representation"
     if tokens == token_values(RESPONSE_STREAM_CAST):
         return "response body cast"
-    if tokens == token_values(RESPONSE_STREAM_BYTES_CAST):
-        return "bytes stream cast"
-    if tokens == token_values(RAW_RESPONSE_STREAM_DECLARATION):
-        return "private raw accessor"
     return None
 
 
@@ -452,10 +433,7 @@ def report_raw_response_stream_assertion(root: Path) -> bool:
         "java.io import": sum(
             INPUT_STREAM_IMPORT_PATTERN.fullmatch(line) is not None for line in lines
         ),
-        "ResponseStream representation": 0,
         "response body cast": 0,
-        "bytes stream cast": 0,
-        "private raw accessor": 0,
     }
     violations: list[tuple[int, str]] = []
     tokens_by_line: dict[int, list[str]] = {}
@@ -490,11 +468,10 @@ def report_raw_response_stream_assertion(root: Path) -> bool:
 
 
 def report_response_stream_adapter_assertion(root: Path) -> bool:
-    owner = root / INPUT_STREAM_OWNER
+    owner = root / SOURCE_OWNER
     owner_tokens = token_values(owner.read_text(encoding="utf-8"))
     required = {
         "web3 streaming import": WEB_STREAM_IMPORT,
-        "JVM input source import": WEB_INPUT_SOURCE_IMPORT,
         "owner adapter declaration": STREAM_RESPONSE_DECLARATION,
         "owner adapter forward": STREAM_RESPONSE_FORWARD,
     }
@@ -502,6 +479,13 @@ def report_response_stream_adapter_assertion(root: Path) -> bool:
         name: token_sequence_count(owner_tokens, expected)
         for name, expected in required.items()
     }
+    jvm_tokens = token_values((root / INPUT_STREAM_OWNER).read_text(encoding="utf-8"))
+    bad_counts["JVM input source import"] = token_sequence_count(
+        jvm_tokens, WEB_INPUT_SOURCE_IMPORT
+    )
+    bad_counts["JVM source handoff"] = token_sequence_count(
+        jvm_tokens, "response_stream(input_source(s))"
+    )
     bad_counts = {name: count for name, count in bad_counts.items() if count != 1}
 
     if not bad_counts:
@@ -510,7 +494,7 @@ def report_response_stream_adapter_assertion(root: Path) -> bool:
 
     print(f"FAIL  {RESPONSE_STREAM_ADAPTER_ASSERTION}")
     for name, count in bad_counts.items():
-        print(f"  {INPUT_STREAM_OWNER}: expected exactly one {name}, found {count}")
+        print(f"  {SOURCE_OWNER}: expected exactly one {name}, found {count}")
     return False
 
 
@@ -697,16 +681,12 @@ def check_root(root: Path) -> int:
         report_response_stream_adapter_assertion(root),
         report_named_source_assertion(
             RESPONSE_BODY_SEAM_ASSERTION,
-            code_token_violations(
-                root, INPUT_STREAM_OWNER, RESPONSE_BODY_SEAM_IDENTIFIERS
-            ),
+            code_token_violations(root, SOURCE_OWNER, RESPONSE_BODY_SEAM_IDENTIFIERS),
             "web3 response body seam code token including string interpolation",
         ),
         report_named_source_assertion(
             STREAMING_SYMBOL_ASSERTION,
-            code_token_violations(
-                root, INPUT_STREAM_OWNER, STREAMING_SYMBOL_IDENTIFIERS
-            ),
+            code_token_violations(root, SOURCE_OWNER, STREAMING_SYMBOL_IDENTIFIERS),
             "web3 streaming symbol code token including string interpolation",
         ),
         report_tokenizer_self_test(root),

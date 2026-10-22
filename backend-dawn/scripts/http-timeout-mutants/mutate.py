@@ -50,6 +50,9 @@ def main() -> int:
 
     http = source_path(project, "src/util/http.dawn")
 
+    if args.mutant in {"client-per-call", "drop-deadline", "inflate-deadline"}:
+        http = source_path(project, "src/util/http_jvm.dawn")
+
     if args.mutant == "client-per-call":
         # "shared" goes back to being only a name: every call builds its own
         # client, so every call starts with an empty connection pool. Nothing
@@ -70,6 +73,13 @@ def main() -> int:
             http,
             "  if timed_out(m) { timeout(m) } else { upstream(m) }\n",
             "  upstream(m)\n",
+        )
+        # The classifier now lives in core, apart from Builder.timeout. Remove
+        # the import this mutation stops using so the mutant remains live code.
+        replace_once(
+            http,
+            "use util/errkind.{upstream, timeout}\n",
+            "use util/errkind.{upstream}\n",
         )
     elif args.mutant == "timeout-tag-second-opinion":
         # The classifier stops reading deadline_text's verdict and forms its

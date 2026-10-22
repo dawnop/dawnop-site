@@ -1,6 +1,7 @@
 # Monitor endpoint (M6 knife 12), protected. Aggregates the four blocks; the
 # third-party pair (lighthouse + qiniu) memoizes in a 120s TTL cell like the
 # FastAPI TTLCache, `?refresh=1` busts it. server/vault stay live every call.
+use util/http_jvm.{HttpCell, with_upstream}
 use std/map
 use std/io
 use web/types.{Handler, json_ok, query}
@@ -10,7 +11,7 @@ use db/db.{with_db}
 use site_core/repo/repo_settings.{setting_int}
 use util/ttl.{TtlCell, cache_get, cache_put, now_s}
 use svc/monitor.{LighthousePending, QiniuPending, server_block, lighthouse_start, lighthouse_collect, qiniu_start, qiniu_collect, vault_block}
-use util/http.{Upstream, with_upstream}
+use site_core/util/http.{Upstream}
 use qiniu/stats.{field}
 use json/value.{Json, JBool, JInt, JObj}
 use json/render.{render}
@@ -55,7 +56,7 @@ pub type MonCfg = {
 ## including the cache hits: `server_block` sits outside the 120s cell above,
 ## so the interval a reading covers is the interval between requests rather
 ## than whatever the cache TTL happens to be.
-pub fn get_monitor(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell, cpu_cell: TtlCell) -> Handler =
+pub fn get_monitor(a: Auth, cl: HttpCell, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell, cpu_cell: TtlCell) -> Handler =
   req => {
     let _u = current_user(a, req)?
     let refresh = match query(req, "refresh") {
@@ -67,7 +68,7 @@ pub fn get_monitor(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell, c
     # handler that wrapped either alone would be gone by the time the other ran.
     # It cannot go higher either -- this closure is a web `Handler`, whose type
     # is closed at `!io` (util/http says why).
-    with_upstream(a.http, () => {
+    with_upstream(cl, () => {
       let work = third_start(a, cfg, cell, respack_cell, refresh)
       let vault = vault_block(cfg.vault_alive, cfg.vault_public)
       # The one Fs install point on a request path. `server_block` reads
@@ -145,5 +146,5 @@ fn with_quota(a: Auth, qn: Json) -> Json !io =
     _ -> qn,
   }
 
-pub fn mon_routes(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell, cpu_cell: TtlCell) -> List[Route] =
-  [route_get("/api/monitor", get_monitor(a, cfg, cell, respack_cell, cpu_cell))]
+pub fn mon_routes(a: Auth, cl: HttpCell, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell, cpu_cell: TtlCell) -> List[Route] =
+  [route_get("/api/monitor", get_monitor(a, cl, cfg, cell, respack_cell, cpu_cell))]

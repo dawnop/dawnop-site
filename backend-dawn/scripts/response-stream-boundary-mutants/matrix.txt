@@ -7,3 +7,4 @@ bypass-owner-adapter|ffi.web3-response-body-seam-confined
 bypass-streaming-symbol|ffi.web3-streaming-symbol-confined
 # This independently owns the same semantic assertion through string interpolation.
 bypass-interpolated-streaming|ffi.web3-streaming-symbol-confined
+discard-source-error|a response source keeps its error until consumption and closes after failure

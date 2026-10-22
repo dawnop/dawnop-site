@@ -1,0 +1,96 @@
+use std/bytes
+use web/source.{bytes_source}
+use java "java.util.concurrent.atomic.AtomicReference"
+use java "java.lang.String"
+
+pub fn no_answer(op: String) -> ForeignError =
+  ForeignError { kind: "dawnop.UpstreamNotAnswered", message: op, cause: None }
+
+pub fn bytes_stream(b: Bytes) -> ResponseStream = response_stream(bytes_source(b))
+
+pub const TEST_TRANSFER_TIMEOUT_S: Int = TRANSFER_TIMEOUT_S
+pub fn test_text_exchange(method: String, url: String, headers: List[(String, String)], body: OutBody, budget_s: Int) -> Result[HttpResp, String] !Upstream =
+  text_exchange(method, url, headers, body, budget_s)
+pub fn test_fetch_bytes_within(url: String, headers: List[(String, String)], budget_s: Int) -> Result[BytesResp, String] !Upstream =
+  fetch_bytes_within(url, headers, budget_s)
+pub fn test_fetch_stream_within(url: String, headers: List[(String, String)], budget_s: Int) -> Result[StreamResp, String] !Upstream =
+  fetch_stream_within(url, headers, budget_s)
+pub fn test_start_within(method: String, url: String, headers: List[(String, String)], body: OutBody, budget_s: Int) -> Result[Pending, String] !Upstream =
+  start_within(method, url, headers, body, budget_s)
+pub fn test_deadline_text(budget_s: Int, e: ForeignError) -> String = deadline_text(budget_s, e)
+pub fn test_unwrap_execution(e: ForeignError) -> ForeignError = unwrap_execution(e)
+pub fn test_response_source(s: ResponseStream) -> BodySource = raw_response_source(s)
+
+fn source_log_new() -> AtomicReference !io = AtomicReference.new("")
+fn source_log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!
+fn source_log_add(r: AtomicReference, s: String) -> Unit !io = r.set("${source_log_read(r)}${s};")
+
+use web/exchange.{pump_with, PumpPanicked, Pumped, drop_body}
+use web/types as source_types
+
+test "a response source keeps its error until consumption and closes after failure" {
+  let seen = source_log_new()
+  let source = BodySource {
+    read: (pos, n) => {
+      source_log_add(seen, "read/${pos}/${n}")
+      panic("retained upstream read error")
+    },
+    close: () => source_log_add(seen, "close"),
+  }
+  let wrapped = response_stream(source)
+  let response = stream_response(200, "application/octet-stream", wrapped)
+  assert source_log_read(seen) == ""
+  let outcome = match source_types.response_body(response) {
+    source_types.Stream(s, _) -> pump_with(s, None, up => len(up.read(0, 8)))
+    _ -> panic("expected stream body")
+  }
+  assert match outcome {
+    PumpPanicked(m) -> str.contains(m, "retained upstream read error")
+    _ -> false
+  }
+  assert source_log_read(seen) == "read/0/8;close;"
+}
+
+fn tracked_source(seen: AtomicReference) -> ResponseStream =
+  response_stream(BodySource {
+    read: (pos, n) => {
+      source_log_add(seen, "read/${pos}")
+      bytes.utf8("x")
+    },
+    close: () => source_log_add(seen, "close"),
+  })
+
+test "source ownership closes successful rejected HEAD and disconnected responses" {
+  let seen = source_log_new()
+  let head = stream_response(200, "application/octet-stream", tracked_source(seen))
+  # The web server uses drop_body for HEAD and statuses without a body.
+  drop_body(source_types.response_body(head))
+  assert source_log_read(seen) == "close;"
+  let empty = stream_response(204, "application/octet-stream", tracked_source(seen))
+  drop_body(source_types.response_body(empty))
+  assert source_log_read(seen) == "close;close;"
+  # A non-2xx rejection releases the source without reading its error body.
+  let rejected = StreamResp { status: 403, stream: tracked_source(seen) }
+  assert not ok_stream(rejected)
+  close_stream(rejected.stream)
+  assert source_log_read(seen) == "close;close;close;"
+  let outcome = pump_with(raw_response_source(tracked_source(seen)), None, s => {
+    let _piece = s.read(0, 1)
+    panic("simulated downstream disconnect")
+  })
+  assert match outcome { PumpPanicked(_) -> true
+    _ -> false }
+  assert source_log_read(seen) == "close;close;close;read/0;close;"
+  assert pump_with(raw_response_source(tracked_source(seen)), Some(1), s => len(s.read(0, 1))) == Pumped
+  assert source_log_read(seen) == "close;close;close;read/0;close;read/0;close;"
+}
+
+test "a request body is multipart bytes and an explicit stable file description" {
+  let head = bytes.utf8("h\u{0}")
+  let tail = bytes.utf8("t")
+  let file = FileSpan { path: "/unused", offset: 13, length: 41 }
+  let parts = request_parts(request_body(head, file, tail))
+  assert parts.head == head
+  assert parts.file == file
+  assert parts.tail == tail
+}

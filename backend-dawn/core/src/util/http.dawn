@@ -1,25 +1,10 @@
-# Minimal HTTP client (M6 knife 4) for outbound calls: qiniu management REST,
-# register's stat check, monitor probes. Pure Dawn over java.net.http. Network
-# failures land in Err via catch_fault; a non-2xx status is still Ok (the caller
-# inspects .status) — only transport errors are failures here.
+# Portable outbound HTTP data, effect and error policy. JVM transport lives
+# in app/jvm util/http_jvm; S8 can install another handler of the same effect.
 use std/str
-use site_core/util/ferr.{fe_text}
-use site_core/util/errkind.{upstream, timeout}
-use web/types.{Response, streaming}
-use web_jvm/server.{input_source}
-use java "java.net.URI"
-use java "java.net.http.HttpClient"
-use java "java.net.http.HttpRequest"
-use java "java.net.http.HttpRequest.Builder"
-use java "java.net.http.HttpRequest.BodyPublisher"
-use java "java.net.http.HttpRequest.BodyPublishers"
-use java "java.net.http.HttpResponse.BodyHandlers"
-use java "java.io.File"
-use java "java.io.InputStream"
-use java "java.time.Duration"
-use java "java.lang.String"
-use java "java.net.http.HttpResponse"
-use java "java.util.concurrent.CompletableFuture"
+use util/ferr.{fe_text}
+use util/errkind.{upstream, timeout}
+use web/types.{Response, BodySource, streaming}
+use std/io
 
 # How long an outbound call may take, end to end.
 #
@@ -56,48 +41,27 @@ pub const MANAGEMENT_TIMEOUT_S: Int = 10
 ## deadline is a hard cap on duration, not an idle timer.
 const TRANSFER_TIMEOUT_S: Int = 3600
 
-## The process's outbound HTTP client, and the only thing in this module that is
-## meant to outlive a request.
-##
-## It has to be a value someone holds. Dawn has no mutable global state (spec
-## §6.1 puts it behind `!io` and Java interop, which is to say behind a static
-## field this repo does not have a Java source file to declare), so "shared"
-## cannot mean "a lazily-initialised singleton somewhere in here". It means main
-## builds one at startup and threads it into the route closures, exactly the way
-## `util/ttl`'s cells already work. The client rides on `Auth`, which every
-## handler that makes an outbound call already carries.
-##
-## Sharing is the point, not tidiness. `HttpClient` owns the connection pool: a
-## client built per call starts with an empty pool, so every outbound request
-## reopens the TCP connection and, against qiniu, redoes the TLS handshake. One
-## client keeps the connection alive across calls. `send` is thread-safe and the
-## JDK documents the client as intended to be shared, so the virtual thread per
-## request does not need one of its own.
-pub opaque type HttpCell = HttpClient
-
-## Ceiling on the TCP (and TLS) handshake alone. The request deadline covers
-## connect as well and is the one that bounds the whole exchange; this only
-## keeps a blackholed SYN from eating a long transfer budget.
-const CONNECT_TIMEOUT_S: Int = 10
-
-## Build the client. Called once, from main. Calling it per request would put
-## this module back where it started, so nothing below this line calls it.
-pub fn new_client() -> HttpCell !io = {
-  let connect = Duration.ofSeconds(CONNECT_TIMEOUT_S)!
-  HttpClient.newBuilder()!.connectTimeout(connect)!.build()!
-}
-
-fn client_of(cell: HttpCell) -> HttpClient = cell
-
 pub type HttpResp = { status: Int, body: String }
 
-## A request body whose Java publisher representation stays inside this module.
-## `file_body` builds the one streaming shape needed by qiniu uploads, while
-## `post_body` sends it without exposing java.net.http to callers.
-pub opaque type RequestBody = BodyPublisher
+## A stable file region. Current JVM uploads describe the whole file; another
+## transport can consume the same path, offset and length with bounded reads.
+pub type FileSpan = { path: String, offset: Int, length: Int }
 
-## A live response stream whose Java representation stays inside this module.
-pub opaque type ResponseStream = InputStream
+pub type FileParts = { head: Bytes, file: FileSpan, tail: Bytes }
+
+## Pure multipart data. No publisher, stream handle or transport callback.
+pub opaque type RequestBody = FileParts
+
+pub fn request_body(head: Bytes, file: FileSpan, tail: Bytes) -> RequestBody =
+  FileParts { head: head, file: file, tail: tail }
+
+pub fn request_parts(body: RequestBody) -> FileParts = body
+
+## A single sequential source. Errors remain in read until the consumer asks;
+## constructing or forwarding this value never reads or probes for EOF.
+pub opaque type ResponseStream = BodySource
+
+pub fn response_stream(source: BodySource) -> ResponseStream = source
 
 # The binary counterpart of HttpResp. It carries the status for the same reason
 # HttpResp does: the caller decides what a non-2xx means. Returning bare Bytes
@@ -135,18 +99,12 @@ pub type StreamResp = { status: Int, stream: ResponseStream }
 # installation points are therefore the innermost boundaries that own a whole
 # outbound unit of work; `with_upstream`'s callers are that list.
 #
-# Sites deliberately left on `!io`: `new_client` (it builds the client the
-# handler answers from, so it cannot be behind the handler), `file_body` (it
-# assembles a body, it does not send one) and `close_stream` (it releases a
-# stream an arm already handed over). None of the three touches a peer, and none
-# has an assertion worth injecting.
-
 ## What a caller wants put on the wire, before any of it is Java.
 pub type OutBody =
   | NoBody
   | TextBody(s: String)
   | RawBody(b: Bytes)
-  | PublishedBody(p: RequestBody)
+  | FileBody(p: RequestBody)
 
 ## A request that has not been built yet: method, target, headers, body, and the
 ## deadline it must be built with. The budget travels on the request because the
@@ -192,113 +150,6 @@ type PendingBox = { run: fn() -> Result[HttpResp, ForeignError] !io, budget_s: I
 pub fn pending(budget_s: Int, run: fn() -> Result[HttpResp, ForeignError] !io) -> Pending =
   PendingBox { run: run, budget_s: budget_s }
 
-## Run `body` against the real network, through the process's shared client.
-##
-## This is the production handler, and unlike util/clock's `with_system_clock` it
-## is the form that gets used. Clock had three installation sites and one arm to
-## write at each, so writing the arm inline read better; Upstream has a dozen
-## sites and four arms apiece, and a dozen copies of the same four arms is a
-## dozen places for them to drift.
-pub fn with_upstream[T](cl: HttpCell, body: fn() -> T !Upstream !io) -> T !io = {
-  with handle Upstream {
-    exchange(req) => wire_exchange(cl, req)
-    exchange_bytes(req) => wire_exchange_bytes(cl, req)
-    exchange_stream(req) => wire_exchange_stream(cl, req)
-    exchange_start(req) => wire_start(cl, req)
-  }
-  body()
-}
-
-# ---- the arms that do reach a peer ----
-
-fn wire_exchange(cl: HttpCell, req: OutReq) -> Result[HttpResp, ForeignError] !io =
-  catch_fault(() => {
-    let built = request_for(req)
-    let resp = client_of(cl).send(built, BodyHandlers.ofString()!)!
-    HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! }
-  })
-
-# resp.body() is an erased-generic Object that is a byte[] at runtime — cast
-# reclaims it (Result since v0.33.0; a mismatch was a ClassCastException that
-# catch_fault turned into a fault, and it still lands in the same Err).
-fn wire_exchange_bytes(cl: HttpCell, req: OutReq) -> Result[BytesResp, ForeignError] !io =
-  flatten_fault(catch_fault(() => {
-    let built = request_for(req)
-    let resp = client_of(cl).send(built, BodyHandlers.ofByteArray()!)!
-    let got: Result[Bytes, ForeignError] = cast(resp.body()!)
-    match got {
-      Ok(b) -> Ok(BytesResp { status: resp.statusCode(), bytes: b })
-      Err(e) -> Err(e)
-    }
-  }))
-
-# ofInputStream returns as soon as the headers land; the body is NOT buffered.
-# The stream is unconsumed here — reading it later pumps bytes, and it MUST be
-# closed (transferTo to EOF, or close_stream) or the HttpClient connection leaks.
-fn wire_exchange_stream(cl: HttpCell, req: OutReq) -> Result[StreamResp, ForeignError] !io =
-  flatten_fault(catch_fault(() => {
-    let built = request_for(req)
-    let resp = client_of(cl).send(built, BodyHandlers.ofInputStream()!)!
-    let got: Result[InputStream, ForeignError] = cast(resp.body()!)
-    match got {
-      Ok(s) -> Ok(StreamResp { status: resp.statusCode(), stream: s })
-      Err(e) -> Err(e)
-    }
-  }))
-
-fn wire_start(cl: HttpCell, req: OutReq) -> Result[Pending, ForeignError] !io =
-  catch_fault(() => {
-    let built = request_for(req)
-    let f: CompletableFuture = client_of(cl).sendAsync(built, BodyHandlers.ofString()!)!
-    pending(req.budget_s, () => future_reply(f))
-  })
-
-fn future_reply(f: CompletableFuture) -> Result[HttpResp, ForeignError] !io =
-  flatten_fault(catch_fault(() => {
-    let got: Result[HttpResponse, ForeignError] = cast(f.get()!)
-    match got {
-      Ok(resp) -> Ok(HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! })
-      Err(e) -> Err(e)
-    }
-  }))
-
-fn flatten_fault[T](r: Result[Result[T, ForeignError], ForeignError]) -> Result[T, ForeignError] =
-  match r {
-    Ok(inner) -> inner
-    Err(e) -> Err(e)
-  }
-
-# The one place a request is assembled, so the deadline cannot be forgotten by a
-# body handler that gets added later. Every outbound call in this module comes
-# through here; there is exactly one `.timeout(` in the file and this is it.
-fn request_for(req: OutReq) -> HttpRequest !io = {
-  let uri = URI.create(req.url)!
-  let base = HttpRequest.newBuilder()!.uri(uri)!
-  let timed = base.timeout(Duration.ofSeconds(req.budget_s)!)!
-  let withHeaders = add_headers(timed, req.headers, 0)
-  withHeaders.method(req.method, publisher_for(req.body))!.build()!
-}
-
-fn publisher_for(b: OutBody) -> BodyPublisher !io =
-  match b {
-    NoBody -> BodyPublishers.noBody()!
-    TextBody(s) -> BodyPublishers.ofString(s)!
-    RawBody(raw) -> BodyPublishers.ofByteArray(raw)!
-    PublishedBody(p) -> raw_body_publisher(p)
-  }
-
-fn raw_body_publisher(p: RequestBody) -> BodyPublisher = p
-
-# apply (header_name, value) pairs onto a builder, threading the builder through
-fn add_headers(b: Builder, hs: List[(String, String)], i: Int) -> Builder !io =
-  if i == len(hs) {
-    b
-  } else {
-    let (k, v) = hs[i]
-    let b2 = b.header(k, v)!
-    add_headers(b2, hs, i + 1)
-  }
-
 # ---- what callers see ----
 
 # The rewording is applied here rather than in an arm, so an arm that answers a
@@ -323,7 +174,7 @@ pub fn fetch(url: String, headers: List[(String, String)]) -> Result[HttpResp, S
 pub fn post(url: String, headers: List[(String, String)], body: String) -> Result[HttpResp, String] !Upstream =
   text_exchange("POST", url, headers, TextBody(body), MANAGEMENT_TIMEOUT_S)
 
-## POST a raw Bytes body, sent verbatim via ofByteArray. For binary proxy upload:
+## POST a raw Bytes body, sent verbatim by the transport. For binary proxy upload:
 ## the assembled multipart body carries the file bytes exactly.
 pub fn post_bytes(url: String, headers: List[(String, String)], body: Bytes) -> Result[HttpResp, String] !Upstream =
   text_exchange("POST", url, headers, RawBody(body), TRANSFER_TIMEOUT_S)
@@ -331,8 +182,8 @@ pub fn post_bytes(url: String, headers: List[(String, String)], body: Bytes) -> 
 ## POST a request body produced by this module, on the transfer deadline (this
 ## is WebDAV PUT's path to qiniu). Transport failures other than a timeout
 ## retain their original text so callers keep their established error surface.
-pub fn post_body(url: String, headers: List[(String, String)], publisher: RequestBody) -> Result[HttpResp, String] !Upstream =
-  text_exchange("POST", url, headers, PublishedBody(publisher), TRANSFER_TIMEOUT_S)
+pub fn post_body(url: String, headers: List[(String, String)], body: RequestBody) -> Result[HttpResp, String] !Upstream =
+  text_exchange("POST", url, headers, FileBody(body), TRANSFER_TIMEOUT_S)
 
 ## A binary GET: the body comes back as first-class Bytes (spec §9.5.1). Ok on
 ## transport success, the status carried like `fetch`. For the fm content proxy
@@ -366,20 +217,18 @@ fn fetch_stream_within(url: String, headers: List[(String, String)], budget_s: I
 ## closes the stream (close_stream) so the connection frees.
 pub fn ok_stream(r: StreamResp) -> Bool = r.status >= 200 && r.status < 300
 
-## Hand a live upstream stream to web3 without exposing its Java representation.
+## Transfer source ownership to the web pump, including HEAD and failure cleanup.
 pub fn stream_response(status: Int, content_type: String, stream: ResponseStream) -> Response =
-  streaming(status, content_type, input_source(raw_response_stream(stream)))
+  streaming(status, content_type, raw_response_source(stream))
 
-## Close an upstream stream, swallowing a close failure (non-fatal — the response is
-## already committed, or was never sent). The server calls this after pumping; a
-## handler rejecting a non-2xx upstream calls it before returning Err.
+## Release a rejected upstream response. Close failures remain non-fatal.
 pub fn close_stream(s: ResponseStream) -> Unit !io = {
-  let raw = raw_response_stream(s)
-  let _ = catch_fault(() => raw.close())
+  let source = raw_response_source(s)
+  let _ = catch_panic(() => catch_fault(source.close))
   ()
 }
 
-fn raw_response_stream(s: ResponseStream) -> InputStream = s
+fn raw_response_source(s: ResponseStream) -> BodySource = s
 
 # A timeout reads as a plain transport failure otherwise: the JDK's own text is
 # "request timed out" with no hint of which budget expired, and for a stalled
@@ -450,7 +299,7 @@ pub fn tag_outbound(m: String) -> String =
 #     and nothing this backend holds gets shared across threads by using these.
 #   - Nothing here creates an executor, so there is none to shut down and none
 #     to leak. The client's executor is the one it has always had, owned by the
-#     process-wide HttpCell.
+#     transport handler.
 #   - Concurrency is bounded by construction. A caller can only have as many
 #     exchanges in flight as it has started, and every start is a fixed call in
 #     the source; there is no queue that grows with load.
@@ -515,15 +364,10 @@ fn unwrap_execution(e: ForeignError) -> ForeignError =
       }
   }
 
-## Build head ++ file ++ tail without materializing the file in the heap.
-## `ofFile` streams from disk, and `concat` preserves an exact Content-Length.
+## Describe head ++ file ++ tail without opening a publisher or reading bytes.
+## Fs reports the same ForeignError as the JVM file preflight did, before send.
 pub fn file_body(head: Bytes, src: String, tail: Bytes) -> Result[RequestBody, String] !io =
-  match catch_fault(() => {
-    let h = BodyPublishers.ofByteArray(head)!
-    let f = BodyPublishers.ofFile(File.new(src).toPath()!)!
-    let t = BodyPublishers.ofByteArray(tail)!
-    BodyPublishers.concat(h, f, t)!
-  }) {
+  match io.with_fs_real(() => io.file_size(src)) {
     Err(e) -> Err(fe_text(e))
-    Ok(p) -> Ok(p)
+    Ok(size) -> Ok(request_body(head, FileSpan { path: src, offset: 0, length: size }, tail))
   }

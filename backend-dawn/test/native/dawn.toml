@@ -5,3 +5,9 @@ name = "sqlite_probe"
 site_sqlite = "../../app/native"
 site_core = "../../core"
 sql_scenarios = "../sql"
+
+[deps.web]
+url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.98.0.zip"
+version = "8.0.0"
+hash = "d1:ed4f56d6ef1c8d5ca1ce41990333754191987bbfd71ac33206afff9e86495743"
+subdir = "packages/web"

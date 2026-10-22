@@ -50,8 +50,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 - 编译器钉在 v0.98.0；web 8.0.0（纯 Dawn，包名 web8）、web_jvm 2.0.0（JVM 服务器，包名 web_jvm2）、
   json 与 sha2 都来自同版 tag 归档。入口使用 `web_jvm/server`，表单解析使用
-  `web/wire`；HTTP owner 在 `stream_response` 内用 `input_source` 把私有
-  InputStream 转成 web 的 BodySource。源的 read(pos, n) 接收累计字节偏移；
+  `web/wire`；JVM HTTP owner 在响应臂内用 `input_source` 把私有
+  InputStream 转成 core ResponseStream 所包装的 BodySource。源的 read(pos, n) 接收累计字节偏移；
   input_source 保持原调用方式，由 InputStream 自己推进游标。
 - 依赖：在 [`app/jvm/dawn.toml`](app/jvm/dawn.toml) 的 `[java-deps]` 里声明（现只剩 `sqlite-jdbc`；`jbcrypt` 已由纯 Dawn 的 `util/bcrypt` 取代——零传递依赖
   白名单，见 m6.md §2 G1）。`dawn run/test/build` 自动从 Maven 拉取并挂上 classpath；
@@ -73,7 +73,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   CI 的 S4/S5/S6 位于独立 `native-acceptance` job；`scripts/sqlite_ci_cache.py`
   仅缓存固定摘要下载与完整插桩 SQLite 引擎，命中仍验摘要并重跑全部负控与 sanitizer。
   缓存身份含源码摘要、编译器、参数、平台和实现摘要；`mutants-complete` 显式核对该 job 成功。
-  保留原有全部 433 项并补充 4 项 Db 测试（含依赖包共 437 项）及 11 条 FFI 断言；无需 .env、外部库或真实服务。
+  保留原有全部 JVM 测试（S7 后含依赖共 449 项）及 11 条 FFI 断言；无需 .env、外部库或真实服务。
 - core 门禁：`python3 scripts/check_core.py --negative-controls`。对整个 core 根运行
   发布版 native dawnc check，再扫描所有可达源码包的完整源码及 manifest，拒绝 Java、
   java-deps、web_jvm 与回指 app/test 的本地依赖。CI 先证明 Java 导入与 app 导入负控会红。
@@ -151,14 +151,14 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 S1 的 `core/src`、`app/jvm/src`、`test/{core,jvm}` 三类物理根继续保留。
 core 是名为 site_core 的 Dawn 包，app 通过 `[deps] site_core = "../../core"` 消费，
-跨根导入写为 `use site_core/...`。S5 后 core 有 34 个模块，包含 db/sql、全部 10 个 repo、
-svc/search、svc/export、svc/paste，以及原有 config、qiniu/creds、qiniu/sign、tencent/sign 与纯 util。
+跨根导入写为 `use site_core/...`。S7 后 core 有 36 个模块，包含 db/sql、全部 10 个 repo、
+svc/search、svc/export、svc/paste、svc/dav_auth、util/http，以及原有 config、qiniu/creds、qiniu/sign、tencent/sign 与纯 util。
 app 留 25 个模块，包含 db/jdbc 与 db/db，及仍依赖 Clock、Upstream 的业务和 HTTP 入口。
-core 的完整 native 依赖闭包为四包 44 个源码文件，零 Java 依赖。
+core 的完整 native 依赖闭包为四包 47 个源码文件，零 Java 依赖。
 
 S4 增加独立 `app/native` 包 site_sqlite，仅含 `db/native_sqlite` handler，core 不回指它。
 `test/sql` 保存两个真实 handler 共用的 SQL 场景；`test/native` 是可 check/build/test 的
-测试 consumer。JVM 生产与原 437 项测试仍用原命令、原根，新增七项缓存测试后共 444 项；native HTTP 入口尚属后续刀。
+测试 consumer。JVM 生产与原 444 项测试仍用原命令；S7 新增四项类型/源生命周期/范围拒绝断言及可达 web/source 一项测试后共 449 项；native HTTP 入口尚属后续刀。
 
 以下模块名按原相对路径记：core 中的模块在 core/src 下，其余在 app/jvm/src 下，
 对应测试在 test/core 或 test/jvm。main 属于 app，config 属于 core。
@@ -203,10 +203,10 @@ S4 增加独立 `app/native` 包 site_sqlite，仅含 `db/native_sqlite` handler
 - `app/jvm/src/db/db.dawn` — 配置记录 DbConfig 与每工作单元一连接的 with_db：WAL、5000ms busy timeout 与原有扩展初始化；回调为 fn() 并由连接 handler 消解 Db。
 - `util/bcrypt.dawn` — 纯 Dawn 的 bcrypt（`$2a$`）校验，取代 jBCrypt；状态是 `std/mem` 的 `I64Buf`（`with_mem` 内生灭，对外纯函数）；cost 12 校验与 jBCrypt 同量级（JVM 约 0.16 s），换 cost 前先重测。
 - `util/crypto.dawn` — sha256 / hmac-sha1 / hmac-sha256 / base64url / uuid（auth、七牛、JWT、腾讯共用）。
-- `util/http.dawn` — java.net.http 出站客户端：`fetch/post` + `fetch_bytes`（二进制体，G6）；
+- `core/src/util/http.dawn` — 可移植出站类型、效果与错误策略：`fetch/post` + `fetch_bytes`（二进制体，G6）；
   **出站 HTTP 是具名效果 `Upstream`**（四个操作：text / bytes / stream / 起一个不等的交换）。
   调用方拼一个纯 Dawn 的 `OutReq` 交给装好的 handler，只有臂里才碰 java.net.http；生产臂是
-  `with_upstream(cell, body)`，测试臂按表作答。**切口刻意开在错误面之下**：臂交回的是原始
+  `app/jvm/src/util/http_jvm.dawn` 的 `with_upstream(cell, body)`，测试臂按表作答。**切口刻意开在错误面之下**：臂交回的是原始
   `ForeignError` 而不是成文的消息，于是 `deadline_text` 的措辞、`timed_out` 的判词、
   `as_outbound` 的 504/502 分流在测试里跑的仍是生产代码——一条答 `HttpTimeoutException` 的臂，
   微秒内断言完从前要停机十秒才断言得到的那三行。`Pending` 里装的是「交付回复的 thunk」而不是
@@ -238,8 +238,8 @@ S4 增加独立 `app/native` 包 site_sqlite，仅含 `db/native_sqlite` handler
   仍是 `KUpstream` → 502。这条分界对着屏幕的人有意义：502 读作「凭据或端点不对」，504 读作
   「对端没响应，可以重试」。落到 wire 上的证据在 qiniu golden 的 `fm.register.quiet_peer`
   （假七牛接受连接后不作答，`/register` 的 stat 走完管理档预算后回 504）。
-  **出站客户端是全进程一个**（`HttpCell`，main 建一次、随 `Auth` 穿到各处，和 `util/ttl` 的
-  cell 同一套办法）：连接池长在实例上，每次调用新建一个等于每次出站重握手（对七牛还要重做 TLS）。
+  **出站客户端是全进程一个**（JVM owner 的 `HttpCell`，main 建一次、单独传入四处路由边界；
+  `Auth` 只持配置，不再携带客户端）：连接池长在实例上，每次调用新建一个等于每次出站重握手（对七牛还要重做 TLS）。
   判词不是「源码里只有一处 new」——那句话在旧的 `shared_client` 每次调用都 build 时也成立——
   而是假服务器把**客户端自己的源端口**回给测试：同一个 cell 的两次请求端口相同，另起一个客户端不同。
   负控在 `scripts/http-timeout-mutants/`（10 个变异体，覆盖期限 / 超时分类 / 共享客户端三组规则）。
@@ -250,17 +250,23 @@ S4 增加独立 `app/native` 包 site_sqlite，仅含 `db/native_sqlite` handler
   假服务器接受连接后先停住再迟迟作答（有限停顿，所以变异体是转红而不是把门禁挂死），
   `inflate-deadline` 保留 `.timeout(` 只把值改荒谬，`client-per-call` 保留唯一那处 builder 只让它
   每次调用跑一遍，`timeout-tag-second-opinion` 给标签另开一套判据——三个都只有真跑才判得出来。
-  `RequestBody` 不透明边界封装流式文件请求体，调用方不传播 Java publisher 类型；
-  `ResponseStream` 不透明边界封装实时响应流，业务模块只经 owner adapter 进入 web3 streaming。
+  `RequestBody` 不透明包装纯数据 `FileParts { head, file: FileSpan { path, offset, length }, tail }`，
+  `OutBody.FileBody` 替代 PublishedBody。file_body 只预检文件大小，不创建 publisher；JVM owner 在
+  request_for 内把完整文件描述转换成 ofFile/concat，保持原流式发送。当前 JVM 明确拒绝非完整文件范围；
+  拒绝返回 ForeignError 并经原 502 分类，S8 可直接使用描述中的 offset/length。`ResponseStream` 不透明包装 web8 BodySource，
+  JVM 臂先用 input_source 转换，core stream_response 再交 web 泵；转交不读源，读错误保留到消费时。
+  HEAD/无体状态、成功、失败/断连由 web bracket 关闭；非2xx拒绝由 close_stream 关闭。
+  response-stream 原七项一对一保留，再加错误被吞为 EOF 的第八项，共九组161变异。
+  详见根目录 `docs/upstream-types-design.md`。
   FFI 门禁只约束显式 `InputStream` 源码名，不阻止 Java 返回类型由推断得到；响应侧另以
   `Stream`/`ResponseBody` 与 `streaming` 两个独立 seam 门禁阻止业务模块绕过 owner。扫描时忽略
   普通、三引号与 raw string 的文本，但 `$name` 和 `${expr}` 插值表达式仍按 Dawn 代码检查。
 - **文件系统是 std 的具名效果 `Fs`**（`std/io` 自 dawn 0.72.0 起，`read_file` 等由 `!io` 改为 `!Fs`），
   形状与上面的 `Upstream` 同款：声明 + `with_fs_real` 生产 handler，没有别的语言支持。
-  本仓的安装点只有**两处**，都在最内层拥有一个完整文件工作单元的边界上：`main.dawn` 罩住
+  本仓的安装点都在最内层拥有一个完整文件工作单元的边界上：`main.dawn` 罩住
   `config.load`（整个进程唯一一次启动期读文件），`api/api_monitor` 的路由闭包罩住 `server_block`
   （读 /proc 的那一段；同样装不进 main，理由与 `Upstream` 那条一样）。
-  其余 `with_fs_real` 都在测试里，服务器的安装点位于依赖包 `web_jvm/server`。
+  core util/http.file_body 另在文件描述创建时装 Fs 并查询真实长度。其余 `with_fs_real` 都在测试里，服务器的安装点位于依赖包 `web_jvm/server`。
 - **环境变量是 std 的具名效果 `Env`**（`io.getenv` 自 dawn 0.76.0 起为 `!Env`；0.78.0 起 `io` 是唯一的环境效果，
   其余效果必须写在签名上）。本仓只在启动期读两处环境变量：`config.lookup` 与 `main.env_or`，
   各自就地罩一层 `io.with_env_real`，签名保持 `!io`（调用方本来都是 `!io`，启动期读取也没有测试替身要装）。

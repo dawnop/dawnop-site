@@ -27,7 +27,7 @@ use site_core/util/crypto.{uuid_hex}
 use site_core/qiniu/sign.{private_url}
 use qiniu/rs.{delete_obj, copy_obj, upload_text, upload_bytes}
 use site_core/util/errkind.{conflict}
-use util/http.{Upstream, as_outbound}
+use site_core/util/http.{Upstream, as_outbound}
 use site_core/util/jsonx.{obj, jstr}
 use util/ttl.{now_s}
 use json/value.{Json, JArr, JObj, JStr}

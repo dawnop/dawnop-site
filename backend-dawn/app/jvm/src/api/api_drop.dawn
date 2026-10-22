@@ -13,6 +13,7 @@
 # Responses to the uploader carry the file's name and size and nothing else:
 # no object key (except the one upload-token hands out, which the client needs
 # to upload), no stored path, nothing about other files.
+use util/http_jvm.{HttpCell, with_upstream}
 use std/map
 use std/list
 use std/char
@@ -23,7 +24,7 @@ use site_core/util/jsonx.{obj, jstr, jint, jbool, jdatetime}
 use site_core/util/jsonread.{body_obj}
 use std/io.{Random, with_random_real}
 use util/clock.{Clock, system_ms}
-use util/http.{Upstream, with_upstream}
+use site_core/util/http.{Upstream}
 use site_core/util/errkind.{KConflict, KUpstream, KTimeout, split_kind}
 use site_core/util/paths.{fm_split, full, basename}
 use svc/auth.{Auth, guarded}
@@ -116,17 +117,17 @@ fn drop_token(req: Request) -> Result[String, HttpError] =
 # A route closure is the innermost thing that owns a whole unit of work, so the
 # production Clock, Random and Upstream handlers are installed here (util/clock and
 # util/http say why they cannot go in main).
-fn public(a: Auth, body: fn(Request) -> Result[Response, HttpError] !Clock !Random !Upstream !io) -> Handler =
+fn public(cl: HttpCell, body: fn(Request) -> Result[Response, HttpError] !Clock !Random !Upstream !io) -> Handler =
   req =>
-  with_upstream(a.http, () => {
+  with_upstream(cl, () => {
     with handle Clock { now_ms() => system_ms() }
     with_random_real(() => body(req))
   })
 
 ## GET /api/drop: what the upload page shows. The directory is reported by its
 ## last segment only.
-pub fn info(a: Auth) -> Handler =
-  public(a, req => {
+pub fn info(a: Auth, cl: HttpCell) -> Handler =
+  public(cl, req => {
     let token = drop_token(req)?
     let d = lift_public(drop_info(a, token))?
     Ok(json_ok(obj([
@@ -144,8 +145,8 @@ pub fn info(a: Auth) -> Handler =
 ## POST /api/drop/upload-token {name, size}: a direct-upload credential for one
 ## file, in the same shape the admin's /api/fm/upload-token hands the browser
 ## (token, key, up_host), with the server-chosen `name` in place of `path`.
-pub fn upload_token(a: Auth) -> Handler =
-  public(a, req => {
+pub fn upload_token(a: Auth, cl: HttpCell) -> Handler =
+  public(cl, req => {
     let token = drop_token(req)?
     let m = body_map(req)?
     let name = req_str(m, "name")?
@@ -160,8 +161,8 @@ pub fn upload_token(a: Auth) -> Handler =
   })
 
 ## POST /api/drop/register {key}: record a direct upload. 201 {name, size}.
-pub fn register(a: Auth) -> Handler =
-  public(a, req => {
+pub fn register(a: Auth, cl: HttpCell) -> Handler =
+  public(cl, req => {
     let token = drop_token(req)?
     let m = body_map(req)?
     let key = req_str(m, "key")?
@@ -172,8 +173,8 @@ pub fn register(a: Auth) -> Handler =
 
 ## PUT /api/drop/files/{name}: the one-step upload, `curl -T file -H
 ## "X-Drop-Token: ..." .../api/drop/files/<name>`. 201 {name, size}.
-pub fn put(a: Auth) -> Handler =
-  public(a, req => {
+pub fn put(a: Auth, cl: HttpCell) -> Handler =
+  public(cl, req => {
     let token = drop_token(req)?
     let name = param(req, "name")?
     let done = lift_public(put_file(a, token, name, declared_length(req), req.body_file))?
@@ -323,15 +324,15 @@ pub fn delete_ep(a: Auth) -> Handler =
     Ok(json_ok(obj([("ok", jbool(true))])))
   })
 
-pub fn routes(a: Auth) -> List[Route] =
+pub fn routes(a: Auth, cl: HttpCell) -> List[Route] =
   [
     route_get("/api/fm/drops", list_ep(a)),
     route_post("/api/fm/drops", create_ep(a)),
     route_post("/api/fm/drops/revoke", revoke_ep(a)),
     route_post("/api/fm/drops/delete", delete_ep(a)),
-    route_get("/api/drop", info(a)),
-    route_post("/api/drop/upload-token", upload_token(a)),
-    route_post("/api/drop/register", register(a)),
+    route_get("/api/drop", info(a, cl)),
+    route_post("/api/drop/upload-token", upload_token(a, cl)),
+    route_post("/api/drop/register", register(a, cl)),
     # stream-body: the server spills the body to a temp file and deletes it when
     # the handler returns, so a file never sits in the heap. raw-body: the JSON
     # ceiling does not apply; the drop's own quota does.
@@ -343,6 +344,6 @@ pub fn routes(a: Auth) -> List[Route] =
     # cap is the guard's to enforce. The reverse proxy's client_max_body_size is
     # what bounds a production upload in practice (deploy/README.md).
     route_guarded(
-      body_limit(tagged(route_put("/api/drop/files/{name}", put(a)), ["raw-body", "stream-body"]), MAX_MAX_FILE_BYTES),
+      body_limit(tagged(route_put("/api/drop/files/{name}", put(a, cl)), ["raw-body", "stream-body"]), MAX_MAX_FILE_BYTES),
       put_guard(a)),
   ]
