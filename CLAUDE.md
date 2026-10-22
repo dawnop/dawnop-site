@@ -62,7 +62,7 @@ dawnop-site/
 │   ├── app/jvm/                # JVM 应用，6 个模块；路径依赖 ../../core
 │   │   ├── src/                # main、JDBC owner、HTTP 适配与测试用缓存构造
 │   │   ├── dawn.toml           # web_jvm、sqlite-jdbc 与 site_core
-│   │   └── dawn.lock           # 原 JDBC artifact 锁，内容不变
+│   │   └── dawn.lock           # JDBC 3.53.4.0 artifact 字节锁
 │   ├── app/native/             # native 单交换入口、SQLite/curl handler 与有界 fd teardown
 │   ├── test/{core,jvm}/        # 按原模块路径保存测试与专用夹具
 │   ├── test/{sql,native,transport,monitor}/ # 共用 SQL/HTTP 场景与 native consumer
@@ -218,8 +218,9 @@ dawnop-site/
   每项含服务端算好的高亮 `title_html`/`excerpt_html`（转义后包 `<mark>`）、`tags`、`word_count`。
 
 > **全站搜索 = SQLite FTS5**（`core/search.py`）+ wangfenjin/simple 扩展做中文分词（字级 + 拼音，只用
-> `simple_query` 不启用 jieba）；前端是 ⌘K 命令面板（`components/SearchModal.vue`）。分词器启动时择优、
-> 逐级降级 `simple → trigram → LIKE`，缺扩展不影响启动。**选型理由、详细设计、部署坑详见
+> `simple_query` 不启用 jieba）；前端是 ⌘K 命令面板（`components/SearchModal.vue`）。冻结 FastAPI 的分词器启动时择优、
+> 逐级降级 `simple → trigram → LIKE`。Dawn 显式配置的扩展加载失败会拒绝启动；
+> JVM 同时要求 WAL 读回 `wal`、SQLite 至少 3.51.3，`--engine-info` 仅在内存连接上报告实际版本与 source id。**选型理由、详细设计、部署坑详见
 > [`docs/search.md`](docs/search.md)**——尤其：simple 的 `.so` 不入库，**生产需手动下载 linux 版再 scp**
 > （fetch 脚本在服务器上连不上 GitHub），rsync 后端要排除 `extensions/libsimple.*`。
 

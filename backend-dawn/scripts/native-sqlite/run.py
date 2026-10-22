@@ -494,6 +494,12 @@ def main():
         )
         ok("SQL extension loading disabled during C init and after return")
         busy(work, native, fixture, env)
+        spec = importlib.util.spec_from_file_location(
+            "jdbc_rollback", BACKEND / "scripts/jdbc-init/rollback.py"
+        )
+        rollback = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rollback)
+        rollback.matrix(work / "rollback", dawn, dawnc, fixture, work, env)
         sanitized(work, dawnc, fixture, env)
         if args.benchmark:
             benchmark(work, native, fixture, env, args.benchmark)

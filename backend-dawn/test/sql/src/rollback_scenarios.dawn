@@ -1,0 +1,69 @@
+# Shared rollback sequence against the real JDBC and native handlers.
+use std/io
+use site_core/db/sql.{Db, query, execute, scalar_int, PStr, PInt, ColStr, VStr}
+use site_core/repo/repo_paste
+use scenarios.{demand, check}
+
+fn count(q: String, n: Int, label: String) -> Unit !Db !io =
+  check(demand(scalar_int(q, [])) == n, label)
+
+fn article(id: Int, title: String) -> Unit !Db !io = {
+  demand(execute("insert into articles(id,title,slug,summary,content,published) values(?,?,'rollback-'||?,'','',1)", [PInt(id), PStr(title), PInt(id)]))
+}
+fn paste(id: String, title: String) -> Unit !Db !io = {
+  demand(execute("insert into pastes(id,title,content,created_at,size_bytes) values(?,?,'rollback body',1,13)", [PStr(id), PStr(title)]))
+}
+fn integrity() -> Unit !Db !io = {
+  check(demand(query("pragma integrity_check", [], [ColStr])) == [[VStr("ok")]], "rollback-integrity")
+  demand(execute("insert into article_fts(article_fts,rank) values('integrity-check',1)", []))
+  demand(execute("insert into paste_fts(paste_fts,rank) values('integrity-check',1)", []))
+  # Check the FTS setting itself. PRAGMA secure_delete is a different option.
+  count("select coalesce((select v from article_fts_config where k='secure-delete'),0)", 0, "article-secure-delete-off")
+  count("select coalesce((select v from paste_fts_config where k='secure-delete'),0)", 0, "paste-secure-delete-off")
+}
+
+pub fn rollback(mode: String) -> Unit !Db !io = {
+  let version = demand(query("select sqlite_version(), sqlite_source_id()", [], [ColStr, ColStr]))
+  io.eprintln(to_string(version))
+  if mode == "seed" || mode == "seed-rollback" {
+    check(version[0][0] == VStr("3.54.1"), "native-pinned-version")
+    demand(repo_paste.ensure_schema())
+    article(9101, "回滚中文")
+    article(9102, "待删除")
+    paste("rollback-1", "native marker")
+    paste("rollback-2", "deleted marker")
+    integrity()
+    if mode == "seed-rollback" {
+      demand(execute("begin immediate", []))
+      article(9104, "未提交")
+      paste("rollback-abort", "uncommitted marker")
+    }
+    println("ready")
+    io.flush_stdout()
+    let _ = io.read_line()
+  } else if mode == "jvm" {
+    check(version[0][0] == VStr("3.53.4"), "jdbc-pinned-version")
+    count("select count(*) from articles where id=9104", 0, "crash-uncommitted-article-absent")
+    count("select count(*) from pastes where id='rollback-abort'", 0, "crash-uncommitted-paste-absent")
+    count("select count(*) from article_fts where article_fts match simple_query('zhongwen') and rowid=9101", 1, "native-to-jvm-pinyin")
+    count("select count(*) from paste_fts where paste_fts match 'native'", 1, "native-to-jvm-trigram")
+    demand(execute("begin immediate", []))
+    demand(execute("update articles set title='更新回滚' where id=9101", []))
+    demand(execute("delete from articles where id=9102", []))
+    article(9103, "新驱动写入")
+    demand(execute("delete from pastes where id='rollback-2'", []))
+    paste("rollback-3", "jdbc marker")
+    demand(execute("commit", []))
+    integrity()
+  } else {
+    check(version[0][0] == VStr("3.54.1"), "native-pinned-version")
+    count("select count(*) from articles where id between 9101 and 9103", 2, "jvm-to-native-rows")
+    count("select count(*) from article_fts where article_fts match simple_query('gengxin') and rowid=9101", 1, "jvm-to-native-update-trigger")
+    count("select count(*) from article_fts where article_fts match simple_query('待删除') and rowid=9102", 0, "jvm-to-native-delete-trigger")
+    count("select count(*) from article_fts where article_fts match simple_query('驱动') and rowid=9103", 1, "jvm-to-native-insert-trigger")
+    count("select count(*) from paste_fts where paste_fts match 'deleted'", 0, "paste-delete-trigger")
+    count("select count(*) from paste_fts where paste_fts match 'jdbc'", 1, "paste-insert-trigger")
+    demand(execute("update articles set title='再次回写' where id=9103", []))
+    integrity()
+  }
+}
