@@ -30,6 +30,8 @@ PrivateTmp=true
 UMask=0077
 Slice=dawnop-native.slice
 MemoryAccounting=true
-MemoryMax=96M
+# Buffered staging charges the page cache. Reclaim before the hard OOM limit.
+MemoryHigh=192M
+MemoryMax=256M
 TasksMax=16
 CPUQuota=100%
