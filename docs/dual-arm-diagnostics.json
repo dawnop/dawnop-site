@@ -1,0 +1,807 @@
+{
+  "baseline": "research-site-native-plan-20261022 v0.97.0; http check097 injected import removed from line numbering",
+  "count": 89,
+  "diagnostics": [
+    {
+      "id": 1,
+      "original_file": "src/util/http.dawn",
+      "original_line": 22,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 2,
+      "original_file": "src/util/http.dawn",
+      "original_line": 23,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 3,
+      "original_file": "src/util/http.dawn",
+      "original_line": 24,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 4,
+      "original_file": "src/util/http.dawn",
+      "original_line": 27,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 5,
+      "original_file": "src/util/http.dawn",
+      "original_line": 28,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 6,
+      "original_file": "src/util/http.dawn",
+      "original_line": 29,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 7,
+      "original_file": "src/util/http.dawn",
+      "original_line": 579,
+      "message": "unknown type: HttpServer",
+      "original_test_or_helper": "fn echo_server(status: Int, body: String) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 8,
+      "original_file": "src/util/http.dawn",
+      "original_line": 674,
+      "message": "unknown type: HttpServer",
+      "original_test_or_helper": "fn stall_server(stall_ms: Int, status: Int, body: String) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 9,
+      "original_file": "src/util/http.dawn",
+      "original_line": 783,
+      "message": "unknown type: HttpServer",
+      "original_test_or_helper": "fn port_server() -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 10,
+      "original_file": "src/util/http.dawn",
+      "original_line": 1019,
+      "message": "unknown type: AtomicReference",
+      "original_test_or_helper": "fn log_new() -> AtomicReference !io = AtomicReference.new(\"\")",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "backend-dawn/test/support.dawn log_new/log_read/log_add"
+    },
+    {
+      "id": 11,
+      "original_file": "src/util/http.dawn",
+      "original_line": 1021,
+      "message": "unknown type: AtomicReference",
+      "original_test_or_helper": "fn log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "backend-dawn/test/support.dawn log_new/log_read/log_add"
+    },
+    {
+      "id": 12,
+      "original_file": "src/util/http.dawn",
+      "original_line": 1023,
+      "message": "unknown type: AtomicReference",
+      "original_test_or_helper": "fn log_add(r: AtomicReference, s: String) -> Unit !io = r.set(\"${log_read(r)}${s};\")",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "backend-dawn/test/support.dawn log_new/log_read/log_add"
+    },
+    {
+      "id": 13,
+      "original_file": "src/util/http.dawn",
+      "original_line": 580,
+      "message": "undefined constructor: HttpServer",
+      "original_test_or_helper": "fn echo_server(status: Int, body: String) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 14,
+      "original_file": "src/util/http.dawn",
+      "original_line": 580,
+      "message": "undefined constructor: InetSocketAddress",
+      "original_test_or_helper": "fn echo_server(status: Int, body: String) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 15,
+      "original_file": "src/util/http.dawn",
+      "original_line": 581,
+      "message": "cannot infer the type of `ex`",
+      "original_test_or_helper": "fn echo_server(status: Int, body: String) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 16,
+      "original_file": "src/util/http.dawn",
+      "original_line": 579,
+      "message": "function `echo_server` declares return type (?, Int) but its body is (?, ?)",
+      "original_test_or_helper": "fn echo_server(status: Int, body: String) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 17,
+      "original_file": "src/util/http.dawn",
+      "original_line": 675,
+      "message": "undefined constructor: HttpServer",
+      "original_test_or_helper": "fn stall_server(stall_ms: Int, status: Int, body: String) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 18,
+      "original_file": "src/util/http.dawn",
+      "original_line": 675,
+      "message": "undefined constructor: InetSocketAddress",
+      "original_test_or_helper": "fn stall_server(stall_ms: Int, status: Int, body: String) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 19,
+      "original_file": "src/util/http.dawn",
+      "original_line": 676,
+      "message": "cannot infer the type of `ex`",
+      "original_test_or_helper": "fn stall_server(stall_ms: Int, status: Int, body: String) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 20,
+      "original_file": "src/util/http.dawn",
+      "original_line": 677,
+      "message": "undefined constructor: Thread",
+      "original_test_or_helper": "fn stall_server(stall_ms: Int, status: Int, body: String) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 21,
+      "original_file": "src/util/http.dawn",
+      "original_line": 674,
+      "message": "function `stall_server` declares return type (?, Int) but its body is (?, ?)",
+      "original_test_or_helper": "fn stall_server(stall_ms: Int, status: Int, body: String) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 22,
+      "original_file": "src/util/http.dawn",
+      "original_line": 784,
+      "message": "undefined constructor: HttpServer",
+      "original_test_or_helper": "fn port_server() -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 23,
+      "original_file": "src/util/http.dawn",
+      "original_line": 784,
+      "message": "undefined constructor: InetSocketAddress",
+      "original_test_or_helper": "fn port_server() -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 24,
+      "original_file": "src/util/http.dawn",
+      "original_line": 785,
+      "message": "cannot infer the type of `ex`",
+      "original_test_or_helper": "fn port_server() -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 25,
+      "original_file": "src/util/http.dawn",
+      "original_line": 783,
+      "message": "function `port_server` declares return type (?, Int) but its body is (?, ?)",
+      "original_test_or_helper": "fn port_server() -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 26,
+      "original_file": "src/util/http.dawn",
+      "original_line": 1019,
+      "message": "undefined constructor: AtomicReference",
+      "original_test_or_helper": "fn log_new() -> AtomicReference !io = AtomicReference.new(\"\")",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "backend-dawn/test/support.dawn log_new/log_read/log_add"
+    },
+    {
+      "id": 27,
+      "original_file": "src/util/http.dawn",
+      "original_line": 1021,
+      "message": "undefined constructor: String",
+      "original_test_or_helper": "fn log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "backend-dawn/test/support.dawn log_new/log_read/log_add"
+    },
+    {
+      "id": 28,
+      "original_file": "src/util/http.dawn",
+      "original_line": 706,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"every request shape carries its deadline, whichever body handler it uses\"",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 29,
+      "original_file": "src/util/http.dawn",
+      "original_line": 708,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"every request shape carries its deadline, whichever body handler it uses\"",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 30,
+      "original_file": "src/util/http.dawn",
+      "original_line": 717,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"every request shape carries its deadline, whichever body handler it uses\"",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 31,
+      "original_file": "src/util/http.dawn",
+      "original_line": 719,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"every request shape carries its deadline, whichever body handler it uses\"",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 32,
+      "original_file": "src/util/http.dawn",
+      "original_line": 729,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"every request shape carries its deadline, whichever body handler it uses\"",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 33,
+      "original_file": "src/util/http.dawn",
+      "original_line": 732,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"every request shape carries its deadline, whichever body handler it uses\"",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 34,
+      "original_file": "src/util/http.dawn",
+      "original_line": 921,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"started requests travel together, not one after another\"",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 35,
+      "original_file": "src/util/http.dawn",
+      "original_line": 929,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"started requests travel together, not one after another\"",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 36,
+      "original_file": "src/util/http.dawn",
+      "original_line": 934,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"started requests travel together, not one after another\"",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 37,
+      "original_file": "src/util/http.dawn",
+      "original_line": 1054,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"an injected deadline is the production deadline, in microseconds\"",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 38,
+      "original_file": "src/util/http.dawn",
+      "original_line": 1056,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"an injected deadline is the production deadline, in microseconds\"",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 39,
+      "original_file": "src/util/http.dawn",
+      "original_line": 1190,
+      "message": "undefined constructor: File",
+      "original_test_or_helper": "test \"every call shape asks for the budget its deadline was chosen for\"",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 40,
+      "original_file": "src/util/http.dawn",
+      "original_line": 1192,
+      "message": "cannot infer type parameter(s) T for `must`",
+      "original_test_or_helper": "test \"every call shape asks for the budget its deadline was chosen for\"",
+      "destination": "backend-dawn/test/jvm/util/http_jvm.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 41,
+      "original_file": "src/qiniu/rs.dawn",
+      "original_line": 8,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/qiniu/rs.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 42,
+      "original_file": "src/qiniu/rs.dawn",
+      "original_line": 9,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/qiniu/rs.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 43,
+      "original_file": "src/qiniu/rs.dawn",
+      "original_line": 10,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/qiniu/rs.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 44,
+      "original_file": "src/qiniu/rs.dawn",
+      "original_line": 11,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/qiniu/rs.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 45,
+      "original_file": "src/qiniu/rs.dawn",
+      "original_line": 12,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/qiniu/rs.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 46,
+      "original_file": "src/qiniu/rs.dawn",
+      "original_line": 168,
+      "message": "undefined constructor: File",
+      "original_test_or_helper": "test \"the streaming multipart body goes on the wire byte-exactly, across many chunks\"",
+      "destination": "backend-dawn/test/jvm/qiniu/rs.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 47,
+      "original_file": "src/qiniu/rs.dawn",
+      "original_line": 169,
+      "message": "undefined constructor: FileOutputStream",
+      "original_test_or_helper": "test \"the streaming multipart body goes on the wire byte-exactly, across many chunks\"",
+      "destination": "backend-dawn/test/jvm/qiniu/rs.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 48,
+      "original_file": "src/qiniu/rs.dawn",
+      "original_line": 192,
+      "message": "undefined constructor: HttpServer",
+      "original_test_or_helper": "test \"the streaming multipart body goes on the wire byte-exactly, across many chunks\"",
+      "destination": "backend-dawn/test/jvm/qiniu/rs.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 49,
+      "original_file": "src/qiniu/rs.dawn",
+      "original_line": 192,
+      "message": "undefined constructor: InetSocketAddress",
+      "original_test_or_helper": "test \"the streaming multipart body goes on the wire byte-exactly, across many chunks\"",
+      "destination": "backend-dawn/test/jvm/qiniu/rs.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 50,
+      "original_file": "src/qiniu/rs.dawn",
+      "original_line": 193,
+      "message": "cannot infer the type of `ex`",
+      "original_test_or_helper": "test \"the streaming multipart body goes on the wire byte-exactly, across many chunks\"",
+      "destination": "backend-dawn/test/jvm/qiniu/rs.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 51,
+      "original_file": "src/qiniu/rs.dawn",
+      "original_line": 194,
+      "message": "undefined constructor: ByteArrayOutputStream",
+      "original_test_or_helper": "test \"the streaming multipart body goes on the wire byte-exactly, across many chunks\"",
+      "destination": "backend-dawn/test/jvm/qiniu/rs.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 52,
+      "original_file": "src/qiniu/rs.dawn",
+      "original_line": 225,
+      "message": "undefined constructor: File",
+      "original_test_or_helper": "test \"the streaming multipart body goes on the wire byte-exactly, across many chunks\"",
+      "destination": "backend-dawn/test/jvm/qiniu/rs.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 53,
+      "original_file": "src/qiniu/rs.dawn",
+      "original_line": 230,
+      "message": "undefined constructor: File",
+      "original_test_or_helper": "test \"a missing upload file keeps the upload_file error prefix\"",
+      "destination": "backend-dawn/test/jvm/qiniu/rs.dawn",
+      "provider": "external backend-dawn/scripts/test_peer.py and portable test_support"
+    },
+    {
+      "id": 54,
+      "original_file": "src/svc/files.dawn",
+      "original_line": 31,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/svc/files.dawn",
+      "provider": "Upstream handler and portable test_support and std Clock"
+    },
+    {
+      "id": 55,
+      "original_file": "src/svc/files.dawn",
+      "original_line": 32,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/svc/files.dawn",
+      "provider": "Upstream handler and portable test_support and std Clock"
+    },
+    {
+      "id": 56,
+      "original_file": "src/svc/files.dawn",
+      "original_line": 33,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/svc/files.dawn",
+      "provider": "Upstream handler and portable test_support and std Clock"
+    },
+    {
+      "id": 57,
+      "original_file": "src/svc/files.dawn",
+      "original_line": 34,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/svc/files.dawn",
+      "provider": "Upstream handler and portable test_support and std Clock"
+    },
+    {
+      "id": 58,
+      "original_file": "src/svc/files.dawn",
+      "original_line": 605,
+      "message": "unknown type: AtomicReference",
+      "original_test_or_helper": "fn gc_log_new() -> AtomicReference !io = AtomicReference.new(\"\")",
+      "destination": "backend-dawn/test/jvm/svc/files.dawn",
+      "provider": "backend-dawn/test/support.dawn log_new/log_read/log_add"
+    },
+    {
+      "id": 59,
+      "original_file": "src/svc/files.dawn",
+      "original_line": 607,
+      "message": "unknown type: AtomicReference",
+      "original_test_or_helper": "fn gc_log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!",
+      "destination": "backend-dawn/test/jvm/svc/files.dawn",
+      "provider": "backend-dawn/test/support.dawn log_new/log_read/log_add"
+    },
+    {
+      "id": 60,
+      "original_file": "src/svc/files.dawn",
+      "original_line": 609,
+      "message": "unknown type: AtomicReference",
+      "original_test_or_helper": "fn gc_log_add(r: AtomicReference, s: String) -> Unit !io = r.set(\"${gc_log_read(r)}${s};\")",
+      "destination": "backend-dawn/test/jvm/svc/files.dawn",
+      "provider": "backend-dawn/test/support.dawn log_new/log_read/log_add"
+    },
+    {
+      "id": 61,
+      "original_file": "src/svc/files.dawn",
+      "original_line": 605,
+      "message": "undefined constructor: AtomicReference",
+      "original_test_or_helper": "fn gc_log_new() -> AtomicReference !io = AtomicReference.new(\"\")",
+      "destination": "backend-dawn/test/jvm/svc/files.dawn",
+      "provider": "backend-dawn/test/support.dawn log_new/log_read/log_add"
+    },
+    {
+      "id": 62,
+      "original_file": "src/svc/files.dawn",
+      "original_line": 607,
+      "message": "undefined constructor: String",
+      "original_test_or_helper": "fn gc_log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!",
+      "destination": "backend-dawn/test/jvm/svc/files.dawn",
+      "provider": "backend-dawn/test/support.dawn log_new/log_read/log_add"
+    },
+    {
+      "id": 63,
+      "original_file": "src/svc/files.dawn",
+      "original_line": 643,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"gc's write transaction spans one outbound call, on the management budget\"",
+      "destination": "backend-dawn/test/jvm/svc/files.dawn",
+      "provider": "Upstream handler and portable test_support and std Clock"
+    },
+    {
+      "id": 64,
+      "original_file": "src/svc/files.dawn",
+      "original_line": 649,
+      "message": "undefined constructor: Thread",
+      "original_test_or_helper": "test \"gc's write transaction spans one outbound call, on the management budget\"",
+      "destination": "backend-dawn/test/jvm/svc/files.dawn",
+      "provider": "Upstream handler and portable test_support and std Clock"
+    },
+    {
+      "id": 65,
+      "original_file": "src/svc/files.dawn",
+      "original_line": 658,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"gc's write transaction spans one outbound call, on the management budget\"",
+      "destination": "backend-dawn/test/jvm/svc/files.dawn",
+      "provider": "Upstream handler and portable test_support and std Clock"
+    },
+    {
+      "id": 66,
+      "original_file": "src/svc/files.dawn",
+      "original_line": 685,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"a delete that times out leaves the writer free, it does not wedge the site\"",
+      "destination": "backend-dawn/test/jvm/svc/files.dawn",
+      "provider": "Upstream handler and portable test_support and std Clock"
+    },
+    {
+      "id": 67,
+      "original_file": "src/svc/files.dawn",
+      "original_line": 699,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"a delete that times out leaves the writer free, it does not wedge the site\"",
+      "destination": "backend-dawn/test/jvm/svc/files.dawn",
+      "provider": "Upstream handler and portable test_support and std Clock"
+    },
+    {
+      "id": 68,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 10,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 69,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 23,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 70,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 25,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 71,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 26,
+      "message": "`use java` is not available in this compiler",
+      "original_test_or_helper": "Java fixture import shared by module tests",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 72,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 848,
+      "message": "unknown type: HttpServer",
+      "original_test_or_helper": "fn stub_server(routes: List[(String, String)]) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 73,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 1104,
+      "message": "unknown type: AtomicReference",
+      "original_test_or_helper": "fn log_new() -> AtomicReference !io = AtomicReference.new(\"\")",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "backend-dawn/test/support.dawn log_new/log_read/log_add"
+    },
+    {
+      "id": 74,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 1106,
+      "message": "unknown type: AtomicReference",
+      "original_test_or_helper": "fn log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "backend-dawn/test/support.dawn log_new/log_read/log_add"
+    },
+    {
+      "id": 75,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 1108,
+      "message": "unknown type: AtomicReference",
+      "original_test_or_helper": "fn log_add(r: AtomicReference, s: String) -> Unit !io = r.set(\"${log_read(r)}${s};\")",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "backend-dawn/test/support.dawn log_new/log_read/log_add"
+    },
+    {
+      "id": 76,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 849,
+      "message": "undefined constructor: HttpServer",
+      "original_test_or_helper": "fn stub_server(routes: List[(String, String)]) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 77,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 849,
+      "message": "undefined constructor: InetSocketAddress",
+      "original_test_or_helper": "fn stub_server(routes: List[(String, String)]) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 78,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 850,
+      "message": "cannot infer the type of `ex`",
+      "original_test_or_helper": "fn stub_server(routes: List[(String, String)]) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 79,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 851,
+      "message": "undefined constructor: String",
+      "original_test_or_helper": "fn stub_server(routes: List[(String, String)]) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 80,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 848,
+      "message": "function `stub_server` declares return type (?, Int) but its body is (?, ?)",
+      "original_test_or_helper": "fn stub_server(routes: List[(String, String)]) -> (HttpServer, Int) !io =",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 81,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 1104,
+      "message": "undefined constructor: AtomicReference",
+      "original_test_or_helper": "fn log_new() -> AtomicReference !io = AtomicReference.new(\"\")",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "backend-dawn/test/support.dawn log_new/log_read/log_add"
+    },
+    {
+      "id": 82,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 1106,
+      "message": "undefined constructor: String",
+      "original_test_or_helper": "fn log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "backend-dawn/test/support.dawn log_new/log_read/log_add"
+    },
+    {
+      "id": 83,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 785,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"a reading with a snapshot to difference against opens no window of its own\"",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 84,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 787,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"a reading with a snapshot to difference against opens no window of its own\"",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 85,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 792,
+      "message": "undefined constructor: Thread",
+      "original_test_or_helper": "test \"a reading with a snapshot to difference against opens no window of its own\"",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 86,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 794,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"a reading with a snapshot to difference against opens no window of its own\"",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 87,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 796,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"a reading with a snapshot to difference against opens no window of its own\"",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 88,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 825,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"a snapshot too old to describe now sends the call back to sampling\"",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    },
+    {
+      "id": 89,
+      "original_file": "src/svc/monitor.dawn",
+      "original_line": 827,
+      "message": "undefined constructor: System",
+      "original_test_or_helper": "test \"a snapshot too old to describe now sends the call back to sampling\"",
+      "destination": "backend-dawn/test/jvm/svc/monitor.dawn",
+      "provider": "handler with_routes or portable test_support and std Clock"
+    }
+  ]
+}

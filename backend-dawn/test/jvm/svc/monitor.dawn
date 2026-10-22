@@ -1,15 +1,11 @@
+use std/list.{find}
+use test_support
 use std/io
 use fake_clock
-use util/http_jvm.{new_client, with_upstream}
-use java "java.lang.String"
-use std/bytes
 use site_core/qiniu/creds.{Qiniu}
 use util/ttl.{test_cell}
 use site_core/util/http.{HttpResp, pending, no_answer}
 use db/db.{config as db_config}
-use java "java.util.concurrent.atomic.AtomicReference"
-use java "com.sun.net.httpserver.HttpServer"
-use java "java.net.InetSocketAddress"
 
 # ---- tests: the /proc readers, fed fixed sample text ----
 #
@@ -187,37 +183,32 @@ test "a snapshot too old to describe now sends the call back to sampling" {
 
 ## A loopback peer answering a fixed (status, body) per path. Anything not
 ## listed answers 500, which is how a test fails exactly one sub-call.
-fn stub_server(routes: List[(String, String)]) -> (HttpServer, Int) !io = {
-  let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
-  server.createContext("/", ex => {
-    let path = String.valueOf(ex.getRequestURI()!.getPath()!)!
-    let nothing: Option[String] = None
-    let hit = fold(routes, nothing, (acc: Option[String], r) => {
-      let (p, body) = r
-      if p == path { Some(body) } else { acc }
-    })
-    let (status, text) = match hit {
-      Some(body) -> (200, body)
-      None -> (500, "{\"error\":\"no such stub route\"}")
+fn with_routes[T](routes: List[(String, String)], body: fn() -> T !Upstream !io) -> T !io = {
+  with handle Upstream {
+    exchange(req) => Err(no_answer("exchange"))
+    exchange_bytes(req) => Err(no_answer("exchange_bytes"))
+    exchange_stream(req) => Err(no_answer("exchange_stream"))
+    exchange_start(req) => {
+      let hit = find(routes, r => { let (path, _) = r
+        "http://fixture.invalid${path}" == req.url })
+      Ok(pending(req.budget_s, () => Ok(match hit {
+        Some(r) -> { let (_, text) = r
+          HttpResp { status: 200, body: text } }
+        None -> HttpResp { status: 500, body: "{\"error\":\"no such stub route\"}" }
+      })))
     }
-    let payload = bytes.utf8(text)
-    ex.sendResponseHeaders(status, len(payload))
-    let os = ex.getResponseBody()!
-    os.write(payload)
-    os.close()
-  })
-  server.start()
-  (server, server.getAddress()!.getPort())
+  }
+  body()
 }
 
 fn stub_q(port: Int, path: String, fail: String) -> PendingQ !Upstream !io =
-  match fetch_start("http://127.0.0.1:${port}${path}", []) {
+  match fetch_start("http://fixture.invalid${path}", []) {
     Ok(p) -> PendingQ { p: p, fail: fail }
     Err(m) -> panic("stub start failed: ${m}")
   }
 
 fn stub_tc(port: Int, path: String, action: String) -> Result[PendingTc, String] !Upstream !io =
-  match fetch_start("http://127.0.0.1:${port}${path}", []) {
+  match fetch_start("http://fixture.invalid${path}", []) {
     Ok(p) -> Ok(PendingTc { p: p, action: action })
     Err(m) -> panic("stub start failed: ${m}")
   }
@@ -252,7 +243,8 @@ fn nothing_started[T](o: Option[T]) -> Bool =
   }
 
 test "a failing qiniu sub-fetch reports itself and leaves the other groups whole" {
-  let (server, port) = stub_server([
+  let port = 0
+  let routes = [
     ("/series", "{\"times\":[1000,2000],\"datas\":[10,20]}"),
     ("/flow", "[{\"time\":\"2026-08-01\",\"values\":{\"flow\":5,\"hits\":7}}]"),
     # no domains means the two tune queries are never issued, so this test
@@ -260,13 +252,13 @@ test "a failing qiniu sub-fetch reports itself and leaves the other groups whole
     ("/domains", "{\"domains\":[]}"),
     ("/respack-list", "{\"data\":[{\"status\":2,\"respack_name\":\"流量包\",\"used_amount\":1,\"total_amount\":4,\"effective_end\":\"2026-12-01\"}]}"),
     ("/respack-overview", "{\"data\":[{\"item_name\":\"存储包\",\"total_surplus\":3}]}"),
-  ])
-  let cl = new_client()
+  ]
+  let cl = routes
   let a = test_auth()
   let cell = test_cell()
 
   # one of the four kodo requests points at a path the stub refuses
-  let j = with_upstream(cl, () => {
+  let j = with_routes(cl, () => {
     let started = QiniuPending {
       kodo: Ok(KodoPending {
         space: stub_q(port, "/series", "七牛统计失败 /v6/space"),
@@ -282,7 +274,6 @@ test "a failing qiniu sub-fetch reports itself and leaves the other groups whole
     }
     qiniu_collect(a, cell, Some(started))
   })
-  server.stop(0)
 
   # the kodo group failed, and said so in its own field, naming the request
   assert field(j, "error") == JStr("七牛统计失败 /v6/count: 500")
@@ -310,15 +301,16 @@ test "each qiniu group fails alone, whichever one it is" {
   # group, the fields that survived there are the ones that now fail, and the
   # kodo numbers come back. A collect phase that let any one failure escape
   # would fail both tests; one that special-cased kodo would fail this one.
-  let (server, port) = stub_server([
+  let port = 0
+  let routes = [
     ("/series", "{\"times\":[1000,2000],\"datas\":[10,20]}"),
     ("/flow", "[{\"time\":\"2026-08-01\",\"values\":{\"flow\":5,\"hits\":7}}]"),
     ("/domains", "{\"domains\":[]}"),
-  ])
-  let cl = new_client()
+  ]
+  let cl = routes
   let a = test_auth()
   let cell = test_cell()
-  let j = with_upstream(cl, () => {
+  let j = with_routes(cl, () => {
     let started = QiniuPending {
       kodo: Ok(KodoPending {
         space: stub_q(port, "/series", "七牛统计失败 /v6/space"),
@@ -335,7 +327,6 @@ test "each qiniu group fails alone, whichever one it is" {
     }
     qiniu_collect(a, cell, Some(started))
   })
-  server.stop(0)
 
   assert field(j, "respack_error") == JStr("七牛 CDN 接口失败 /billing-api/v1/respack/list: 500")
   assert not key_present(j, "cdn_pack")
@@ -356,19 +347,19 @@ test "a lighthouse call that fails to start is isolated like one that fails in f
   # and it happens before any thread is involved. It has to land in the same
   # per-call *_error field, or the concurrent version would have a failure mode
   # the serial one did not.
-  let (server, port) = stub_server([
+  let port = 0
+  let routes = [
     ("/instances", "{\"Response\":{\"InstanceSet\":[{\"InstanceName\":\"box\",\"CPU\":4,\"Memory\":4,\"InstanceState\":\"RUNNING\",\"PublicAddresses\":[\"203.0.113.9\"],\"SystemDisk\":{\"DiskSize\":60},\"ExpiredTime\":\"2027-01-01T00:00:00Z\",\"CreatedTime\":\"2026-01-01T00:00:00Z\"}]}}"),
     ("/trend", "{\"Response\":{\"DataPoints\":[{\"Timestamps\":[1000,2000],\"Values\":[1.5,2.5]}]}}"),
-  ])
-  let cl = new_client()
-  let started = with_upstream(cl, () => Some(LighthousePending {
+  ]
+  let cl = routes
+  let started = with_routes(cl, () => Some(LighthousePending {
     # never started at all
     traffic: Err("流量包请求未发出"),
     instance: stub_tc(port, "/instances", "DescribeInstances"),
     trend: stub_tc(port, "/trend", "GetMonitorData"),
   }))
   let j = lighthouse_collect(started)
-  server.stop(0)
 
   assert field(j, "configured") == jbool(true)
   assert field(j, "traffic_error") == JStr("流量包请求未发出")
@@ -387,18 +378,18 @@ test "a lighthouse call that fails to start is isolated like one that fails in f
 test "an API-level Error is still one call's failure, not the block's" {
   # Tencent answers 200 with an Error object in the body; tc_resp turns that
   # into an Err. It must isolate exactly like a transport failure does.
-  let (server, port) = stub_server([
+  let port = 0
+  let routes = [
     ("/denied", "{\"Response\":{\"Error\":{\"Code\":\"AuthFailure\",\"Message\":\"签名过期\"},\"RequestId\":\"x\"}}"),
     ("/trend", "{\"Response\":{\"DataPoints\":[]}}"),
     ("/instances", "{\"Response\":{\"InstanceSet\":[{\"InstanceName\":\"box\",\"CPU\":4,\"Memory\":4,\"InstanceState\":\"RUNNING\",\"PublicAddresses\":[],\"SystemDisk\":{\"DiskSize\":60},\"ExpiredTime\":\"\",\"CreatedTime\":\"\"}]}}"),
-  ])
-  let cl = new_client()
-  let j = lighthouse_collect(with_upstream(cl, () => Some(LighthousePending {
+  ]
+  let cl = routes
+  let j = lighthouse_collect(with_routes(cl, () => Some(LighthousePending {
     traffic: stub_tc(port, "/denied", "DescribeInstancesTrafficPackages"),
     instance: stub_tc(port, "/instances", "DescribeInstances"),
     trend: stub_tc(port, "/trend", "GetMonitorData"),
   })))
-  server.stop(0)
 
   assert field(j, "traffic_error") == JStr("DescribeInstancesTrafficPackages 失败: AuthFailure 签名过期")
   assert field(field(j, "instance"), "name") == JStr("box")
@@ -406,7 +397,7 @@ test "an API-level Error is still one call's failure, not the block's" {
 }
 
 test "an unconfigured block asks nothing and answers the constant" {
-  let cl = new_client()
+  let cl: List[(String, String)] = []
   let cell = test_cell()
   let blank = test_auth_with("")
   # no credentials means no request is started at all -- the start phase is
@@ -414,7 +405,7 @@ test "an unconfigured block asks nothing and answers the constant" {
   # A Pending carries the thunk that will deliver its reply, so these Options
   # hold a function and cannot be compared; `nothing_started` asks the only
   # question this is about.
-  let (no_key, no_id, no_ak) = with_upstream(cl, () => (
+  let (no_key, no_id, no_ak) = with_routes(cl, () => (
     lighthouse_start("", "key", "ap-guangzhou", "lhins-x"),
     lighthouse_start("id", "", "ap-guangzhou", "lhins-x"),
     qiniu_start(blank, cell),
@@ -423,7 +414,7 @@ test "an unconfigured block asks nothing and answers the constant" {
   assert nothing_started(no_id)
   assert nothing_started(no_ak)
   assert lighthouse_collect(None) == obj([("configured", jbool(false))])
-  assert with_upstream(cl, () => qiniu_collect(blank, cell, None)) ==
+  assert with_routes(cl, () => qiniu_collect(blank, cell, None)) ==
     obj([("configured", jbool(false))])
 }
 
@@ -442,11 +433,11 @@ test "an unconfigured block asks nothing and answers the constant" {
 
 ## An append-only string an arm can write to. Dawn has no global mutable state;
 ## this is the shape util/ttl's cells already use.
-fn log_new() -> AtomicReference !io = AtomicReference.new("")
+fn log_new() -> String !io = test_support.log_new()
 
-fn log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!
+fn log_read(r: String) -> String !io = test_support.log_read(r)
 
-fn log_add(r: AtomicReference, s: String) -> Unit !io = r.set("${log_read(r)}${s};")
+fn log_add(r: String, s: String) -> Unit !io = test_support.log_add(r, s)
 
 fn header_value(hs: List[(String, String)], name: String) -> String =
   fold(hs, "", (acc, kv) => {

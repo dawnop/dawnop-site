@@ -1,9 +1,11 @@
 """Assemble module-local white-box tests in a disposable project."""
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -61,6 +63,22 @@ def stage_project(destination: Path, backend: Path = BACKEND) -> None:
     shutil.copy2(backend / "app/jvm/dawn.lock", destination / "dawn.lock")
     for source in (destination / "src").rglob("*.dawn"):
         source.write_text(source.read_text().replace("use site_core/", "use "))
+    scratch = destination / "fixture-state"
+    scratch.mkdir()
+    support = (backend / "test/support.dawn").read_text()
+    support = (
+        "const SCRATCH: String = "
+        + json.dumps(str(scratch))
+        + "\n"
+        + "const PEER: String = "
+        + json.dumps(str(backend / "scripts/test_peer.py"))
+        + "\n"
+        + "const PYTHON: String = "
+        + json.dumps(sys.executable)
+        + "\n"
+        + support
+    )
+    (destination / "src/test_support.dawn").write_text(support)
     cache_cases = (backend / "test/sql/src/cache_scenarios.dawn").read_text()
     cache_cases = cache_cases.replace("use site_core/", "use ").replace(
         "use scenarios.{check}",

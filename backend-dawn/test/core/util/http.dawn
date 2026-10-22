@@ -1,7 +1,6 @@
+use test_support
 use std/bytes
 use web/source.{bytes_source}
-use java "java.util.concurrent.atomic.AtomicReference"
-use java "java.lang.String"
 
 pub fn no_answer(op: String) -> ForeignError =
   ForeignError { kind: "dawnop.UpstreamNotAnswered", message: op, cause: None }
@@ -21,9 +20,9 @@ pub fn test_deadline_text(budget_s: Int, e: ForeignError) -> String = deadline_t
 pub fn test_unwrap_execution(e: ForeignError) -> ForeignError = unwrap_execution(e)
 pub fn test_response_source(s: ResponseStream) -> BodySource = raw_response_source(s)
 
-fn source_log_new() -> AtomicReference !io = AtomicReference.new("")
-fn source_log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!
-fn source_log_add(r: AtomicReference, s: String) -> Unit !io = r.set("${source_log_read(r)}${s};")
+fn source_log_new() -> String !io = test_support.log_new()
+fn source_log_read(r: String) -> String !io = test_support.log_read(r)
+fn source_log_add(r: String, s: String) -> Unit !io = test_support.log_add(r, s)
 
 use web/exchange.{pump_with, PumpPanicked, Pumped, drop_body}
 use web/types as source_types
@@ -51,7 +50,7 @@ test "a response source keeps its error until consumption and closes after failu
   assert source_log_read(seen) == "read/0/8;close;"
 }
 
-fn tracked_source(seen: AtomicReference) -> ResponseStream =
+fn tracked_source(seen: String) -> ResponseStream =
   response_stream(BodySource {
     read: (pos, n) => {
       source_log_add(seen, "read/${pos}")

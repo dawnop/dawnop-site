@@ -1,12 +1,10 @@
+use test_support
 use site_core/util/clock.{system_now}
 use site_core/util/http.{FileSpan, request_body, fetch, post, post_bytes, post_body, fetch_bytes, fetch_stream, fetch_start, post_start, await_resp, ok_stream, close_stream, file_body, timed_out, as_outbound, HttpResp, BytesResp, StreamResp, MANAGEMENT_TIMEOUT_S, no_answer, bytes_stream, test_text_exchange, test_fetch_bytes_within, test_fetch_stream_within, test_start_within, test_deadline_text, test_unwrap_execution, test_response_source, TEST_TRANSFER_TIMEOUT_S}
 use std/bytes
 use site_core/util/errkind.{KUpstream, KTimeout, split_kind}
 use site_core/util/ferr.{fe_text}
 use web/types.{BodySource}
-use java "java.util.concurrent.atomic.AtomicReference"
-use java "com.sun.net.httpserver.HttpServer"
-use java "java.net.InetSocketAddress"
 
 # ---- tests ----
 #
@@ -28,20 +26,7 @@ use java "java.net.InetSocketAddress"
 # the wording and the status is asserted by a handler.
 
 ## Serve one canned response on an ephemeral port; returns (server, port).
-fn echo_server(status: Int, body: String) -> (HttpServer, Int) !io = {
-  let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
-  server.createContext("/", ex => {
-    # reflect the request headers back so a test can assert what was sent
-    let probe = unwrap_or(ex.getRequestHeaders()!.getFirst("X-Probe"), "-")
-    let payload = bytes.utf8(body ++ probe)
-    ex.sendResponseHeaders(status, len(payload))
-    let os = ex.getResponseBody()!
-    os.write(payload)
-    os.close()
-  })
-  server.start()
-  (server, server.getAddress()!.getPort())
-}
+fn echo_server(status: Int, body: String) -> (Int, Int) !io = test_support.peer("echo", status, body, 0)
 
 test "GET returns the status and body the server sent" {
   let (server, port) = echo_server(200, """{"status":"ok"}""")
@@ -52,12 +37,12 @@ test "GET returns the status and body the server sent" {
     }
     Err(m) -> panic("fetch failed: ${m}")
   }
-  server.stop(0)
+  test_support.stop(server)
 }
 
 test "a bad host is an Err, not a crash" {
   # .invalid is reserved by RFC 2606 and never resolves — no live host involved
-  match with_upstream(new_client(), () => fetch("https://no-such-host.invalid/", [])) {
+  match with_upstream(new_client(), () => fetch("http://127.0.0.1:1/", [])) {
     Ok(_) -> { assert false }
     Err(m) -> { assert len(m) > 0 }
   }
@@ -75,7 +60,7 @@ test "custom headers reach the server" {
     }
     Err(m) -> panic(m)
   }
-  server.stop(0)
+  test_support.stop(server)
 }
 
 test "a non-2xx status is Ok, not Err — the caller decides" {
@@ -84,7 +69,7 @@ test "a non-2xx status is Ok, not Err — the caller decides" {
     Ok(r) -> { assert r.status == 404 }
     Err(m) -> panic(m)
   }
-  server.stop(0)
+  test_support.stop(server)
 }
 
 test "fetch_stream hands back a readable upstream stream" {
@@ -100,7 +85,7 @@ test "fetch_stream hands back a readable upstream stream" {
     }
     Err(m) -> panic("fetch_stream failed: ${m}")
   }
-  server.stop(0)
+  test_support.stop(server)
 }
 
 test "fetch_stream carries a non-2xx status; ok_stream is false" {
@@ -114,7 +99,7 @@ test "fetch_stream carries a non-2xx status; ok_stream is false" {
     }
     Err(m) -> panic(m)
   }
-  server.stop(0)
+  test_support.stop(server)
 }
 
 ## A peer that accepts the connection, reads the request, and then says nothing
@@ -123,19 +108,7 @@ test "fetch_stream carries a non-2xx status; ok_stream is false" {
 ## that the call must fail turns RED under a mutant rather than wedging the
 ## suite. Testing "it timed out" against a peer that never answers can only be
 ## done with a bound of its own, and this is that bound.
-fn stall_server(stall_ms: Int, status: Int, body: String) -> (HttpServer, Int) !io = {
-  let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
-  server.createContext("/", ex => {
-    io.with_clock_real(() => io.sleep_ns(stall_ms * 1000000))
-    let payload = bytes.utf8(body)
-    ex.sendResponseHeaders(status, len(payload))
-    let os = ex.getResponseBody()!
-    os.write(payload)
-    os.close()
-  })
-  server.start()
-  (server, server.getAddress()!.getPort())
-}
+fn stall_server(stall_ms: Int, status: Int, body: String) -> (Int, Int) !io = test_support.peer("stall", status, body, stall_ms)
 
 test "every request shape carries its deadline, whichever body handler it uses" {
   # `send()` returns at different points per handler: ofString/ofByteArray only
@@ -158,7 +131,7 @@ test "every request shape carries its deadline, whichever body handler it uses" 
   let t1 = system_now()
   let bytes_outcome = with_upstream(new_client(), () => test_fetch_bytes_within("http://127.0.0.1:${p1}/", [], budget))
   let e1 = io.elapsed_ns(t1, system_now()) / 1000000
-  s1.stop(0)
+  test_support.stop(s1)
   match bytes_outcome {
     Ok(_) -> panic("fetch_bytes rode out the stall: ${to_string(e1)}ms")
     Err(m) -> { assert str.contains(m, "timed out") }
@@ -169,7 +142,7 @@ test "every request shape carries its deadline, whichever body handler it uses" 
   let t2 = system_now()
   let stream_outcome = with_upstream(new_client(), () => test_fetch_stream_within("http://127.0.0.1:${p2}/", [], budget))
   let e2 = io.elapsed_ns(t2, system_now()) / 1000000
-  s2.stop(0)
+  test_support.stop(s2)
   match stream_outcome {
     Ok(_) -> panic("fetch_stream rode out the stall: ${to_string(e2)}ms")
     Err(m) -> { assert str.contains(m, "timed out") }
@@ -182,7 +155,7 @@ test "every request shape carries its deadline, whichever body handler it uses" 
   let post_outcome = with_upstream(new_client(), () =>
       test_text_exchange("POST", "http://127.0.0.1:${p3}/", [], TextBody("x"), budget))
   let e3 = io.elapsed_ns(t3, system_now()) / 1000000
-  s3.stop(0)
+  test_support.stop(s3)
   match post_outcome {
     Ok(_) -> panic("send_body rode out the stall: ${to_string(e3)}ms")
     Err(m) -> { assert str.contains(m, "timed out") }
@@ -232,18 +205,7 @@ test "only a timeout is reworded; every other fault keeps its text" {
 ## A peer that answers with the requesting client's own source port. Two
 ## requests that travelled over one TCP connection report the same number; two
 ## that opened their own connections cannot.
-fn port_server() -> (HttpServer, Int) !io = {
-  let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
-  server.createContext("/", ex => {
-    let payload = bytes.utf8(to_string(ex.getRemoteAddress()!.getPort()))
-    ex.sendResponseHeaders(200, len(payload))
-    let os = ex.getResponseBody()!
-    os.write(payload)
-    os.close()
-  })
-  server.start()
-  (server, server.getAddress()!.getPort())
-}
+fn port_server() -> (Int, Int) !io = test_support.peer("port", 200, "", 0)
 
 fn probe_source_port(cl: HttpCell, url: String) -> String !io =
   match with_upstream(cl, () => fetch(url, [])) {
@@ -267,7 +229,7 @@ test "one cell is one connection; a client built per call is not" {
   # arrives from a different source port. Without this the assertion would also
   # pass against a server that reported a constant.
   let elsewhere = probe_source_port(new_client(), url)
-  server.stop(0)
+  test_support.stop(server)
 
   assert first == second
   assert first != elsewhere
@@ -384,9 +346,9 @@ test "started requests travel together, not one after another" {
   let r2 = must(await_resp(g2))
   let r3 = must(await_resp(g3))
   let elapsed = io.elapsed_ns(t0, system_now()) / 1000000
-  s1.stop(0)
-  s2.stop(0)
-  s3.stop(0)
+  test_support.stop(s1)
+  test_support.stop(s2)
+  test_support.stop(s3)
 
   assert r1.body == "one"
   assert r2.body == "two"
@@ -414,7 +376,7 @@ test "an async timeout reads exactly like a blocking one" {
   let started = with_upstream(new_client(), () =>
       must(test_start_within("GET", "http://127.0.0.1:${port}/", [], NoBody, budget)))
   let outcome = await_resp(started)
-  server.stop(0)
+  test_support.stop(server)
   match outcome {
     Ok(r) -> panic("a quiet peer must not answer: got ${to_string(r.status)}")
     Err(m) -> {
@@ -468,11 +430,11 @@ test "unwrap_execution recovers the fault the blocking path would have seen" {
 
 ## An append-only string, for arms that need to report what they saw. Dawn has
 ## no mutable global state, so this is the same shape util/ttl's cells use.
-fn log_new() -> AtomicReference !io = AtomicReference.new("")
+fn log_new() -> String !io = test_support.log_new()
 
-fn log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!
+fn log_read(r: String) -> String !io = test_support.log_read(r)
 
-fn log_add(r: AtomicReference, s: String) -> Unit !io = r.set("${log_read(r)}${s};")
+fn log_add(r: String, s: String) -> Unit !io = test_support.log_add(r, s)
 
 ## The timeout the JDK raises when a request deadline expires. An arm answering
 ## with it is answering exactly what the socket would have.
@@ -639,8 +601,8 @@ test "every call shape asks for the budget its deadline was chosen for" {
   # to show that `fetch` uses MANAGEMENT_TIMEOUT_S, and it showed it by taking
   # ten seconds. An arm reads the number off the request.
   let seen = log_new()
-  let tmp = File.createTempFile("dawn-upstream-", ".bin")!
-  let src = tmp.getPath()!
+  let tmp = test_support.file(bytes.utf8(""))
+  let src = tmp
   let published = must(file_body(bytes.utf8("h"), src, bytes.utf8("t")))
 
   with handle Upstream {
@@ -669,7 +631,7 @@ test "every call shape asks for the budget its deadline was chosen for" {
   let _f = fetch_stream("http://x/", [])
   let _g = fetch_start("http://x/", [])
   let _h = post_start("http://x/", [], "p")
-  let _deleted = tmp.delete()
+  test_support.remove(tmp)
 
   let m = to_string(MANAGEMENT_TIMEOUT_S)
   let t = to_string(TEST_TRANSFER_TIMEOUT_S)
@@ -760,12 +722,12 @@ fn read_from(source: BodySource, pos: Int, acc: Bytes) -> Bytes !io = {
 }
 
 test "an unsupported JVM file slice is an outbound error before send" {
-  let file = File.createTempFile("dawn-slice-", ".bin")!
+  let file = test_support.file(bytes.utf8(""))
   let body = request_body(bytes.utf8(""), FileSpan {
-    path: file.getPath()!, offset: 1, length: 0,
+    path: file, offset: 1, length: 0,
   }, bytes.utf8(""))
   let outcome = with_upstream(new_client(), () => post_body("http://127.0.0.1:1/", [], body))
-  let _ = file.delete()
+  test_support.remove(file)
   match as_outbound(outcome) {
     Ok(_) -> { assert false }
     Err(m) -> {
