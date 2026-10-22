@@ -22,10 +22,14 @@ def command(argv):
     result = subprocess.run(
         list(map(str, argv)), check=True, capture_output=True, text=True, timeout=120
     )
-    if argv[0] == "systemd-analyze" and re.search(
-        r"Unknown (key|lvalue)|not executable|Invalid", result.stderr
-    ):
-        raise ValueError("invalid unit settings: " + result.stderr)
+    if argv[0] == "systemd-analyze":
+        requested = {Path(p).name for p in argv[2:]}
+        for line in result.stderr.splitlines():
+            if any(name in line for name in requested) and re.search(
+                r"Unknown (key|lvalue)|not executable|Invalid", line
+            ):
+                raise ValueError("invalid unit settings: " + line)
+        return (result.stdout + result.stderr).strip()
     return result.stdout.strip()
 
 

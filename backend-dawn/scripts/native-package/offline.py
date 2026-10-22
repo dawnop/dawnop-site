@@ -41,10 +41,16 @@ def command(argv, *, good=True):
     )
     if good and result.returncode:
         raise AssertionError(f"command failed: {argv}\n{result.stdout}{result.stderr}")
-    if argv[0] == "systemd-analyze" and re.search(
-        r"Unknown (key|lvalue)|not executable|Invalid", result.stderr
-    ):
-        raise AssertionError("invalid unit settings: " + result.stderr)
+    if argv[0] == "systemd-analyze":
+        requested = {Path(p).name for p in argv[2:]}
+        for line in result.stderr.splitlines():
+            if any(name in line for name in requested) and re.search(
+                r"Unknown (key|lvalue)|not executable|Invalid", line
+            ):
+                raise AssertionError("invalid unit settings: " + line)
+        # Preserve unrelated manager diagnostics, without treating their warnings
+        # as errors in the candidate. Jammy runners currently warn about snapd.
+        return (result.stdout + result.stderr).strip()
     return result.stdout.strip()
 
 
@@ -336,6 +342,20 @@ def artifact_controls(release, work):
 
 
 def unit_controls(units):
+    original = units.template.read_text()
+    units.template.write_text(
+        original.replace("CollectMode=inactive-or-failed\n", "").replace(
+            "[Service]\n", "[Service]\nCollectMode=inactive-or-failed\n"
+        )
+    )
+    try:
+        negative(
+            "unknown template setting",
+            lambda: command(["systemd-analyze", "verify", units.template]),
+            "invalid unit settings",
+        )
+    finally:
+        units.template.write_text(original)
     units.start()
     denied = subprocess.run(
         [
