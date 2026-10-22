@@ -458,7 +458,7 @@ def timeout_kill(units):
             demand(time.monotonic() < deadline, "kill target starts")
             threading.Event().wait(0.05)
         target = units.instances()[0]
-        command(["systemctl", "kill", "--signal=KILL", "--kill-whom=all", target])
+        command(["systemctl", "kill", "--signal=KILL", "--kill-who=all", target])
     units.quiesce()
     units.health()
     print(
