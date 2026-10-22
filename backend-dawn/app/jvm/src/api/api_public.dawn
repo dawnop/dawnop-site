@@ -10,7 +10,7 @@ use db/db.{DbConfig, with_db}
 use svc/auth.{Auth, is_authed}
 use site_core/repo/repo_article.{list_published, list_by_page, by_slug_any, published_of, bump_views}
 use site_core/repo/repo_paste
-use util/clock.{system_s}
+use site_core/util/clock.{system_s}
 use site_core/repo/repo_page
 use site_core/repo/repo_tag
 use site_core/repo/repo_viz

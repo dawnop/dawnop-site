@@ -20,7 +20,7 @@
 # closure, so threading Clock there would put `!Clock` on the whole api/ surface
 # and then hit the wall above; and none of them has an assertion worth freezing.
 # The persistent cache instead uses std/io.Clock and millisecond fake clocks.
-use java "java.lang.System"
+use std/io
 
 ## Wall-clock milliseconds since the epoch, from whichever clock the caller's
 ## handler installed.
@@ -31,7 +31,7 @@ pub effect Clock {
 ## Wall-clock milliseconds straight from the machine. The one place this backend
 ## reads the host clock; `with_system_clock` is what wires it to the effect, and
 ## util/ttl.now_s is the reader for the sites that have not been migrated.
-pub fn system_ms() -> Int !io = System.currentTimeMillis()
+pub fn system_ms() -> Int !io = io.with_clock_real(() => io.now_wall_ns() / 1000000)
 
 ## Wall-clock seconds straight from the machine.
 pub fn system_s() -> Int !io = system_ms() / 1000

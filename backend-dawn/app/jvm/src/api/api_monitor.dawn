@@ -9,14 +9,14 @@ use web/router.{Route, route_get}
 use svc/auth.{Auth, current_user}
 use db/db.{with_db}
 use site_core/repo/repo_settings.{setting_int}
-use util/ttl.{TtlCell, cache_get, cache_put, now_s}
-use svc/monitor.{LighthousePending, QiniuPending, server_block, lighthouse_start, lighthouse_collect, qiniu_start, qiniu_collect, vault_block}
-use site_core/util/http.{Upstream}
-use qiniu/stats.{field}
+use util/ttl.{TtlCell, cache_get, cache_put}
+use svc/monitor.{server_block}
+use site_core/svc/monitor_batch.{MonitorConfig, collect_monitor}
+use site_core/qiniu/stats.{field}
 use json/value.{Json, JBool, JInt, JObj}
 use json/render.{render}
 use json/parser.{parse}
-use site_core/util/jsonx.{obj, jint}
+use site_core/util/jsonx.{obj}
 
 ## The monitor config (Tencent Lighthouse creds/instance + Vault URLs), read
 ## once at startup from .env.
@@ -33,22 +33,9 @@ pub type MonCfg = {
 ## cached_at}. Quota is read from the settings table on every request (editing
 ## the setting takes effect immediately, unaffected by the cache).
 ##
-## The handler runs in three phases, which is the whole reason this endpoint is
-## no longer the slowest thing on the site. On a cold cell it makes a dozen
-## third-party calls, and made them one at a time: every latency was paid in
-## series, and the CPU sampling window was paid on top.
-##
-##   1. issue — every third-party request goes on the wire and none is waited
-##      for. Nothing runs on another thread of ours; the exchanges are in flight
-##      inside the shared HttpClient, which is what it is for.
-##   2. local — the vault probe (whose reported latency must stay the latency of
-##      that exchange, not of the wait until we got round to reading it) and the
-##      server snapshot.
-##   3. read — collect the replies and shape the response.
-##
-## Nothing about failure isolation moves: the blocks still turn each sub-call's
-## failure into its own *_error field, and each of those sub-calls is still read
-## on this thread by the same code.
+## Core plans and executes two explicit batches, then the local snapshot is
+## taken. Vault latency comes from its own completed transfer. A cold CPU
+## sample adds its 300ms window after the blocking batch boundary.
 ##
 ## `cpu_cell` carries the previous call's /proc/stat snapshot, which is what
 ## `server_block` differences this call's sample against instead of sleeping
@@ -63,19 +50,20 @@ pub fn get_monitor(a: Auth, cl: HttpCell, cfg: MonCfg, cell: TtlCell, respack_ce
       Some(v) -> v == "1" || v == "true"
       None -> false
     }
-    # The Upstream handler is installed here, around all three phases, and not
-    # deeper: the issue phase and the read phase are separate calls, so a
-    # handler that wrapped either alone would be gone by the time the other ran.
-    # It cannot go higher either -- this closure is a web `Handler`, whose type
-    # is closed at `!io` (util/http says why).
     with_upstream(cl, () => {
-      let work = third_start(a, cfg, cell, respack_cell, refresh)
-      let vault = vault_block(cfg.vault_alive, cfg.vault_public)
-      # The one Fs install point on a request path. `server_block` reads
-      # /proc; it is the only file work under this route, so the handler goes
-      # around that call and nothing wider.
+      let cached: Option[Json] = if refresh { None } else { cached_json(cell, 120) }
+      let packs = cached_json(respack_cell, 300)
+      let result = collect_monitor(MonitorConfig { qiniu: a.qiniu,
+        tencent_id: cfg.tencent_id, tencent_key: cfg.tencent_key,
+        region: cfg.region, instance: cfg.instance,
+        vault_alive: cfg.vault_alive, vault_public: cfg.vault_public }, cached, packs)
+      let vault = result.vault
       let server = io.with_fs_real(() => server_block(cpu_cell))
-      let third = third_collect(a, cell, respack_cell, work)
+      let third = result.third
+      match cached { None -> cache_put(cell, render(third))
+        Some(_) -> () }
+      match result.packs { Some(j) -> cache_put(respack_cell, render(j))
+        None -> () }
       let qn = with_quota(a, field(third, "qiniu"))
       Ok(json_ok(obj([
         ("server", server),
@@ -87,44 +75,10 @@ pub fn get_monitor(a: Auth, cl: HttpCell, cfg: MonCfg, cell: TtlCell, respack_ce
     })
   }
 
-# Where the cached {lighthouse, qiniu, cached_at} pair will come from: the
-# cell, or the requests the issue phase just put on the wire.
-type ThirdWork =
-  | TCached(j: Json)
-  | TStarted(lighthouse: Option[LighthousePending], qiniu: Option[QiniuPending])
-
-# phase 1: read the 120s cell, and on a miss put the third-party calls on the
-# wire without waiting for any of them
-fn third_start(a: Auth, cfg: MonCfg, cell: TtlCell, respack_cell: TtlCell, refresh: Bool) -> ThirdWork !Upstream !io = {
-  let cached: Option[String] = if refresh { None } else { cache_get(cell, 120) }
-  match cached {
-    Some(s) ->
-      match parse(s) {
-        Ok(j) -> TCached(j)
-        Err(_m) -> start_fresh(a, cfg, respack_cell)
-      }
-    None -> start_fresh(a, cfg, respack_cell)
-  }
-}
-
-fn start_fresh(a: Auth, cfg: MonCfg, respack_cell: TtlCell) -> ThirdWork !Upstream !io =
-  TStarted(
-    lighthouse_start(cfg.tencent_id, cfg.tencent_key, cfg.region, cfg.instance),
-    qiniu_start(a, respack_cell))
-
-# phase 3: read the replies and refill the cell (a cache hit has nothing to do)
-fn third_collect(a: Auth, cell: TtlCell, respack_cell: TtlCell, work: ThirdWork) -> Json !Upstream !io =
-  match work {
-    TCached(j) -> j
-    TStarted(lh, qn) -> {
-      let j = obj([
-        ("lighthouse", lighthouse_collect(lh)),
-        ("qiniu", qiniu_collect(a, respack_cell, qn)),
-        ("cached_at", jint(now_s())),
-      ])
-      cache_put(cell, render(j))
-      j
-    }
+fn cached_json(cell: TtlCell, ttl: Int) -> Option[Json] !io =
+  match cache_get(cell, ttl) { None -> None
+    Some(s) -> match parse(s) { Ok(j) -> Some(j)
+      Err(_) -> None }
   }
 
 # inject quota (settings table over the .env default) when qiniu is configured

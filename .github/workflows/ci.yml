@@ -265,6 +265,9 @@ jobs:
       - name: curl transport dual arm bytes resources and negative controls
         run: backend-dawn/scripts/curl-transport/run.sh --work "${RUNNER_TEMP}/curl-transport"
 
+      - name: monitor batch dual arm timing isolation and negative controls
+        run: backend-dawn/scripts/monitor-batch/run.sh --work "${RUNNER_TEMP}/monitor-batch"
+
   # Every mutation harness, one job per shard. These are the gates that prove
   # the other gates can fail: each mutant is a one-line production change that
   # must turn exactly one named assertion red.

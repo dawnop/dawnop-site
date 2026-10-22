@@ -24,7 +24,7 @@ def jvm_project(work, backend=BACKEND):
     project = work / "jdbc"
     (project / "src").mkdir(parents=True)
     app = backend / "app/jvm" if (backend / "app/jvm").exists() else BACKEND / "app/jvm"
-    for rel in ("db/jdbc.dawn", "db/db.dawn", "util/ttl.dawn", "util/clock.dawn"):
+    for rel in ("db/jdbc.dawn", "db/db.dawn", "util/ttl.dawn"):
         target = project / "src" / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(app / "src" / rel, target)

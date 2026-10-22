@@ -70,7 +70,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   必须取得的 simple v0.7.1 FTS 夹具、真实源码负控、双进程 BUSY 和完整插桩引擎的
   ASan/UBSan/LSan。需要 clang；下载物逐次验摘要，缺失或损坏直接失败。`--benchmark 300`
   加测新进程每连接初始化成本；`--work <空目录>` 保留日志与样本。
-  CI 的 S4/S5/S6/S8 位于独立 `native-acceptance` job；`scripts/sqlite_ci_cache.py`
+  CI 的 S4/S5/S6/S8/S9 位于独立 `native-acceptance` job；`scripts/sqlite_ci_cache.py`
   仅缓存固定摘要下载与完整插桩 SQLite 引擎，命中仍验摘要并重跑全部负控与 sanitizer。
   缓存身份含源码摘要、编译器、参数、平台和实现摘要；`mutants-complete` 显式核对该 job 成功。
   保留原有全部 JVM 测试（S7 后含依赖共 449 项）及 11 条 FFI 断言；无需 .env、外部库或真实服务。
@@ -160,10 +160,10 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 S1 的 `core/src`、`app/jvm/src`、`test/{core,jvm}` 三类物理根继续保留。
 core 是名为 site_core 的 Dawn 包，app 通过 `[deps] site_core = "../../core"` 消费，
-跨根导入写为 `use site_core/...`。S7 后 core 有 36 个模块，包含 db/sql、全部 10 个 repo、
+跨根导入写为 `use site_core/...`。S9 后 core 有 41 个模块，包含 db/sql、全部 10 个 repo、
 svc/search、svc/export、svc/paste、svc/dav_auth、util/http，以及原有 config、qiniu/creds、qiniu/sign、tencent/sign 与纯 util。
-app 留 25 个模块，包含 db/jdbc 与 db/db，及仍依赖 Clock、Upstream 的业务和 HTTP 入口。
-core 的完整 native 依赖闭包为四包 47 个源码文件，零 Java 依赖。
+app 留 22 个模块，包含 db/jdbc 与 db/db，及仍依赖 Clock、Upstream 的业务和 HTTP 入口。
+core 的完整 native 依赖闭包为四包 52 个源码文件，零 Java 依赖。
 
 S4 增加独立 `app/native` 包 site_sqlite，S8 在同包加入 `util/http_curl` Upstream 四操作；core 不回指它。
 `test/sql` 保存两个真实 handler 共用的 SQL 场景；`test/native` 是可 check/build/test 的
@@ -457,23 +457,27 @@ S4 增加独立 `app/native` 包 site_sqlite，S8 在同包加入 `util/http_cur
 - 私人记录复用现有 `/api/fm/create-file` 和 `/api/fm/save`，七牛私有正文不进入公开 Paste。
   产品与部署细节见 [`../docs/paste.md`](../docs/paste.md)。
 
-**监控（刀 12）**
-- `api/api_monitor.dawn` — `/api/monitor`，120s TTL + `?refresh`，配额从 settings 表实时注入。
-- `svc/monitor.dawn` — 四块容错聚合：server（读 /proc，无 /proc 时回 source: "none" 的空值，不再回落 JMX）、lighthouse（TC3）、qiniu（kodo+CDN+respack）、vault 探活。
-  读 /proc 的那几个是 `!Fs`（`server_block` / `cpu_*` / `loadavg` / `meminfo` / `net_totals` / `uptime_s`）。
-  **CPU 占用是「本次 /proc/stat 采样 − 上次调用留下的快照」**（psutil 的 `cpu_percent(interval=None)`），
-  不再每次自己睡 300ms 采窗口：三个第三方请求改成并发之后，那个窗口和本端点自己的活儿重叠了，
-  报出来的数被「测它」这个动作本身污染；它同时还是缓存命中路径上一道 300ms 硬地板（实测
-  307ms → 7.4ms）。**先读上次快照、再采本次**，而 /proc/stat 计数器单调不减，所以无论多少虚拟线程
-  同时进来，差值都不可能为负；快照存在同库 `runtime_cache` 的 `cpu.v1` 槽（SELECT 与短事务 UPSERT 各自原子）里、
-  **每次请求都刷新**（`server_block` 在 120s 缓存之外，缓存命中也照刷，否则窗口会漂成缓存 TTL）。
-  三种情况回落到 300ms 窗口：进程起来后的第一次、快照超过 `CPU_SNAPSHOT_MAX_AGE_S`（300s，
-  再老就成了「上次开页面至今的平均值」）、以及采样对本身算不出读数（同一 jiffy 内、或计数器倒退）。
-  负控在 `scripts/cpu-sampling-mutants/`（4 个变异体）：差值路径改成永远算不出读数、
-  差值算完不回写快照、年龄上限换成一天、去掉单调性判据。四个都保留了源码「看起来已经对了」的样子，
-  只有真跑（看时钟、看 cell）才判得出来。
-- `tencent/client.dawn` / `tencent/sign.dawn` — 腾讯云 v3 请求装配 / TC3-HMAC-SHA256 签名（vs SDK 逐字节）。
-- `qiniu/stats.dawn` — kodo v6 序列 / fusion CDN tune / billing respack。
+**监控（刀 12，S9 显式批次）**
+- `api/api_monitor.dawn` — `/api/monitor`，120s 聚合缓存、300s billing 缓存及实时 quota 注入。
+- `core/src/svc/monitor_batch.dawn` — 请求列表 → 批量执行 → 稳定 ID 回填。第一轮包含
+  Tencent 三项、Kodo 四项、domains、冷 billing 两项和 vault 两项；第二轮为依赖 domains
+  的 flux/bandwidth。失败保留在各自组的 error 字段，空 domains 不发第二轮。
+  vault latency 使用 alive 项自身单调耗时；冷 CPU 窗口另加300ms，不能声称与 Proc.run 重叠。
+- `core/src/util/http_batch.dawn` — 相邻效果 UpstreamBatch；每项保留 ID、exit、status、
+  headers、body、elapsed_ms、ForeignError。重复输入 ID 拒绝，缺失或重复结果 ID 拒绝。
+- `app/native/src/util/http_curl.dawn` — 每轮一次 curl --parallel，逐项 write-out 关联私有文件，
+  不依赖 curl 总退出码。复用 S8 argv、私有配置、错误脱敏和大小边界，完成后全部清理。
+- `app/jvm/src/util/http_jvm.dawn` — 现有 HttpClient sendAsync；成功与失败各用非空参数的
+  completion callback 记录单项完成时刻，再按 ID 收齐，等待顺序不改变 latency。
+- `scripts/monitor-batch/run.sh` — 同一 consumer 双臂验证六项延时并行、乱序、部分失败和超时、
+  两轮依赖、各组隔离及缓存；先编译真实源码负控再要求指定判词红。
+- `svc/monitor.dawn` — 本机 /proc、CPU 快照和旧单块兼容入口；路由的出站已交给 core 批次。CPU 为本次减上次持久样本，首次、过期或
+  无效差值回落300ms窗口；每次请求都刷新，聚合缓存命中仍照采。
+  #20 测试用注入的计数器与 CpuWait 数等待次数，第二次调用不新开窗口，无墙钟上界。
+  cpu-sampling 原四变异与 owner 矩阵不变，always-sample-a-window 仍只击中原 owner。
+- `core/src/tencent/client.dawn` / `tencent/sign.dawn` — 腾讯云请求数据与 TC3 签名；
+  `core/src/qiniu/stats.dawn` — 共享请求装配和响应解码，旧单请求调用继续复用。
+- `core/src/util/clock.dawn` — 原命名 Clock 接缝，真实臂改用 std Clock，不再导入 Java。
 - `core/src/util/cache.dawn` — `runtime_cache(namespace, cache_key, payload, created_ms)`，
   `(namespace, cache_key)` 复合主键；仅通过 `!Db` 与 std `Clock` 存取。monitor 120s、
   respack 300s（monitor/FM 共享）、space 600s、CPU 样本 300s，分别为 `.v1` 命名空间。

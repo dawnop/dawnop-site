@@ -10,13 +10,13 @@ use java "java.lang.System"
 use java "java.lang.Thread"
 use java "java.io.File"
 use svc/auth.{Auth}
-use tencent/client
+use site_core/tencent/client
 use site_core/util/cache.{sample_payload, sample_from}
 use util/ttl.{TtlCell, cache_get, cache_put, now_s}
-use util/clock.{Clock, system_ms}
+use site_core/util/clock.{Clock, system_ms}
 use site_core/util/time.{utc_datetime}
-use qiniu/stats.{field, int_of, last_nonzero, PendingQ, PendingRespack, kodo_series_start, kodo_series_finish, flow_series_start, flow_series_finish, cdn_domains_start, cdn_domains_finish, cdn_tune_start, cdn_tune_finish, respack_start, respack_finish, respack_summary}
-use tencent/client.{PendingTc}
+use site_core/qiniu/stats.{field, int_of, last_nonzero, PendingQ, PendingRespack, kodo_series_start, kodo_series_finish, flow_series_start, flow_series_finish, cdn_domains_start, cdn_domains_finish, cdn_tune_start, cdn_tune_finish, respack_start, respack_finish, respack_summary}
+use site_core/tencent/client.{PendingTc}
 use site_core/util/http.{Upstream, fetch, fetch_start, await_resp}
 use json/value.{Json, JNull, JNum, JInt, JStr, JArr, JObj}
 use json/render.{render}
@@ -119,9 +119,20 @@ const CPU_SNAPSHOT_MAX_AGE_S: Int = 300
 ## (if short) window, and the later write wins, which only means the next call's
 ## window starts a little earlier than it otherwise would. The cases that
 ## ordering rules out are still checked rather than assumed, in cpu_delta_pct.
+pub effect CpuWait {
+  fn wait_window(ms: Int) -> Unit
+  fn read_sample() -> (Int, Int)
+}
+
 fn cpu_percent(cell: TtlCell, max_age_s: Int) -> Float !Fs !io = {
+  with handle CpuWait { wait_window(ms) => Thread.sleep(ms)
+    read_sample() => cpu_sample() }
+  cpu_percent_sampled(cell, max_age_s)
+}
+
+fn cpu_percent_sampled(cell: TtlCell, max_age_s: Int) -> Float !CpuWait !io = {
   let prev = cpu_prev(cell, max_age_s)
-  let cur = cpu_sample()
+  let cur = read_sample()
   let reading = match prev {
     Some(p) -> cpu_delta_pct(p, cur)
     None -> None
@@ -143,9 +154,9 @@ fn cpu_percent(cell: TtlCell, max_age_s: Int) -> Float !Fs !io = {
 # implementation cost. The SECOND sample is the one that goes in the cell: it is
 # the fresher of the two, and the next call's window should start at the end of
 # this one rather than before it.
-fn cpu_window(cell: TtlCell, first: (Int, Int)) -> Float !Fs !io = {
-  Thread.sleep(CPU_WINDOW_MS)
-  let second = cpu_sample()
+fn cpu_window(cell: TtlCell, first: (Int, Int)) -> Float !CpuWait !io = {
+  wait_window(CPU_WINDOW_MS)
+  let second = read_sample()
   cpu_put(cell, second)
   match cpu_delta_pct(first, second) {
     Some(x) -> x

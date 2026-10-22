@@ -23,7 +23,7 @@ use json/value.{Json, JNull, JInt, JStr, JArr}
 use site_core/util/jsonx.{obj, jstr, jint, jbool, jdatetime}
 use site_core/util/jsonread.{body_obj}
 use std/io.{Random, with_random_real}
-use util/clock.{Clock, system_ms}
+use site_core/util/clock.{Clock, system_ms}
 use site_core/util/http.{Upstream}
 use site_core/util/errkind.{KConflict, KUpstream, KTimeout, split_kind}
 use site_core/util/paths.{fm_split, full, basename}

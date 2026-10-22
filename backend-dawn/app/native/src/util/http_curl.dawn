@@ -1,9 +1,10 @@
-# Sequential curl owner. No shell, host HTTP API or mutable process state.
+# Curl owner with sequential exchanges and explicit parallel text batches. No shell, host HTTP API or mutable process state.
 use std/io
 use std/bytes
 use std/str
 use std/fmt.{parse_int}
 use site_core/util/http.{Upstream, OutReq, OutBody, NoBody, TextBody, RawBody, FileBody, HttpResp, BytesResp, StreamResp, pending, request_parts, response_stream}
+use site_core/util/http_batch.{UpstreamBatch, BatchReq, BatchReply, unique_ids, batch_fault, failed}
 use web/types.{BodySource}
 use web/source.{file_source}
 
@@ -33,7 +34,8 @@ fn exit_error(code: Int) -> ForeignError =
 ## All four operations are synchronous here. start returns an already settled
 ## result, never a deferred request disguised as an asynchronous exchange. S9
 ## owns monitor's explicit parallel batches.
-pub fn with_upstream[T](cfg: CurlConfig, body: fn() -> T !Upstream !io) -> T !io = {
+pub fn with_upstream[T](cfg: CurlConfig, body: fn() -> T !Upstream !UpstreamBatch !io) -> T !io = {
+  with handle UpstreamBatch { exchange_batch(requests) => batch_reply(cfg, requests) }
   with handle Upstream {
     exchange(req) => text_reply(cfg, req)
     exchange_bytes(req) => bytes_reply(cfg, req)
@@ -201,7 +203,7 @@ fn assemble(dir: String, body: OutBody, start: io.Instant, budget: Int) -> Resul
     }
   }
 
-fn perform(dir: String, req: OutReq, small: Bool, start: io.Instant) -> Result[Int, ForeignError] !io.Fs !io.Proc !io.Clock = {
+fn prepare(dir: String, req: OutReq, small: Bool, start: io.Instant, write_out: String) -> Result[Unit, ForeignError] !io.Fs !io.Clock = {
   if req.budget_s <= 0 || req.budget_s > 3600 || not valid_token(req.method) || not safe_value(req.url) ||
     not (str.starts_with(req.url, "http://") || str.starts_with(req.url, "https://")) {
     return Err(fault("RequestError", "invalid outbound request"))
@@ -224,7 +226,7 @@ fn perform(dir: String, req: OutReq, small: Bool, start: io.Instant) -> Result[I
   io.write_file(dir ++ "/headers", headers)?
   var config = option("url", req.url) ++ option("request", req.method) ++
     option("header", "@" ++ dir ++ "/headers") ++ option("dump-header", dir ++ "/response-headers") ++
-    option("output", dir ++ "/body") ++ option("write-out", "%{http_code}") ++
+    option("output", dir ++ "/body") ++ option("write-out", write_out) ++
     option("max-time", remaining(start, req.budget_s)?)
   if small { config = config ++ option("max-filesize", to_string(TEXT_LIMIT)) }
   if has_body {
@@ -232,16 +234,27 @@ fn perform(dir: String, req: OutReq, small: Bool, start: io.Instant) -> Result[I
   }
   if req.method == "HEAD" { config = config ++ "head\n" }
   io.write_file(dir ++ "/config", config)?
-  let code = io.run([
-    "curl", "-q", "--silent", "--globoff", "--path-as-is", "--proto", "=http,https",
-    "--proto-redir", "=http,https", "--no-location", "--max-redirs", "0",
-    "--proxy", "", "--noproxy", "*", "--no-insecure", "--no-proxy-insecure",
-    "--connect-timeout", to_string(CONNECT_TIMEOUT_S), "--config", dir ++ "/config",
-  ], dir ++ "/status", dir ++ "/stderr")?
+  Ok(())
+}
+
+fn policy_args() -> List[String] = [
+  "--silent", "--globoff", "--path-as-is", "--proto", "=http,https",
+  "--proto-redir", "=http,https", "--no-location", "--max-redirs", "0",
+  "--proxy", "", "--noproxy", "*", "--no-insecure", "--no-proxy-insecure",
+  "--connect-timeout", to_string(CONNECT_TIMEOUT_S),
+]
+
+fn perform(dir: String, req: OutReq, small: Bool, start: io.Instant) -> Result[Int, ForeignError] !io.Fs !io.Proc !io.Clock = {
+  prepare(dir, req, small, start, "%{http_code}")?
+  let code = io.run(["curl", "-q"] ++ policy_args() ++ ["--config", dir ++ "/config"], dir ++ "/status", dir ++ "/stderr")?
   if code != 0 { return Err(exit_error(code)) }
   let status_text = io.read_file(dir ++ "/status")?
   let status = match parse_int(status_text) { Some(n) -> n
     None -> 0 }
+  validate_reply(dir, req, small, status)
+}
+
+fn validate_reply(dir: String, req: OutReq, small: Bool, status: Int) -> Result[Int, ForeignError] !io.Fs = {
   if status < 100 || status > 599 { return Err(fault("ResponseError", "curl returned no HTTP status")) }
   if io.file_size(dir ++ "/response-headers")? > HEADER_LIMIT {
     return Err(fault("ResponseError", "outbound headers exceed limit"))
@@ -261,4 +274,94 @@ fn perform(dir: String, req: OutReq, small: Bool, start: io.Instant) -> Result[I
     return Err(fault("ResponseError", "outbound text exceeds limit"))
   }
   Ok(status)
+}
+
+# A failed preparation has its own result and does not enter curl's config.
+type BatchStaged = { id: String, dir: String, req: OutReq, index: Int, error: Option[ForeignError] }
+
+fn batch_reply(cfg: CurlConfig, requests: List[BatchReq]) -> List[BatchReply] !io = {
+  if len(requests) == 0 { return [] }
+  if not unique_ids(requests) {
+    return map(requests, r => failed(r.id, batch_fault("duplicate or empty outbound batch ID")))
+  }
+  io.with_fs_real(() => io.with_proc_real(() => io.with_clock_real(() => {
+    let root = match io.temp_dir(cfg.temp_parent, "site-curl-") {
+      Ok(dir) -> dir
+      Err(e) -> return map(requests, r => failed(r.id, e))
+    }
+    bracket(root, dir => cleanup(dir), dir => {
+      var staged: List[BatchStaged] = []
+      var argv = ["curl", "-q", "--parallel", "--parallel-immediate", "--parallel-max", "32"]
+      for i in range(0, len(requests)) {
+        let item = requests[i]
+        match io.temp_dir(dir, "item-") {
+          Err(e) -> { staged = staged ++ [BatchStaged { id: item.id, dir: "", req: item.req, index: i, error: Some(e) }] }
+          Ok(child) -> {
+            # Each deadline starts at its own preparation, independently.
+            let tried = catch_panic(() => catch_fault(() => prepare(child, item.req, true, io.now(),
+              to_string(i) ++ "\\t%{exitcode}\\t%{http_code}\\t%{time_total}\\n")))
+            let error = match tried {
+              Ok(Ok(Ok(_))) -> None
+              Ok(Ok(Err(e))) -> Some(e)
+              _ -> Some(fault("HostError", "outbound batch preparation failed"))
+            }
+            if error == None {
+              if len(argv) > 7 { argv = argv ++ ["--next"] }
+              argv = argv ++ policy_args() ++ ["--config", child ++ "/config"]
+            }
+            staged = staged ++ [BatchStaged { id: item.id, dir: child, req: item.req, index: i, error: error }]
+          }
+        }
+      }
+      # Global exit is intentionally not the verdict for individual transfers.
+      let ran: Result[Int, ForeignError] = if len(argv) > 7 { io.run(argv, dir ++ "/status", dir ++ "/stderr") } else { Ok(0) }
+      let metadata = match io.read_file(dir ++ "/status") { Ok(s) -> s
+        Err(_) -> "" }
+      let replies = map(staged, item => match item.error {
+        Some(e) -> failed(item.id, e)
+        None -> match ran {
+          Err(e) -> failed(item.id, e)
+          Ok(_) -> batch_item(item, metadata)
+        }
+      })
+      for item in staged { if item.dir != "" { cleanup(item.dir) } }
+      replies
+    })
+  })))
+}
+
+fn batch_item(item: BatchStaged, metadata: String) -> BatchReply !io.Fs = {
+  let lines = filter(str.split(metadata, "\n"), line => str.starts_with(line, to_string(item.index) ++ "\t"))
+  if len(lines) != 1 { return failed(item.id, batch_fault("missing or duplicate curl item metadata")) }
+  let fields = str.split(lines[0], "\t")
+  if len(fields) != 4 { return failed(item.id, batch_fault("invalid curl item metadata")) }
+  let code = unwrap_or(parse_int(fields[1]), -1)
+  let status = unwrap_or(parse_int(fields[2]), 0)
+  let duration = match parse_float(fields[3]) { Some(n) -> to_int(n * 1000.0)
+    None -> -1 }
+  var error: Option[ForeignError] = if code != 0 { Some(exit_error(code)) } else { None }
+  if duration < 0 { error = Some(batch_fault("invalid curl item duration")) }
+  if code == 0 {
+    match validate_reply(item.dir, item.req, true, status) {
+      Ok(_) -> ()
+      Err(e) -> { error = Some(e) }
+    }
+  }
+  let headers = match bounded_text(item.dir ++ "/response-headers", HEADER_LIMIT) {
+    Ok(s) -> s
+    Err(e) -> { if error == None { error = Some(e) }
+      "" }
+  }
+  let body = match bounded_text(item.dir ++ "/body", TEXT_LIMIT) {
+    Ok(s) -> s
+    Err(e) -> { if error == None { error = Some(e) }
+      "" }
+  }
+  BatchReply { id: item.id, exit_code: code, status: status, headers: headers, body: body,
+    elapsed_ms: duration, error: error }
+}
+
+fn bounded_text(path: String, limit: Int) -> Result[String, ForeignError] !io.Fs = {
+  if io.file_size(path)? > limit { return Err(fault("ResponseError", "outbound text exceeds limit")) }
+  Ok(bytes.decode_utf8_lossy(io.read_bytes(path)?))
 }

@@ -50,7 +50,7 @@ def main() -> int:
         # and every call falls through to sampling one of its own. The snapshot
         # still moves (the fallback writes it), the reading is still a sane
         # percentage, and the source still hands cpu_delta_pct the previous
-        # snapshot. Only the clock knows.
+        # snapshot. The injected window wait counter detects it.
         replace_once(
             monitor,
             "    Some(p) -> cpu_delta_pct(p, cur)\n",

@@ -1,10 +1,8 @@
-use std/str
 use site_core/util/http.{FileSpan, request_body, fetch, post, post_bytes, post_body, fetch_bytes, fetch_stream, fetch_start, post_start, await_resp, ok_stream, close_stream, file_body, timed_out, as_outbound, HttpResp, BytesResp, StreamResp, MANAGEMENT_TIMEOUT_S, no_answer, bytes_stream, test_text_exchange, test_fetch_bytes_within, test_fetch_stream_within, test_start_within, test_deadline_text, test_unwrap_execution, test_response_source, TEST_TRANSFER_TIMEOUT_S}
 use std/bytes
 use site_core/util/errkind.{KUpstream, KTimeout, split_kind}
 use site_core/util/ferr.{fe_text}
 use web/types.{BodySource}
-use java "java.lang.System"
 use java "java.lang.Thread"
 use java "java.util.concurrent.atomic.AtomicReference"
 use java "com.sun.net.httpserver.HttpServer"

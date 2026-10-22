@@ -5,7 +5,7 @@
 use std/str
 use std/map
 use site_core/util/crypto.{hmac_sha256_b64url_nopad, b64url_encode_nopad, b64url_decode, eq_const}
-use util/clock.{Clock, now_s}
+use site_core/util/clock.{Clock, now_s}
 use json/value.{JObj, JNum, JInt, JStr}
 use site_core/util/jsonread.{parse_text}
 
