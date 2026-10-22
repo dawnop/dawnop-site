@@ -70,6 +70,7 @@ def controls(work, binary):
             ("missing", "missing"),
             ("skip", "skip_added"),
         ]:
+            server.quiesce()
             contract_fixture.build(str(db))
             server.execute("--migrate")
             report = work / f"{mode}.json"

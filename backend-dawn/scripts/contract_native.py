@@ -47,17 +47,25 @@ class NativeServer:
         (private / "curl").symlink_to(curl)
         self.env = {**env, "PATH": str(private), "JAVA_HOME": ""}
         self.lock = threading.Lock()
+        self.idle = threading.Condition()
+        self.active = 0
         self.sequence = 0
         self.errors = []
         owner = self
 
         class Handler(socketserver.BaseRequestHandler):
             def handle(self):
+                with owner.idle:
+                    owner.active += 1
                 try:
                     owner.execute(stdin=self.request, stdout=self.request)
                 except BaseException as error:
                     with owner.lock:
                         owner.errors.append(str(error))
+                finally:
+                    with owner.idle:
+                        owner.active -= 1
+                        owner.idle.notify_all()
 
         class Server(socketserver.ThreadingTCPServer):
             allow_reuse_address = True
@@ -107,6 +115,17 @@ class NativeServer:
 
     def start(self):
         self.thread.start()
+
+    def quiesce(self):
+        # Reading the complete response can precede the process's bounded drain
+        # and SQLite close. A fixture reset must wait for that actual owner.
+        with self.idle:
+            if not self.idle.wait_for(lambda: self.active == 0, timeout=45):
+                raise AssertionError(
+                    "native fixture reset while exchange still owns DB"
+                )
+        if self.errors:
+            raise AssertionError("native exchanges failed: " + json.dumps(self.errors))
 
     def close(self):
         if self.thread.is_alive():

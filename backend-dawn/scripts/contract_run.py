@@ -225,6 +225,8 @@ def run_arm(args, arm, work):
         for name in scripts:
             tag = "qiniu" if name == "qiniu" else "plain"
             db = servers[tag][0]
+            if arm == "native":
+                natives[tag].quiesce()
             # fresh fixture per script: each golden then describes one backend
             # from one known state, whatever the previous script mutated
             contract_fixture.build(str(db))
@@ -268,9 +270,14 @@ def run_arm(args, arm, work):
             else:
                 senv.pop("CONTRACT_QINIU_CONFIGURED", None)
             report = work / f"{name}.json"
-            senv["CONTRACT_GOLDEN_REPORT"] = str(report)
+            # Mutation harnesses already request their report at a stable path.
+            # Preserve that API while also keeping per-suite launcher evidence.
+            external_report = os.environ.get("CONTRACT_GOLDEN_REPORT")
+            senv["CONTRACT_GOLDEN_REPORT"] = external_report or str(report)
             results[name] = subprocess.call(cmd, env=senv, cwd=str(HERE))
             rc = rc or results[name]
+            if external_report:
+                shutil.copyfile(external_report, report)
             reports[name] = json.loads(report.read_text())
             if not args.record:
                 expected = json.loads((HERE / "golden" / f"{name}.json").read_text())
