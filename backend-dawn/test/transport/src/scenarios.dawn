@@ -1,0 +1,114 @@
+# The same consumer is compiled against the actual JVM and curl owners.
+use std/bytes
+use std/fmt.{parse_int}
+use std/io
+use site_core/util/http.{Upstream, OutReq, NoBody, RawBody, FileBody, TextBody, FileSpan, request_body, request_parts,
+  exchange, exchange_bytes, exchange_stream, exchange_start, HttpResp, pending, await_resp, as_outbound, stream_response, close_stream }
+use site_core/util/errkind.{split_kind, KTimeout}
+use web/types.{Response, text, binary, streaming, response_status, response_body, Stream, BodySource}
+use web/router.{route_get}
+use web/exchange.{exchange_config, serve_exchange, stdio_transport}
+
+fn number(s: String) -> Int = unwrap_or(parse_int(s), 0)
+
+fn failed(e: ForeignError, budget: Int) -> Response !io = {
+  io.eprintln("TRANSPORT_FAULT_KIND=" ++ e.kind)
+  let reply: Result[HttpResp, String] = as_outbound(await_resp(pending(budget, () => Err(e))))
+  match reply {
+    Ok(_) -> panic("unexpected success")
+    Err(m) -> {
+      let (kind, _) = split_kind(m)
+      text(if kind == KTimeout { 504 } else { 502 }, "transport failure")
+    }
+  }
+}
+
+pub fn response(argv: List[String]) -> Response !Upstream !io = {
+  let mode = argv[0]
+  let url = argv[1]
+  let path = argv[2]
+  let budget = number(argv[3])
+  let size = number(argv[4])
+  let base_headers = if mode == "bad-header" { [("X-Probe", "bad\r\nInjected: true")] } else { [("Authorization", "Bearer transport-fixture-secret"), ("Range", "bytes=7-263"), ("X-Probe", "literal \\\" \${unchanged}")] }
+  let body = if mode == "upload" || mode == "slice" || mode == "put" {
+    FileBody(request_body(bytes.utf8("multipart-head\r\n\u{0}"), FileSpan {
+      path: path, offset: if mode == "slice" { 17 } else { 0 }, length: size,
+    }, bytes.utf8("\r\n\u{0}multipart-tail")))
+  } else if mode == "raw" {
+    RawBody(io.with_fs_real(() => match io.read_bytes(path) { Ok(b) -> b
+      Err(e) -> panic(e.message) }))
+  } else if mode == "post" { TextBody("request text \u{0} tail") }
+  else { NoBody }
+  let headers = match body {
+    NoBody -> base_headers
+    _ -> {
+      let count = match body {
+        FileBody(p) -> {
+          let parts = request_parts(p)
+          len(parts.head) + parts.file.length + len(parts.tail)
+        }
+        RawBody(b) -> len(b)
+        TextBody(t) -> len(bytes.utf8(t))
+        NoBody -> 0
+      }
+      base_headers ++ [("X-Expected-Length", to_string(count))]
+    }
+  }
+  let req = OutReq {
+    method: if mode == "put" { "PUT" }
+    else if mode == "upload" || mode == "raw" || mode == "slice" || mode == "post" { "POST" }
+    else if mode == "head" { "HEAD" } else { "GET" },
+    url: url, headers: headers, body: body, budget_s: budget,
+  }
+  if mode == "bytes" {
+    match exchange_bytes(req) { Ok(r) -> binary(r.status, "application/octet-stream", r.bytes)
+      Err(e) -> failed(e, budget) }
+  } else if mode == "stream" || mode == "head" || mode == "reject" {
+    match exchange_stream(req) {
+      Err(e) -> failed(e, budget)
+      Ok(r) -> if mode == "reject" {
+        close_stream(r.stream)
+        text(r.status, "rejected")
+      } else { stream_response(r.status, "application/octet-stream", r.stream) }
+    }
+  } else if mode == "start" {
+    match exchange_start(req) {
+      Err(e) -> failed(e, budget)
+      Ok(p) -> match as_outbound(await_resp(p)) {
+        Ok(r) -> text(r.status, r.body)
+        Err(m) -> {
+          let (kind, _) = split_kind(m)
+          text(if kind == KTimeout { 504 } else { 502 }, "transport failure")
+        }
+      }
+    }
+  } else {
+    match exchange(req) { Ok(r) -> text(r.status, r.body)
+      Err(e) -> failed(e, budget) }
+  }
+}
+
+fn elapsed(start: io.Instant) -> Int !io =
+  io.with_clock_real(() => io.elapsed_ns(start, io.now()))
+
+pub fn serve(reply: Response, start: io.Instant) -> Unit !io = {
+  io.eprintln("TRANSPORT_HEADERS_NS=" ++ to_string(elapsed(start)))
+  let measured = match response_body(reply) {
+    Stream(source, length) -> streaming(response_status(reply), "application/octet-stream", BodySource {
+      read: (pos, n) => {
+        let piece = source.read(pos, n)
+        if pos == 0 && len(piece) > 0 {
+          io.eprintln("TRANSPORT_FIRST_NS=" ++ to_string(elapsed(start)))
+        }
+        piece
+      },
+      close: source.close,
+    }, length)
+    _ -> {
+      io.eprintln("TRANSPORT_FIRST_NS=" ++ to_string(elapsed(start)))
+      reply
+    }
+  }
+  serve_exchange(exchange_config(), [route_get("/", _req => Ok(measured))], [], stdio_transport())
+  io.eprintln("TRANSPORT_TOTAL_NS=" ++ to_string(elapsed(start)))
+}

@@ -70,10 +70,19 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   必须取得的 simple v0.7.1 FTS 夹具、真实源码负控、双进程 BUSY 和完整插桩引擎的
   ASan/UBSan/LSan。需要 clang；下载物逐次验摘要，缺失或损坏直接失败。`--benchmark 300`
   加测新进程每连接初始化成本；`--work <空目录>` 保留日志与样本。
-  CI 的 S4/S5/S6 位于独立 `native-acceptance` job；`scripts/sqlite_ci_cache.py`
+  CI 的 S4/S5/S6/S8 位于独立 `native-acceptance` job；`scripts/sqlite_ci_cache.py`
   仅缓存固定摘要下载与完整插桩 SQLite 引擎，命中仍验摘要并重跑全部负控与 sanitizer。
   缓存身份含源码摘要、编译器、参数、平台和实现摘要；`mutants-complete` 显式核对该 job 成功。
   保留原有全部 JVM 测试（S7 后含依赖共 449 项）及 11 条 FFI 断言；无需 .env、外部库或真实服务。
+- curl 顺序传输：`backend-dawn/scripts/curl-transport/run.sh --work <空目录>`。
+  `test/transport` 是 JVM 与 native 共用的真实出站 consumer；Python 外部进程只监听回环。
+  默认执行 256/512 MiB 完整摘要、进程树 RSS/PSS、暂存磁盘与 TTFB，及五个源码负控。
+  管理回复限制 4 MiB；私有请求目录、无默认 curl 配置、无代理/重定向，TLS 校验开启。
+  ENOSPC 使用私有 mount namespace 的 128 KiB tmpfs，先独立证实 errno 28；CI 使用
+  runner 的 sudo/unshare，不改变宿主挂载。还测实际 socket 断连、慢源、早拒绝与文件配额。
+  原 JVM 生产入口不改；大文件下载暂存的 TTFB 未获 S13 放行，详见根目录
+  `docs/curl-transport-design.md`。上传按追加裁决改用 upload-file，显式 method/request-target，固定长度并抑制 Expect；
+  原内存阈值不变，退回 data-binary 的真实256/512 MiB负控必须红。
 - core 门禁：`python3 scripts/check_core.py --negative-controls`。对整个 core 根运行
   发布版 native dawnc check，再扫描所有可达源码包的完整源码及 manifest，拒绝 Java、
   java-deps、web_jvm 与回指 app/test 的本地依赖。CI 先证明 Java 导入与 app 导入负控会红。
@@ -156,7 +165,7 @@ svc/search、svc/export、svc/paste、svc/dav_auth、util/http，以及原有 co
 app 留 25 个模块，包含 db/jdbc 与 db/db，及仍依赖 Clock、Upstream 的业务和 HTTP 入口。
 core 的完整 native 依赖闭包为四包 47 个源码文件，零 Java 依赖。
 
-S4 增加独立 `app/native` 包 site_sqlite，仅含 `db/native_sqlite` handler，core 不回指它。
+S4 增加独立 `app/native` 包 site_sqlite，S8 在同包加入 `util/http_curl` Upstream 四操作；core 不回指它。
 `test/sql` 保存两个真实 handler 共用的 SQL 场景；`test/native` 是可 check/build/test 的
 测试 consumer。JVM 生产与原 444 项测试仍用原命令；S7 新增四项类型/源生命周期/范围拒绝断言及可达 web/source 一项测试后共 449 项；native HTTP 入口尚属后续刀。
 

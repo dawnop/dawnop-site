@@ -1,0 +1,264 @@
+# Sequential curl owner. No shell, host HTTP API or mutable process state.
+use std/io
+use std/bytes
+use std/str
+use std/fmt.{parse_int}
+use site_core/util/http.{Upstream, OutReq, OutBody, NoBody, TextBody, RawBody, FileBody, HttpResp, BytesResp, StreamResp, pending, request_parts, response_stream}
+use web/types.{BodySource}
+use web/source.{file_source}
+
+const BLOCK: Int = 65536
+const TEXT_LIMIT: Int = 4194304
+const HEADER_LIMIT: Int = 262144
+const CONNECT_TIMEOUT_S: Int = 10
+
+## Empty parent selects the host temporary directory. The caller must provide
+## a local filesystem with enough capacity
+## each request owns a 0700 directory.
+pub type CurlConfig = { temp_parent: String }
+
+type Staged = { dir: String, status: Int }
+
+fn fault(kind: String, message: String) -> ForeignError =
+  ForeignError { kind: "site.curl." ++ kind, message: message, cause: None }
+
+# Never include curl stderr, the URL, config content or header values in errors.
+fn exit_error(code: Int) -> ForeignError =
+  if code == 28 {
+    fault("TimeoutException", "curl deadline expired")
+  } else {
+    fault("TransferError", "curl exited with code " ++ to_string(code))
+  }
+
+## All four operations are synchronous here. start returns an already settled
+## result, never a deferred request disguised as an asynchronous exchange. S9
+## owns monitor's explicit parallel batches.
+pub fn with_upstream[T](cfg: CurlConfig, body: fn() -> T !Upstream !io) -> T !io = {
+  with handle Upstream {
+    exchange(req) => text_reply(cfg, req)
+    exchange_bytes(req) => bytes_reply(cfg, req)
+    exchange_stream(req) => stream_reply(cfg, req)
+    exchange_start(req) => {
+      let result = text_reply(cfg, req)
+      Ok(pending(req.budget_s, () => result))
+    }
+  }
+  body()
+}
+
+fn text_reply(cfg: CurlConfig, req: OutReq) -> Result[HttpResp, ForeignError] !io = {
+  let staged = stage(cfg, req, true)?
+  bracket(staged, s => cleanup(s.dir), s => io.with_fs_real(() => {
+    let raw = io.read_bytes(s.dir ++ "/body")?
+    Ok(HttpResp { status: s.status, body: bytes.decode_utf8_lossy(raw) })
+  }))
+}
+
+fn bytes_reply(cfg: CurlConfig, req: OutReq) -> Result[BytesResp, ForeignError] !io = {
+  let staged = stage(cfg, req, false)?
+  bracket(staged, s => cleanup(s.dir), s => io.with_fs_real(() => {
+    let raw = io.read_bytes(s.dir ++ "/body")?
+    Ok(BytesResp { status: s.status, bytes: raw })
+  }))
+}
+
+fn stream_reply(cfg: CurlConfig, req: OutReq) -> Result[StreamResp, ForeignError] !io = {
+  let staged = stage(cfg, req, false)?
+  let source = file_source(staged.dir ++ "/body")
+  Ok(StreamResp {
+    status: staged.status,
+    stream: response_stream(BodySource {
+      read: source.read,
+      close: () => cleanup(staged.dir),
+    }),
+  })
+}
+
+# Both explicit Result failures and unexpected host faults release the staging
+# directory. On success only body remains, and ownership passes to the caller.
+fn stage(cfg: CurlConfig, req: OutReq, small: Bool) -> Result[Staged, ForeignError] !io =
+  io.with_fs_real(() => io.with_proc_real(() => io.with_clock_real(() => {
+    let start = io.now()
+    let dir = io.temp_dir(cfg.temp_parent, "site-curl-")?
+    let tried = catch_panic(() => catch_fault(() => perform(dir, req, small, start)))
+    let result: Result[Int, ForeignError] = match tried {
+      Err(_) -> Err(fault("HostError", "outbound staging failed"))
+      Ok(Err(_)) -> Err(fault("HostError", "outbound host operation failed"))
+      Ok(Ok(r)) -> r
+    }
+    match result {
+      Err(e) -> { cleanup(dir)
+        Err(e) }
+      Ok(status) -> {
+        match remove_aux(dir) {
+          Err(e) -> { cleanup(dir)
+            Err(e) }
+          Ok(_) -> Ok(Staged { dir: dir, status: status })
+        }
+      }
+    }
+  })))
+
+fn clean_paths(dir: String, names: List[String]) -> Result[Unit, ForeignError] !io.Fs = {
+  var failure: Option[ForeignError] = None
+  for name in names {
+    match io.delete(dir ++ "/" ++ name) {
+      Ok(_) -> ()
+      Err(e) -> { failure = Some(e) }
+    }
+  }
+  match failure { None -> Ok(())
+    Some(e) -> Err(e) }
+}
+
+fn remove_aux(dir: String) -> Result[Unit, ForeignError] !io.Fs =
+  clean_paths(dir, ["config", "headers", "response-headers", "upload", "status", "stderr"])
+
+fn cleanup(dir: String) -> Unit !io = io.with_fs_real(() => {
+  let auxiliary = remove_aux(dir)
+  let body = io.delete(dir ++ "/body")
+  let directory = io.delete(dir)
+  if is_err(auxiliary) || is_err(body) || is_err(directory) {
+    panic("site.curl.CleanupError: cannot remove staging files")
+  }
+})
+
+fn is_err[T](r: Result[T, ForeignError]) -> Bool = match r { Ok(_) -> false
+  Err(_) -> true }
+
+# curl config quoted strings escape only the documented backslash/quote forms.
+# Reject all control characters before quoting any untrusted value.
+fn safe_value(s: String) -> Bool = {
+  for c in s { if c < " " || c == "\u{7f}" { return false } }
+  true
+}
+
+fn quoted(s: String) -> String =
+  "\"" ++ str.replace(str.replace(s, "\\", "\\\\"), "\"", "\\\"") ++ "\""
+
+fn option(name: String, value: String) -> String = name ++ " = " ++ quoted(value) ++ "\n"
+
+# Preserve the origin-form target without decoding or normalizing escapes.
+# upload-file may append its basename to a URL ending in slash; request-target
+# pins the actual wire path and query even in that case.
+fn request_target(url: String) -> String = {
+  let absolute = match str.split_once(url, "#") { Some((before, _)) -> before
+    None -> url }
+  var pos = if str.starts_with(absolute, "https://") { 8 } else { 7 }
+  while pos < len(absolute) && str.at(absolute, pos) != '/' && str.at(absolute, pos) != '?' {
+    pos = pos + 1
+  }
+  if pos == len(absolute) { "/" }
+  else if str.at(absolute, pos) == '?' { "/" ++ str.slice(absolute, pos, len(absolute)) }
+  else { str.slice(absolute, pos, len(absolute)) }
+}
+
+fn valid_token(s: String) -> Bool = {
+  if s == "" { return false }
+  for c in s {
+    if not ((c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || str.contains("!#$%&'*+-.^_`|~", to_string(c))) {
+      return false
+    }
+  }
+  true
+}
+
+fn remaining(start: io.Instant, seconds: Int) -> Result[String, ForeignError] !io.Clock = {
+  let elapsed = io.elapsed_ns(start, io.now()) / 1000000
+  let ms = seconds * 1000 - elapsed
+  if ms <= 0 { return Err(exit_error(28)) }
+  # A fixed three-place fraction, independent of locale.
+  let fraction = to_string(1000 + ms % 1000)
+  Ok(to_string(ms / 1000) ++ "." ++ str.slice(fraction, 1, 4))
+}
+
+fn assemble(dir: String, body: OutBody, start: io.Instant, budget: Int) -> Result[Bool, ForeignError] !io.Fs !io.Clock =
+  match body {
+    NoBody -> Ok(false)
+    TextBody(s) -> { io.write_bytes(dir ++ "/upload", bytes.utf8(s))?
+      Ok(true) }
+    RawBody(b) -> { io.write_bytes(dir ++ "/upload", b)?
+      Ok(true) }
+    FileBody(p) -> {
+      let parts = request_parts(p)
+      let span = parts.file
+      let size = io.file_size(span.path)?
+      if span.offset < 0 || span.length < 0 || span.offset > size || span.length > size - span.offset {
+        return Err(fault("FileRangeError", "outbound file range is invalid"))
+      }
+      io.write_bytes(dir ++ "/upload", parts.head)?
+      var pos = 0
+      while pos < span.length {
+        let _ = remaining(start, budget)?
+        let count = if span.length - pos < BLOCK { span.length - pos } else { BLOCK }
+        let piece = io.read_range(span.path, span.offset + pos, count)?
+        if len(piece) == 0 { return Err(fault("ShortFileError", "outbound file ended early")) }
+        io.append_bytes(dir ++ "/upload", piece)?
+        pos = pos + len(piece)
+      }
+      io.append_bytes(dir ++ "/upload", parts.tail)?
+      Ok(true)
+    }
+  }
+
+fn perform(dir: String, req: OutReq, small: Bool, start: io.Instant) -> Result[Int, ForeignError] !io.Fs !io.Proc !io.Clock = {
+  if req.budget_s <= 0 || req.budget_s > 3600 || not valid_token(req.method) || not safe_value(req.url) ||
+    not (str.starts_with(req.url, "http://") || str.starts_with(req.url, "https://")) {
+    return Err(fault("RequestError", "invalid outbound request"))
+  }
+  let has_body = assemble(dir, req.body, start, req.budget_s)?
+  var headers = ""
+  for (name, value) in req.headers {
+    if not valid_token(name) || not safe_value(value) {
+      return Err(fault("HeaderError", "invalid outbound header"))
+    }
+    let lower = str.to_lower(name)
+    if not (has_body && (lower == "expect" || lower == "content-length" || lower == "transfer-encoding")) {
+      headers = headers ++ name ++ ": " ++ value ++ "\n"
+    }
+  }
+  if has_body {
+    # Own framing rather than trusting a caller's stale length or encoding.
+    headers = headers ++ "Expect:\n" ++ "Content-Length: " ++ to_string(io.file_size(dir ++ "/upload")?) ++ "\n"
+  }
+  io.write_file(dir ++ "/headers", headers)?
+  var config = option("url", req.url) ++ option("request", req.method) ++
+    option("header", "@" ++ dir ++ "/headers") ++ option("dump-header", dir ++ "/response-headers") ++
+    option("output", dir ++ "/body") ++ option("write-out", "%{http_code}") ++
+    option("max-time", remaining(start, req.budget_s)?)
+  if small { config = config ++ option("max-filesize", to_string(TEXT_LIMIT)) }
+  if has_body {
+    config = config ++ option("upload-file", dir ++ "/upload") ++ option("request-target", request_target(req.url))
+  }
+  if req.method == "HEAD" { config = config ++ "head\n" }
+  io.write_file(dir ++ "/config", config)?
+  let code = io.run([
+    "curl", "-q", "--silent", "--globoff", "--path-as-is", "--proto", "=http,https",
+    "--proto-redir", "=http,https", "--no-location", "--max-redirs", "0",
+    "--proxy", "", "--noproxy", "*", "--no-insecure", "--no-proxy-insecure",
+    "--connect-timeout", to_string(CONNECT_TIMEOUT_S), "--config", dir ++ "/config",
+  ], dir ++ "/status", dir ++ "/stderr")?
+  if code != 0 { return Err(exit_error(code)) }
+  let status_text = io.read_file(dir ++ "/status")?
+  let status = match parse_int(status_text) { Some(n) -> n
+    None -> 0 }
+  if status < 100 || status > 599 { return Err(fault("ResponseError", "curl returned no HTTP status")) }
+  if io.file_size(dir ++ "/response-headers")? > HEADER_LIMIT {
+    return Err(fault("ResponseError", "outbound headers exceed limit"))
+  }
+  let response_headers = io.read_file(dir ++ "/response-headers")?
+  var final_status = 0
+  for line in str.split(response_headers, "\n") {
+    if str.starts_with(line, "HTTP/") {
+      let fields = str.split(str.trim(line), " ")
+      if len(fields) >= 2 { final_status = match parse_int(fields[1]) { Some(n) -> n
+        None -> 0 } }
+    }
+  }
+  if final_status != status { return Err(fault("ResponseError", "outbound status and headers disagree")) }
+  if req.method == "HEAD" { io.write_bytes(dir ++ "/body", bytes.utf8(""))? }
+  if small && io.file_size(dir ++ "/body")? > TEXT_LIMIT {
+    return Err(fault("ResponseError", "outbound text exceeds limit"))
+  }
+  Ok(status)
+}

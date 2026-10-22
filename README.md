@@ -35,7 +35,7 @@
 
 ```
 backend-dawn/   生产后端（Dawn）。core/src（Db/Upstream 效果、SQL 业务与纯 HTTP 类型）与 app/jvm/src（JDBC/JDK HTTP 等适配）分根，test/ 保存白盒测试，app/jvm/dawn.toml 声明 java-deps
-                app/native/src/db/native_sqlite 是独立 SQLite handler；test/sql 与 test/native 验证两种 adapter 与五槽持久缓存
+                app/native/src/{db/native_sqlite,util/http_curl} 保存 SQLite 与 curl handler；test/{sql,native,transport} 验证两臂、缓存与本地传输
 backend/        FastAPI 实现：回滚目标 + 契约参照
 frontend/       Vue 3 + Vite
 deploy/         nginx / systemd / 证书 / vaultwarden
@@ -54,6 +54,7 @@ scripts/        工具链解析（fetch-dawn.sh）+ 四个门禁：服务器身�
 ```bash
 ./backend-dawn/build.sh          # 按 .dawn-version 取编译器 → 跑 test/ 白盒测试 → 打 jar
 java -jar backend-dawn/backend-dawn.jar
+backend-dawn/scripts/curl-transport/run.sh --work /tmp/site-curl-check # 本地假上游双臂、摘要、内存、TTFB 与负控
 backend-dawn/scripts/native-sqlite/run.sh  # native handler、SQL 双臂、真实 FTS、BUSY 与 sanitizers
 ```
 
