@@ -166,8 +166,24 @@ jobs:
       # usage stats stay a named skip; skips are listed in the goldens and
       # printed by every run, so "CI ran it" cannot quietly become "CI compared
       # nothing". Re-record with `contract_run.py --record` and review the diff.
-      - name: contract goldens (read / edge / webdav / qiniu)
-        run: python3 backend-dawn/scripts/contract_run.py
+      - name: dual arm 355 contracts simple routes and negative controls
+        run: backend-dawn/scripts/dual-arm/run.sh --work "${RUNNER_TEMP}/dual-arm"
+
+      - name: retain dual arm contract evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dual-arm-contract-evidence
+          path: |
+            ${{ runner.temp }}/dual-arm/contracts.log
+            ${{ runner.temp }}/dual-arm/contracts/summary.json
+            ${{ runner.temp }}/dual-arm/contracts/*/*.json
+            ${{ runner.temp }}/dual-arm/contracts/native/*/exec-*.log
+            ${{ runner.temp }}/dual-arm/controls/*.json
+            ${{ runner.temp }}/dual-arm/controls/*.log
+            ${{ runner.temp }}/dual-arm/simple/observations.json
+          if-no-files-found: error
+          retention-days: 7
 
       # Keep S10 on this shorter job so the existing native component job
       # retains its measured 20 minute budget and the runner count stays fixed.

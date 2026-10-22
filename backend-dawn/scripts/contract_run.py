@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Drive the three contract scripts against a freshly seeded backend.
+"""Drive the four unchanged contract suites against JVM, native, or both.
 
 One command, no live database, no second backend, no credentials:
 
     python3 backend-dawn/scripts/contract_run.py            # verify
-    python3 backend-dawn/scripts/contract_run.py --record   # re-record goldens
+    python3 backend-dawn/scripts/contract_run.py --record   # JVM re-record only
+    python3 backend-dawn/scripts/contract_run.py --arm both --native-binary /path/to/ELF
 
 It seeds the pinned fixture, boots backend-dawn.jar on a private port with a
 generated .env, logs in as the fixture admin, and runs contract_read,
@@ -46,6 +47,7 @@ import urllib.parse
 import urllib.request
 
 import contract_fixture
+import contract_native
 import contract_qiniu_fake
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -142,28 +144,11 @@ def login(base: str) -> str:
         return json.loads(resp.read())["access_token"]
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--record", action="store_true", help="rewrite the golden files")
-    ap.add_argument("--port", type=int, default=18001)
-    ap.add_argument("--jar", default=str(JAR))
-    ap.add_argument(
-        "--only",
-        action="append",
-        choices=["read", "edge", "webdav", "qiniu"],
-        help="run a subset (repeatable)",
-    )
-    args = ap.parse_args()
-
-    jar = pathlib.Path(args.jar)
-    if not jar.exists():
-        print(f"FATAL: no jar at {jar} — run ./backend-dawn/build.sh", file=sys.stderr)
-        return 2
+def run_arm(args, arm, work):
+    jar = pathlib.Path(args.jar).resolve()
     java = shutil.which("java") or str(
-        pathlib.Path(os.environ.get("JAVA_HOME", "")) / "bin" / "java"
+        pathlib.Path(os.environ.get("JAVA_HOME", "")) / "bin/java"
     )
-
-    work = pathlib.Path(tempfile.mkdtemp(prefix="dawnop-contract-"))
     scripts = args.only or ["read", "edge", "webdav", "qiniu"]
     plain = [s for s in scripts if s != "qiniu"]
 
@@ -183,7 +168,10 @@ def main() -> int:
             fake_base,
         )
 
-    procs, logs, tokens, bases = {}, {}, {}, {}
+    procs, logs, tokens, bases, natives = {}, {}, {}, {}, {}
+    reports = {}
+    child_environments = {}
+    proof = {}
     rc = 0
     fake = contract_qiniu_fake.serve(args.port + 2) if "qiniu" in scripts else None
     try:
@@ -209,15 +197,28 @@ def main() -> int:
                 # contract one — and, for the hosts, would aim a contract run at
                 # a real bucket.
                 child_env.pop(stale, None)
+            # Pin every key written to the fixture, including simple and cloud
+            # settings that may otherwise be inherited from the developer.
+            for line in envf.read_text().splitlines():
+                child_env.pop(line.split("=", 1)[0], None)
+            child_environments[tag] = child_env
             logs[tag] = open(work / f"backend-{tag}.log", "wb")
-            procs[tag] = subprocess.Popen(
-                [java, "-Duser.timezone=UTC", "-jar", str(jar)],
-                env=child_env,
-                stdout=logs[tag],
-                stderr=subprocess.STDOUT,
-            )
             bases[tag] = f"http://127.0.0.1:{port}"
-            wait_health(bases[tag], procs[tag])
+            if arm == "native":
+                native = contract_native.NativeServer(
+                    args.native_binary, child_env, port, work / tag
+                )
+                natives[tag] = native
+                native.execute("--migrate")
+                native.start()
+            else:
+                procs[tag] = subprocess.Popen(
+                    [java, "-Duser.timezone=UTC", "-jar", str(jar)],
+                    env=child_env,
+                    stdout=logs[tag],
+                    stderr=subprocess.STDOUT,
+                )
+                wait_health(bases[tag], procs[tag])
             tokens[tag] = login(bases[tag])
 
         results = {}
@@ -229,18 +230,16 @@ def main() -> int:
             contract_fixture.build(str(db))
             # Resetting the fixture also discards additive schemas. Prepare them
             # explicitly, exactly as deployment prepare must, outside requests.
-            subprocess.run(
-                [java, "-Duser.timezone=UTC", "-jar", str(jar), "--migrate"],
-                env={
-                    **os.environ,
-                    "DAWNOP_ENV": str(servers[tag][1]),
-                    "DAWN_DB_PATH": str(db),
-                    "DAWN_SIMPLE_EXT": "",
-                },
-                check=True,
-                capture_output=True,
-                timeout=30,
-            )
+            if arm == "native":
+                natives[tag].execute("--migrate")
+            else:
+                subprocess.run(
+                    [java, "-Duser.timezone=UTC", "-jar", str(jar), "--migrate"],
+                    env={**child_environments[tag], "DAWN_SIMPLE_EXT": ""},
+                    check=True,
+                    capture_output=True,
+                    timeout=30,
+                )
             print(f"\n{'=' * 62}\n== contract_{name}\n{'=' * 62}")
             cmd = [
                 sys.executable,
@@ -268,8 +267,21 @@ def main() -> int:
                 senv["CONTRACT_DB_PATH"] = str(db)
             else:
                 senv.pop("CONTRACT_QINIU_CONFIGURED", None)
+            report = work / f"{name}.json"
+            senv["CONTRACT_GOLDEN_REPORT"] = str(report)
             results[name] = subprocess.call(cmd, env=senv, cwd=str(HERE))
             rc = rc or results[name]
+            reports[name] = json.loads(report.read_text())
+            if not args.record:
+                expected = json.loads((HERE / "golden" / f"{name}.json").read_text())
+                observed = reports[name]
+                if (
+                    not observed["complete"]
+                    or observed["bad"]
+                    or observed["match"] != len(expected["cases"])
+                    or observed["skipped"] != expected["skipped"]
+                ):
+                    rc = 1
         print(f"\n{'=' * 62}")
         for name, code in results.items():
             verdict = "PASS" if code == 0 else f"FAIL ({code})"
@@ -280,17 +292,64 @@ def main() -> int:
     finally:
         if fake is not None:
             fake.shutdown()
+            fake.server_close()
         for tag, proc in procs.items():
             proc.terminate()
             try:
                 proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 proc.kill()
+                proc.wait(timeout=5)
             logs[tag].close()
+        for tag, native in natives.items():
+            proof[tag] = native.close()
+        for log in logs.values():
+            log.close()
         if rc:
             print(f"\nbackend logs in {work} (work dir kept for inspection)")
-        else:
-            shutil.rmtree(work, ignore_errors=True)
+
+    return rc, {"suites": reports, "no_jvm": proof}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--record", action="store_true")
+    ap.add_argument("--port", type=int, default=18001)
+    ap.add_argument("--jar", default=str(JAR))
+    ap.add_argument(
+        "--only", action="append", choices=["read", "edge", "webdav", "qiniu"]
+    )
+    ap.add_argument("--arm", choices=["jvm", "native", "both"], default="jvm")
+    ap.add_argument("--native-binary", type=pathlib.Path)
+    ap.add_argument("--work", type=pathlib.Path)
+    args = ap.parse_args()
+    if args.arm != "jvm" and (args.native_binary is None or args.record):
+        ap.error("native requires --native-binary and cannot record goldens")
+    arms = ["jvm", "native"] if args.arm == "both" else [args.arm]
+    work = (
+        args.work or pathlib.Path(tempfile.mkdtemp(prefix="dawnop-contract-"))
+    ).resolve()
+    work.mkdir(parents=True, exist_ok=True)
+    results = {}
+    rc = 0
+    for arm in arms:
+        directory = work / arm
+        directory.mkdir()
+        start = time.monotonic()
+        code, result = run_arm(args, arm, directory)
+        result["wall_s"] = time.monotonic() - start
+        results[arm] = result
+        rc = rc or code
+        count = sum(s["match"] for s in result["suites"].values())
+        skips = sum(len(s["skipped"]) for s in result["suites"].values())
+        print(
+            f"{arm}: {count} matched, {skips} pinned skips, wall_s={result['wall_s']:.3f}",
+            flush=True,
+        )
+    (work / "summary.json").write_text(json.dumps(results, indent=2) + "\n")
+    print(f"contract evidence: {work}")
+    if not rc and args.work is None:
+        shutil.rmtree(work)
     return rc
 
 

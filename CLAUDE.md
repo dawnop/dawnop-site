@@ -321,7 +321,8 @@ python3 scripts/check_config_defaults.py --self-test   # 负控：合成表，�
 python3 scripts/check_config_defaults.py --mutants     # 负控：改真实输入(纯内存)，含干净输入必绿的阳性对照
 
 # ---- 契约 golden（CI 每次 push 都跑，只需 Dawn 后端的 jar）----
-python3 backend-dawn/scripts/contract_run.py            # 播种 fixture→起后端→跑四套
+python3 backend-dawn/scripts/contract_run.py            # JVM：播种 fixture→起后端→跑四套
+backend-dawn/scripts/dual-arm/run.sh                    # JVM/native 各355、真实FTS与四负控
 python3 backend-dawn/scripts/contract_run.py --record   # 改了行为后重录，diff 进 review
 python3 backend-dawn/scripts/contract_run.py --only read
 backend-dawn/scripts/auth-cache/run.sh                  # 双臂认证、40进程防击穿、崩溃恢复与负控
