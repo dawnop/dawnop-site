@@ -292,6 +292,16 @@ class Units:
 def artifact_controls(release, work):
     copy = work / "corrupt"
     shutil.copytree(release, copy)
+    expected = json.loads((copy / "manifest.json").read_text())["commit"]
+    deploy.verifier(copy, expected)
+    demand(
+        not (copy / "tools/__pycache__").exists(),
+        "deployed verifier does not mutate the release",
+    )
+    print(
+        "PASS deployed verifier: complete clean artifact, no bytecode writes",
+        flush=True,
+    )
     library = copy / "extensions/libsimple.so"
     original = library.read_bytes()
     library.write_bytes(original + b"bad")
