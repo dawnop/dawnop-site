@@ -616,8 +616,9 @@ def transfers(units, work, label="shipped"):
                 )
                 demand(events["oom"] == events["oom_kill"] == "0", "transfer no OOM")
                 demand(
-                    group["memory.max"].strip() == str(96 * 1024**2),
-                    "shipped MemoryMax=96M",
+                    group["memory.max"].strip() == str(256 * 1024**2)
+                    and group["memory.high"].strip() == str(192 * 1024**2),
+                    "shipped MemoryHigh=192M MemoryMax=256M",
                 )
         demand(
             all(r["curl_pids"] for r in results.values()),

@@ -64,6 +64,7 @@ class Progress:
                                 "memory.stat",
                                 "memory.pressure",
                                 "memory.max",
+                                "memory.high",
                                 "io.stat",
                                 "io.pressure",
                                 "io.max",

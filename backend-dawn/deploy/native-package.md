@@ -28,7 +28,7 @@ stdout 为空。不设服务或全局 LD_LIBRARY_PATH，子进程不继承私有
 | 突发 | MaxConnections=64、Backlog=256、TriggerLimitIntervalSec=2s、Burst=512；保留 40/s 突发余量 |
 | 生命周期 | Restart=no、[Unit] CollectMode=inactive-or-failed、KillMode=control-group；单次失败由下一连接恢复 |
 | 时限 | RuntimeMaxSec=10800；为入站、curl、回写三个顺序阶段留预算；socket 收发空闲各 60s；curl connect/管理 10s、传输总 3600s；stop 5s |
-| 内存 | 单实例 MemoryMax=96M，总 slice 2G；限制包含后代和页缓存，给 4G 主机上的 JVM 留余量 |
+| 内存 | 单实例 MemoryHigh=192M 开始回收，MemoryMax=256M 作最后硬保护；包含后代和页缓存，总 slice 仍 2G，四个大体传输硬预算 1G，给轻请求与主机 JVM 留余量 |
 | 任务/CPU | 单实例 16 tasks、100%；总 slice 1024 tasks、200%，限制峰值争抢 |
 | 沙箱 | NoNewPrivileges、ProtectSystem=strict、ProtectHome、PrivateTmp；ReadWritePaths 指向 DB 整个目录 |
 | cleanup | 同 ELF --cleanup-pastes，TimeoutStartSec=300；与 JVM cleanup service/timer 冲突 |
@@ -85,14 +85,15 @@ python3 backend-dawn/scripts/native-package/stress.py --release <release> --sour
 memory.events、I/O 压力和实际资源参数，连续 10s 无进度或单交换超过 180s 则红。
 磁盘组装期间没有 HTTP 响应字节不等于停滞。SIGSTOP 真 PUT 实例的负控必须红，
 然后在原单元及 CPUQuota=25%、/tmp 设备读写各 32 MB/s 的更紧条件下各跑一次
-512 MiB 双向摘要；96 MiB 内存限制不放宽，并核验约束实际生效、零 OOM 和最大
+512 MiB 双向摘要；保留 shipped 的 192/256 MiB 软硬限制，并核验约束实际生效、零 OOM 和最大
 无进度间隔。`*-upload.jsonl`、`*-download.jsonl` 及对应 JSON 随 native-units
 evidence 保留，失败也落盘。根因与原超时复现见
 [进度门设计](../../docs/native-package-upload-design.md)。
 
 协调者在 S13 切流前另做生产只读核对：所有 RW/checkpoint 客户端、系统包完整版本、
 JRE 与 JDBC maps、保留的修复 JVM 整包、候选/扩展摘要与依赖、实际服务用户/组、DB
-目录/文件身份与权限、暂存盘、当前单元及 nginx 实际入口。用同一 release 的内存探针
+目录/文件身份与权限、暂存盘、当前单元及 nginx 实际入口；还要确认 cgroup v2 与
+memory.high/memory.max 实际为 192/256 MiB（MemoryHigh 仅在 v2 生效）。用同一 release 的内存探针
 确认私有路径/source id，不能用系统 sqlite3 或 ldd 替代。业务库/schema/FTS/备份恢复
 需要单独批准的受控验收；旧系统 SQLite 不得写或 checkpoint 共享库。
 
