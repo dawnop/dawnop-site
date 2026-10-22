@@ -10,8 +10,8 @@ use web/router.{Route, route_get, route_post}
 use web/wire.{parse_form, form_value}
 use json/value.{Json}
 use site_core/util/jsonx.{obj, jint, jstr, jdatetime}
-use db/db.{Db, with_db}
-use db/sql.{DbConn, PStr, ColInt, ColStr, query, int_at, str_at, first_str, first_map}
+use db/db.{DbConfig, with_db}
+use site_core/db/sql.{Db, PStr, ColInt, ColStr, query, int_at, str_at, first_str, first_map}
 use util/jwt.{sign, verify}
 use util/clock.{Clock, system_ms}
 use util/http.{HttpCell}
@@ -29,7 +29,7 @@ use site_core/qiniu/creds.{Qiniu}
 ## that record is .env values and nothing else, which is what lets the contract
 ## harness swap its hosts for a fake without touching anything live.
 pub type Auth = {
-  db: Db,
+  db: DbConfig,
   secret: String,
   expire_min: Int,
   storage_quota: Int,
@@ -62,19 +62,19 @@ fn verify_password(plain: String, hashed: String) -> Bool = {
 ## Verify a username/password against the users table (bcrypt). For WebDAV's
 ## HTTP Basic auth — same credential store as JWT login. False on unknown user,
 ## wrong password, or a malformed hash (never a 500).
-pub fn check_basic(c: DbConn, username: String, password: String) -> Result[Bool, String] !io =
-  match hash_of(c, username)? {
+pub fn check_basic(username: String, password: String) -> Result[Bool, String] !Db !io =
+  match hash_of(username)? {
     Some(h) -> Ok(verify_password(password, h))
     None -> Ok(false)
   }
 
-fn hash_of(c: DbConn, username: String) -> Result[Option[String], String] !io = {
-  let rows = query(c, "select password_hash from users where username = ?", [PStr(username)], [ColStr])?
+fn hash_of(username: String) -> Result[Option[String], String] !Db !io = {
+  let rows = query("select password_hash from users where username = ?", [PStr(username)], [ColStr])?
   Ok(first_str(rows))
 }
 
-fn user_json(c: DbConn, username: String) -> Result[Option[Json], String] !io = {
-  let rows = query(c, "select id, username, created_at from users where username = ?", [PStr(username)], [ColInt, ColStr, ColStr])?
+fn user_json(username: String) -> Result[Option[Json], String] !Db !io = {
+  let rows = query("select id, username, created_at from users where username = ?", [PStr(username)], [ColInt, ColStr, ColStr])?
   Ok(first_map(rows, r => obj([
     ("id", jint(int_at(r, 0))),
     ("username", jstr(str_at(r, 1))),
@@ -104,7 +104,7 @@ pub fn login(a: Auth) -> Handler =
     } else {
       let username = get_or_blank(form, "username")
       let password = get_or_blank(form, "password")
-      match as_http(with_db(a.db.path, a.db.ext, c => hash_of(c, username)), 500)? {
+      match as_http(with_db(a.db.path, a.db.ext, () => hash_of(username)), 500)? {
         Some(hashed) ->
           if verify_password(password, hashed) {
             Ok(json_ok(obj([
@@ -127,7 +127,7 @@ pub fn me(a: Auth) -> Handler =
   req =>
   {
     let username = current_user(a, req)?
-    match as_http(with_db(a.db.path, a.db.ext, c => user_json(c, username)), 500)? {
+    match as_http(with_db(a.db.path, a.db.ext, () => user_json(username)), 500)? {
       Some(j) -> Ok(json_ok(j))
       None -> Err(http_error(401, "无效或过期的凭证"))
     }

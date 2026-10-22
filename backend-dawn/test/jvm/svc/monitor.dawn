@@ -3,7 +3,7 @@ use std/bytes
 use site_core/qiniu/creds.{Qiniu}
 use util/ttl.{new_cell}
 use util/http.{HttpCell, HttpResp, new_client, with_upstream, pending, no_answer}
-use db/db.{Db}
+use db/db.{DbConfig}
 use java "java.util.concurrent.atomic.AtomicReference"
 use java "com.sun.net.httpserver.HttpServer"
 use java "java.net.InetSocketAddress"
@@ -222,7 +222,7 @@ fn stub_tc(port: Int, path: String, action: String) -> Result[PendingTc, String]
 
 fn test_auth_with(cl: HttpCell, ak: String) -> Auth =
   Auth {
-    db: Db { path: "", ext: "" },
+    db: DbConfig { path: "", ext: "" },
     secret: "test",
     expire_min: 1,
     storage_quota: 10,

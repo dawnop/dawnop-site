@@ -38,6 +38,8 @@ if [[ -z "$DAWN" ]]; then
   DAWN="$("$ROOT/scripts/fetch-dawn.sh")"
 fi
 
+python3 "$HERE/check_handler.py" --dawn "$DAWN"
+
 work="$(mktemp -d "${TMPDIR:-/tmp}/dawnop-db-conn-mutants.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
@@ -68,6 +70,7 @@ expected_mutants=(
   guard-tx-by-autocommit
   rollback-open-tx-on-entry
   unnamed-nested-refusal
+  first-duplicate-column-wins
 )
 if [[ "${mutants[*]}" != "${expected_mutants[*]}" ]]; then
   printf 'FAIL  matrix mutant order or membership changed\n' >&2

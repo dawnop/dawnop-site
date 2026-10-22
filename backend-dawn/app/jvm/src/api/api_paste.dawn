@@ -9,15 +9,15 @@ use site_core/util/jsonread.{body_obj}
 use site_core/util/jsonx.{obj, jint, jbool, fastapi_errors}
 use util/clock.{system_s}
 use db/db.{with_db}
-use db/sql.{DbConn, PInt, PStr, exec, with_immediate_tx}
+use site_core/db/sql.{Db, PInt, PStr, exec, with_immediate_tx}
 use svc/auth.{Auth, guarded}
-use svc/paste
-use repo/repo_paste
+use site_core/svc/paste
+use site_core/repo/repo_paste
 
-fn db[T](a: Auth, body: fn(DbConn) -> Result[T, String] !io) -> Result[T, HttpError] !io = {
-  let run: fn(DbConn) -> Result[T, String] !io = c => {
-    repo_paste.ensure_schema(c)?
-    body(c)
+fn db[T](a: Auth, body: fn() -> Result[T, String] !Db !io) -> Result[T, HttpError] !io = {
+  let run: fn() -> Result[T, String] !Db !io = () => {
+    repo_paste.ensure_schema()?
+    body()
   }
   let r = with_db(a.db.path, a.db.ext, run)
   match r { Ok(v) -> Ok(v)
@@ -46,12 +46,12 @@ fn list(a: Auth, req: Request, admin: Bool) -> Result[Response, HttpError] !io =
   let page = query_int_bounded(req, "page", 1, 1, 1000000, fmt: fastapi_errors())?
   let size = query_int_bounded(req, "size", 20, 1, 50, fmt: fastapi_errors())?
   let now = system_s()
-  Ok(json_ok(db(a, c => repo_paste.listing(c, now, admin, q, status, after, before, page, size))?))
+  Ok(json_ok(db(a, () => repo_paste.listing(now, admin, q, status, after, before, page, size))?))
 }
 fn detail(a: Auth, req: Request, admin: Bool, source: Bool) -> Result[Response, HttpError] !io = {
   let id = param(req, "id")?
   let now = system_s()
-  match db(a, c => repo_paste.by_id(c, id, now, admin))? {
+  match db(a, () => repo_paste.by_id(id, now, admin))? {
     None -> Err(http_error(404, "Paste 不存在"))
     Some(p) -> Ok(if source {
       with_header(raw(200, "text/plain; charset=utf-8", p.content), "X-Content-Type-Options", "nosniff")
@@ -71,14 +71,14 @@ fn create(a: Auth) -> Handler = req => {
   let now = system_s()
   # minted here, before the transaction: db() runs its closure at plain !io
   let id = with_random_real(() => uuid_hex())
-  match db(a, c => paste.create(c, a.secret, source, title, content, days, now, id))? {
+  match db(a, () => paste.create(a.secret, source, title, content, days, now, id))? {
     Ok(p) -> Ok(json_response(201, repo_paste.as_json(p)))
     Err(e) -> Err(if e.retry > 0 { HttpError { ..http_error(e.status, e.message), headers: [("Retry-After", to_string(e.retry))] } } else { http_error(e.status, e.message) })
   }
 }
 fn config(a: Auth, admin: Bool) -> Handler = req => {
   let read: fn() -> Result[Response, HttpError] !io = () => {
-    let conf = db(a, c => repo_paste.limits(c))?
+    let conf = db(a, () => repo_paste.limits())?
     Ok(json_ok(if admin { repo_paste.limits_json(conf) } else { obj([("max_bytes", jint(unwrap_or(map.get(conf, "max_bytes"), 262144)))]) }))
   }
   if admin { guarded(a, req, read) } else { read() }
@@ -97,7 +97,7 @@ fn settings(a: Auth) -> Handler = req => guarded(a, req, () => {
     let n = r?
     if n < 1 || n > max { return Err(http_error(422, "额度超出允许范围")) }
   }
-  let _saved = db(a, c => with_immediate_tx(c, () => write_settings(c, values)))?
+  let _saved = db(a, () => with_immediate_tx(() => write_settings(values)))?
 
   Ok(json_ok(obj([("ok", jbool(true))])))
 })
@@ -109,23 +109,23 @@ fn remove(a: Auth) -> Handler = req => guarded(a, req, () => {
   let ss: List[Result[String, HttpError]] = map(ids, j => match j { JStr(s) -> Ok(s)
     _ -> Err(http_error(422, "id 必须是字符串")) })
   for s in ss { let _s = s? }
-  let n = db(a, c => with_immediate_tx(c, () => delete_ids(c, ss)))?
+  let n = db(a, () => with_immediate_tx(() => delete_ids(ss)))?
 
   Ok(json_ok(obj([("deleted", jint(n))])))
 })
 fn retain(a: Auth) -> Handler = req => guarded(a, req, () => {
   let id = param(req, "id")?
-  let n = db(a, c => exec(c, "update pastes set expires_at=null where id=?", [PStr(id)]))?
+  let n = db(a, () => exec("update pastes set expires_at=null where id=?", [PStr(id)]))?
   if n == 0 { Err(http_error(404, "Paste 不存在")) } else { Ok(json_ok(obj([("ok", jbool(true))]))) }
 })
 fn clean(a: Auth) -> Handler = req => guarded(a, req, () => {
   let now = system_s()
-  let n = db(a, c => with_immediate_tx(c, () => repo_paste.cleanup(c, now)))?
+  let n = db(a, () => with_immediate_tx(() => repo_paste.cleanup(now)))?
   Ok(json_ok(obj([("deleted", jint(n))])))
 })
 fn stats(a: Auth) -> Handler = req => guarded(a, req, () => {
   let now = system_s()
-  Ok(json_ok(db(a, c => repo_paste.stats(c, now))?))
+  Ok(json_ok(db(a, () => repo_paste.stats(now))?))
 })
 
 pub fn routes(a: Auth) -> List[Route] = [
@@ -144,22 +144,22 @@ pub fn routes(a: Auth) -> List[Route] = [
   route_get("/api/pastes/{id}", req => detail(a, req, false, false)),
 ]
 
-fn write_settings(c: DbConn, values: List[(String, Result[Int, HttpError], Int)]) -> Result[Unit, String] !io = {
+fn write_settings(values: List[(String, Result[Int, HttpError], Int)]) -> Result[Unit, String] !Db !io = {
   for (k, r, _max) in values {
     let n = match r { Ok(v) -> v
       Err(_) -> return Err("invalid validated paste setting") }
-    let _w = exec(c, "insert into paste_settings(key,value) values(?,?) on conflict(key) do update set value=excluded.value", [PStr(k), PInt(n)])?
+    let _w = exec("insert into paste_settings(key,value) values(?,?) on conflict(key) do update set value=excluded.value", [PStr(k), PInt(n)])?
   }
   Ok(())
 }
-fn delete_ids(c: DbConn, ss: List[Result[String, HttpError]]) -> Result[Int, String] !io =
+fn delete_ids(ss: List[Result[String, HttpError]]) -> Result[Int, String] !Db !io =
   match ss {
     [] -> Ok(0)
     [s, ..rest] -> {
       let id = match s { Ok(v) -> v
         Err(_) -> return Err("invalid validated paste id") }
-      let n = exec(c, "delete from pastes where id=?", [PStr(id)])?
-      let more = delete_ids(c, rest)?
+      let n = exec("delete from pastes where id=?", [PStr(id)])?
+      let more = delete_ids(rest)?
       Ok(n + more)
     }
   }

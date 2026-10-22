@@ -16,12 +16,12 @@
 use std/str
 use std/map
 use std/bytes
-use db/sql.{DbConn, with_immediate_tx}
+use site_core/db/sql.{Db, with_immediate_tx}
 use svc/auth.{Auth}
 use site_core/qiniu/creds.{Qiniu}
 use db/db.{with_db}
 use site_core/util/paths.{fm_split, parent_rel, basename, ext, key_ext_ok, fm_join, full, guess_mime, safe_persisted_mime, strip_slashes, strip_trailing_slash}
-use repo/repo_fm.{FileRow, ReplaceOutcome, MovePlan, CopiedRow, CopyTree, fs_data, taken, insert_folder, replace_file, replace_file_receipt, create_file_once, reparent_allow_missing, prepare_fm_move, commit_fm_moves, get_row, delete_subtrees, entry_json, key_referenced, key_pending, validate_fm_ancestors, validate_fm_file_target, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}
+use site_core/repo/repo_fm.{FileRow, ReplaceOutcome, MovePlan, CopiedRow, CopyTree, fs_data, taken, insert_folder, replace_file, replace_file_receipt, create_file_once, reparent_allow_missing, prepare_fm_move, commit_fm_moves, get_row, delete_subtrees, entry_json, key_referenced, key_pending, validate_fm_ancestors, validate_fm_file_target, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}
 use std/io.{Random}
 use site_core/util/crypto.{uuid_hex}
 use site_core/qiniu/sign.{private_url}
@@ -54,17 +54,17 @@ fn best_effort_gc[!e](body: fn() -> Result[Unit, String] !e !io) -> Unit !e !io 
 
 pub fn gc_unreferenced(a: Auth, candidate: Option[String]) -> Unit !Upstream !io =
   best_effort_gc(() =>
-      with_db(a.db.path, a.db.ext, c => gc_unreferenced_on(a.qiniu, c, candidate)))
+      with_db(a.db.path, a.db.ext, () => gc_unreferenced_on(a.qiniu, candidate)))
 
-fn gc_unreferenced_on(q: Qiniu, c: DbConn, candidate: Option[String]) -> Result[Unit, String] !Upstream !io =
+fn gc_unreferenced_on(q: Qiniu, candidate: Option[String]) -> Result[Unit, String] !Upstream !Db !io =
   match candidate {
     Some(key) ->
       if str.trim(key) == "" {
         Ok(())
       } else {
-        with_immediate_tx(c, () => {
-          let referenced = key_referenced(c, key)?
-          let pending = key_pending(c, key)?
+        with_immediate_tx(() => {
+          let referenced = key_referenced(key)?
+          let pending = key_pending(key)?
           if referenced || pending {
             Ok(())
           } else {
@@ -110,32 +110,32 @@ pub fn copy_object(q: Qiniu, src_key: String) -> Result[String, String] !Random 
 
 ## Create `rel` (with any missing ancestors) and return the listing of `cur`.
 ## None when something already sits at `rel`.
-pub fn mk_folder(c: DbConn, rel: String, cur: String) -> Result[Option[Json], String] !io = {
-  let t = taken(c, rel)?
+pub fn mk_folder(rel: String, cur: String) -> Result[Option[Json], String] !Db !io = {
+  let t = taken(rel)?
   if t {
     Ok(None)
   } else {
-    let _i = insert_folder(c, rel)?
-    let d = fs_data(c, cur)?
+    let _i = insert_folder(rel)?
+    let d = fs_data(cur)?
     Ok(Some(d))
   }
 }
 
 # ---- rename / move (path-only: the qiniu objects are never touched) ----
 
-pub fn do_rename(c: DbConn, old: String, new_rel: String, cur: String) -> Result[Option[Json], String] !io =
+pub fn do_rename(old: String, new_rel: String, cur: String) -> Result[Option[Json], String] !Db !io =
   if not rename_parent_unchanged(old, new_rel) {
     Err(conflict("重命名不能改变父目录：${full(old)}"))
   } else if new_rel == old {
-    let d = fs_data(c, cur)?
+    let d = fs_data(cur)?
     Ok(Some(d))
   } else {
-    let t = taken(c, new_rel)?
+    let t = taken(new_rel)?
     if t {
       Ok(None)
     } else {
-      let _r = reparent_allow_missing(c, old, new_rel)?
-      let d = fs_data(c, cur)?
+      let _r = reparent_allow_missing(old, new_rel)?
+      let d = fs_data(cur)?
       Ok(Some(d))
     }
   }
@@ -143,31 +143,31 @@ pub fn do_rename(c: DbConn, old: String, new_rel: String, cur: String) -> Result
 fn rename_parent_unchanged(old: String, new_rel: String) -> Bool =
   parent_rel(new_rel) == parent_rel(old)
 
-pub fn do_move(c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !io =
+pub fn do_move(sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !Db !io =
   {
-    let plans = plan_fm_moves(c, sources, dest, i, [])?
-    let _m = commit_fm_moves(c, plans)?
-    fs_data(c, cur)
+    let plans = plan_fm_moves(sources, dest, i, [])?
+    let _m = commit_fm_moves(plans)?
+    fs_data(cur)
   }
 
-fn plan_fm_moves(c: DbConn, sources: List[String], dest: String, i: Int, acc: List[MovePlan]) -> Result[List[MovePlan], String] !io =
+fn plan_fm_moves(sources: List[String], dest: String, i: Int, acc: List[MovePlan]) -> Result[List[MovePlan], String] !Db !io =
   if i >= len(sources) {
     Ok(acc)
   } else {
     let src = fm_split(sources[i])
     if src == "" {
-      plan_fm_moves(c, sources, dest, i + 1, acc)
+      plan_fm_moves(sources, dest, i + 1, acc)
     } else {
       let new_rel = fm_join(dest, basename(src))
       if new_rel == src || str.starts_with(new_rel, "${src}/") {
-        plan_fm_moves(c, sources, dest, i + 1, acc)
+        plan_fm_moves(sources, dest, i + 1, acc)
       } else {
-        let t = taken(c, new_rel)?
+        let t = taken(new_rel)?
         if t {
           Err(conflict("已存在同名项：${basename(new_rel)}"))
         } else {
-          let plan = prepare_fm_move(c, src, new_rel)?
-          plan_fm_moves(c, sources, dest, i + 1, acc ++ [plan])
+          let plan = prepare_fm_move(src, new_rel)?
+          plan_fm_moves(sources, dest, i + 1, acc ++ [plan])
         }
       }
     }
@@ -175,38 +175,38 @@ fn plan_fm_moves(c: DbConn, sources: List[String], dest: String, i: Int, acc: Li
 
 # ---- copy (dirs are recreated, files get a fresh qiniu object) ----
 
-pub fn do_copy(q: Qiniu, c: DbConn, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !Random !Upstream !io =
+pub fn do_copy(q: Qiniu, sources: List[String], dest: String, cur: String, i: Int) -> Result[Json, String] !Random !Upstream !Db !io =
   {
-    let planned = plan_fm_copies(c, sources, dest, i, [])?
+    let planned = plan_fm_copies(sources, dest, i, [])?
     let _u = validate_copy_plan_targets(planned)?
     let copied = copy_tree_list_objects(q, planned, 0, [])?
-    match commit_fm_copies(c, copied) {
-      Ok(_) -> fs_data(c, cur)
+    match commit_fm_copies(copied) {
+      Ok(_) -> fs_data(cur)
       Err(m) -> {
-        let _gc = gc_copy_trees_on(q, c, copied, 0)
+        let _gc = gc_copy_trees_on(q, copied, 0)
         Err(m)
       }
     }
   }
 
-fn plan_fm_copies(c: DbConn, sources: List[String], dest: String, i: Int, acc: List[CopyTree]) -> Result[List[CopyTree], String] !io =
+fn plan_fm_copies(sources: List[String], dest: String, i: Int, acc: List[CopyTree]) -> Result[List[CopyTree], String] !Db !io =
   if i >= len(sources) {
     Ok(acc)
   } else {
     let src = fm_split(sources[i])
     if src == "" {
-      plan_fm_copies(c, sources, dest, i + 1, acc)
+      plan_fm_copies(sources, dest, i + 1, acc)
     } else {
       let new_rel = fm_join(dest, basename(src))
       if str.starts_with(new_rel, "${src}/") {
-        plan_fm_copies(c, sources, dest, i + 1, acc)
+        plan_fm_copies(sources, dest, i + 1, acc)
       } else {
-        let t = taken(c, new_rel)?
+        let t = taken(new_rel)?
         if t {
           Err(conflict("已存在同名项：${basename(new_rel)}"))
         } else {
-          let tree = prepare_fm_copy(c, src, new_rel)?
-          plan_fm_copies(c, sources, dest, i + 1, acc ++ [tree])
+          let tree = prepare_fm_copy(src, new_rel)?
+          plan_fm_copies(sources, dest, i + 1, acc ++ [tree])
         }
       }
     }
@@ -295,20 +295,20 @@ fn cleanup_copied_rows_direct(q: Qiniu, rows: List[CopiedRow], i: Int) -> Unit !
     cleanup_copied_rows_direct(q, rows, i + 1)
   }
 
-fn gc_copy_trees_on(q: Qiniu, c: DbConn, trees: List[CopyTree], i: Int) -> Unit !Upstream !io =
+fn gc_copy_trees_on(q: Qiniu, trees: List[CopyTree], i: Int) -> Unit !Upstream !Db !io =
   if i >= len(trees) {
     ()
   } else {
-    let _g = gc_copied_rows_on(q, c, trees[i].rows, 0)
-    gc_copy_trees_on(q, c, trees, i + 1)
+    let _g = gc_copied_rows_on(q, trees[i].rows, 0)
+    gc_copy_trees_on(q, trees, i + 1)
   }
 
-fn gc_copied_rows_on(q: Qiniu, c: DbConn, rows: List[CopiedRow], i: Int) -> Unit !Upstream !io =
+fn gc_copied_rows_on(q: Qiniu, rows: List[CopiedRow], i: Int) -> Unit !Upstream !Db !io =
   if i >= len(rows) {
     ()
   } else {
-    let _g: Result[Unit, String] = gc_unreferenced_on(q, c, rows[i].copied_key)
-    gc_copied_rows_on(q, c, rows, i + 1)
+    let _g: Result[Unit, String] = gc_unreferenced_on(q, rows[i].copied_key)
+    gc_copied_rows_on(q, rows, i + 1)
   }
 
 # ---- delete ----
@@ -328,12 +328,12 @@ pub fn item_paths(m: Map[String, Json]) -> List[String] =
     _ -> []
   }
 
-pub fn do_delete(q: Qiniu, c: DbConn, items: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !Upstream !io =
+pub fn do_delete(q: Qiniu, items: List[String], i: Int, acc: List[Json]) -> Result[List[Json], String] !Upstream !Db !io =
   {
     let rels = delete_paths(items, i, [])
-    let rows = delete_subtrees(c, rels)?
+    let rows = delete_subtrees(rels)?
     let deleted = deleted_entries(rows, 0, [])?
-    let _gc = gc_deleted_rows(q, c, rows, 0)
+    let _gc = gc_deleted_rows(q, rows, 0)
     Ok(acc ++ deleted)
   }
 
@@ -354,12 +354,12 @@ fn deleted_entries(rows: List[FileRow], i: Int, acc: List[Json]) -> Result[List[
     deleted_entries(rows, i + 1, acc ++ [e])
   }
 
-fn gc_deleted_rows(q: Qiniu, c: DbConn, rows: List[FileRow], i: Int) -> Unit !Upstream !io =
+fn gc_deleted_rows(q: Qiniu, rows: List[FileRow], i: Int) -> Unit !Upstream !Db !io =
   if i >= len(rows) {
     ()
   } else {
-    let _g: Result[Unit, String] = gc_unreferenced_on(q, c, rows[i].key)
-    gc_deleted_rows(q, c, rows, i + 1)
+    let _g: Result[Unit, String] = gc_unreferenced_on(q, rows[i].key)
+    gc_deleted_rows(q, rows, i + 1)
   }
 
 pub fn merge_deleted(base: Json, deleted: List[Json]) -> Json =
@@ -371,9 +371,9 @@ pub fn merge_deleted(base: Json, deleted: List[Json]) -> Json =
 # ---- create empty file / save text ----
 
 pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json], String] !Random !Upstream !io = {
-  let checked: Result[Bool, String] = with_db(a.db.path, a.db.ext, c => {
-    let _v = validate_effect_path(c, rel)?
-    taken(c, rel)
+  let checked: Result[Bool, String] = with_db(a.db.path, a.db.ext, () => {
+    let _v = validate_effect_path(rel)?
+    taken(rel)
   })
   let t = checked?
   if t {
@@ -382,7 +382,7 @@ pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json],
     let mime = guess_mime(rel)
     let key = uuid_hex()
     let _up = as_outbound(upload_text(a.qiniu, key, "", mime, now_s() + a.qiniu.expires))?
-    match with_db(a.db.path, a.db.ext, c => create_file_db(c, rel, key, mime, cur)) {
+    match with_db(a.db.path, a.db.ext, () => create_file_db(rel, key, mime, cur)) {
       Ok(d) -> Ok(Some(d))
       Err(m) -> {
         let _gc = gc_unreferenced(a, Some(key))
@@ -392,23 +392,23 @@ pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json],
   }
 }
 
-fn create_file_db(c: DbConn, rel: String, key: String, mime: String, cur: String) -> Result[Json, String] !io = {
-  let _i = create_file_once(c, rel, key, mime, 0)?
-  fs_data(c, cur)
+fn create_file_db(rel: String, key: String, mime: String, cur: String) -> Result[Json, String] !Db !io = {
+  let _i = create_file_once(rel, key, mime, 0)?
+  fs_data(cur)
 }
 
 ## Write text to a NEW qiniu key, repoint the row, then best-effort collect the
 ## old key only when no metadata row still references it. Returns {path}.
 pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !Random !Upstream !io = {
-  let checked: Result[Option[FileRow], String] = with_db(a.db.path, a.db.ext, c => {
-    let _v = validate_effect_path(c, rel)?
-    get_row(c, rel)
+  let checked: Result[Option[FileRow], String] = with_db(a.db.path, a.db.ext, () => {
+    let _v = validate_effect_path(rel)?
+    get_row(rel)
   })
   let existing = checked?
   let mime = save_mime(existing, rel)
   let new_key = save_key(rel)
   let _up = as_outbound(upload_text(a.qiniu, new_key, content, mime, now_s() + a.qiniu.expires))?
-  match with_db(a.db.path, a.db.ext, c => save_db(c, rel, new_key, mime, text_byte_size(content))) {
+  match with_db(a.db.path, a.db.ext, () => save_db(rel, new_key, mime, text_byte_size(content))) {
     Ok(outcome) -> {
       let _gc = gc_unreferenced(a, outcome.superseded_key)
       Ok(obj([("path", jstr(full(rel)))]))
@@ -420,8 +420,8 @@ pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !R
   }
 }
 
-fn save_db(c: DbConn, rel: String, key: String, mime: String, size: Int) -> Result[ReplaceOutcome, String] !io = {
-  replace_file(c, rel, key, mime, size)
+fn save_db(rel: String, key: String, mime: String, size: Int) -> Result[ReplaceOutcome, String] !Db !io = {
+  replace_file(rel, key, mime, size)
 }
 
 fn text_byte_size(content: String) -> Int !io =
@@ -452,11 +452,11 @@ fn key_for_save(id: String, rel: String) -> String = {
 # ---- proxy upload ----
 
 pub fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int) -> Result[Json, String] !Random !Upstream !io = {
-  let checked: Result[Unit, String] = with_db(a.db.path, a.db.ext, c => validate_effect_path(c, rel))
+  let checked: Result[Unit, String] = with_db(a.db.path, a.db.ext, () => validate_effect_path(rel))
   let _v = checked?
   let key = upload_key()
   let _up = as_outbound(upload_bytes(a.qiniu, key, content, mime, now_s() + a.qiniu.expires))?
-  match with_db(a.db.path, a.db.ext, c => replace_upload(c, rel, key, mime, size)) {
+  match with_db(a.db.path, a.db.ext, () => replace_upload(rel, key, mime, size)) {
     Ok(result) -> {
       let (uploaded, outcome) = result
       let _gc = gc_unreferenced(a, outcome.superseded_key)
@@ -469,16 +469,16 @@ pub fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int)
   }
 }
 
-fn validate_effect_path(c: DbConn, rel: String) -> Result[Unit, String] !io = {
-  let _a = validate_effect_ancestors(c, rel)?
-  validate_effect_target(c, rel)
+fn validate_effect_path(rel: String) -> Result[Unit, String] !Db !io = {
+  let _a = validate_effect_ancestors(rel)?
+  validate_effect_target(rel)
 }
 
-fn validate_effect_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
-  validate_fm_ancestors(c, rel)
+fn validate_effect_ancestors(rel: String) -> Result[Unit, String] !Db !io =
+  validate_fm_ancestors(rel)
 
-fn validate_effect_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
-  validate_fm_file_target(c, rel)
+fn validate_effect_target(rel: String) -> Result[Unit, String] !Db !io =
+  validate_fm_file_target(rel)
 
 # Proxy uploads always use a fresh key.
 fn upload_key() -> String !Random = uuid_hex()
@@ -486,8 +486,8 @@ fn upload_key() -> String !Random = uuid_hex()
 # The receipt is the row this upload wrote, so it is read inside the transaction
 # that wrote it (repo_fm.replace_file_receipt) rather than by a get_row after the
 # commit. /register has always read its receipt inside its own transaction.
-fn replace_upload(c: DbConn, rel: String, key: String, mime: String, size: Int) -> Result[(Json, ReplaceOutcome), String] !io = {
-  let written = replace_file_receipt(c, rel, key, mime, size)?
+fn replace_upload(rel: String, key: String, mime: String, size: Int) -> Result[(Json, ReplaceOutcome), String] !Db !io = {
+  let written = replace_file_receipt(rel, key, mime, size)?
   let (row, outcome) = written
   Ok((entry_json(row), outcome))
 }

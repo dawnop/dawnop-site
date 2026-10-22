@@ -1,5 +1,6 @@
+use db/jdbc.{DbConn, open, with_jdbc}
 use java "java.lang.String"
-use db/sql.{open, exec}
+use db/sql.{exec}
 use util/http.{HttpResp, MANAGEMENT_TIMEOUT_S, no_answer}
 use java "java.lang.System"
 use java "java.lang.Thread"
@@ -111,17 +112,17 @@ fn gc_test_qiniu() -> Qiniu =
 # It is the only question that matters here, and the only one a connection other
 # than the holder can ask; it rolls back whatever it took.
 fn writer_free(probe: DbConn) -> Bool !io =
-  match exec(probe, "begin immediate", []) {
+  match with_jdbc(probe, () => exec("begin immediate", [])) {
     Err(_m) -> false
     Ok(_n) -> {
-      let _r = exec(probe, "rollback", [])
+      let _r = with_jdbc(probe, () => exec("rollback", []))
       true
     }
   }
 
 fn gc_tables(c: DbConn) -> Unit !io = {
-  let _f = exec(c, "create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null)", [])
-  let _p = exec(c, "create table pending_uploads (key text primary key, path text not null, created_at text not null)", [])
+  let _f = with_jdbc(c, () => exec("create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null)", []))
+  let _p = with_jdbc(c, () => exec("create table pending_uploads (key text primary key, path text not null, created_at text not null)", []))
   ()
 }
 
@@ -146,7 +147,7 @@ test "gc's write transaction spans one outbound call, on the management budget" 
       exchange_stream(req) => Err(no_answer("exchange_stream"))
       exchange_start(req) => Err(no_answer("exchange_start"))
     }
-    gc_unreferenced_on(gc_test_qiniu(), c, Some("orphan-key"))
+    with_jdbc(c, () => gc_unreferenced_on(gc_test_qiniu(), Some("orphan-key")))
   }
   let elapsed = System.currentTimeMillis() - t0
 
@@ -161,7 +162,7 @@ test "gc's write transaction spans one outbound call, on the management budget" 
   assert elapsed >= stall_ms
   assert elapsed < stall_ms * 5
   # the lock is gone by the time gc returns, for this connection ...
-  assert with_immediate_tx(c, () => exec(c, "insert into pending_uploads values ('k', 'p', 'now')", [])) == Ok(1)
+  assert with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => exec("insert into pending_uploads values ('k', 'p', 'now')", [])))) == Ok(1)
   # ... and for everyone else
   assert writer_free(probe)
 }
@@ -187,13 +188,13 @@ test "a delete that times out leaves the writer free, it does not wedge the site
       exchange_stream(req) => Err(no_answer("exchange_stream"))
       exchange_start(req) => Err(no_answer("exchange_start"))
     }
-    gc_unreferenced_on(gc_test_qiniu(), c, Some("orphan-key"))
+    with_jdbc(c, () => gc_unreferenced_on(gc_test_qiniu(), Some("orphan-key")))
   }
   let elapsed = System.currentTimeMillis() - t0
 
   assert gc_ok(outcome)
   assert writer_free(probe)
-  assert with_immediate_tx(c, () => exec(c, "insert into pending_uploads values ('k', 'p', 'now')", [])) == Ok(1)
+  assert with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => exec("insert into pending_uploads values ('k', 'p', 'now')", [])))) == Ok(1)
   # the whole failure, at the speed of a function call instead of ten seconds
   assert elapsed < 1000
 }

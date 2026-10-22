@@ -27,7 +27,7 @@ use util/http.{Upstream, with_upstream}
 use site_core/util/errkind.{KConflict, KUpstream, KTimeout, split_kind}
 use site_core/util/paths.{fm_split, full, basename}
 use svc/auth.{Auth, guarded}
-use repo/repo_drop.{DropRow}
+use site_core/repo/repo_drop.{DropRow}
 use svc/drop.{Refusal, NotFound, Gone, TooLarge, Invalid, Unprocessable, LengthRequired, NoFreeName,
   DropErr, Refused, Failed, DropStatus, DropSpec, drop_info, grant_direct, register_direct, put_file, put_precheck,
   create_drop, list_all, revoke, remove, status_text, drop_status,

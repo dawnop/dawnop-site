@@ -2,11 +2,11 @@
 # FsData serialization, ancestor-dir backfill, and reparent — all pure metadata
 # on the `files` table (rename/move only rewrite paths, never touch qiniu).
 use std/str
-use db/sql.{DbConn, PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, with_immediate_tx, require_tx, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
+use db/sql.{Db, PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, with_immediate_tx, require_tx, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
 use json/value.{Json, JNull, JInt, JStr, JArr}
-use site_core/util/jsonx.{obj, jstr, jbool}
-use site_core/util/paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts, safe_persisted_mime}
-use site_core/util/errkind.{conflict, precondition}
+use util/jsonx.{obj, jstr, jbool}
+use util/paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts, safe_persisted_mime}
+use util/errkind.{conflict, precondition}
 
 pub type FileRow = { path: String, is_dir: Bool, key: Option[String], content_type: String, size: Int, updated_at: String }
 
@@ -70,11 +70,11 @@ fn entry(o: FileRow) -> Json !io = {
 }
 
 ## Direct children of a directory, dirs-first then case-insensitive path order.
-pub fn children(c: DbConn, parent: String) -> Result[List[FileRow], String] !io = {
+pub fn children(parent: String) -> Result[List[FileRow], String] !Db !io = {
   let rows = if parent == "" {
-    query(c, "select ${COLS} from files", [], col_types())?
+    query("select ${COLS} from files", [], col_types())?
   } else {
-    query(c, "select ${COLS} from files where instr(path, ? || '/') = 1", [PStr(parent)], col_types())?
+    query("select ${COLS} from files where instr(path, ? || '/') = 1", [PStr(parent)], col_types())?
   }
   let all = map(rows, row_of)
   let kids = filter(all, o => parent_rel(o.path) == parent)
@@ -92,8 +92,8 @@ fn cmp_entry(a: FileRow, b: FileRow) -> Int =
 fn cmp_str(a: String, b: String) -> Int = if a < b { -1 } else if a > b { 1 } else { 0 }
 
 ## The FsData for a directory listing.
-pub fn fs_data(c: DbConn, dir_rel: String) -> Result[Json, String] !io = {
-  let kids = children(c, dir_rel)?
+pub fn fs_data(dir_rel: String) -> Result[Json, String] !Db !io = {
+  let kids = children(dir_rel)?
   let files = entries_of(kids, 0, [])?
   Ok(obj([
     ("storages", JArr([jstr(STORAGE)])),
@@ -113,11 +113,11 @@ fn entries_of(rows: List[FileRow], i: Int, acc: List[Json]) -> Result[List[Json]
 
 ## GET /api/fm/search: files under `base` (deep or direct children) whose
 ## basename contains `needle` (case-insensitive). Returns {files:[entry...]}.
-pub fn search_files(c: DbConn, base: String, needle: String, deep: Bool) -> Result[Json, String] !io = {
+pub fn search_files(base: String, needle: String, deep: Bool) -> Result[Json, String] !Db !io = {
   let rows = if base == "" {
-    query(c, "select ${COLS} from files", [], col_types())?
+    query("select ${COLS} from files", [], col_types())?
   } else {
-    query(c, "select ${COLS} from files where instr(path, ? || '/') = 1", [PStr(base)], col_types())?
+    query("select ${COLS} from files where instr(path, ? || '/') = 1", [PStr(base)], col_types())?
   }
   let all = map(rows, row_of)
   let scoped = if deep { all } else { filter(all, o => parent_rel(o.path) == base) }
@@ -127,14 +127,14 @@ pub fn search_files(c: DbConn, base: String, needle: String, deep: Bool) -> Resu
   Ok(obj([("files", JArr(files))]))
 }
 
-pub fn get_row(c: DbConn, rel: String) -> Result[Option[FileRow], String] !io = {
-  let rows = query(c, "select ${COLS} from files where path = ?", [PStr(rel)], col_types())?
+pub fn get_row(rel: String) -> Result[Option[FileRow], String] !Db !io = {
+  let rows = query("select ${COLS} from files where path = ?", [PStr(rel)], col_types())?
   Ok(first_map(rows, r => row_of(r)))
 }
 
 ## True when a path is already taken.
-pub fn taken(c: DbConn, rel: String) -> Result[Bool, String] !io = {
-  let rows = query(c, "select count(*) from files where path = ?", [PStr(rel)], [ColInt])?
+pub fn taken(rel: String) -> Result[Bool, String] !Db !io = {
+  let rows = query("select count(*) from files where path = ?", [PStr(rel)], [ColInt])?
   Ok(first_bool_or(rows, false))
 }
 
@@ -144,28 +144,28 @@ type AncestorPolicy =
 
 ## Validate every ancestor of `rel`. File-manager writes may fill missing rows,
 ## but an existing ancestor is always required to be a directory.
-pub fn validate_fm_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
-  validate_ancestors(c, rel, AllowMissingAncestors)
+pub fn validate_fm_ancestors(rel: String) -> Result[Unit, String] !Db !io =
+  validate_ancestors(rel, AllowMissingAncestors)
 
 ## Reject a file write whose target row is already a directory or whose target
 ## has descendants. Callers pair this with validate_fm_ancestors before any
 ## object-store or ledger effect.
-pub fn validate_fm_file_target(c: DbConn, rel: String) -> Result[Unit, String] !io = {
-  let _t = validate_file_target_directory_preflight(c, rel)?
-  validate_file_target_descendants_preflight(c, rel)
+pub fn validate_fm_file_target(rel: String) -> Result[Unit, String] !Db !io = {
+  let _t = validate_file_target_directory_preflight(rel)?
+  validate_file_target_descendants_preflight(rel)
 }
 
-fn validate_file_target_directory_preflight(c: DbConn, rel: String) -> Result[Unit, String] !io =
-  reject_directory_target(c, rel)
+fn validate_file_target_directory_preflight(rel: String) -> Result[Unit, String] !Db !io =
+  reject_directory_target(rel)
 
 ## Validate every ancestor of `rel` for WebDAV, whose storage model requires
 ## the complete parent chain to exist before a write begins.
-pub fn validate_webdav_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
-  validate_ancestors(c, rel, RequireExistingAncestors)
+pub fn validate_webdav_ancestors(rel: String) -> Result[Unit, String] !Db !io =
+  validate_ancestors(rel, RequireExistingAncestors)
 
-fn validate_ancestors(c: DbConn, rel: String, policy: AncestorPolicy) -> Result[Unit, String] !io = {
+fn validate_ancestors(rel: String, policy: AncestorPolicy) -> Result[Unit, String] !Db !io = {
   let ancestors = ancestor_paths(rel)
-  validate_ancestor_loop(c, ancestors, policy, 0)
+  validate_ancestor_loop(ancestors, policy, 0)
 }
 
 fn ancestor_paths(rel: String) -> List[String] = {
@@ -182,21 +182,21 @@ fn ancestor_path_loop(parts: List[String], i: Int, acc: String, paths: List[Stri
     ancestor_path_loop(parts, i + 1, next, paths ++ [next])
   }
 
-fn validate_ancestor_loop(c: DbConn, ancestors: List[String], policy: AncestorPolicy, i: Int) -> Result[Unit, String] !io =
+fn validate_ancestor_loop(ancestors: List[String], policy: AncestorPolicy, i: Int) -> Result[Unit, String] !Db !io =
   if i >= len(ancestors) {
     Ok(())
   } else {
     let path = ancestors[i]
-    match get_row(c, path)? {
+    match get_row(path)? {
       Some(o) ->
         if o.is_dir {
-          validate_ancestor_loop(c, ancestors, policy, i + 1)
+          validate_ancestor_loop(ancestors, policy, i + 1)
         } else {
           Err(conflict("祖先不是目录：${full(path)}"))
         }
       None ->
         match policy {
-          AllowMissingAncestors -> validate_ancestor_loop(c, ancestors, policy, i + 1)
+          AllowMissingAncestors -> validate_ancestor_loop(ancestors, policy, i + 1)
           RequireExistingAncestors -> Err(conflict("父目录不存在：${full(path)}"))
         }
     }
@@ -211,83 +211,83 @@ fn validate_ancestor_loop(c: DbConn, ancestors: List[String], policy: AncestorPo
 ## (backfill where the live code refuses), so deleting it stops those mutants
 ## compiling and the harness loses three of its red set. A dead-code sweep that
 ## finds it again should read that file before reaching for the delete key.
-pub fn ensure_dirs(c: DbConn, rel: String) -> Result[Int, String] !io =
-  with_immediate_tx(c, () => ensure_dirs_tx(c, rel))
+pub fn ensure_dirs(rel: String) -> Result[Int, String] !Db !io =
+  with_immediate_tx(() => ensure_dirs_tx(rel))
 
-fn ensure_dirs_tx(c: DbConn, rel: String) -> Result[Int, String] !io = {
-  let _v = validate_fm_ancestors(c, rel)?
-  ensure_loop(c, ancestor_paths(rel), 0)
+fn ensure_dirs_tx(rel: String) -> Result[Int, String] !Db !io = {
+  let _v = validate_fm_ancestors(rel)?
+  ensure_loop(ancestor_paths(rel), 0)
 }
 
-fn ensure_loop(c: DbConn, paths: List[String], i: Int) -> Result[Int, String] !io =
+fn ensure_loop(paths: List[String], i: Int) -> Result[Int, String] !Db !io =
   if i >= len(paths) {
     Ok(0)
   } else {
     let path = paths[i]
-    let _u = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, datetime('now'), datetime('now')) on conflict(path) do nothing", [PStr(path)])?
-    ensure_loop(c, paths, i + 1)
+    let _u = exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, datetime('now'), datetime('now')) on conflict(path) do nothing", [PStr(path)])?
+    ensure_loop(paths, i + 1)
   }
 
 ## Insert a folder row.
-pub fn insert_folder(c: DbConn, rel: String) -> Result[Int, String] !io =
-  with_immediate_tx(c, () => {
-    let _v = validate_insert_folder_ancestors(c, rel)?
-    let _a = ensure_loop(c, ancestor_paths(rel), 0)?
-    insert_folder_row(c, rel)
+pub fn insert_folder(rel: String) -> Result[Int, String] !Db !io =
+  with_immediate_tx(() => {
+    let _v = validate_insert_folder_ancestors(rel)?
+    let _a = ensure_loop(ancestor_paths(rel), 0)?
+    insert_folder_row(rel)
   })
 
-fn validate_insert_folder_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
-  validate_fm_ancestors(c, rel)
+fn validate_insert_folder_ancestors(rel: String) -> Result[Unit, String] !Db !io =
+  validate_fm_ancestors(rel)
 
 ## WebDAV final folder write: recheck the complete existing parent chain in the
 ## same write transaction, without inheriting FM's directory backfill policy.
-pub fn insert_folder_strict(c: DbConn, rel: String) -> Result[Int, String] !io =
-  with_immediate_tx(c, () => {
-    let _a = validate_insert_folder_strict_ancestors(c, rel)?
-    insert_folder_row(c, rel)
+pub fn insert_folder_strict(rel: String) -> Result[Int, String] !Db !io =
+  with_immediate_tx(() => {
+    let _a = validate_insert_folder_strict_ancestors(rel)?
+    insert_folder_row(rel)
   })
 
-fn validate_insert_folder_strict_ancestors(c: DbConn, rel: String) -> Result[Unit, String] !io =
-  validate_webdav_ancestors(c, rel)
+fn validate_insert_folder_strict_ancestors(rel: String) -> Result[Unit, String] !Db !io =
+  validate_webdav_ancestors(rel)
 
-fn insert_folder_row(c: DbConn, rel: String) -> Result[Int, String] !io =
-  exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, datetime('now'), datetime('now'))", [PStr(rel)])
+fn insert_folder_row(rel: String) -> Result[Int, String] !Db !io =
+  exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 1, null, '', 0, datetime('now'), datetime('now'))", [PStr(rel)])
 
 ## A rel plus its whole subtree in deterministic parent-before-child order.
-pub fn subtree_rows(c: DbConn, rel: String) -> Result[List[FileRow], String] !io = {
-  let rows = query(c, "select ${COLS} from files where path = ? or instr(path, ? || '/') = 1 order by path", [PStr(rel), PStr(rel)], col_types())?
+pub fn subtree_rows(rel: String) -> Result[List[FileRow], String] !Db !io = {
+  let rows = query("select ${COLS} from files where path = ? or instr(path, ? || '/') = 1 order by path", [PStr(rel), PStr(rel)], col_types())?
   Ok(map(rows, row_of))
 }
 
 ## The DirEntry JSON for a row (public — delete returns these).
 pub fn entry_json(o: FileRow) -> Json !io = entry(o)
 
-pub fn delete_row(c: DbConn, path: String) -> Result[Int, String] !io =
-  exec(c, "delete from files where path = ?", [PStr(path)])
+pub fn delete_row(path: String) -> Result[Int, String] !Db !io =
+  exec("delete from files where path = ?", [PStr(path)])
 
-pub fn delete_subtree(c: DbConn, rel: String) -> Result[List[FileRow], String] !io =
-  with_immediate_tx(c, () => delete_subtree_tx(c, rel))
+pub fn delete_subtree(rel: String) -> Result[List[FileRow], String] !Db !io =
+  with_immediate_tx(() => delete_subtree_tx(rel))
 
-pub fn delete_subtrees(c: DbConn, rels: List[String]) -> Result[List[FileRow], String] !io =
-  with_immediate_tx(c, () => delete_subtree_list_tx(c, rels, 0, []))
+pub fn delete_subtrees(rels: List[String]) -> Result[List[FileRow], String] !Db !io =
+  with_immediate_tx(() => delete_subtree_list_tx(rels, 0, []))
 
-fn delete_subtree_list_tx(c: DbConn, rels: List[String], i: Int, acc: List[FileRow]) -> Result[List[FileRow], String] !io =
+fn delete_subtree_list_tx(rels: List[String], i: Int, acc: List[FileRow]) -> Result[List[FileRow], String] !Db !io =
   if i >= len(rels) {
     Ok(acc)
   } else {
-    let rows = delete_subtree_tx(c, rels[i])?
-    delete_subtree_list_tx(c, rels, i + 1, acc ++ rows)
+    let rows = delete_subtree_tx(rels[i])?
+    delete_subtree_list_tx(rels, i + 1, acc ++ rows)
   }
 
-fn delete_subtree_tx(c: DbConn, rel: String) -> Result[List[FileRow], String] !io =
+fn delete_subtree_tx(rel: String) -> Result[List[FileRow], String] !Db !io =
   if rel == "" {
     Ok([])
   } else {
-    let rows = subtree_rows(c, rel)?
+    let rows = subtree_rows(rel)?
     if not subtree_root_present(rows, rel, 0) {
       Ok([])
     } else {
-      let n = exec(c, "delete from files where path = ? or instr(path, ? || '/') = 1", [PStr(rel), PStr(rel)])?
+      let n = exec("delete from files where path = ? or instr(path, ? || '/') = 1", [PStr(rel), PStr(rel)])?
       if n == len(rows) {
         Ok(rows)
       } else {
@@ -296,8 +296,8 @@ fn delete_subtree_tx(c: DbConn, rel: String) -> Result[List[FileRow], String] !i
     }
   }
 
-pub fn replace_file(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[ReplaceOutcome, String] !io =
-  with_immediate_tx(c, () => replace_file_tx(c, rel, key, content_type, size, AllowMissingAncestors))
+pub fn replace_file(rel: String, key: String, content_type: String, size: Int) -> Result[ReplaceOutcome, String] !Db !io =
+  with_immediate_tx(() => replace_file_tx(rel, key, content_type, size, AllowMissingAncestors))
 
 ## Proxy upload's final write: replace the row and answer with the row that was
 ## written. The read shares the write's transaction, which is the whole point of
@@ -305,10 +305,10 @@ pub fn replace_file(c: DbConn, rel: String, key: String, content_type: String, s
 ## after the commit answers with whatever row is there by then, so a second
 ## writer on the same path gets to describe this response, and a delete gets to
 ## turn an already-committed write into a failure.
-pub fn replace_file_receipt(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[(FileRow, ReplaceOutcome), String] !io =
-  with_immediate_tx(c, () => {
-    let outcome = replace_file_tx(c, rel, key, content_type, size, AllowMissingAncestors)?
-    match receipt_row(c, rel)? {
+pub fn replace_file_receipt(rel: String, key: String, content_type: String, size: Int) -> Result[(FileRow, ReplaceOutcome), String] !Db !io =
+  with_immediate_tx(() => {
+    let outcome = replace_file_tx(rel, key, content_type, size, AllowMissingAncestors)?
+    match receipt_row(rel)? {
       Some(o) -> Ok((o, outcome))
       None -> Err("uploaded file vanished: ${full(rel)}")
     }
@@ -329,22 +329,22 @@ pub fn replace_file_receipt(c: DbConn, rel: String, key: String, content_type: S
 ## an Err: the 500 an Err already produces is the right answer for a database
 ## that contradicts itself, and a panic would buy nothing on a branch that
 ## cannot be taken.
-fn receipt_row(c: DbConn, rel: String) -> Result[Option[FileRow], String] !io = {
-  let _t = require_tx(c, "upload receipt read ${full(rel)}")?
-  get_row(c, rel)
+fn receipt_row(rel: String) -> Result[Option[FileRow], String] !Db !io = {
+  let _t = require_tx("upload receipt read ${full(rel)}")?
+  get_row(rel)
 }
 
-pub fn replace_file_strict(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[ReplaceOutcome, String] !io =
-  with_immediate_tx(c, () => replace_file_tx(c, rel, key, content_type, size, RequireExistingAncestors))
+pub fn replace_file_strict(rel: String, key: String, content_type: String, size: Int) -> Result[ReplaceOutcome, String] !Db !io =
+  with_immediate_tx(() => replace_file_tx(rel, key, content_type, size, RequireExistingAncestors))
 
-fn replace_file_tx(c: DbConn, rel: String, key: String, content_type: String, size: Int, policy: AncestorPolicy) -> Result[ReplaceOutcome, String] !io = {
-  let _v = validate_ancestors(c, rel, policy)?
+fn replace_file_tx(rel: String, key: String, content_type: String, size: Int, policy: AncestorPolicy) -> Result[ReplaceOutcome, String] !Db !io = {
+  let _v = validate_ancestors(rel, policy)?
   let _a = match policy {
-    AllowMissingAncestors -> ensure_loop(c, ancestor_paths(rel), 0)
+    AllowMissingAncestors -> ensure_loop(ancestor_paths(rel), 0)
     RequireExistingAncestors -> Ok(0)
   }?
-  let existing = get_row(c, rel)?
-  let _i = insert_file_row(c, rel, key, content_type, size)?
+  let existing = get_row(rel)?
+  let _i = insert_file_row(rel, key, content_type, size)?
   Ok(ReplaceOutcome {
     target_existed: existing != None,
     superseded_key: superseded_file_key(existing, key),
@@ -361,26 +361,26 @@ fn superseded_file_key(existing: Option[FileRow], new_key: String) -> Option[Str
     None -> None
   }
 
-pub fn insert_file(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =
-  match replace_file(c, rel, key, content_type, size) {
+pub fn insert_file(rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !Db !io =
+  match replace_file(rel, key, content_type, size) {
     Ok(_) -> Ok(1)
     Err(m) -> Err(m)
   }
 
 ## WebDAV final file write: strict parent-chain validation and the upsert share
 ## one immediate transaction. Missing parents are never synthesized here.
-pub fn insert_file_strict(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =
-  match replace_file_strict(c, rel, key, content_type, size) {
+pub fn insert_file_strict(rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !Db !io =
+  match replace_file_strict(rel, key, content_type, size) {
     Ok(_) -> Ok(1)
     Err(m) -> Err(m)
   }
 
-fn insert_file_row(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io = {
-  let _t = validate_insert_file_target(c, rel)?
-  let n = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, ?, ?, datetime('now'), datetime('now')) on conflict(path) do update set key = excluded.key, content_type = excluded.content_type, size = excluded.size, updated_at = datetime('now') where files.is_dir = 0",
+fn insert_file_row(rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !Db !io = {
+  let _t = validate_insert_file_target(rel)?
+  let n = exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, ?, ?, datetime('now'), datetime('now')) on conflict(path) do update set key = excluded.key, content_type = excluded.content_type, size = excluded.size, updated_at = datetime('now') where files.is_dir = 0",
     [PStr(rel), PStr(key), PStr(content_type), PInt(size)])?
   if n == 0 {
-    match get_row(c, rel)? {
+    match get_row(rel)? {
       Some(o) -> if o.is_dir { Err(conflict("目标是目录：${full(rel)}")) } else { Err("file upsert affected no row: ${full(rel)}") }
       None -> Err("file upsert target disappeared: ${full(rel)}")
     }
@@ -389,22 +389,22 @@ fn insert_file_row(c: DbConn, rel: String, key: String, content_type: String, si
   }
 }
 
-fn validate_insert_file_target(c: DbConn, rel: String) -> Result[Unit, String] !io = {
-  let _t = validate_insert_file_directory_target(c, rel)?
-  validate_file_target_descendants_final(c, rel)
+fn validate_insert_file_target(rel: String) -> Result[Unit, String] !Db !io = {
+  let _t = validate_insert_file_directory_target(rel)?
+  validate_file_target_descendants_final(rel)
 }
 
-fn validate_insert_file_directory_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
-  reject_directory_target(c, rel)
+fn validate_insert_file_directory_target(rel: String) -> Result[Unit, String] !Db !io =
+  reject_directory_target(rel)
 
-fn validate_file_target_descendants_preflight(c: DbConn, rel: String) -> Result[Unit, String] !io =
-  reject_file_target_descendants(c, rel)
+fn validate_file_target_descendants_preflight(rel: String) -> Result[Unit, String] !Db !io =
+  reject_file_target_descendants(rel)
 
-fn validate_file_target_descendants_final(c: DbConn, rel: String) -> Result[Unit, String] !io =
-  reject_file_target_descendants(c, rel)
+fn validate_file_target_descendants_final(rel: String) -> Result[Unit, String] !Db !io =
+  reject_file_target_descendants(rel)
 
-fn reject_file_target_descendants(c: DbConn, rel: String) -> Result[Unit, String] !io = {
-  let rows = subtree_rows(c, rel)?
+fn reject_file_target_descendants(rel: String) -> Result[Unit, String] !Db !io = {
+  let rows = subtree_rows(rel)?
   reject_file_target_descendant_rows(rows, rel, 0)
 }
 
@@ -417,64 +417,64 @@ fn reject_file_target_descendant_rows(rows: List[FileRow], rel: String, i: Int) 
     Err(conflict("文件目标下存在后代：${full(rows[i].path)}"))
   }
 
-fn reject_directory_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
-  match get_row(c, rel)? {
+fn reject_directory_target(rel: String) -> Result[Unit, String] !Db !io =
+  match get_row(rel)? {
     Some(o) -> if o.is_dir { Err(conflict("目标是目录：${full(rel)}")) } else { Ok(()) }
     None -> Ok(())
   }
 
-pub fn create_file_once(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !io =
-  with_immediate_tx(c, () => {
-    let _v = validate_fm_ancestors(c, rel)?
-    let _a = ensure_loop(c, ancestor_paths(rel), 0)?
-    let _t = validate_create_file_target(c, rel)?
-    let n = exec(c, "insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, ?, ?, datetime('now'), datetime('now'))",
+pub fn create_file_once(rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !Db !io =
+  with_immediate_tx(() => {
+    let _v = validate_fm_ancestors(rel)?
+    let _a = ensure_loop(ancestor_paths(rel), 0)?
+    let _t = validate_create_file_target(rel)?
+    let n = exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, ?, ?, datetime('now'), datetime('now'))",
       [PStr(rel), PStr(key), PStr(content_type), PInt(size)])?
     if n == 1 { Ok(n) } else { Err("create-file insert count changed: ${full(rel)}") }
   })
 
-fn validate_create_file_target(c: DbConn, rel: String) -> Result[Unit, String] !io =
-  match get_row(c, rel)? {
+fn validate_create_file_target(rel: String) -> Result[Unit, String] !Db !io =
+  match get_row(rel)? {
     Some(_) -> Err(conflict("目标已存在：${full(rel)}"))
-    None -> validate_file_target_descendants_final(c, rel)
+    None -> validate_file_target_descendants_final(rel)
   }
 
-pub fn key_referenced(c: DbConn, key: String) -> Result[Bool, String] !io = {
-  let rows = query(c, "select count(*) from files where key = ?", [PStr(key)], [ColInt])?
+pub fn key_referenced(key: String) -> Result[Bool, String] !Db !io = {
+  let rows = query("select count(*) from files where key = ?", [PStr(key)], [ColInt])?
   Ok(first_bool_or(rows, false))
 }
 
-pub fn key_pending(c: DbConn, key: String) -> Result[Bool, String] !io = {
-  let rows = query(c, "select count(*) from pending_uploads where key = ?", [PStr(key)], [ColInt])?
+pub fn key_pending(key: String) -> Result[Bool, String] !Db !io = {
+  let rows = query("select count(*) from pending_uploads where key = ?", [PStr(key)], [ColInt])?
   Ok(first_bool_or(rows, false))
 }
 
-pub fn validate_register_preflight(c: DbConn, rel: String, key: String) -> Result[Unit, String] !io = {
-  let pending = pending_upload_matches(c, key, full(rel))?
+pub fn validate_register_preflight(rel: String, key: String) -> Result[Unit, String] !Db !io = {
+  let pending = pending_upload_matches(key, full(rel))?
   if not pending {
     Err(conflict("上传凭证与登记路径不匹配：${full(rel)}"))
-  } else if key_referenced(c, key)? {
+  } else if key_referenced(key)? {
     Err(conflict("对象 key 已被文件引用：${key}"))
   } else {
-    let _a = validate_fm_ancestors(c, rel)?
-    validate_fm_file_target(c, rel)
+    let _a = validate_fm_ancestors(rel)?
+    validate_fm_file_target(rel)
   }
 }
 
-pub fn finalize_register(c: DbConn, rel: String, key: String, content_type: String, size: Int) -> Result[(FileRow, ReplaceOutcome), String] !io =
-  with_immediate_tx(c, () => {
-    let pending = pending_upload_matches(c, key, full(rel))?
+pub fn finalize_register(rel: String, key: String, content_type: String, size: Int) -> Result[(FileRow, ReplaceOutcome), String] !Db !io =
+  with_immediate_tx(() => {
+    let pending = pending_upload_matches(key, full(rel))?
     if not pending {
       Err(conflict("上传凭证与登记路径不匹配：${full(rel)}"))
-    } else if key_referenced(c, key)? {
+    } else if key_referenced(key)? {
       Err(conflict("对象 key 已被文件引用：${key}"))
     } else {
-      let outcome = replace_file_tx(c, rel, key, content_type, size, AllowMissingAncestors)?
-      let consumed = exec(c, "delete from pending_uploads where key = ? and path = ?", [PStr(key), PStr(full(rel))])?
+      let outcome = replace_file_tx(rel, key, content_type, size, AllowMissingAncestors)?
+      let consumed = exec("delete from pending_uploads where key = ? and path = ?", [PStr(key), PStr(full(rel))])?
       if consumed != 1 {
         Err("register ledger consume count changed: ${key}")
       } else {
-        match receipt_row(c, rel)? {
+        match receipt_row(rel)? {
           Some(o) -> Ok((o, outcome))
           None -> Err("registered file vanished: ${full(rel)}")
         }
@@ -482,30 +482,30 @@ pub fn finalize_register(c: DbConn, rel: String, key: String, content_type: Stri
     }
   })
 
-fn pending_upload_matches(c: DbConn, key: String, path: String) -> Result[Bool, String] !io = {
-  let rows = query(c, "select count(*) from pending_uploads where key = ? and path = ?", [PStr(key), PStr(path)], [ColInt])?
+fn pending_upload_matches(key: String, path: String) -> Result[Bool, String] !Db !io = {
+  let rows = query("select count(*) from pending_uploads where key = ? and path = ?", [PStr(key), PStr(path)], [ColInt])?
   Ok(first_bool_or(rows, false))
 }
 
 ## Local storage stats from the metadata: (used_bytes, file_count, dir_count).
-pub fn stats_db(c: DbConn) -> Result[(Int, Int, Int), String] !io = {
-  let used = scalar_or0(c, "select coalesce(sum(size), 0) from files where is_dir = 0")?
-  let files = scalar_or0(c, "select count(*) from files where is_dir = 0")?
-  let dirs = scalar_or0(c, "select count(*) from files where is_dir = 1")?
+pub fn stats_db() -> Result[(Int, Int, Int), String] !Db !io = {
+  let used = scalar_or0("select coalesce(sum(size), 0) from files where is_dir = 0")?
+  let files = scalar_or0("select count(*) from files where is_dir = 0")?
+  let dirs = scalar_or0("select count(*) from files where is_dir = 1")?
   Ok((used, files, dirs))
 }
 
-fn scalar_or0(c: DbConn, q: String) -> Result[Int, String] !io = {
-  let rows = query(c, q, [], [ColInt])?
+fn scalar_or0(q: String) -> Result[Int, String] !Db !io = {
+  let rows = query(q, [], [ColInt])?
   Ok(first_int_or(rows, 0))
 }
 
 ## Record a signed upload key in the pending_uploads ledger (orphan tracking).
-pub fn ledger_insert(c: DbConn, key: String, path: String) -> Result[Int, String] !io =
-  exec(c, "insert into pending_uploads (key, path, created_at) values (?, ?, datetime('now')) on conflict(key) do update set path = excluded.path", [PStr(key), PStr(path)])
+pub fn ledger_insert(key: String, path: String) -> Result[Int, String] !Db !io =
+  exec("insert into pending_uploads (key, path, created_at) values (?, ?, datetime('now')) on conflict(key) do update set path = excluded.path", [PStr(key), PStr(path)])
 
-fn validated_subtree_paths(c: DbConn, old_rel: String) -> Result[List[String], String] !io = {
-  let rows = subtree_rows(c, old_rel)?
+fn validated_subtree_paths(old_rel: String) -> Result[List[String], String] !Db !io = {
+  let rows = subtree_rows(old_rel)?
   let _s = validate_present_subtree(rows, old_rel)?
   Ok(map(rows, o => o.path))
 }
@@ -513,78 +513,78 @@ fn validated_subtree_paths(c: DbConn, old_rel: String) -> Result[List[String], S
 ## Rename metadata in one immediate transaction. Missing destination ancestors
 ## remain missing for compatibility, while every ancestor row that does exist
 ## must be a directory.
-pub fn reparent_allow_missing(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io =
-  with_immediate_tx(c, () => {
-    let paths = validated_subtree_paths(c, old_rel)?
-    let _v = validate_reparent_allow_missing_destination(c, new_rel)?
-    reparent_loop(c, paths, old_rel, new_rel, 0)
+pub fn reparent_allow_missing(old_rel: String, new_rel: String) -> Result[Int, String] !Db !io =
+  with_immediate_tx(() => {
+    let paths = validated_subtree_paths(old_rel)?
+    let _v = validate_reparent_allow_missing_destination(new_rel)?
+    reparent_loop(paths, old_rel, new_rel, 0)
   })
 
-fn validate_reparent_allow_missing_destination(c: DbConn, new_rel: String) -> Result[Unit, String] !io = {
-  let _a = validate_fm_ancestors(c, new_rel)?
-  validate_final_destination_subtree(c, new_rel)
+fn validate_reparent_allow_missing_destination(new_rel: String) -> Result[Unit, String] !Db !io = {
+  let _a = validate_fm_ancestors(new_rel)?
+  validate_final_destination_subtree(new_rel)
 }
 
 ## File-manager MOVE metadata in one immediate transaction. Missing destination
 ## ancestors are synthesized before the path rewrite and roll back with it.
-pub fn reparent_fill_missing(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io =
-  with_immediate_tx(c, () => {
-    let paths = validated_subtree_paths(c, old_rel)?
-    let _v = validate_reparent_fill_destination(c, new_rel)?
-    let _d = ensure_loop(c, ancestor_paths(new_rel), 0)?
-    reparent_loop(c, paths, old_rel, new_rel, 0)
+pub fn reparent_fill_missing(old_rel: String, new_rel: String) -> Result[Int, String] !Db !io =
+  with_immediate_tx(() => {
+    let paths = validated_subtree_paths(old_rel)?
+    let _v = validate_reparent_fill_destination(new_rel)?
+    let _d = ensure_loop(ancestor_paths(new_rel), 0)?
+    reparent_loop(paths, old_rel, new_rel, 0)
   })
 
 ## Apply one FM MOVE request as one immediate transaction. Each plan is finally
 ## revalidated and applied in request order, so a later collision rolls back all
 ## earlier path rewrites and ancestor backfill from the same request.
-pub fn commit_fm_moves(c: DbConn, plans: List[MovePlan]) -> Result[Int, String] !io =
-  with_immediate_tx(c, () => commit_fm_move_plans(c, plans, 0))
+pub fn commit_fm_moves(plans: List[MovePlan]) -> Result[Int, String] !Db !io =
+  with_immediate_tx(() => commit_fm_move_plans(plans, 0))
 
-fn commit_fm_move_plans(c: DbConn, plans: List[MovePlan], i: Int) -> Result[Int, String] !io =
+fn commit_fm_move_plans(plans: List[MovePlan], i: Int) -> Result[Int, String] !Db !io =
   if i >= len(plans) {
     Ok(0)
   } else {
     let plan = plans[i]
-    let paths = validated_subtree_paths(c, plan.source_root)?
-    let _v = validate_reparent_fill_destination(c, plan.destination_root)?
-    let _d = ensure_loop(c, ancestor_paths(plan.destination_root), 0)?
-    let moved = reparent_loop(c, paths, plan.source_root, plan.destination_root, 0)?
-    let rest = commit_fm_move_plans(c, plans, i + 1)?
+    let paths = validated_subtree_paths(plan.source_root)?
+    let _v = validate_reparent_fill_destination(plan.destination_root)?
+    let _d = ensure_loop(ancestor_paths(plan.destination_root), 0)?
+    let moved = reparent_loop(paths, plan.source_root, plan.destination_root, 0)?
+    let rest = commit_fm_move_plans(plans, i + 1)?
     Ok(moved + rest)
   }
 
-fn validate_reparent_fill_destination(c: DbConn, new_rel: String) -> Result[Unit, String] !io = {
-  let _a = validate_fm_ancestors(c, new_rel)?
-  validate_final_destination_subtree(c, new_rel)
+fn validate_reparent_fill_destination(new_rel: String) -> Result[Unit, String] !Db !io = {
+  let _a = validate_fm_ancestors(new_rel)?
+  validate_final_destination_subtree(new_rel)
 }
 
 ## WebDAV final MOVE without overwrite. Kept as the narrow metadata primitive
 ## for callers that require an absent destination.
-pub fn reparent_strict(c: DbConn, old_rel: String, new_rel: String) -> Result[Int, String] !io =
-  match commit_webdav_move(c, old_rel, new_rel, false) {
+pub fn reparent_strict(old_rel: String, new_rel: String) -> Result[Int, String] !Db !io =
+  match commit_webdav_move(old_rel, new_rel, false) {
     Ok(outcome) -> Ok(outcome.written)
     Err(m) -> Err(m)
   }
 
-fn validate_reparent_strict_destination(c: DbConn, new_rel: String) -> Result[Unit, String] !io = {
-  let _a = validate_webdav_ancestors(c, new_rel)?
-  validate_final_destination_subtree(c, new_rel)
+fn validate_reparent_strict_destination(new_rel: String) -> Result[Unit, String] !Db !io = {
+  let _a = validate_webdav_ancestors(new_rel)?
+  validate_final_destination_subtree(new_rel)
 }
 
 ## Atomically replace a WebDAV MOVE destination and reparent the current source
 ## subtree. The returned rows are exactly the destination metadata removed by
 ## this transaction and are safe candidates for reference-aware object GC only
 ## after commit.
-pub fn commit_webdav_move(c: DbConn, old_rel: String, new_rel: String, overwrite: Bool) -> Result[SubtreeWriteOutcome, String] !io =
-  with_immediate_tx(c, () => {
+pub fn commit_webdav_move(old_rel: String, new_rel: String, overwrite: Bool) -> Result[SubtreeWriteOutcome, String] !Db !io =
+  with_immediate_tx(() => {
     let _o = validate_disjoint_subtrees(old_rel, new_rel)?
-    let paths = validated_subtree_paths(c, old_rel)?
-    let _a = validate_webdav_ancestors(c, new_rel)?
-    let destination_rows = subtree_rows(c, new_rel)?
+    let paths = validated_subtree_paths(old_rel)?
+    let _a = validate_webdav_ancestors(new_rel)?
+    let destination_rows = subtree_rows(new_rel)?
     let destination_existed = validate_webdav_destination_snapshot(destination_rows, new_rel, overwrite)?
-    let replaced: List[FileRow] = if destination_existed { delete_subtree_tx(c, new_rel)? } else { [] }
-    let moved = reparent_loop(c, paths, old_rel, new_rel, 0)?
+    let replaced: List[FileRow] = if destination_existed { delete_subtree_tx(new_rel)? } else { [] }
+    let moved = reparent_loop(paths, old_rel, new_rel, 0)?
     Ok(SubtreeWriteOutcome {
       destination_existed: destination_existed,
       replaced_rows: replaced,
@@ -618,40 +618,40 @@ fn validate_webdav_destination_snapshot(rows: List[FileRow], root: String, overw
 ## Read-only destination validation for a subtree operation. Callers that have
 ## external effects use this before touching the object store; reparent repeats
 ## it inside its transaction so the repository remains safe on its own.
-pub fn validate_subtree_destination(c: DbConn, old_rel: String, new_rel: String) -> Result[Unit, String] !io = {
-  let rows = subtree_rows(c, old_rel)?
+pub fn validate_subtree_destination(old_rel: String, new_rel: String) -> Result[Unit, String] !Db !io = {
+  let rows = subtree_rows(old_rel)?
   let _s = validate_present_subtree(rows, old_rel)?
-  let _a = validate_fm_ancestors(c, new_rel)?
-  validate_absent_destination_subtree(c, new_rel)
+  let _a = validate_fm_ancestors(new_rel)?
+  validate_absent_destination_subtree(new_rel)
 }
 
 ## Build one FM MOVE plan after a read-only source, ancestor, and complete
 ## destination-subtree preflight. commit_fm_moves repeats these invariants under
 ## the request-wide immediate transaction before applying each plan.
-pub fn prepare_fm_move(c: DbConn, old_rel: String, new_rel: String) -> Result[MovePlan, String] !io = {
-  let _v = validate_subtree_destination(c, old_rel, new_rel)?
+pub fn prepare_fm_move(old_rel: String, new_rel: String) -> Result[MovePlan, String] !Db !io = {
+  let _v = validate_subtree_destination(old_rel, new_rel)?
   Ok(MovePlan { source_root: old_rel, destination_root: new_rel })
 }
 
 ## Reject every row under an absent-destination operation. FM uses this strict
 ## empty-subtree rule; WebDAV uses the root-aware overwrite rule below.
-pub fn validate_absent_destination_subtree(c: DbConn, new_rel: String) -> Result[Unit, String] !io =
-  validate_empty_destination_subtree(c, new_rel)
+pub fn validate_absent_destination_subtree(new_rel: String) -> Result[Unit, String] !Db !io =
+  validate_empty_destination_subtree(new_rel)
 
 ## Recheck a WebDAV destination snapshot during HTTP preflight. A root that
 ## appeared after the initial lookup is a failed precondition when overwrite is
 ## disabled, while orphan descendants remain a malformed-subtree conflict.
-pub fn validate_webdav_destination_preflight(c: DbConn, new_rel: String, overwrite: Bool) -> Result[Unit, String] !io = {
-  let rows = subtree_rows(c, new_rel)?
+pub fn validate_webdav_destination_preflight(new_rel: String, overwrite: Bool) -> Result[Unit, String] !Db !io = {
+  let rows = subtree_rows(new_rel)?
   let _s = validate_webdav_destination_snapshot(rows, new_rel, overwrite)?
   Ok(())
 }
 
-fn validate_final_destination_subtree(c: DbConn, new_rel: String) -> Result[Unit, String] !io =
-  validate_empty_destination_subtree(c, new_rel)
+fn validate_final_destination_subtree(new_rel: String) -> Result[Unit, String] !Db !io =
+  validate_empty_destination_subtree(new_rel)
 
-fn validate_empty_destination_subtree(c: DbConn, new_rel: String) -> Result[Unit, String] !io = {
-  let rows = subtree_rows(c, new_rel)?
+fn validate_empty_destination_subtree(new_rel: String) -> Result[Unit, String] !Db !io = {
+  let rows = subtree_rows(new_rel)?
   if len(rows) == 0 {
     Ok(())
   } else {
@@ -663,59 +663,59 @@ fn validate_empty_destination_subtree(c: DbConn, new_rel: String) -> Result[Unit
 ## ancestor above the direct parent. The WebDAV caller checks that direct parent
 ## separately before the final transaction, preserving its 412 and 409 ordering
 ## contract.
-pub fn validate_webdav_subtree_destination(c: DbConn, old_rel: String, new_rel: String) -> Result[Unit, String] !io = {
-  let rows = subtree_rows(c, old_rel)?
+pub fn validate_webdav_subtree_destination(old_rel: String, new_rel: String) -> Result[Unit, String] !Db !io = {
+  let rows = subtree_rows(old_rel)?
   let _s = validate_present_subtree(rows, old_rel)?
-  validate_webdav_ancestors(c, parent_rel(new_rel))
+  validate_webdav_ancestors(parent_rel(new_rel))
 }
 
 ## Build an FM copy plan before any object-store effects. Every mapped target,
 ## not just the destination root, must be absent.
-pub fn prepare_fm_copy(c: DbConn, old_rel: String, new_rel: String) -> Result[CopyTree, String] !io = {
-  let tree = prepare_copy_tree(c, old_rel, new_rel)?
-  let _a = validate_fm_ancestors(c, new_rel)?
-  let _t = validate_prepare_fm_copy_targets(c, tree)?
+pub fn prepare_fm_copy(old_rel: String, new_rel: String) -> Result[CopyTree, String] !Db !io = {
+  let tree = prepare_copy_tree(old_rel, new_rel)?
+  let _a = validate_fm_ancestors(new_rel)?
+  let _t = validate_prepare_fm_copy_targets(tree)?
   Ok(tree)
 }
 
-fn validate_prepare_fm_copy_targets(c: DbConn, tree: CopyTree) -> Result[Unit, String] !io = {
-  let _u = validate_preflight_copy_unmapped_targets(c, [tree])?
-  validate_copy_targets(c, [tree])
+fn validate_prepare_fm_copy_targets(tree: CopyTree) -> Result[Unit, String] !Db !io = {
+  let _u = validate_preflight_copy_unmapped_targets([tree])?
+  validate_copy_targets([tree])
 }
 
 ## Snapshot a WebDAV COPY source before object-store effects. Overwrite never
 ## mutates the destination here; the final transaction rechecks the snapshot,
 ## parent chain, overlap, and then replaces the destination atomically.
-pub fn prepare_webdav_copy(c: DbConn, old_rel: String, new_rel: String, overwrite: Bool) -> Result[CopyTree, String] !io = {
+pub fn prepare_webdav_copy(old_rel: String, new_rel: String, overwrite: Bool) -> Result[CopyTree, String] !Db !io = {
   let _o = validate_disjoint_subtrees(old_rel, new_rel)?
-  let tree = prepare_copy_tree(c, old_rel, new_rel)?
-  let _a = validate_webdav_ancestors(c, new_rel)?
-  let _t = validate_prepare_webdav_copy_targets(c, tree, overwrite)?
+  let tree = prepare_copy_tree(old_rel, new_rel)?
+  let _a = validate_webdav_ancestors(new_rel)?
+  let _t = validate_prepare_webdav_copy_targets(tree, overwrite)?
   Ok(tree)
 }
 
 ## Validate the complete source tree before COPY touches the object store. MOVE
 ## deliberately does not call this because object shape is irrelevant to a
 ## metadata-only path rewrite.
-pub fn validate_copy_source_objects(c: DbConn, old_rel: String) -> Result[Unit, String] !io = {
-  let rows = subtree_rows(c, old_rel)?
+pub fn validate_copy_source_objects(old_rel: String) -> Result[Unit, String] !Db !io = {
+  let rows = subtree_rows(old_rel)?
   let _s = validate_present_subtree(rows, old_rel)?
   validate_copy_source_rows(rows, 0)
 }
 
-fn validate_prepare_webdav_copy_targets(c: DbConn, tree: CopyTree, overwrite: Bool) -> Result[Unit, String] !io =
+fn validate_prepare_webdav_copy_targets(tree: CopyTree, overwrite: Bool) -> Result[Unit, String] !Db !io =
   {
-    let _s = validate_webdav_destination_preflight(c, tree.destination_root, overwrite)?
+    let _s = validate_webdav_destination_preflight(tree.destination_root, overwrite)?
     if overwrite {
       Ok(())
     } else {
-      let _u = validate_preflight_copy_unmapped_targets(c, [tree])?
-      validate_copy_targets(c, [tree])
+      let _u = validate_preflight_copy_unmapped_targets([tree])?
+      validate_copy_targets([tree])
     }
   }
 
-fn prepare_copy_tree(c: DbConn, old_rel: String, new_rel: String) -> Result[CopyTree, String] !io = {
-  let rows = subtree_rows(c, old_rel)?
+fn prepare_copy_tree(old_rel: String, new_rel: String) -> Result[CopyTree, String] !Db !io = {
+  let rows = subtree_rows(old_rel)?
   let _s = validate_present_subtree(rows, old_rel)?
   let _o = validate_copy_source_rows(rows, 0)?
   Ok(CopyTree {
@@ -761,25 +761,25 @@ fn path_after(paths: List[String], path: String, i: Int) -> Bool =
 fn copy_destination(tree: CopyTree, source_path: String) -> String =
   tree.destination_root ++ str.slice(source_path, len(tree.source_root), len(source_path))
 
-fn validate_copy_targets(c: DbConn, trees: List[CopyTree]) -> Result[Unit, String] !io = {
+fn validate_copy_targets(trees: List[CopyTree]) -> Result[Unit, String] !Db !io = {
   let _u = validate_copy_plan_targets(trees)?
-  validate_copy_tree_targets(c, trees, 0)
+  validate_copy_tree_targets(trees, 0)
 }
 
-fn validate_preflight_copy_unmapped_targets(c: DbConn, trees: List[CopyTree]) -> Result[Unit, String] !io =
-  validate_copy_unmapped_targets(c, trees, 0)
+fn validate_preflight_copy_unmapped_targets(trees: List[CopyTree]) -> Result[Unit, String] !Db !io =
+  validate_copy_unmapped_targets(trees, 0)
 
-fn validate_final_copy_unmapped_targets(c: DbConn, trees: List[CopyTree]) -> Result[Unit, String] !io =
-  validate_copy_unmapped_targets(c, trees, 0)
+fn validate_final_copy_unmapped_targets(trees: List[CopyTree]) -> Result[Unit, String] !Db !io =
+  validate_copy_unmapped_targets(trees, 0)
 
-fn validate_copy_unmapped_targets(c: DbConn, trees: List[CopyTree], i: Int) -> Result[Unit, String] !io =
+fn validate_copy_unmapped_targets(trees: List[CopyTree], i: Int) -> Result[Unit, String] !Db !io =
   if i >= len(trees) {
     Ok(())
   } else {
-    let rows = subtree_rows(c, trees[i].destination_root)?
+    let rows = subtree_rows(trees[i].destination_root)?
     let mapped = copy_tree_target_paths(trees[i], 0, [])
     let _r = validate_copy_destination_rows_mapped(rows, mapped, 0)?
-    validate_copy_unmapped_targets(c, trees, i + 1)
+    validate_copy_unmapped_targets(trees, i + 1)
   }
 
 fn validate_copy_destination_rows_mapped(rows: List[FileRow], mapped: List[String], i: Int) -> Result[Unit, String] !io =
@@ -791,47 +791,47 @@ fn validate_copy_destination_rows_mapped(rows: List[FileRow], mapped: List[Strin
     Err(conflict("复制目标子树含未映射项：${full(rows[i].path)}"))
   }
 
-fn validate_copy_tree_targets(c: DbConn, trees: List[CopyTree], i: Int) -> Result[Unit, String] !io =
+fn validate_copy_tree_targets(trees: List[CopyTree], i: Int) -> Result[Unit, String] !Db !io =
   if i >= len(trees) {
     Ok(())
   } else {
-    let _t = validate_copy_row_targets(c, trees[i], 0)?
-    validate_copy_tree_targets(c, trees, i + 1)
+    let _t = validate_copy_row_targets(trees[i], 0)?
+    validate_copy_tree_targets(trees, i + 1)
   }
 
-fn validate_copy_row_targets(c: DbConn, tree: CopyTree, i: Int) -> Result[Unit, String] !io =
+fn validate_copy_row_targets(tree: CopyTree, i: Int) -> Result[Unit, String] !Db !io =
   if i >= len(tree.rows) {
     Ok(())
   } else {
     let destination = copy_destination(tree, tree.rows[i].source.path)
-    match get_row(c, destination)? {
+    match get_row(destination)? {
       Some(_) -> Err(conflict("复制目标已存在：${full(destination)}"))
-      None -> validate_copy_row_targets(c, tree, i + 1)
+      None -> validate_copy_row_targets(tree, i + 1)
     }
   }
 
 ## Commit every FM copy row in one immediate transaction. Missing external
 ## ancestors are filled in that transaction; a late failure rolls all metadata
 ## back together.
-pub fn commit_fm_copies(c: DbConn, trees: List[CopyTree]) -> Result[Int, String] !io =
-  with_immediate_tx(c, () => commit_copy_trees_tx(c, trees, FillMissingCopyAncestors))
+pub fn commit_fm_copies(trees: List[CopyTree]) -> Result[Int, String] !Db !io =
+  with_immediate_tx(() => commit_copy_trees_tx(trees, FillMissingCopyAncestors))
 
 ## Atomically replace one WebDAV COPY destination without synthesizing its
 ## external parent chain. A failure after destination deletion rolls the old
 ## target back together with every attempted insert.
-pub fn commit_webdav_copy(c: DbConn, tree: CopyTree, overwrite: Bool) -> Result[SubtreeWriteOutcome, String] !io =
-  with_immediate_tx(c, () => {
+pub fn commit_webdav_copy(tree: CopyTree, overwrite: Bool) -> Result[SubtreeWriteOutcome, String] !Db !io =
+  with_immediate_tx(() => {
     let _u = validate_copy_plan_targets([tree])?
     let _o = validate_disjoint_subtrees(tree.source_root, tree.destination_root)?
-    let _s = validate_copy_snapshots(c, [tree], 0)?
-    let _a = validate_copy_destination_roots(c, [tree], RequireExistingCopyAncestors, 0)?
+    let _s = validate_copy_snapshots([tree], 0)?
+    let _a = validate_copy_destination_roots([tree], RequireExistingCopyAncestors, 0)?
     let _k = validate_copied_keys([tree], 0, 0)?
-    let destination_rows = subtree_rows(c, tree.destination_root)?
+    let destination_rows = subtree_rows(tree.destination_root)?
     let destination_existed = validate_webdav_destination_snapshot(destination_rows, tree.destination_root, overwrite)?
-    let replaced: List[FileRow] = if destination_existed { delete_subtree_tx(c, tree.destination_root)? } else { [] }
-    let _e = validate_final_copy_unmapped_targets(c, [tree])?
-    let _t = validate_copy_targets(c, [tree])?
-    let written = insert_copy_trees(c, [tree], 0)?
+    let replaced: List[FileRow] = if destination_existed { delete_subtree_tx(tree.destination_root)? } else { [] }
+    let _e = validate_final_copy_unmapped_targets([tree])?
+    let _t = validate_copy_targets([tree])?
+    let written = insert_copy_trees([tree], 0)?
     Ok(SubtreeWriteOutcome {
       destination_existed: destination_existed,
       replaced_rows: replaced,
@@ -839,25 +839,25 @@ pub fn commit_webdav_copy(c: DbConn, tree: CopyTree, overwrite: Bool) -> Result[
     })
   })
 
-fn commit_copy_trees_tx(c: DbConn, trees: List[CopyTree], policy: CopyPolicy) -> Result[Int, String] !io = {
+fn commit_copy_trees_tx(trees: List[CopyTree], policy: CopyPolicy) -> Result[Int, String] !Db !io = {
   let _u = validate_copy_plan_targets(trees)?
-  let _s = validate_copy_snapshots(c, trees, 0)?
-  let _a = validate_copy_destination_roots(c, trees, policy, 0)?
-  let _e = validate_final_copy_unmapped_targets(c, trees)?
-  let _t = validate_copy_targets(c, trees)?
+  let _s = validate_copy_snapshots(trees, 0)?
+  let _a = validate_copy_destination_roots(trees, policy, 0)?
+  let _e = validate_final_copy_unmapped_targets(trees)?
+  let _t = validate_copy_targets(trees)?
   let _k = validate_copied_keys(trees, 0, 0)?
-  let _d = fill_copy_destination_roots(c, trees, policy, 0)?
-  insert_copy_trees(c, trees, 0)
+  let _d = fill_copy_destination_roots(trees, policy, 0)?
+  insert_copy_trees(trees, 0)
 }
 
-fn validate_copy_snapshots(c: DbConn, trees: List[CopyTree], i: Int) -> Result[Unit, String] !io =
+fn validate_copy_snapshots(trees: List[CopyTree], i: Int) -> Result[Unit, String] !Db !io =
   if i >= len(trees) {
     Ok(())
   } else {
-    let current = subtree_rows(c, trees[i].source_root)?
+    let current = subtree_rows(trees[i].source_root)?
     let _p = validate_present_subtree(current, trees[i].source_root)?
     let _m = validate_copy_snapshot_rows(current, trees[i].rows, 0)?
-    validate_copy_snapshots(c, trees, i + 1)
+    validate_copy_snapshots(trees, i + 1)
   }
 
 fn validate_copy_snapshot_rows(current: List[FileRow], planned: List[CopiedRow], i: Int) -> Result[Unit, String] !io =
@@ -875,16 +875,16 @@ fn same_file_row(a: FileRow, b: FileRow) -> Bool =
   a.path == b.path && a.is_dir == b.is_dir && a.key == b.key &&
   a.content_type == b.content_type && a.size == b.size && a.updated_at == b.updated_at
 
-fn validate_copy_destination_roots(c: DbConn, trees: List[CopyTree], policy: CopyPolicy, i: Int) -> Result[Unit, String] !io =
+fn validate_copy_destination_roots(trees: List[CopyTree], policy: CopyPolicy, i: Int) -> Result[Unit, String] !Db !io =
   if i >= len(trees) {
     Ok(())
   } else {
     let checked = match policy {
-      FillMissingCopyAncestors -> validate_fm_ancestors(c, trees[i].destination_root)
-      RequireExistingCopyAncestors -> validate_webdav_ancestors(c, trees[i].destination_root)
+      FillMissingCopyAncestors -> validate_fm_ancestors(trees[i].destination_root)
+      RequireExistingCopyAncestors -> validate_webdav_ancestors(trees[i].destination_root)
     }
     let _a = checked?
-    validate_copy_destination_roots(c, trees, policy, i + 1)
+    validate_copy_destination_roots(trees, policy, i + 1)
   }
 
 fn validate_copied_keys(trees: List[CopyTree], tree_i: Int, row_i: Int) -> Result[Unit, String] !io =
@@ -910,46 +910,46 @@ fn validate_copied_keys(trees: List[CopyTree], tree_i: Int, row_i: Int) -> Resul
     }
   }
 
-fn fill_copy_destination_roots(c: DbConn, trees: List[CopyTree], policy: CopyPolicy, i: Int) -> Result[Int, String] !io =
+fn fill_copy_destination_roots(trees: List[CopyTree], policy: CopyPolicy, i: Int) -> Result[Int, String] !Db !io =
   if i >= len(trees) {
     Ok(0)
   } else {
     let _d = match policy {
-      FillMissingCopyAncestors -> ensure_loop(c, ancestor_paths(trees[i].destination_root), 0)?
+      FillMissingCopyAncestors -> ensure_loop(ancestor_paths(trees[i].destination_root), 0)?
       RequireExistingCopyAncestors -> 0
     }
-    fill_copy_destination_roots(c, trees, policy, i + 1)
+    fill_copy_destination_roots(trees, policy, i + 1)
   }
 
-fn insert_copy_trees(c: DbConn, trees: List[CopyTree], i: Int) -> Result[Int, String] !io =
+fn insert_copy_trees(trees: List[CopyTree], i: Int) -> Result[Int, String] !Db !io =
   if i >= len(trees) {
     Ok(0)
   } else {
-    let n = insert_copy_rows(c, trees[i], 0)?
-    let rest = insert_copy_trees(c, trees, i + 1)?
+    let n = insert_copy_rows(trees[i], 0)?
+    let rest = insert_copy_trees(trees, i + 1)?
     Ok(n + rest)
   }
 
-fn insert_copy_rows(c: DbConn, tree: CopyTree, i: Int) -> Result[Int, String] !io =
+fn insert_copy_rows(tree: CopyTree, i: Int) -> Result[Int, String] !Db !io =
   if i >= len(tree.rows) {
     Ok(0)
   } else {
     let row = tree.rows[i]
     let destination = copy_destination(tree, row.source.path)
     let inserted: Result[Int, String] = if row.source.is_dir {
-      insert_folder_row(c, destination)
+      insert_folder_row(destination)
     } else {
       match row.copied_key {
         # a copy carries the source row's stored type forward into a brand new
         # row, so an unshippable legacy value would be duplicated rather than
         # retired. It goes through the outbound boundary on the way in, the same
         # way svc/files save_mime does, and the copy lands clean.
-        Some(key) -> insert_file_row(c, destination, key, safe_persisted_mime(row.source.content_type), row.source.size)
+        Some(key) -> insert_file_row(destination, key, safe_persisted_mime(row.source.content_type), row.source.size)
         None -> Err("copy insertion has no object result: ${full(row.source.path)}")
       }
     }
     let n = inserted?
-    let rest = insert_copy_rows(c, tree, i + 1)?
+    let rest = insert_copy_rows(tree, i + 1)?
     Ok(n + rest)
   }
 
@@ -1045,7 +1045,7 @@ fn subtree_row_at(rows: List[FileRow], path: String, i: Int) -> Option[FileRow] 
     subtree_row_at(rows, path, i + 1)
   }
 
-fn reparent_loop(c: DbConn, paths: List[String], old_rel: String, new_rel: String, i: Int) -> Result[Int, String] !io =
+fn reparent_loop(paths: List[String], old_rel: String, new_rel: String, i: Int) -> Result[Int, String] !Db !io =
   if i >= len(paths) {
     Ok(0)
   } else {
@@ -1061,11 +1061,11 @@ fn reparent_loop(c: DbConn, paths: List[String], old_rel: String, new_rel: Strin
     #   3. The object store is not touched at all — a rename rewrites path and
     #      leaves the qiniu key alone, by design. Not one byte changed, so
     #      "modified just now" would be a lie.
-    let moved = exec(c, "update files set path = ? where path = ?", [PStr(np), PStr(p)])?
+    let moved = exec("update files set path = ? where path = ?", [PStr(np), PStr(p)])?
     if moved != 1 {
       Err("subtree reparent count changed: ${full(p)}")
     } else {
-      let rest = reparent_loop(c, paths, old_rel, new_rel, i + 1)?
+      let rest = reparent_loop(paths, old_rel, new_rel, i + 1)?
       Ok(moved + rest)
     }
   }

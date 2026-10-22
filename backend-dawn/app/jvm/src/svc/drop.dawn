@@ -30,12 +30,12 @@ use std/char
 use std/list
 use std/map
 use std/bytes
-use db/sql.{DbConn, with_immediate_tx}
+use site_core/db/sql.{Db, with_immediate_tx}
 use db/db.{with_db}
 use svc/auth.{Auth}
 use svc/files.{gc_unreferenced}
-use repo/repo_drop.{DropRow, DropPending, ensure_schema, insert_drop, drop_by_hash, drop_by_id, list_drops, revoke_drop, delete_drop, dir_present, rel_free, reserve_key, pending_for, release_key, insert_drop_file, charge}
-use repo/repo_fm.{key_referenced}
+use site_core/repo/repo_drop.{DropRow, DropPending, ensure_schema, insert_drop, drop_by_hash, drop_by_id, list_drops, revoke_drop, delete_drop, dir_present, rel_free, reserve_key, pending_for, release_key, insert_drop_file, charge}
+use site_core/repo/repo_fm.{key_referenced}
 use site_core/util/paths.{fm_join, basename, ext, key_ext_ok, guess_mime, safe_persisted_mime, name_verdict, NameAccepted, NameAllBlank, NameEdgeBlank, NameDotSegment}
 use std/io.{Random}
 use site_core/util/crypto.{random_token, sha256_hex, uuid_hex}
@@ -308,12 +308,12 @@ pub fn spec_refusal(s: DropSpec) -> Option[String] =
 
 # ---- resolving a token ----
 
-fn known_drop(c: DbConn, token: String) -> Result[DropRow, DropErr] !io = {
-  let _s = db(ensure_schema(c))?
+fn known_drop(token: String) -> Result[DropRow, DropErr] !Db !io = {
+  let _s = db(ensure_schema())?
   let found: Option[DropRow] = if token == "" || len(token) > MAX_TOKEN_CHARS {
     None
   } else {
-    db(drop_by_hash(c, sha256_hex(token)))?
+    db(drop_by_hash(sha256_hex(token)))?
   }
   match found {
     Some(d) -> Ok(d)
@@ -321,29 +321,29 @@ fn known_drop(c: DbConn, token: String) -> Result[DropRow, DropErr] !io = {
   }
 }
 
-fn usable(c: DbConn, d: DropRow) -> Result[Unit, DropErr] !Clock !io = {
-  let dir_ok = db(dir_present(c, d.dir))?
+fn usable(d: DropRow) -> Result[Unit, DropErr] !Clock !Db !io = {
+  let dir_ok = db(dir_present(d.dir))?
   match unusable(status_of(d, now_s(), dir_ok)) {
     Some(r) -> Err(Refused(r))
     None -> Ok(())
   }
 }
 
-fn active_drop(c: DbConn, token: String) -> Result[DropRow, DropErr] !Clock !io = {
-  let d = known_drop(c, token)?
-  let _u = usable(c, d)?
+fn active_drop(token: String) -> Result[DropRow, DropErr] !Clock !Db !io = {
+  let d = known_drop(token)?
+  let _u = usable(d)?
   Ok(d)
 }
 
 ## GET /api/drop: the link, when it still admits uploads.
 pub fn drop_info(a: Auth, token: String) -> Result[DropRow, DropErr] !Clock !io =
-  with_db(a.db.path, a.db.ext, c => active_drop(c, token))
+  with_db(a.db.path, a.db.ext, () => active_drop(token))
 
 # ---- naming ----
 
 # The first free candidate for `name` under `dir`, as (rel, final name). Runs
 # inside the caller's transaction so the answer holds until it commits.
-fn pick_rel(c: DbConn, dir: String, name: String, own_key: String, i: Int) -> Result[Result[(String, String), Refusal], String] !io =
+fn pick_rel(dir: String, name: String, own_key: String, i: Int) -> Result[Result[(String, String), Refusal], String] !Db !io =
   if i > MAX_RENAMES {
     Ok(Err(NoFreeName("同名文件过多，请换个文件名")))
   } else {
@@ -352,10 +352,10 @@ fn pick_rel(c: DbConn, dir: String, name: String, own_key: String, i: Int) -> Re
       Some(_m) -> Ok(Err(NoFreeName("无法为同名文件生成新名字，请换个短一些的文件名")))
       None -> {
         let rel = fm_join(dir, cand)
-        if rel_free(c, rel, own_key)? {
+        if rel_free(rel, own_key)? {
           Ok(Ok((rel, cand)))
         } else {
-          pick_rel(c, dir, name, own_key, i + 1)
+          pick_rel(dir, name, own_key, i + 1)
         }
       }
     }
@@ -366,12 +366,12 @@ fn pick_rel(c: DbConn, dir: String, name: String, own_key: String, i: Int) -> Re
 ## POST /api/drop/upload-token: reserve a fresh key and a free name for one file,
 ## and sign a credential the bucket itself limits (insertOnly, fsizeLimit).
 pub fn grant_direct(a: Auth, token: String, name: String, size: Int) -> Result[DirectGrant, DropErr] !Random !Clock !io = {
-  let d = with_db(a.db.path, a.db.ext, c => active_drop(c, token))?
+  let d = with_db(a.db.path, a.db.ext, () => active_drop(token))?
   let _n = name_ok(name)?
   let _q = refuse_if(quota_refusal(d, size))?
   let key = mint_key(name)
   let now = now_s()
-  let chosen = with_db(a.db.path, a.db.ext, c => settle(with_immediate_tx(c, () => reserve_tx(c, d, name, key))))?
+  let chosen = with_db(a.db.path, a.db.ext, () => settle(with_immediate_tx(() => reserve_tx(d, name, key))))?
   let deadline = direct_deadline(now, d.expires_at, a.qiniu.expires)
   Ok(DirectGrant {
     token: upload_token_limited(a.qiniu, key, deadline, direct_size_limit(d)),
@@ -380,12 +380,12 @@ pub fn grant_direct(a: Auth, token: String, name: String, size: Int) -> Result[D
   })
 }
 
-fn reserve_tx(c: DbConn, d: DropRow, name: String, key: String) -> Result[Result[String, Refusal], String] !io =
-  match pick_rel(c, d.dir, name, key, 0)? {
+fn reserve_tx(d: DropRow, name: String, key: String) -> Result[Result[String, Refusal], String] !Db !io =
+  match pick_rel(d.dir, name, key, 0)? {
     Err(r) -> Ok(Err(r))
     Ok(pair) -> {
       let (rel, chosen) = pair
-      let _r = reserve_key(c, key, d.id, rel, direct_size_limit(d))?
+      let _r = reserve_key(key, d.id, rel, direct_size_limit(d))?
       Ok(Ok(chosen))
     }
   }
@@ -397,9 +397,9 @@ fn reserve_tx(c: DbConn, d: DropRow, name: String, key: String) -> Result[Result
 ## name comes from this drop's own reservation, and a key the drop did not sign
 ## is unknown here whoever signed it.
 pub fn register_direct(a: Auth, token: String, key: String) -> Result[(String, Int), DropErr] !Clock !Upstream !io = {
-  let claimed = with_db(a.db.path, a.db.ext, c => claim(c, token, key))?
+  let claimed = with_db(a.db.path, a.db.ext, () => claim(token, key))?
   let (d, p) = claimed
-  match with_db(a.db.path, a.db.ext, c => usable(c, d)) {
+  match with_db(a.db.path, a.db.ext, () => usable(d)) {
     Err(Refused(r)) -> {
       # the link stopped admitting uploads after it signed this key; whatever
       # landed under the key is not going to be registered, so it goes now
@@ -423,9 +423,9 @@ pub fn register_direct(a: Auth, token: String, key: String) -> Result[(String, I
   }
 }
 
-fn claim(c: DbConn, token: String, key: String) -> Result[(DropRow, DropPending), DropErr] !io = {
-  let d = known_drop(c, token)?
-  let found: Option[DropPending] = if key == "" { None } else { db(pending_for(c, key, d.id))? }
+fn claim(token: String, key: String) -> Result[(DropRow, DropPending), DropErr] !Db !io = {
+  let d = known_drop(token)?
+  let found: Option[DropPending] = if key == "" { None } else { db(pending_for(key, d.id))? }
   match found {
     Some(p) -> Ok((d, p))
     None -> Err(Refused(NotFound("上传凭证不存在或已登记")))
@@ -465,7 +465,7 @@ fn stat_str(body: String, field: String) -> String !io =
 ## again after the spill, so the two can never disagree on a status or detail.
 ## Answers the link and the declared length.
 pub fn put_precheck(a: Auth, token: String, name: String, declared: Option[Int]) -> Result[(DropRow, Int), DropErr] !Clock !io = {
-  let d = with_db(a.db.path, a.db.ext, c => active_drop(c, token))?
+  let d = with_db(a.db.path, a.db.ext, () => active_drop(token))?
   let _n = name_ok(name)?
   let length = required_length(declared)?
   let _q = refuse_if(quota_refusal(d, length))?
@@ -506,7 +506,7 @@ pub fn put_file(a: Auth, token: String, name: String, declared: Option[Int], bod
 # unreserved one is collected.
 fn commit(a: Auth, drop_id: Int, name: String, key: String, reserved: Option[DropPending], mime: String, size: Int) -> Result[(String, Int), DropErr] !Clock !Upstream !io = {
   let now = now_s()
-  let out = with_db(a.db.path, a.db.ext, c => settle(with_immediate_tx(c, () => commit_tx(c, drop_id, name, key, reserved, mime, size, now))))
+  let out = with_db(a.db.path, a.db.ext, () => settle(with_immediate_tx(() => commit_tx(drop_id, name, key, reserved, mime, size, now))))
   match out {
     Ok(v) -> Ok(v)
     Err(Refused(r)) -> {
@@ -527,23 +527,23 @@ fn commit(a: Auth, drop_id: Int, name: String, key: String, reserved: Option[Dro
 ## quota with the real size, pick a free name, insert the row, consume the
 ## reservation, charge the quota. Every check comes before the first write, so a
 ## refusal commits an empty transaction.
-fn commit_tx(c: DbConn, drop_id: Int, name: String, key: String, reserved: Option[DropPending], mime: String, size: Int, now: Int) -> Result[Result[(String, Int), Refusal], String] !io =
-  match drop_by_id(c, drop_id)? {
+fn commit_tx(drop_id: Int, name: String, key: String, reserved: Option[DropPending], mime: String, size: Int, now: Int) -> Result[Result[(String, Int), Refusal], String] !Db !io =
+  match drop_by_id(drop_id)? {
     None -> Ok(Err(Gone("上传链接已被删除")))
     Some(d) -> {
-      let dir_ok = dir_present(c, d.dir)?
+      let dir_ok = dir_present(d.dir)?
       match unusable(status_of(d, now, dir_ok)) {
         Some(r) -> Ok(Err(r))
         None -> {
           let claim_ok = match reserved {
-            Some(_p) -> pending_for(c, key, d.id)? != None
+            Some(_p) -> pending_for(key, d.id)? != None
             None -> true
           }
           let limit = match reserved {
             Some(p) -> p.size_limit
             None -> d.max_file_bytes
           }
-          if not claim_ok || key_referenced(c, key)? {
+          if not claim_ok || key_referenced(key)? {
             Ok(Err(NotFound("上传凭证不存在或已登记")))
           } else if size > limit {
             Ok(Err(TooLarge("文件超过上传凭证允许的大小")))
@@ -551,13 +551,13 @@ fn commit_tx(c: DbConn, drop_id: Int, name: String, key: String, reserved: Optio
             match quota_refusal(d, size) {
               Some(r) -> Ok(Err(r))
               None ->
-                match pick_rel(c, d.dir, name, key, 0)? {
+                match pick_rel(d.dir, name, key, 0)? {
                   Err(r) -> Ok(Err(r))
                   Ok(pair) -> {
                     let (rel, chosen) = pair
-                    let _i = insert_drop_file(c, rel, key, mime, size)?
-                    let _r = consume(c, key, d.id, reserved)?
-                    let _q = charge(c, d.id, size)?
+                    let _i = insert_drop_file(rel, key, mime, size)?
+                    let _r = consume(key, d.id, reserved)?
+                    let _q = charge(d.id, size)?
                     Ok(Ok((chosen, size)))
                   }
                 }
@@ -568,11 +568,11 @@ fn commit_tx(c: DbConn, drop_id: Int, name: String, key: String, reserved: Optio
     }
   }
 
-fn consume(c: DbConn, key: String, drop_id: Int, reserved: Option[DropPending]) -> Result[Unit, String] !io =
+fn consume(key: String, drop_id: Int, reserved: Option[DropPending]) -> Result[Unit, String] !Db !io =
   match reserved {
     None -> Ok(())
     Some(_p) -> {
-      let n = release_key(c, key, drop_id)?
+      let n = release_key(key, drop_id)?
       if n == 1 { Ok(()) } else { Err("drop reservation consume count changed: ${key}") }
     }
   }
@@ -581,7 +581,7 @@ fn consume(c: DbConn, key: String, drop_id: Int, reserved: Option[DropPending]) 
 # ledger row goes with the reservation, so the reference-aware GC is then free
 # to delete the object, and if anything here fails the sweeper still has it.
 fn discard(a: Auth, key: String, drop_id: Int) -> Unit !Upstream !io = {
-  let _r: Result[Int, String] = with_db(a.db.path, a.db.ext, c => with_immediate_tx(c, () => release_key(c, key, drop_id)))
+  let _r: Result[Int, String] = with_db(a.db.path, a.db.ext, () => with_immediate_tx(() => release_key(key, drop_id)))
   gc_unreferenced(a, Some(key))
 }
 
@@ -592,78 +592,69 @@ pub fn create_drop(a: Auth, s: DropSpec) -> Result[(DropRow, String), DropErr] !
   let _v = spec_ok(s)?
   let token = random_token()
   let expires_at = now_s() + s.expires_in_s
-  let d = with_db(a.db.path, a.db.ext, c => create_on(c, s, token, expires_at))?
+  let d = with_db(a.db.path, a.db.ext, () => create_on(s, token, expires_at))?
   Ok((d, token))
 }
 
-fn create_on(c: DbConn, s: DropSpec, token: String, expires_at: Int) -> Result[DropRow, DropErr] !io = {
-  let _s = db(ensure_schema(c))?
-  settle(with_immediate_tx(c, () => create_tx(c, s, token, expires_at)))
+fn create_on(s: DropSpec, token: String, expires_at: Int) -> Result[DropRow, DropErr] !Db !io = {
+  let _s = db(ensure_schema())?
+  settle(with_immediate_tx(() => create_tx(s, token, expires_at)))
 }
 
-fn create_tx(c: DbConn, s: DropSpec, token: String, expires_at: Int) -> Result[Result[DropRow, Refusal], String] !io =
-  if not dir_present(c, s.dir)? {
+fn create_tx(s: DropSpec, token: String, expires_at: Int) -> Result[Result[DropRow, Refusal], String] !Db !io =
+  if not dir_present(s.dir)? {
     Ok(Err(NotFound("目录不存在")))
   } else {
-    let d = insert_drop(c, sha256_hex(token), s.label, s.dir, expires_at, s.max_files, s.max_file_bytes, s.max_total_bytes, token)?
+    let d = insert_drop(sha256_hex(token), s.label, s.dir, expires_at, s.max_files, s.max_file_bytes, s.max_total_bytes, token)?
     Ok(Ok(d))
   }
 
 ## The state of a link right now, for the admin view.
 pub fn drop_status(a: Auth, d: DropRow) -> Result[DropStatus, DropErr] !Clock !io = {
-  let dir_ok = with_db(a.db.path, a.db.ext, c => db(dir_present(c, d.dir)))?
+  let dir_ok = with_db(a.db.path, a.db.ext, () => db(dir_present(d.dir)))?
   Ok(status_of(d, now_s(), dir_ok))
 }
 
 ## GET /api/fm/drops: every link with its state, newest first.
 pub fn list_all(a: Auth) -> Result[List[(DropRow, DropStatus)], DropErr] !Clock !io = {
   let now = now_s()
-  with_db(a.db.path, a.db.ext, c => list_on(c, now))
+  with_db(a.db.path, a.db.ext, () => list_on(now))
 }
 
-fn list_on(c: DbConn, now: Int) -> Result[List[(DropRow, DropStatus)], DropErr] !io = {
-  let _s = db(ensure_schema(c))?
-  let rows = db(list_drops(c))?
-  with_status(c, rows, now, 0, [])
+fn list_on(now: Int) -> Result[List[(DropRow, DropStatus)], DropErr] !Db !io = {
+  let _s = db(ensure_schema())?
+  let rows = db(list_drops())?
+  with_status(rows, now, 0, [])
 }
 
-fn with_status(c: DbConn, rows: List[DropRow], now: Int, i: Int, acc: List[(DropRow, DropStatus)]) -> Result[List[(DropRow, DropStatus)], DropErr] !io =
+fn with_status(rows: List[DropRow], now: Int, i: Int, acc: List[(DropRow, DropStatus)]) -> Result[List[(DropRow, DropStatus)], DropErr] !Db !io =
   if i >= len(rows) {
     Ok(acc)
   } else {
-    let dir_ok = db(dir_present(c, rows[i].dir))?
-    with_status(c, rows, now, i + 1, acc ++ [(rows[i], status_of(rows[i], now, dir_ok))])
+    let dir_ok = db(dir_present(rows[i].dir))?
+    with_status(rows, now, i + 1, acc ++ [(rows[i], status_of(rows[i], now, dir_ok))])
   }
 
 ## POST /api/fm/drops/revoke. Keys it already signed stay reserved; register
 ## refuses them (410) and collects their objects.
 pub fn revoke(a: Auth, id: Int) -> Result[Unit, DropErr] !io =
-  with_db(a.db.path, a.db.ext, c => revoke_on(c, id))
+  with_db(a.db.path, a.db.ext, () => revoke_on(id))
 
-fn revoke_on(c: DbConn, id: Int) -> Result[Unit, DropErr] !io = {
-  let _s = db(ensure_schema(c))?
-  if db(revoke_drop(c, id))? { Ok(()) } else { Err(Refused(NotFound("上传链接不存在"))) }
+fn revoke_on(id: Int) -> Result[Unit, DropErr] !Db !io = {
+  let _s = db(ensure_schema())?
+  if db(revoke_drop(id))? { Ok(()) } else { Err(Refused(NotFound("上传链接不存在"))) }
 }
 
 ## POST /api/fm/drops/delete. Files already uploaded stay where they are.
 pub fn remove(a: Auth, id: Int) -> Result[Unit, DropErr] !io =
-  with_db(a.db.path, a.db.ext, c => remove_on(c, id))
+  with_db(a.db.path, a.db.ext, () => remove_on(id))
 
-fn remove_on(c: DbConn, id: Int) -> Result[Unit, DropErr] !io = {
-  let _s = db(ensure_schema(c))?
-  let gone = db(with_immediate_tx(c, () => delete_drop(c, id)))?
+fn remove_on(id: Int) -> Result[Unit, DropErr] !Db !io = {
+  let _s = db(ensure_schema())?
+  let gone = db(with_immediate_tx(() => delete_drop(id)))?
   if gone { Ok(()) } else { Err(Refused(NotFound("上传链接不存在"))) }
 }
 
 ## Startup: create the tables if this database has never seen them.
 pub fn init_schema(a: Auth) -> Result[Unit, String] !io =
-  with_db(a.db.path, a.db.ext, c => ensure_schema(c))
-
-# ---- tests ----
-
-fn row(used_files: Int, used_bytes: Int) -> DropRow =
-  DropRow {
-    id: 1, token: "", label: "", dir: "in", created_at: "2026-10-01 00:00:00", expires_at: 1000,
-    revoked: false, max_files: 3, max_file_bytes: 100, max_total_bytes: 250,
-    used_files: used_files, used_bytes: used_bytes,
-  }
+  with_db(a.db.path, a.db.ext, () => ensure_schema())

@@ -24,14 +24,14 @@ use site_core/util/ferr.{catch_text}
 use site_core/util/b64
 use site_core/util/uri.{Uri, is_opaque, percent_decode}
 use site_core/util/uri
-use db/sql.{DbConn}
+use site_core/db/sql.{Db}
 use site_core/util/time.{http_date, iso_date}
 use web/types.{Request, Response, HttpError, Handler, Guard, http_error, as_http, as_http_with, text, raw, binary, redirect, with_header, header, headers_all, param_segs}
 use web/router.{Route, route_method_of, tagged, body_limit, guarded}
 use db/db.{with_db}
 use svc/auth.{Auth, check_basic, scheme_param}
 use svc/files.{signed_url, gc_unreferenced, gc_rows_unreferenced, gc_copy_tree_unreferenced, copy_tree_objects}
-use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}
+use site_core/repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}
 use site_core/util/paths.{basename, parent_rel, ext, ts, guess_mime, safe_persisted_mime, require_admissible_names}
 use qiniu/rs.{upload_file}
 use java "java.io.File"
@@ -40,7 +40,7 @@ use site_core/util/crypto.{sha256_hex, uuid, uuid_hex}
 use util/http.{Upstream, fetch_stream, ok_stream, stream_response, close_stream, as_outbound, tag_outbound, with_upstream}
 use util/ttl.{TtlCell, cache_get, cache_put, now_s}
 use site_core/util/errkind.{KConflict, KPrecondition, KUpstream, KTimeout, split_kind}
-use svc/export.{url_encode}
+use site_core/svc/export.{url_encode}
 
 const AUTH_TTL: Int = 300
 
@@ -201,24 +201,24 @@ fn propfind_depth(req: Request) -> Result[String, HttpError] = {
 fn propfind(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io = {
   let prefix = dav_prefix(req)
   let depth = propfind_depth(req)?
-  match as_http(with_db(a.db.path, a.db.ext, c => propfind_body(c, prefix, rel, depth)), 500)? {
+  match as_http(with_db(a.db.path, a.db.ext, () => propfind_body(prefix, rel, depth)), 500)? {
     Some(body) -> Ok(raw(207, "application/xml; charset=\"utf-8\"", body))
     None -> Err(http_error(404, "资源不存在"))
   }
 }
 
-fn propfind_body(c: DbConn, prefix: String, rel: String, depth: String) -> Result[Option[String], String] !io =
+fn propfind_body(prefix: String, rel: String, depth: String) -> Result[Option[String], String] !Db !io =
   if rel == "" {
     let now = now_s()
     let self_xml = response_xml(prefix, "", "", true, 0, "", now, now, "")
-    let kids: List[FileRow] = if depth != "0" { children(c, "")? } else { [] }
+    let kids: List[FileRow] = if depth != "0" { children("")? } else { [] }
     Ok(Some(multistatus(self_xml ++ kids_xml(prefix, kids))))
   } else {
-    match get_row(c, rel)? {
+    match get_row(rel)? {
       None -> Ok(None)
       Some(o) -> {
         let self_xml = entry_xml(prefix, o)
-        let kids: List[FileRow] = if depth != "0" && o.is_dir { children(c, rel)? } else { [] }
+        let kids: List[FileRow] = if depth != "0" && o.is_dir { children(rel)? } else { [] }
         Ok(Some(multistatus(self_xml ++ kids_xml(prefix, kids))))
       }
     }
@@ -235,7 +235,7 @@ fn get_or_head(a: Auth, req: Request, rel: String, head: Bool) -> Result[Respons
   if rel == "" {
     Err(http_error(405, "不能下载目录"))
   } else {
-    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
+    match as_http(with_db(a.db.path, a.db.ext, () => get_row(rel)), 500)? {
       None -> Err(http_error(404, "资源不存在"))
       Some(o) ->
         if o.is_dir {
@@ -366,14 +366,14 @@ fn parent_is_directory(parent: String, row: Option[FileRow]) -> Bool =
   }
 
 fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {
-  with_db(a.db.path, a.db.ext, c => {
+  with_db(a.db.path, a.db.ext, () => {
     let parent = parent_rel(rel)
-    let found: Result[Option[FileRow], String] = if parent == "" { Ok(None) } else { get_row(c, parent) }
+    let found: Result[Option[FileRow], String] = if parent == "" { Ok(None) } else { get_row(parent) }
     let row = found?
     if not parent_is_directory(parent, row) {
       Ok(false)
     } else {
-      match validate_webdav_ancestors(c, parent) {
+      match validate_webdav_ancestors(parent) {
         Ok(_) -> Ok(true)
         Err(m) -> {
           let (k, _t) = split_kind(m)
@@ -423,22 +423,22 @@ fn put(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !Rando
     Err(http_error(405, "不能写入根"))
   } else {
     let _n = require_admissible_names(rel)?
-    match as_http_with(with_db(a.db.path, a.db.ext, c => put_preflight(c, rel)), conflict_or(500))? {
+    match as_http_with(with_db(a.db.path, a.db.ext, () => put_preflight(rel)), conflict_or(500))? {
       Some(o) -> if o.is_dir { Err(http_error(405, "目标是目录")) } else { put_do(a, req, rel) }
       None -> put_do(a, req, rel)
     }
   }
 
-fn put_preflight(c: DbConn, rel: String) -> Result[Option[FileRow], String] !io =
-  match get_row(c, rel)? {
+fn put_preflight(rel: String) -> Result[Option[FileRow], String] !Db !io =
+  match get_row(rel)? {
     Some(o) -> if o.is_dir {
       Ok(Some(o))
     } else {
-      let _t = validate_fm_file_target(c, rel)?
+      let _t = validate_fm_file_target(rel)?
       Ok(Some(o))
     }
     None -> {
-      let _t = validate_fm_file_target(c, rel)?
+      let _t = validate_fm_file_target(rel)?
       Ok(None)
     }
   }
@@ -472,7 +472,7 @@ fn put_do(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !Ra
   }
 
 fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int) -> Result[Response, HttpError] !Upstream !io =
-  match with_db(a.db.path, a.db.ext, c => replace_file_strict(c, rel, key, mime, size)) {
+  match with_db(a.db.path, a.db.ext, () => replace_file_strict(rel, key, mime, size)) {
     Ok(outcome) -> {
       let _gc = gc_unreferenced(a, outcome.superseded_key)
       Ok(text(if outcome.target_existed { 204 } else { 201 }, ""))
@@ -489,7 +489,7 @@ fn del(a: Auth, rel: String) -> Result[Response, HttpError] !Upstream !io =
   if rel == "" {
     Err(http_error(405, "不能删除根"))
   } else {
-    let rows = as_http(with_db(a.db.path, a.db.ext, c => delete_subtree(c, rel)), 500)?
+    let rows = as_http(with_db(a.db.path, a.db.ext, () => delete_subtree(rel)), 500)?
     if len(rows) == 0 {
       Err(http_error(404, "资源不存在"))
     } else {
@@ -505,14 +505,14 @@ fn mkcol(a: Auth, rel: String) -> Result[Response, HttpError] !io =
     Err(http_error(405, "根已存在"))
   } else {
     let _n = require_admissible_names(rel)?
-    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
+    match as_http(with_db(a.db.path, a.db.ext, () => get_row(rel)), 500)? {
       Some(_) -> Err(http_error(405, "已存在同名项"))
       None -> {
         let ok = as_http(parent_exists(a, rel), 500)?
         if not ok {
           Err(http_error(409, "父目录不存在"))
         } else {
-          let _i = as_http_with(with_db(a.db.path, a.db.ext, c => insert_folder_strict(c, rel)), conflict_or(500))?
+          let _i = as_http_with(with_db(a.db.path, a.db.ext, () => insert_folder_strict(rel)), conflict_or(500))?
           Ok(text(201, ""))
         }
       }
@@ -900,7 +900,7 @@ fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Res
   if rel == "" {
     Err(http_error(405, "不能操作根"))
   } else {
-    match as_http(with_db(a.db.path, a.db.ext, c => get_row(c, rel)), 500)? {
+    match as_http(with_db(a.db.path, a.db.ext, () => get_row(rel)), 500)? {
       None -> Err(http_error(404, "源不存在"))
       Some(source) -> {
         let overwrite = validate_move_copy_request(req, is_move, source.is_dir)?
@@ -930,7 +930,7 @@ fn destination_is_source_ancestor(rel: String, dst: String) -> Bool =
 
 fn mc_check_dst(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Random !Upstream !io =
   {
-    let dst_existing = as_http(with_db(a.db.path, a.db.ext, c => get_row(c, dst)), 500)?
+    let dst_existing = as_http(with_db(a.db.path, a.db.ext, () => get_row(dst)), 500)?
     match dst_existing {
       Some(_) ->
         if not overwrite {
@@ -938,15 +938,15 @@ fn mc_check_dst(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Boo
         } else if destination_is_source_ancestor(rel, dst) {
           Err(http_error(409, "不能移动/复制到自身或祖先目录"))
         } else {
-          let _v = as_http_with(with_db(a.db.path, a.db.ext, c => validate_webdav_subtree_destination(c, rel, dst)), conflict_or(500))?
+          let _v = as_http_with(with_db(a.db.path, a.db.ext, () => validate_webdav_subtree_destination(rel, dst)), conflict_or(500))?
           let _c = mc_validate_copy_source(a, rel, is_move)?
           mc_require_parent(a, rel, dst, is_move, overwrite)
         }
       None -> if destination_is_source_ancestor(rel, dst) {
         Err(http_error(409, "不能移动/复制到自身或祖先目录"))
       } else {
-        let _v = as_http_with(with_db(a.db.path, a.db.ext, c => validate_webdav_subtree_destination(c, rel, dst)), conflict_or(500))?
-        let _e = as_http_with(with_db(a.db.path, a.db.ext, c => validate_webdav_destination_preflight(c, dst, overwrite)), conflict_or(500))?
+        let _v = as_http_with(with_db(a.db.path, a.db.ext, () => validate_webdav_subtree_destination(rel, dst)), conflict_or(500))?
+        let _e = as_http_with(with_db(a.db.path, a.db.ext, () => validate_webdav_destination_preflight(dst, overwrite)), conflict_or(500))?
         let _c = mc_validate_copy_source(a, rel, is_move)?
         mc_require_parent(a, rel, dst, is_move, overwrite)
       }
@@ -957,7 +957,7 @@ fn mc_validate_copy_source(a: Auth, rel: String, is_move: Bool) -> Result[Unit, 
   if is_move {
     Ok(())
   } else {
-    as_http_with(with_db(a.db.path, a.db.ext, c => validate_copy_source_objects(c, rel)), conflict_or(500))
+    as_http_with(with_db(a.db.path, a.db.ext, () => validate_copy_source_objects(rel)), conflict_or(500))
   }
 
 fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Random !Upstream !io =
@@ -973,7 +973,7 @@ fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, overwrite
 fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Random !Upstream !io = {
   let result: Result[SubtreeWriteOutcome, String] =
     if is_move {
-      with_db(a.db.path, a.db.ext, c => commit_webdav_move(c, rel, dst, overwrite))
+      with_db(a.db.path, a.db.ext, () => commit_webdav_move(rel, dst, overwrite))
     } else {
       copy_subtree(a, rel, dst, overwrite)
     }
@@ -989,9 +989,9 @@ fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -
 
 # COPY: recreate dirs, and for each file copy the qiniu object to a fresh key.
 fn copy_subtree(a: Auth, rel: String, dst: String, overwrite: Bool) -> Result[SubtreeWriteOutcome, String] !Random !Upstream !io = {
-  let planned = with_db(a.db.path, a.db.ext, c => prepare_webdav_copy(c, rel, dst, overwrite))?
+  let planned = with_db(a.db.path, a.db.ext, () => prepare_webdav_copy(rel, dst, overwrite))?
   let copied = copy_tree_objects(a.qiniu, planned)?
-  match with_db(a.db.path, a.db.ext, c => commit_webdav_copy(c, copied, overwrite)) {
+  match with_db(a.db.path, a.db.ext, () => commit_webdav_copy(copied, overwrite)) {
     Ok(outcome) -> Ok(outcome)
     Err(m) -> {
       let _gc = gc_copy_tree_unreferenced(a, copied)
@@ -1087,7 +1087,7 @@ fn b64_decode_try(s: String) -> Result[String, String] !io =
   }
 
 fn verify_cache(a: Auth, cell: TtlCell, user: String, pass: String, key: String) -> Result[Unit, HttpError] !io =
-  match with_db(a.db.path, a.db.ext, c => check_basic(c, user, pass)) {
+  match with_db(a.db.path, a.db.ext, () => check_basic(user, pass)) {
     Ok(true) -> {
       let _p = cache_put(cell, key)
       Ok(())

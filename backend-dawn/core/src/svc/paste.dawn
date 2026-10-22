@@ -3,10 +3,10 @@ use std/str
 use std/map
 use std/bytes
 use std/char
-use db/sql.{DbConn, PStr, PInt, ColInt, query, exec, scalar_int, int_at, first_row, with_immediate_tx}
+use db/sql.{Db, PStr, PInt, ColInt, query, exec, scalar_int, int_at, first_row, with_immediate_tx}
 use repo/repo_paste.{Paste, limits, cleanup}
-use site_core/util/crypto.{hmac_sha256_hex}
-use site_core/util/ipaddr.{parse_literal, hex_prefix}
+use util/crypto.{hmac_sha256_hex}
+use util/ipaddr.{parse_literal, hex_prefix}
 
 pub type Refusal = { status: Int, message: String, retry: Int }
 fn no(status: Int, message: String, retry: Int) -> Refusal = Refusal { status: status, message: message, retry: retry }
@@ -43,17 +43,17 @@ pub fn validate(title: String, content: String, days: Int) -> Result[Int, Refusa
   else if days != 1 && days != 7 && days != 30 { Err(no(422, "保存期限只能是 1、7 或 30 天", 0)) }
   else { Ok(len(bytes.utf8(content))) }
 
-fn budget(c: DbConn, day: Int, source: String) -> Result[(Int, Int, Int, Int), String] !io = {
-  let rs = query(c, "select count,bytes,minute,minute_count from paste_budgets where day=? and source=?", [PInt(day), PStr(source)], [ColInt, ColInt, ColInt, ColInt])?
+fn budget(day: Int, source: String) -> Result[(Int, Int, Int, Int), String] !Db !io = {
+  let rs = query("select count,bytes,minute,minute_count from paste_budgets where day=? and source=?", [PInt(day), PStr(source)], [ColInt, ColInt, ColInt, ColInt])?
   Ok(match first_row(rs) { Some(r) -> (int_at(r, 0), int_at(r, 1), int_at(r, 2), int_at(r, 3))
     None -> (0, 0, 0, 0) })
 }
-fn charge(c: DbConn, day: Int, source: String, size: Int, minute: Int) -> Result[Unit, String] !io = {
-  let _n = exec(c, "insert into paste_budgets(day,source,count,bytes,minute,minute_count) values(?,?,1,?,?,1) on conflict(day,source) do update set count=count+1,bytes=bytes+excluded.bytes,minute_count=case when minute=excluded.minute then minute_count+1 else 1 end,minute=excluded.minute", [PInt(day), PStr(source), PInt(size), PInt(minute)])?
+fn charge(day: Int, source: String, size: Int, minute: Int) -> Result[Unit, String] !Db !io = {
+  let _n = exec("insert into paste_budgets(day,source,count,bytes,minute,minute_count) values(?,?,1,?,?,1) on conflict(day,source) do update set count=count+1,bytes=bytes+excluded.bytes,minute_count=case when minute=excluded.minute then minute_count+1 else 1 end,minute=excluded.minute", [PInt(day), PStr(source), PInt(size), PInt(minute)])?
   Ok(())
 }
 
-pub fn create(c: DbConn, secret: String, source: String, title: String, content: String, days: Int, now: Int, id: String) -> Result[Result[Paste, Refusal], String] !io = {
+pub fn create(secret: String, source: String, title: String, content: String, days: Int, now: Int, id: String) -> Result[Result[Paste, Refusal], String] !Db !io = {
   match validate(title, content, days) {
     Err(e) -> Ok(Err(e))
     Ok(size) -> {
@@ -61,15 +61,15 @@ pub fn create(c: DbConn, secret: String, source: String, title: String, content:
       let minute = now / 60
       let key = hmac_sha256_hex(secret, "paste-source-key-v1")
       let digest = hmac_sha256_hex(key, "${day}:${source}")
-      with_immediate_tx(c, () => {
-        let conf = limits(c)?
+      with_immediate_tx(() => {
+        let conf = limits()?
         let limit = (k: String) => unwrap_or(map.get(conf, k), 0)
         # Housekeeping shares the transaction; deleting never refunds daily budgets.
-        let _clean = cleanup(c, now)?
-        let (sc, sb, sm, mc) = budget(c, day, digest)?
-        let (gc, gb, _gm, _gmc) = budget(c, day, "global")?
-        let count = scalar_int(c, "select count(*) from pastes", [])?
-        let stored = scalar_int(c, "select coalesce(sum(size_bytes),0) from pastes", [])?
+        let _clean = cleanup(now)?
+        let (sc, sb, sm, mc) = budget(day, digest)?
+        let (gc, gb, _gm, _gmc) = budget(day, "global")?
+        let count = scalar_int("select count(*) from pastes", [])?
+        let stored = scalar_int("select coalesce(sum(size_bytes),0) from pastes", [])?
         if size > limit("max_bytes") { Ok(Err(no(413, "正文超过大小限制", 0))) }
         else if sm == minute && mc >= limit("source_minute") { Ok(Err(no(429, "提交过于频繁，请稍后重试", 60 - now % 60))) }
         else if sc >= limit("source_day") || sb + size > limit("source_day_bytes") { Ok(Err(no(429, "今日提交额度已用完", 86400 - now % 86400))) }
@@ -77,9 +77,9 @@ pub fn create(c: DbConn, secret: String, source: String, title: String, content:
         else if count >= limit("stored_count") || stored + size > limit("stored_bytes") { Ok(Err(no(503, "存储已满，暂时无法发布", 300))) }
         else {
           let p = Paste { id: id, title: title, content: content, created_at: now, expires_at: Some(now + days * 86400), size_bytes: size }
-          let _i = exec(c, "insert into pastes(id,title,content,created_at,expires_at,size_bytes) values(?,?,?,?,?,?)", [PStr(p.id), PStr(title), PStr(content), PInt(now), PInt(now + days * 86400), PInt(size)])?
-          charge(c, day, digest, size, minute)?
-          charge(c, day, "global", size, minute)?
+          let _i = exec("insert into pastes(id,title,content,created_at,expires_at,size_bytes) values(?,?,?,?,?,?)", [PStr(p.id), PStr(title), PStr(content), PInt(now), PInt(now + days * 86400), PInt(size)])?
+          charge(day, digest, size, minute)?
+          charge(day, "global", size, minute)?
           Ok(Ok(p))
         }
       })

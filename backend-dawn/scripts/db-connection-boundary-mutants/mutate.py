@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Apply one compiling src/db/sql.dawn boundary mutant in place.
+"""Apply one compiling SQL and JDBC boundary mutant in place.
 
-Two boundaries live in that file and both are here: the FFI one (java.sql stays
+The portable SQL module and JVM adapter share these boundaries: the FFI one (java.sql stays
 inside the module, DbConn is opaque) and the transaction one (what happens when
 a connection already has a transaction open). The second was added with #254,
 whose finding was that the entry guard could not see the transactions this
@@ -54,6 +54,7 @@ def main() -> int:
             "make-dbconn-transparent",
             "rollback-open-tx-on-entry",
             "unnamed-nested-refusal",
+            "first-duplicate-column-wins",
         ),
     )
     parser.add_argument("project", type=Path)
@@ -61,7 +62,8 @@ def main() -> int:
 
     project = require_workdir(args.project)
 
-    sql = source_path(project, "src/db/sql.dawn")
+    sql = source_path(project, "src/db/jdbc.dawn")
+    core_sql = source_path(project, "src/db/sql.dawn")
     if args.mutant == "make-dbconn-transparent":
         replace_once(
             sql,
@@ -72,40 +74,36 @@ def main() -> int:
         repo = source_path(project, "src/repo/repo_tag.dawn")
         replace_once(
             repo,
-            "use db/sql.{DbConn, ",
-            'use java "java.sql.Connection"\nuse db/sql.{DbConn, ',
+            "use db/sql.{Db, ",
+            'use java "java.sql.Connection"\nuse db/sql.{Db, ',
         )
         append_leak(repo)
     elif args.mutant == "guard-tx-by-autocommit":
         # The defect #254 was about, restored: the probe answers from
         # sqlite-jdbc's JDBC-level flag instead of asking SQLite. The flag never
         # sees a raw `begin immediate`, so it reports "no transaction" while one
-        # is open -- and with_tx walks into setAutoCommit(false) and dies there.
-        replace_once(
-            sql,
-            "fn in_tx(c: DbConn) -> Bool !io =\n"
-            '  match exec(c, "begin", []) {\n'
-            "    Ok(_) -> {\n"
-            '      let _r = exec(c, "rollback", [])\n'
-            "      false\n"
-            "    }\n"
-            "    Err(m) -> nested_tx_refusal(m)\n"
-            "  }\n",
-            "fn in_tx(c: DbConn) -> Bool !io = not raw(c).getAutoCommit()\n",
+        # is open. Both the direct probe and the named refusal must catch it.
+        text = sql.read_text()
+        start = text.index("fn jdbc_in_transaction(")
+        end = text.index("\nfn jdbc_last_id", start)
+        sql.write_text(
+            text[:start]
+            + "fn jdbc_in_transaction(c: DbConn) -> Result[Bool, String] !io =\n"
+            "  Ok(not raw(c).getAutoCommit())\n" + text[end:]
         )
     elif args.mutant == "rollback-open-tx-on-entry":
         # The fix nobody should make: the entry now sees the open transaction
         # and "recovers" by rolling it back and starting its own. That discards
         # uncommitted writes belonging to a caller further out, quietly.
         replace_once(
-            sql,
+            core_sql,
             "      if nested_tx_refusal(m) {\n"
             '        Err("with_immediate_tx entered with a transaction already open on this connection")\n'
             "      } else {\n",
             "      if nested_tx_refusal(m) {\n"
-            '        let _r = exec(c, "rollback", [])\n'
-            '        let _b = exec(c, "begin immediate", [])?\n'
-            "        bracket(c, h => rollback_immediate(h), _h => finish_immediate_tx(c, body))\n"
+            '        let _r = execute("rollback", [])\n'
+            '        let _b = execute("begin immediate", [])?\n'
+            "        bracket((), _h => rollback_immediate(), _h => finish_immediate_tx(body))\n"
             "      } else {\n",
         )
     elif args.mutant == "unnamed-nested-refusal":
@@ -113,9 +111,15 @@ def main() -> int:
         # own "cannot start a transaction within a transaction", which reads
         # like a driver fault rather than a caller that nested.
         replace_once(
-            sql,
+            core_sql,
             '        Err("with_immediate_tx entered with a transaction already open on this connection")\n',
             "        Err(m)\n",
+        )
+    elif args.mutant == "first-duplicate-column-wins":
+        replace_once(
+            core_sql,
+            "  map.from(map(range(0, len(names)), i => (names[i], i)))\n",
+            "  map.from(map(range(0, len(names)), i => (names[len(names) - 1 - i], len(names) - 1 - i)))\n",
         )
     else:
         insert_raw_leak(sql)

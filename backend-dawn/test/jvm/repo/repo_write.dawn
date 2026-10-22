@@ -1,22 +1,23 @@
-use db/sql.{open, scalar_int}
+use db/jdbc.{DbConn, open, with_jdbc}
+use db/sql.{scalar_int}
 # tests need --cp lib/sqlite-jdbc; use db.connect for FTS-safe writes
 
 test "unique_slug appends suffixes on collision" {
   let c = open("jdbc:sqlite::memory:")
-  let _1 = exec(c, "create table articles (id integer primary key, slug text)", [])
-  let _2 = exec(c, "insert into articles (slug) values ('hello')", [])
-  assert unique_slug(c, "articles", "Hello", None) == Ok("hello-2")
-  assert unique_slug(c, "articles", "fresh", None) == Ok("fresh")
+  let _1 = with_jdbc(c, () => exec("create table articles (id integer primary key, slug text)", []))
+  let _2 = with_jdbc(c, () => exec("insert into articles (slug) values ('hello')", []))
+  assert with_jdbc(c, () => unique_slug("articles", "Hello", None)) == Ok("hello-2")
+  assert with_jdbc(c, () => unique_slug("articles", "fresh", None)) == Ok("fresh")
 }
 
 test "resolve_tags finds or creates, dedups by lowercase" {
   let c = open("jdbc:sqlite::memory:")
-  let _1 = exec(c, "create table tags (id integer primary key, name text, slug text, created_at text)", [])
-  let _2 = exec(c, "insert into tags (name, slug) values ('JVM', 'jvm')", [])
-  match resolve_tags(c, ["JVM", "jvm", "Kotlin", ""]) {
+  let _1 = with_jdbc(c, () => exec("create table tags (id integer primary key, name text, slug text, created_at text)", []))
+  let _2 = with_jdbc(c, () => exec("insert into tags (name, slug) values ('JVM', 'jvm')", []))
+  match with_jdbc(c, () => resolve_tags(["JVM", "jvm", "Kotlin", ""])) {
     Ok(ids) -> {
       assert len(ids) == 2
-      assert scalar_int(c, "select count(*) from tags", []) == Ok(2)
+      assert with_jdbc(c, () => scalar_int("select count(*) from tags", [])) == Ok(2)
     }
     Err(e) -> panic(e)
   }
@@ -39,20 +40,20 @@ fn must(r: Result[Int, String]) -> Int =
 
 fn article_test_db() -> DbConn !io = {
   let c = open("jdbc:sqlite::memory:")
-  let _a = must(exec(c, "create table articles (id integer primary key, title text, slug text unique, summary text, content text, published integer, auto_title integer, page_id integer, views integer, created_at text, updated_at text)", []))
-  let _p = must(exec(c, "create table pages (id integer primary key, type text)", []))
-  let _t = must(exec(c, "create table tags (id integer primary key, name text, slug text, created_at text)", []))
-  let _l = must(exec(c, "create table article_tags (article_id integer, tag_id integer)", []))
-  let _lp = must(exec(c, "insert into pages values (7, 'article_list')", []))
-  let _r = must(exec(c, "insert into articles values (1, 'Title', 'title', 'Sum', 'Body', 1, 0, null, 0, '2020-01-01 00:00:00', '${STALE}')", []))
+  let _a = must(with_jdbc(c, () => exec("create table articles (id integer primary key, title text, slug text unique, summary text, content text, published integer, auto_title integer, page_id integer, views integer, created_at text, updated_at text)", [])))
+  let _p = must(with_jdbc(c, () => exec("create table pages (id integer primary key, type text)", [])))
+  let _t = must(with_jdbc(c, () => exec("create table tags (id integer primary key, name text, slug text, created_at text)", [])))
+  let _l = must(with_jdbc(c, () => exec("create table article_tags (article_id integer, tag_id integer)", [])))
+  let _lp = must(with_jdbc(c, () => exec("insert into pages values (7, 'article_list')", [])))
+  let _r = must(with_jdbc(c, () => exec("insert into articles values (1, 'Title', 'title', 'Sum', 'Body', 1, 0, null, 0, '2020-01-01 00:00:00', '${STALE}')", [])))
   # one tag already on the article, so "re-save what is stored" covers tags too
-  let _sd = must(exec(c, "insert into tags values (1, 'seed', 'seed', '2020-01-01 00:00:00')", []))
-  let _sl = must(exec(c, "insert into article_tags values (1, 1)", []))
+  let _sd = must(with_jdbc(c, () => exec("insert into tags values (1, 'seed', 'seed', '2020-01-01 00:00:00')", [])))
+  let _sl = must(with_jdbc(c, () => exec("insert into article_tags values (1, 1)", [])))
   c
 }
 
 fn article_updated(c: DbConn) -> String !io =
-  match query(c, "select updated_at from articles where id = 1", [], [ColStr]) {
+  match with_jdbc(c, () => query("select updated_at from articles where id = 1", [], [ColStr])) {
     Ok(rows) -> first_str_or(rows, "")
     Err(e) -> panic(e)
   }
@@ -87,7 +88,7 @@ fn same_patch() -> ArticlePatch =
   }
 
 fn put_article(c: DbConn, p: ArticlePatch) -> Unit !io =
-  match update_article(c, 1, p) {
+  match with_jdbc(c, () => update_article(1, p)) {
     Ok(true) -> { }
     Ok(false) -> panic("article vanished")
     Err(e) -> panic(e)
@@ -99,7 +100,7 @@ test "PUT article: re-saving every field with the stored value is not an edit" {
   assert article_updated(c) == STALE
   # the slug was regenerated through unique_slug and came back the same, so it
   # did not count as an edit — and it did not collect a -2 suffix either
-  assert scalar_int(c, "select count(*) from articles where slug = 'title'", []) == Ok(1)
+  assert with_jdbc(c, () => scalar_int("select count(*) from articles where slug = 'title'", [])) == Ok(1)
 }
 
 test "PUT article: an empty patch is not an edit" {
@@ -113,7 +114,7 @@ test "PUT article: changing one field advances updated_at" {
   let same = same_patch()
   put_article(c, ArticlePatch { ..same, title: Some("Title 2") })
   assert article_updated(c) != STALE
-  assert scalar_int(c, "select count(*) from articles where title = 'Title 2'", []) == Ok(1)
+  assert with_jdbc(c, () => scalar_int("select count(*) from articles where title = 'Title 2'", [])) == Ok(1)
 }
 
 test "PUT article: each editable field on its own counts as an edit" {
@@ -141,11 +142,11 @@ test "article_sig ignores the view counter but sees a real edit" {
   # is not reachable from a single-threaded test. Going through update_article
   # here would pass no matter which columns the signature covers.
   let c = article_test_db()
-  let quiet = article_sig(c, 1)
-  let _v = must(exec(c, "update articles set views = views + 1 where id = 1", []))
-  assert article_sig(c, 1) == quiet
-  let _t = must(exec(c, "update articles set title = 'Edited' where id = 1", []))
-  assert article_sig(c, 1) != quiet
+  let quiet = with_jdbc(c, () => article_sig(1))
+  let _v = must(with_jdbc(c, () => exec("update articles set views = views + 1 where id = 1", [])))
+  assert with_jdbc(c, () => article_sig(1)) == quiet
+  let _t = must(with_jdbc(c, () => exec("update articles set title = 'Edited' where id = 1", [])))
+  assert with_jdbc(c, () => article_sig(1)) != quiet
 }
 
 test "PUT article: retagging is an edit" {
@@ -153,7 +154,7 @@ test "PUT article: retagging is an edit" {
   let none = no_patch()
   put_article(c, ArticlePatch { ..none, tags: Some(["jvm"]) })
   assert article_updated(c) != STALE
-  assert scalar_int(c, "select count(*) from article_tags where article_id = 1", []) == Ok(1)
+  assert with_jdbc(c, () => scalar_int("select count(*) from article_tags where article_id = 1", [])) == Ok(1)
 }
 
 test "PUT article: re-sending the same tag set in another order is not an edit" {
@@ -163,11 +164,11 @@ test "PUT article: re-sending the same tag set in another order is not an edit" 
   put_article(c, ArticlePatch { ..none, tags: Some(["jvm", "dawn"]) })
   assert article_updated(c) != STALE
   # tags are a set: the same two names, swapped, is the same state
-  let _r = must(exec(c, "update articles set updated_at = '${STALE}' where id = 1", []))
+  let _r = must(with_jdbc(c, () => exec("update articles set updated_at = '${STALE}' where id = 1", [])))
   put_article(c, ArticlePatch { ..none, tags: Some(["dawn", "jvm"]) })
   assert article_updated(c) == STALE
   # and the links survived the rewrite intact
-  assert scalar_int(c, "select count(*) from article_tags where article_id = 1", []) == Ok(2)
+  assert with_jdbc(c, () => scalar_int("select count(*) from article_tags where article_id = 1", [])) == Ok(2)
 }
 
 test "PUT article: dropping a tag and adding one are both edits" {
@@ -175,16 +176,16 @@ test "PUT article: dropping a tag and adding one are both edits" {
   let c = article_test_db()
   put_article(c, ArticlePatch { ..none, tags: Some(["jvm", "dawn"]) })
   # drop one
-  let _r = must(exec(c, "update articles set updated_at = '${STALE}' where id = 1", []))
+  let _r = must(with_jdbc(c, () => exec("update articles set updated_at = '${STALE}' where id = 1", [])))
   put_article(c, ArticlePatch { ..none, tags: Some(["jvm"]) })
   assert article_updated(c) != STALE
   # add a different one
-  let _r2 = must(exec(c, "update articles set updated_at = '${STALE}' where id = 1", []))
+  let _r2 = must(with_jdbc(c, () => exec("update articles set updated_at = '${STALE}' where id = 1", [])))
   put_article(c, ArticlePatch { ..none, tags: Some(["jvm", "sqlite"]) })
   assert article_updated(c) != STALE
   # clearing them all is an edit too
-  let _r3 = must(exec(c, "update articles set updated_at = '${STALE}' where id = 1", []))
+  let _r3 = must(with_jdbc(c, () => exec("update articles set updated_at = '${STALE}' where id = 1", [])))
   put_article(c, ArticlePatch { ..none, tags: Some([]) })
   assert article_updated(c) != STALE
-  assert scalar_int(c, "select count(*) from article_tags where article_id = 1", []) == Ok(0)
+  assert with_jdbc(c, () => scalar_int("select count(*) from article_tags where article_id = 1", [])) == Ok(0)
 }

@@ -34,7 +34,7 @@
 ## 目录结构
 
 ```
-backend-dawn/   生产后端（Dawn）。core/src 与 app/jvm/src 分根，test/ 保存白盒测试，app/jvm/dawn.toml 声明 java-deps
+backend-dawn/   生产后端（Dawn）。core/src（Db 效果与 SQL 业务）与 app/jvm/src（JDBC 等适配）分根，test/ 保存白盒测试，app/jvm/dawn.toml 声明 java-deps
 backend/        FastAPI 实现：回滚目标 + 契约参照
 frontend/       Vue 3 + Vite
 deploy/         nginx / systemd / 证书 / vaultwarden

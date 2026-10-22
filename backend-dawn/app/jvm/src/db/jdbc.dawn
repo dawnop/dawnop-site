@@ -1,0 +1,128 @@
+# The JVM adapter owns every JDBC value and converts faults at one boundary.
+use std/str
+use site_core/util/ferr.{catch_text}
+use site_core/db/sql.{Db, SqlV, PInt, PFloat, PStr, PNull, Col, ColInt, ColFloat, ColStr, Cell, VInt, VFloat, VStr, VNull, QueryResult}
+use java "java.sql.Connection"
+use java "java.sql.DriverManager"
+use java "java.sql.PreparedStatement"
+use java "java.sql.ResultSet"
+use java "java.util.Properties"
+
+pub opaque type DbConn = Connection
+
+fn raw(c: DbConn) -> Connection = c
+
+## Open a database. Panics when the connection cannot be made — a service
+## that cannot reach its database has no useful degraded mode.
+pub fn open(url: String) -> DbConn !io =
+  DriverManager.getConnection(url).expect("db connect failed: ${url}")
+
+## Open with `enable_load_extension` so `select load_extension(...)` works
+## (the FTS `simple` tokenizer rides in via this).
+pub fn open_ext(url: String) -> DbConn !io = {
+  let props = Properties.new()
+  props.setProperty("enable_load_extension", "true")
+  DriverManager.getConnection(url, props).expect("db connect failed: ${url}")
+}
+
+## Run `body` and close the connection on both normal and panic paths.
+pub fn with_connection[T, !e](c: DbConn, body: fn() -> T !Db !e) -> T !io =
+  bracket(c, h => close_conn(h), h => with_jdbc(h, body))
+
+fn close_conn(c: DbConn) -> Unit !io = raw(c).close()
+
+fn bind(st: PreparedStatement, ps: List[SqlV]) -> Unit !io = {
+  for i in range(0, len(ps)) {
+    match ps[i] {
+      PInt(n) -> st.setLong(i + 1, n)
+      PFloat(x) -> st.setDouble(i + 1, x)
+      PStr(s) -> st.setString(i + 1, s)
+      PNull -> st.setNull(i + 1, 0) # 0 = java.sql.Types.NULL (static fields are not importable)
+    }
+  }
+}
+
+fn cell_of(rs: ResultSet, col: Col, i: Int) -> Cell !io =
+  match col {
+    ColInt -> {
+      let n = rs.getLong(i)
+      if rs.wasNull() { VNull } else { VInt(n) }
+    }
+    ColFloat -> {
+      let x = rs.getDouble(i)
+      if rs.wasNull() { VNull } else { VFloat(x) }
+    }
+    ColStr ->
+      match rs.getString(i) {
+        Some(s) -> VStr(s)
+        None -> VNull
+      }
+  }
+
+fn row_of(rs: ResultSet, cols: List[Col]) -> List[Cell] !io =
+  map(range(0, len(cols)), i => cell_of(rs, cols[i], i + 1))
+
+fn rows_of(rs: ResultSet, cols: List[Col]) -> List[List[Cell]] !io =
+  if rs.next() { [row_of(rs, cols)] ++ rows_of(rs, cols) } else { [] }
+
+fn jdbc_query(c: DbConn, q: String, ps: List[SqlV], cols: List[Col]) -> Result[QueryResult, String] !io =
+  catch_text(() => {
+    let st = raw(c).prepareStatement(q)!
+    bracket(st, s => s.close(), s => {
+      bind(s, ps)
+      let rs = s.executeQuery()!
+      let md = rs.getMetaData()!
+      let names = map(range(0, md.getColumnCount()), i => md.getColumnLabel(i + 1)!)
+      QueryResult { names: names, rows: rows_of(rs, cols) }
+    })
+  })
+
+fn jdbc_execute(c: DbConn, q: String, ps: List[SqlV]) -> Result[Unit, String] !io =
+  catch_text(() => {
+    let st = raw(c).prepareStatement(q)!
+    bracket(st, s => s.close(), s => {
+      bind(s, ps)
+      let _r = s.execute()
+      ()
+    })
+  })
+
+fn jdbc_changes(c: DbConn, q: String, ps: List[SqlV]) -> Result[Int, String] !io =
+  catch_text(() => {
+    let st = raw(c).prepareStatement(q)!
+    bracket(st, s => s.close(), s => {
+      bind(s, ps)
+      s.executeUpdate()
+    })
+  })
+
+# SQLite sees raw BEGIN; JDBC's independent autoCommit flag does not.
+fn jdbc_in_transaction(c: DbConn) -> Result[Bool, String] !io =
+  match jdbc_execute(c, "begin", []) {
+    Ok(_) -> {
+      let _r = jdbc_execute(c, "rollback", [])?
+      Ok(false)
+    }
+    Err(m) -> if str.contains(m, "within a transaction") { Ok(true) } else { Err(m) }
+  }
+
+fn jdbc_last_id(c: DbConn) -> Result[Int, String] !io = {
+  let result = jdbc_query(c, "select last_insert_rowid()", [], [ColInt])?
+  match get(result.rows, 0) {
+    Some([VInt(n)]) -> Ok(n)
+    _ -> Err("scalar query returned no rows: select last_insert_rowid()")
+  }
+}
+
+## Install evidence when the callback runs, within its live connection.
+pub fn with_jdbc[T, !e](c: DbConn, body: fn() -> T !Db !e) -> T !io = {
+  with handle Db {
+    db_query(q, ps, cols) => jdbc_query(c, q, ps, cols)
+    execute(q, ps) => jdbc_execute(c, q, ps)
+    execute_changes(q, ps) => jdbc_changes(c, q, ps)
+    last_id() => jdbc_last_id(c)
+    busy_timeout(ms) => jdbc_execute(c, "PRAGMA busy_timeout=${ms}", [])
+    in_transaction() => jdbc_in_transaction(c)
+  }
+  body()
+}

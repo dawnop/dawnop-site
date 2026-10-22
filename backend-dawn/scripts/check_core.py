@@ -124,7 +124,7 @@ def negative_controls(dawnc: Path) -> bool:
             injection = (
                 'use java "java.lang.System"\n'
                 if name == "java-import"
-                else "use backend_dawn/db/sql.{DbConn}\n"
+                else "use backend_dawn/db/jdbc.{DbConn}\n"
             )
             source.write_text(injection + source.read_text())
             if name == "app-import":
