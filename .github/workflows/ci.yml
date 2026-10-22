@@ -292,6 +292,65 @@ jobs:
       - name: Clock and Fs primitives with compiling negative controls
         run: backend-dawn/scripts/clock-fs/run.sh --work "${RUNNER_TEMP}/clock-fs"
 
+  # Package against jammy's glibc and systemd 249. Keep this work off the
+  # native acceptance job, whose existing 20 minute budget remains unchanged.
+  native-package:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '21'
+          distribution: 'graalvm-community'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/cache@v4
+        with:
+          path: .dawn
+          key: dawn-package-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.dawn-version', '.dawn-version.sha256', 'scripts/fetch-dawn*.sh') }}
+      - name: build the fixed JVM rollback package
+        run: backend-dawn/build.sh
+      - name: build and verify the native package
+        run: >-
+          python3 backend-dawn/scripts/native-package/package.py build
+          "${RUNNER_TEMP}/native-release" --work "${RUNNER_TEMP}/native-build"
+          --sha "${{ github.sha }}"
+      - name: native artifact runs all 355 contracts
+        run: >-
+          python3 backend-dawn/scripts/contract_run.py --arm native
+          --native-binary "${RUNNER_TEMP}/native-release/dawnop-native"
+          --work "${RUNNER_TEMP}/native-contracts"
+      - name: real offline units and failure controls
+        run: >-
+          sudo -n env "PATH=$PATH" "JAVA_HOME=$JAVA_HOME"
+          python3 backend-dawn/scripts/native-package/offline.py
+          --release "${RUNNER_TEMP}/native-release" --work "${RUNNER_TEMP}/native-units"
+      - name: mixed fixed engines WAL stress
+        run: >-
+          python3 backend-dawn/scripts/native-package/stress.py
+          --release "${RUNNER_TEMP}/native-release" --source "${RUNNER_TEMP}/native-build"
+          --work "${RUNNER_TEMP}/native-stress"
+      - name: retain native package evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-package-evidence-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/native-units/
+            ${{ runner.temp }}/native-stress/*.json
+            ${{ runner.temp }}/native-stress/*.log
+            ${{ runner.temp }}/native-contracts/
+          if-no-files-found: error
+      # Uploading does not authorize deployment: deploy-native independently
+      # requires this exact main SHA's entire workflow and all 26 jobs green.
+      - name: upload native deployable
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-native-${{ github.sha }}
+          path: ${{ runner.temp }}/native-release/
+          if-no-files-found: error
+          retention-days: 30
+
   # Every mutation harness, one job per shard. These are the gates that prove
   # the other gates can fail: each mutant is a one-line production change that
   # must turn exactly one named assertion red.
@@ -308,11 +367,11 @@ jobs:
   # job on top of ~2-3 minutes of per-shard fixed cost (checkout, toolchain,
   # each harness's own base build and preflight, which every shard repeats
   # because they are what makes its slice trustworthy). Total here is 19 jobs;
-  # with the six others that is 25, five past the concurrent-job ceiling for
+  # with the seven others that is 26, six past the concurrent-job ceiling for
   # this account. Adding a shard past that does not fail, it queues — but it also
   # stops buying wall clock, so re-measure before growing this list.
   #
-  # The six are secrets, backend, native-acceptance, python-backend, frontend,
+  # The seven are secrets, backend, native-acceptance, native-package, python-backend, frontend,
   # and mutants-complete.
   # This comment said "the four above" from 2026-08-14 until 2026-08-15 and left
   # mutants-complete out, so every total it stated was one low (the 2026-08-14 run
@@ -439,7 +498,7 @@ jobs:
   # missing mutant are different news and both are worth having.
   mutants-complete:
     runs-on: ubuntu-latest
-    needs: [mutants, native-acceptance]
+    needs: [mutants, native-acceptance, native-package]
     if: always()
     timeout-minutes: 10
     steps:
@@ -474,6 +533,12 @@ jobs:
         env:
           NATIVE_RESULT: ${{ needs.native-acceptance.result }}
         run: test "$NATIVE_RESULT" = success
+
+      - name: native package completed successfully
+        if: ${{ !cancelled() }}
+        env:
+          PACKAGE_RESULT: ${{ needs.native-package.result }}
+        run: test "$PACKAGE_RESULT" = success
 
   # The FastAPI backend is retired from serving (M6 moved every route to Dawn on
   # :8001) but it is not dead code: it is the emergency rollback target —

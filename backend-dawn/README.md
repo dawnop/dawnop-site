@@ -100,7 +100,10 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   先用已有业务 schema 的隔离库和同一 DAWNOP_ENV 执行 --migrate，再喂请求到 stdin；此处无部署授权。
   fd teardown 在 flush 后半关闭写端，最多排空 8 MiB / 300 ms，随后退出，不会循环服务第二个交换。
   S10 在已有 backend CI job 执行，原 native-acceptance 仍跑 S2/S4/S5/S6/S8/S9，job 数与 timeout 不变。
-  S8 的完整暂存 TTFB 限制继续适用；S11 的 355 双臂已接入 backend CI，部署包仍是 S12。
+  S8 的完整暂存 TTFB 限制继续适用；S11 的 355 双臂已接入 backend CI。
+  S12 私有引擎 artifact、systemd 单元、0% 安装/撤回与离线验收命令见
+  [`deploy/native-package.md`](deploy/native-package.md)；CI native-package 固定 Ubuntu 22.04。
+  artifact 的 `--engine-info` 报实际私有 dlopen 路径、SQL 版本/source id，不打开业务库。
   wire/headers 只重排第一次完整 head write，保持 JVM 的 Date、207 空 reason 与文件响应头顺序；
   body 字节不进入该接缝。curl owner 接受七牛实际使用的三位状态 612，仍校验最终状态/头一致。
 - core 门禁：`python3 scripts/check_core.py --negative-controls`。对整个 core 根运行

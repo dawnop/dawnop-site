@@ -1,0 +1,13 @@
+[Unit]
+Description=Clean expired public Markdown hourly using native
+Conflicts=dawnop-paste-cleanup.timer
+After=dawnop-paste-cleanup.timer
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=60
+Unit=dawnop-native-cleanup.service
+
+[Install]
+WantedBy=timers.target

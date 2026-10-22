@@ -1,0 +1,30 @@
+[Unit]
+Description=Remove expired public Markdown using the native release
+Conflicts=dawnop-paste-cleanup.service
+After=dawnop-paste-cleanup.service
+
+[Service]
+Type=oneshot
+User=dawnop
+Group=dawnop
+WorkingDirectory=/opt/dawnop-dawn/native/current
+Environment=DAWNOP_ENV=/opt/dawnop/backend/.env
+Environment=DAWN_DB_PATH=/opt/dawnop/data/dawnop.db
+Environment=DAWN_SIMPLE_EXT=/opt/dawnop-dawn/native/current/extensions/libsimple.so
+ExecStart=/opt/dawnop-dawn/native/current/dawnop-native --cleanup-pastes
+StandardOutput=journal
+StandardError=journal
+# RuntimeMaxSec has no effect for oneshot; bound its start instead.
+TimeoutStartSec=300
+TimeoutStopSec=5
+KillMode=control-group
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/dawnop/data
+ProtectHome=true
+PrivateTmp=true
+UMask=0077
+Slice=dawnop-native.slice
+MemoryMax=96M
+TasksMax=16
+CPUQuota=100%

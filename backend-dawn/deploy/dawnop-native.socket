@@ -1,0 +1,20 @@
+[Unit]
+Description=Dawn native candidate HTTP socket
+StartLimitIntervalSec=0
+
+[Socket]
+ListenStream=/run/dawnop-native/http.sock
+Accept=yes
+SocketMode=0660
+SocketUser=dawnop
+SocketGroup=www-data
+DirectoryMode=0755
+MaxConnections=64
+Backlog=256
+# systemd 249 supports both settings. Leave room above a 40/s burst.
+TriggerLimitIntervalSec=2s
+TriggerLimitBurst=512
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target
