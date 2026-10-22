@@ -1,0 +1,8 @@
+[Unit]
+Description=Shared budget for Dawn native candidate exchanges
+
+[Slice]
+MemoryAccounting=true
+MemoryMax=2G
+TasksMax=1024
+CPUQuota=200%

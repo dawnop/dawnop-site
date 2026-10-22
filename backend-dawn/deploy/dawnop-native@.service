@@ -1,0 +1,35 @@
+[Unit]
+Description=Dawn native single HTTP exchange
+StartLimitIntervalSec=0
+CollectMode=inactive-or-failed
+
+[Service]
+Type=exec
+User=dawnop
+Group=dawnop
+WorkingDirectory=/opt/dawnop-dawn/native/current
+Environment=DAWNOP_ENV=/opt/dawnop/backend/.env
+Environment=DAWN_DB_PATH=/opt/dawnop/data/dawnop.db
+Environment=DAWN_SIMPLE_EXT=/opt/dawnop-dawn/native/current/extensions/libsimple.so
+Environment=DAWNOP_SOCKET_IDLE_SEC=60
+ExecStart=/opt/dawnop-dawn/native/current/dawnop-native
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+Restart=no
+KillMode=control-group
+# Three sequential 3600s phases: ingress, upstream transfer, response copy.
+RuntimeMaxSec=10800
+TimeoutStartSec=30
+TimeoutStopSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/dawnop/data
+ProtectHome=true
+PrivateTmp=true
+UMask=0077
+Slice=dawnop-native.slice
+MemoryAccounting=true
+MemoryMax=96M
+TasksMax=16
+CPUQuota=100%
