@@ -42,3 +42,8 @@ first-write 是单交换进程内的 C 标记，后续 body 原始 Bytes 不解�
 才结算早拒绝；既有 barrier 尝试产生循环等待。没有取得能满足“客户端完整读到响应
 后才关闭”或“JVM 路径不依赖 peer close”的确定性修复证据，因此不放宽、不重试、
 不把单次通过解释为根治，后续仍须解决。S8 原门与时限全部保留。
+
+CI 暴露了两个 launcher 生命周期/API 细节，现已修正：响应已被客户端读完并不
+保证 native 的 drain 与 SQLite close 已完成，fixture reset 前必须 quiesce 等实际
+handler 归零；同时保留旧变异 harness 的 CONTRACT_GOLDEN_REPORT 指定输出路径，
+另复制到各套证据目录，不能用新目录覆盖调用方报告接口。原判词与矩阵均不改。
