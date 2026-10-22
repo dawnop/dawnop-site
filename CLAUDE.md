@@ -354,7 +354,8 @@ SQLite 五槽缓存的表、语义与验证命令见 `backend-dawn/README.md` �
 规范尽量落在 CI 与配置里，而不是文档里——文档会过期，CI 不会。
 
 - **CI**（`.github/workflows/ci.yml`，push main + PR 触发）：`secrets`（三道守卫 + shellcheck）、
-  `backend`（Dawn 测试 + 打 jar 传 artifact + 四套 golden）、`mutants`（**19 个并行分片**，
+  `backend`（Dawn 测试 + 打 jar 传 artifact + 四套 golden）、
+  `native-acceptance`（S4/S5/S6 双臂验收，含完整负控与 sanitizer）、`mutants`（**19 个并行分片**，
   跑九个变异体 harness 共 160 个变异体）、`mutants-complete`（断言各分片并集覆盖全矩阵）、
   `python-backend`（**钉 Python 3.10**，对齐生产 + ruff）、`frontend`（lint/format/build）。
   任一红都别合。
@@ -362,8 +363,8 @@ SQLite 五槽缓存的表、语义与验证命令见 `backend-dawn/README.md` �
   > 2026-08-14：`dawn build` 5.9s 吃 236% CPU、`dawn test` 38.4s 只吃 41%），串行 154 个 =
   > 130 分钟出头，曾把 `backend` job 顶到 62 分钟上限被取消。分片规格写在 ci.yml 的
   > `mutants.strategy.matrix`，harness 侧的 `--shard I/N` 在 `backend-dawn/scripts/mutant-shard.sh`。
-  > 19 个分片加上另外**五个** job（secrets / backend / python-backend / frontend /
-  > **mutants-complete**）是 24，比本账号的并发上限多四个。再加不会失败，但会排队，
+  > 19 个分片加上另外**六个** job（secrets / backend / native-acceptance / python-backend / frontend /
+  > **mutants-complete**）是 25，比本账号的并发上限多五个。再加不会失败，但会排队，
   > 也就不再省墙钟时间。上限的具体数字与这笔账记在 ci.yml 里，改分片数以那儿为准。
   > **这个数以前一直少算一个**（`mutants-complete` 没被数进去，两处都写「另外四个」），
   > 2026-08-15 按 GitHub API 逐次核实后改正：`30c7e79` 21、`52879b2` 22、`8c0046b` 23。

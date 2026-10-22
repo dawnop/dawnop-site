@@ -148,15 +148,6 @@ jobs:
       - name: native core dependency closure and negative controls
         run: python3 backend-dawn/scripts/check_core.py --negative-controls
 
-      - name: native SQLite handler check build test and contracts
-        run: backend-dawn/scripts/native-sqlite/run.sh
-
-      - name: SQLite TTL cache dual arm and cross process contracts
-        run: backend-dawn/scripts/ttl-cache/run.sh
-
-      - name: WebDAV auth cache leases and 40 process bcrypt contracts
-        run: backend-dawn/scripts/auth-cache/run.sh
-
       - name: Java FFI boundaries
         run: python3 backend-dawn/scripts/check-ffi-boundaries.py
 
@@ -219,6 +210,58 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # S4/S5/S6 share toolchains and fixtures. One job adds one runner slot to
+  # the existing 24 jobs and keeps setup shared; see docs/ci-native-acceptance-design.md.
+  native-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '21'
+          distribution: 'graalvm-community'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: cache the pinned dawn toolchains
+        uses: actions/cache@v4
+        with:
+          path: .dawn
+          key: dawn-native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.dawn-version', '.dawn-version.sha256', 'scripts/fetch-dawn*.sh') }}
+
+      - name: cache java-deps
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/coursier
+          key: coursier-${{ hashFiles('backend-dawn/**/dawn.toml') }}
+          restore-keys: coursier-
+
+      - name: identify verified SQLite cache inputs
+        id: sqlite-cache
+        run: python3 backend-dawn/scripts/sqlite_ci_cache.py
+
+      - name: cache digest pinned SQLite and libsimple fixtures
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/dawn/sqlite-contract/downloads
+          key: ${{ steps.sqlite-cache.outputs.fixtures_key }}
+
+      - name: cache fully instrumented SQLite engine
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/dawn/sqlite-contract/engines
+          key: ${{ steps.sqlite-cache.outputs.engine_key }}
+
+      - name: native SQLite handler check build test and contracts
+        run: backend-dawn/scripts/native-sqlite/run.sh
+
+      - name: SQLite TTL cache dual arm and cross process contracts
+        run: backend-dawn/scripts/ttl-cache/run.sh
+
+      - name: WebDAV auth cache leases and 40 process bcrypt contracts
+        run: backend-dawn/scripts/auth-cache/run.sh
+
   # Every mutation harness, one job per shard. These are the gates that prove
   # the other gates can fail: each mutant is a one-line production change that
   # must turn exactly one named assertion red.
@@ -235,11 +278,12 @@ jobs:
   # job on top of ~2-3 minutes of per-shard fixed cost (checkout, toolchain,
   # each harness's own base build and preflight, which every shard repeats
   # because they are what makes its slice trustworthy). Total here is 19 jobs;
-  # with the five others that is 24, four past the concurrent-job ceiling for
+  # with the six others that is 25, five past the concurrent-job ceiling for
   # this account. Adding a shard past that does not fail, it queues — but it also
   # stops buying wall clock, so re-measure before growing this list.
   #
-  # The five are secrets, backend, python-backend, frontend, and mutants-complete.
+  # The six are secrets, backend, native-acceptance, python-backend, frontend,
+  # and mutants-complete.
   # This comment said "the four above" from 2026-08-14 until 2026-08-15 and left
   # mutants-complete out, so every total it stated was one low (the 2026-08-14 run
   # it called 21 jobs was 21 because there were 16 shards then, not 17 — two errors
@@ -365,7 +409,7 @@ jobs:
   # missing mutant are different news and both are worth having.
   mutants-complete:
     runs-on: ubuntu-latest
-    needs: mutants
+    needs: [mutants, native-acceptance]
     if: always()
     timeout-minutes: 10
     steps:
@@ -394,6 +438,12 @@ jobs:
         run: >-
           python3 backend-dawn/scripts/mutants_coverage.py
           --coverage-dir coverage
+
+      - name: native acceptance completed successfully
+        if: ${{ !cancelled() }}
+        env:
+          NATIVE_RESULT: ${{ needs.native-acceptance.result }}
+        run: test "$NATIVE_RESULT" = success
 
   # The FastAPI backend is retired from serving (M6 moved every route to Dawn on
   # :8001) but it is not dead code: it is the emergency rollback target —
