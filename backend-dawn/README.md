@@ -48,10 +48,11 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 ## 依赖与构建
 
-- 编译器钉在 v0.97.0；web 7.2.0（纯 Dawn）、web_jvm 1.1.0（JVM 服务器）、
+- 编译器钉在 v0.98.0；web 8.0.0（纯 Dawn，包名 web8）、web_jvm 2.0.0（JVM 服务器，包名 web_jvm2）、
   json 与 sha2 都来自同版 tag 归档。入口使用 `web_jvm/server`，表单解析使用
   `web/wire`；HTTP owner 在 `stream_response` 内用 `input_source` 把私有
-  InputStream 转成 web 的 BodySource。
+  InputStream 转成 web 的 BodySource。源的 read(pos, n) 接收累计字节偏移；
+  input_source 保持原调用方式，由 InputStream 自己推进游标。
 - 依赖：在 [`app/jvm/dawn.toml`](app/jvm/dawn.toml) 的 `[java-deps]` 里声明（现只剩 `sqlite-jdbc`；`jbcrypt` 已由纯 Dawn 的 `util/bcrypt` 取代——零传递依赖
   白名单，见 m6.md §2 G1）。`dawn run/test/build` 自动从 Maven 拉取并挂上 classpath；
   `dawn build` 另把它们复制进 jar 同级的 `lib/`，jar 的 manifest `Class-Path` 以相对路径引用它，
@@ -167,7 +168,7 @@ S4 增加独立 `app/native` 包 site_sqlite，仅含 `db/native_sqlite` handler
   查询并核对 WAL，再按需用固定 sqlite3_simple_init 的 C 接口加载扩展；失败返回调用层，
   不执行 body。SQL 扩展 gate 始终关闭。NULL、列名和重复 label、Bool、SQL quote row_sig
   与 core 事务规则保持；不把 sqlite3_changes 用于 DDL 或编辑检测。版本和源码树摘要
-  固定到工具链同一个 v0.97.0 URL/subdir。详见 `docs/native-sqlite-design.md`（仓库根）。
+  固定到工具链同一个 v0.98.0 URL/subdir。详见 `docs/native-sqlite-design.md`（仓库根）。
 - `core/src/db/sql.dawn` — 站点 `Db` 效果与 `SqlV/Col/Cell/Row/QueryResult`：
   六个操作为 db_query、execute、execute_changes、last_id、busy_timeout、in_transaction，
   均返回 Result[..., String]。query/query_rows、exec、scalar_int、require_tx、row_sig 与普通泛型
