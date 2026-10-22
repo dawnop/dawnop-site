@@ -1,0 +1,74 @@
+# Native connection owner. The portable core never imports this module.
+use sqlite/sqlite
+use site_core/util/ferr.{fe_text}
+use site_core/db/sql.{Db, SqlV, PInt, PFloat, PStr, PNull, Col, ColInt, ColFloat, ColStr, Cell, VInt, VFloat, VStr, VNull, QueryResult}
+
+fn value(p: SqlV) -> sqlite.Value = match p {
+  PInt(n) -> sqlite.Integer(n)
+  PFloat(x) -> sqlite.Real(x)
+  PStr(s) -> sqlite.Text(s)
+  PNull -> sqlite.Null
+}
+
+fn column(c: Col) -> sqlite.Col = match c {
+  ColInt -> sqlite.ColInt
+  ColFloat -> sqlite.ColFloat
+  ColStr -> sqlite.ColText
+}
+
+# The package tests NULL before any requested numeric or text conversion.
+fn cell(v: sqlite.Value) -> Cell = match v {
+  sqlite.Null -> VNull
+  sqlite.Integer(n) -> VInt(n)
+  sqlite.Real(x) -> VFloat(x)
+  sqlite.Text(s) -> VStr(s)
+}
+
+fn result[T](r: Result[T, ForeignError]) -> Result[T, String] = match r {
+  Ok(v) -> Ok(v)
+  Err(e) -> Err(fe_text(e))
+}
+
+fn native_query(c: sqlite.Db, q: String, ps: List[SqlV], cols: List[Col]) -> Result[QueryResult, String] !io = {
+  let rows = result(sqlite.query(c, q, map(ps, value), map(cols, column)))?
+  Ok(QueryResult { names: rows.names, rows: map(rows.rows, row => map(row, cell)) })
+}
+
+fn with_sqlite[T, !e](c: sqlite.Db, body: fn() -> T !Db !e) -> T !io = {
+  with handle Db {
+    db_query(q, ps, cols) => native_query(c, q, ps, cols)
+    execute(q, ps) => result(sqlite.execute(c, q, map(ps, value)))
+    execute_changes(q, ps) => result(sqlite.execute_changes(c, q, map(ps, value)))
+    last_id() => result(sqlite.last_id(c))
+    busy_timeout(ms) => result(sqlite.busy_timeout(c, ms))
+    in_transaction() => result(sqlite.in_transaction(c))
+  }
+  body()
+}
+
+fn initialize(c: sqlite.Db, ext: String) -> Result[Unit, ForeignError] !io = {
+  sqlite.busy_timeout(c, 5000)?
+  let mode = sqlite.query(c, "PRAGMA journal_mode=WAL", [], [sqlite.ColText])?
+  match mode.rows {
+    [[sqlite.Text("wal")]] -> ()
+    _ -> return Err(ForeignError { kind: "site.db.wal", message: "SQLite did not enter WAL mode", cause: None })
+  }
+  if ext != "" { sqlite.load_extension(c, ext, Some("sqlite3_simple_init"))? }
+  Ok(())
+}
+
+## Initialize each connection before running body; all errors reach the caller.
+## Pass an empty ext only for work units that do not use the simple tokenizer.
+pub fn with_db[T, !e](path: String, ext: String, body: fn() -> Result[T, String] !Db !e) -> Result[T, String] !io = {
+  let run: Result[T, ForeignError] = sqlite.with_db(path, c => {
+    initialize(c, ext)?
+    match with_sqlite(c, body) {
+      Ok(v) -> Ok(v)
+      Err(m) -> Err(ForeignError { kind: "site.db.body", message: m, cause: None })
+    }
+  })
+  match run {
+    Ok(v) -> Ok(v)
+    Err(e) -> Err(if e.kind == "site.db.body" { e.message } else { fe_text(e) })
+  }
+}

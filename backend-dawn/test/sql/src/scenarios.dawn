@@ -1,0 +1,211 @@
+# One operation sequence is compiled unchanged against both real Db handlers.
+use std/str
+use site_core/db/sql
+use site_core/db/sql.{Db, VInt, VFloat, VStr, VNull, PInt, PFloat, PStr, PNull, ColInt, ColFloat, ColStr, execute, exec, query, db_query, query_rows, scalar_int, last_id, busy_timeout, in_transaction, with_tx, with_immediate_tx, require_tx, row_sig, bool_int}
+use site_core/repo/repo_article
+use site_core/repo/repo_page
+use site_core/repo/repo_tag
+use site_core/repo/repo_pagetag
+use site_core/repo/repo_settings
+use site_core/repo/repo_viz
+use site_core/repo/repo_viz.{NewViz}
+use site_core/repo/repo_write
+use site_core/repo/repo_write.{NewArticle, ArticlePatch}
+use site_core/repo/repo_fm
+use site_core/repo/repo_drop
+use site_core/repo/repo_paste
+use site_core/svc/export
+
+pub fn demand[T](r: Result[T, String]) -> T = match r { Ok(v) -> v
+  Err(m) -> panic(m) }
+
+pub fn check(ok: Bool, name: String) -> Unit = if not ok { panic("assertion: ${name}") }
+
+fn emit(name: String, value: String) -> Unit !io = println("${name}\t${value}")
+
+fn expect_error[T](r: Result[T, String], name: String) -> Unit !io = {
+  check(match r { Err(_) -> true
+    Ok(_) -> false }, name)
+  emit(name, "Err")
+}
+
+fn expect_sql_error[T](r: Result[T, String], phrase: String, name: String) -> Unit !io = {
+  check(match r { Err(m) -> str.contains(m, phrase)
+    Ok(_) -> false }, name)
+  emit(name, "Err:" ++ phrase)
+}
+
+fn observed(name: String, q: String, cols: List[sql.Col]) -> Unit !Db !io = {
+  let r = demand(db_query(q, [], cols))
+  emit(name, to_string(r.names) ++ ":" ++ to_string(r.rows))
+}
+
+pub fn sql_suite() -> Result[Unit, String] !Db !io = {
+  demand(busy_timeout(120))
+  check(demand(scalar_int("PRAGMA busy_timeout", [])) == 120, "timeout")
+  observed("wal", "PRAGMA journal_mode", [ColStr])
+  execute("create table s4_values(id integer primary key, n integer, x real, s text, b integer)", [])?
+  let changed = exec("insert into s4_values values(?,?,?,?,?)", [PInt(1), PInt(-9223372036854775808), PFloat(1.25), PStr("中文 ' | \u{0} tail"), PInt(bool_int(true))])?
+  check(changed == 1, "insert-count")
+  emit("insert-count", to_string(changed))
+  check(demand(last_id()) == 1, "last-id")
+  let _ = exec("insert into s4_values values(2,?,null,null,?)", [PNull, PInt(bool_int(false))])?
+  let values = db_query("select n,x,s,b from s4_values order by id", [], [ColInt, ColFloat, ColStr, ColInt])?
+  check(values.rows[0] == [VInt(-9223372036854775808), VFloat(1.25), VStr("中文 ' | \u{0} tail"), VInt(1)], "value-roundtrip")
+  check(values.rows[1] == [VNull, VNull, VNull, VInt(0)], "null-before-conversion")
+  emit("values", to_string(values.rows))
+  let empty = db_query("select n as absent from s4_values where 0", [], [ColInt])?
+  check(empty.names == ["absent"] && len(empty.rows) == 0, "empty-labels")
+  emit("empty-labels", to_string(empty.names))
+  let duplicate = query_rows("select 11 as same, 22 as same", [], [ColInt, ColInt])?
+  check(sql.col_int(duplicate[0], "same") == 22, "duplicate-label-last")
+  emit("duplicate-label", to_string(sql.col_int(duplicate[0], "same")))
+  execute("create index s4_value_index on s4_values(b)", [])?
+  observed("ddl-after-dml", "select id,b from s4_values order by id", [ColInt, ColInt])
+  # No-op DML counts a matched row, whereas a SQL quote snapshot stays stable.
+  let before = row_sig("s4_values", ["n", "x", "s", "b"], 2)?
+  check(exec("update s4_values set b=b where id=2", [])? == 1, "noop-count")
+  let after = row_sig("s4_values", ["n", "x", "s", "b"], 2)?
+  check(before == after && before == "NULL|NULL|NULL|0", "row-sig-noop")
+  let _ = exec("update s4_values set b=1 where id=2", [])?
+  check(row_sig("s4_values", ["n", "x", "s", "b"], 2)? != before, "row-sig-edit")
+  emit("row-sig", before)
+  expect_sql_error(exec("insert into s4_values(id) values(1)", []), "UNIQUE constraint failed", "constraint")
+  expect_sql_error(query("select missing from s4_values", [], [ColInt]), "no such column: missing", "prepare-error")
+  transaction_suite()?
+  business_suite()?
+  Ok(())
+}
+
+fn transaction_suite() -> Result[Unit, String] !Db !io = {
+  execute("create table s4_tx(id integer primary key)", [])?
+  check(not in_transaction()?, "tx-initial")
+  check(with_tx(() => exec("insert into s4_tx values(1)", []))? == 1, "tx-commit")
+  let failed: Result[Unit, String] = with_immediate_tx(() => {
+    let _ = exec("insert into s4_tx values(2)", [])?
+    Err("body failure")
+  })
+  check(failed == Err("body failure"), "tx-body-error")
+  check(not in_transaction()? && scalar_int("select count(*) from s4_tx", [])? == 1, "tx-err-rollback")
+  let panicked: Result[Unit, ForeignError] = catch_panic(() => {
+    let r: Result[Unit, String] = with_tx(() => {
+      let _ = demand(exec("insert into s4_tx values(3)", []))
+      panic("s4 body panic")
+    })
+    demand(r)
+  })
+  check(match panicked { Err(e) -> str.contains(e.message, "s4 body panic")
+    Ok(_) -> false }, "tx-panic-preserved")
+  check(not in_transaction()? && scalar_int("select count(*) from s4_tx", [])? == 1, "tx-panic-rollback")
+  execute("begin immediate", [])?
+  let _ = exec("insert into s4_tx values(4)", [])?
+  let nested_i: Result[Unit, String] = with_immediate_tx(() => Ok(()))
+  expect_error(nested_i, "nested-immediate")
+  let nested_d: Result[Unit, String] = with_tx(() => Ok(()))
+  expect_error(nested_d, "nested-deferred")
+  check(in_transaction()? && scalar_int("select count(*) from s4_tx", [])? == 2, "nested-retains-outer")
+  require_tx("s4 outer")?
+  execute("rollback", [])?
+  expect_error(require_tx("s4 outside"), "require-tx")
+  execute("PRAGMA foreign_keys=on", [])?
+  execute("create table s4_parent(id integer primary key)", [])?
+  execute("create table s4_child(id integer references s4_parent(id) deferrable initially deferred)", [])?
+  expect_sql_error(with_tx(() => exec("insert into s4_child values(99)", [])), "FOREIGN KEY constraint failed", "commit-deferred-error")
+  check(not in_transaction()? && scalar_int("select count(*) from s4_child", [])? == 0, "commit-deferred-rollback")
+  expect_sql_error(with_immediate_tx(() => exec("insert into s4_child values(99)", [])), "FOREIGN KEY constraint failed", "commit-immediate-error")
+  check(not in_transaction()? && scalar_int("select count(*) from s4_child", [])? == 0, "commit-immediate-rollback")
+  execute("PRAGMA foreign_keys=off", [])?
+  observed("transactions", "select id from s4_tx order by id", [ColInt])
+  Ok(())
+}
+
+fn business_suite() -> Result[Unit, String] !Db !io = {
+  # Call production repositories so joins, filters and SQL expressions stay real.
+  let published = repo_article.list_published(None, 2, 3)?
+  emit("article-page", to_string(published))
+  emit("article-admin", to_string(repo_article.list_admin(Some(true), Some(3), Some(""), 1, 4)?))
+  emit("article-tags", to_string(repo_article.tags_json(1)?))
+  emit("pages", to_string(repo_page.nav()?))
+  emit("tags", to_string(repo_tag.list_public()?))
+  emit("export", to_string(export.export_markdown(1)?))
+  emit("settings", to_string(repo_settings.read_all(10)?))
+  let article = NewArticle {
+    title: "S4 article", slug_hint: "s4-article", summary: "summary", content: "content",
+    published: true, auto_title: false, page_id: Some(3), tags: ["s4-tag"],
+    created_at: Some("2026-01-02T00:00:00Z")
+  }
+  let aid = with_immediate_tx(() => repo_write.create_article(article))?
+  let _ = exec("update articles set updated_at='2000-01-01 00:00:00' where id=?", [PInt(aid)])?
+  let patch = ArticlePatch {
+    title: Some("S4 article"), slug: None, summary: Some("summary"), content: None,
+    published: None, auto_title: None, page_id: None, tags: None, created_at: None
+  }
+  check(with_immediate_tx(() => repo_write.update_article(aid, patch))?, "article-noop-update")
+  check(scalar_int("select count(*) from articles where id=? and updated_at='2000-01-01 00:00:00'", [PInt(aid)])? == 1, "article-noop-timestamp")
+  emit("article-created-id", to_string(aid))
+  let _ = with_immediate_tx(() => repo_write.delete_article(aid))?
+  check(not repo_write.article_exists(aid)?, "article-delete")
+  check(repo_settings.put_one("upload_concurrency", 3)?, "settings-upsert")
+  emit("upsert", to_string(repo_settings.setting_int("upload_concurrency", 0)?))
+  let _ = repo_fm.insert_folder_strict("s4-folder")?
+  let _ = repo_fm.insert_file_strict("s4-folder/a.txt", "s4-key", "text/plain", 12)?
+  check(repo_fm.taken("s4-folder/a.txt")?, "file-insert")
+  check(repo_fm.key_referenced("s4-key")?, "file-key")
+  emit("file-stats", to_string(repo_fm.stats_db()?))
+  let _ = repo_fm.delete_subtree("s4-folder")?
+  check(not repo_fm.taken("s4-folder/a.txt")?, "file-delete")
+  repo_drop.ensure_schema()?
+  let drop = with_immediate_tx(() => repo_drop.insert_drop("s4-hash", "s4", "", 2000000000, 3, 1024, 3072, "s4-token"))?
+  let reservation: Result[Unit, String] = with_immediate_tx(() => {
+    repo_drop.reserve_key("s4-reserved", drop.id, "s4-file.txt", 1024)?
+    check(repo_drop.pending_for("s4-reserved", drop.id)? != None, "drop-reservation")
+    repo_drop.charge(drop.id, 12)?
+    Ok(())
+  })
+  reservation?
+  observed("drop-charge", "select used_files,used_bytes from upload_drops where token_hash='s4-hash'", [ColInt, ColInt])
+  check(repo_drop.revoke_drop(drop.id)?, "drop-revoke")
+  repo_paste.ensure_schema()?
+  emit("paste-empty", to_string(repo_paste.stats(1800000000)?))
+  let viz = repo_viz.create_viz(NewViz { slug: "s4-viz", name: "s4", source: "source", compiled: "compiled", style: "style" })?
+  let sig = repo_viz.viz_sig(viz)?
+  let _ = repo_viz.set_viz_str(viz, "name", "s4")?
+  check(repo_viz.viz_sig(viz)? == sig, "viz-noop")
+  let _ = repo_viz.delete_viz(viz)?
+  emit("tag-slug", repo_write.unique_slug("tags", "Dawn", None)?)
+  emit("page-kind", to_string(repo_pagetag.page_kind(3)?))
+  # Compare durable post-state without wall-clock dependent created_at values.
+  observed("durable-settings", "select key,value from settings order by key", [ColStr, ColStr])
+  Ok(())
+}
+
+pub fn fts_suite() -> Result[Unit, String] !Db !io = {
+  execute("create table s4_articles(id integer primary key,title text,summary text,content text,published integer)", [])?
+  execute("create virtual table s4_fts using fts5(title,summary,content,content='s4_articles',content_rowid='id',tokenize='simple')", [])?
+  execute("create trigger s4_ai after insert on s4_articles begin insert into s4_fts(rowid,title,summary,content) values(new.id,new.title,new.summary,new.content); end", [])?
+  execute("create trigger s4_ad after delete on s4_articles begin insert into s4_fts(s4_fts,rowid,title,summary,content) values('delete',old.id,old.title,old.summary,old.content); end", [])?
+  execute("create trigger s4_au after update on s4_articles begin insert into s4_fts(s4_fts,rowid,title,summary,content) values('delete',old.id,old.title,old.summary,old.content); insert into s4_fts(rowid,title,summary,content) values(new.id,new.title,new.summary,new.content); end", [])?
+  for q in ["insert into s4_articles values(1,'中国','hello','world',1)", "insert into s4_articles values(2,'hello','','中国',1)", "insert into s4_articles values(3,'中国','hello','world',0)"] { execute(q, [])? }
+  let q = "select a.id from s4_fts join s4_articles a on a.id=s4_fts.rowid where s4_fts match simple_query(?) and a.published=1 order by bm25(s4_fts,10.0,4.0,1.0),a.id limit ? offset ?"
+  let chinese = query(q, [PStr("中国"), PInt(10), PInt(0)], [ColInt])?
+  check(chinese == [[VInt(1)], [VInt(2)]], "fts-chinese-ranking-published-insert")
+  emit("fts-chinese", to_string(chinese))
+  let pinyin = query(q, [PStr("zhongguo"), PInt(1), PInt(1)], [ColInt])?
+  check(pinyin == [[VInt(2)]], "fts-pinyin-page")
+  emit("fts-pinyin", to_string(pinyin))
+  let terms = query(q, [PStr("中国 hello"), PInt(10), PInt(0)], [ColInt])?
+  check(len(terms) == 2, "fts-two-terms")
+  emit("fts-two-terms", to_string(terms))
+  execute("update s4_articles set title='日本',summary='',content='bye' where id=1", [])?
+  let updated = query(q, [PStr("中国"), PInt(10), PInt(0)], [ColInt])?
+  check(updated == [[VInt(2)]], "fts-update-trigger")
+  emit("fts-update", to_string(updated))
+  let replacement = query(q, [PStr("日本"), PInt(10), PInt(0)], [ColInt])?
+  check(replacement == [[VInt(1)]], "fts-update-new-content")
+  emit("fts-update-new", to_string(replacement))
+  execute("delete from s4_articles where id=2", [])?
+  let deleted = query(q, [PStr("中国"), PInt(10), PInt(0)], [ColInt])?
+  check(deleted == [], "fts-delete-trigger")
+  emit("fts-delete", to_string(deleted))
+  Ok(())
+}

@@ -1,0 +1,136 @@
+# Test consumer of the real adapter. No native HTTP entry is introduced by S4.
+use std/io
+use std/str
+use site_sqlite/db/native_sqlite.{with_db}
+use site_core/db/sql.{Db, execute, db_query, scalar_int, busy_timeout, with_immediate_tx, ColInt, ColStr, VInt, VStr, VNull, QueryResult}
+use sql_scenarios/scenarios.{demand, check, sql_suite, fts_suite}
+
+fn done(r: Result[Unit, String]) -> Unit = demand(r)
+
+fn setting(name: String) -> String !io =
+  io.with_env_real(() => unwrap_or(io.getenv(name), ""))
+
+fn temporary[T, !e](body: fn(String) -> T !e !io) -> T !io = {
+  let path = match io.with_fs_real(() => io.temp_file(setting("DAWN_SQLITE_TEST_DIR"), "adapter-")) { Ok(p) -> p
+    Err(e) -> panic(e.message) }
+  bracket(path, p => io.with_fs_real(() => {
+    let _ = io.delete(p)
+    let _ = io.delete(p ++ "-wal")
+    let _ = io.delete(p ++ "-shm")
+    ()
+  }), body)
+}
+
+fn gate() -> Result[Unit, String] !Db !io = {
+  let r = execute("select load_extension('missing')", [])
+  check(match r { Err(m) -> str.contains(m, "not authorized")
+    Ok(_) -> false }, "sql-extension-gate")
+  Ok(())
+}
+
+test "native startup refuses non WAL and never runs body" {
+  let r: Result[Unit, String] = with_db(":memory:", "", () => panic("body must not run"))
+  check(match r { Err(m) -> str.contains(m, "site.db.wal")
+    Ok(_) -> false }, "startup-wal")
+}
+
+test "native startup propagates missing extension and never runs body" {
+  temporary(path => {
+    let r: Result[Unit, String] = with_db(path, path ++ ".missing", () => panic("body must not run"))
+    check(match r { Err(m) -> str.contains(m, "sqlite.extension")
+      Ok(_) -> false }, "startup-extension")
+  })
+}
+
+test "native timeout is installed before body" {
+  temporary(path => done(with_db(path, "", () => {
+    check(scalar_int("PRAGMA busy_timeout", [])? == 5000, "initial-timeout")
+    busy_timeout(0)?
+    check(scalar_int("PRAGMA busy_timeout", [])? == 0, "changed-timeout")
+    check(match busy_timeout(-1) { Err(_) -> true
+      Ok(_) -> false }, "negative-timeout")
+    Ok(())
+  })))
+}
+
+test "native copies NULL types labels and values past connection close" {
+  let materialized: QueryResult = temporary(path => demand(with_db(path, "", () => db_query("select null as a,null as b,null as c,7 as d,'中文' as d", [], [ColInt, ColStr, ColInt, ColInt, ColStr]))))
+  check(materialized.names == ["a", "b", "c", "d", "d"], "copied-labels")
+  check(materialized.rows == [[VNull, VNull, VNull, VInt(7), VStr("中文")]], "copied-values")
+}
+
+test "native SQL extension loading stays disabled before and after C loading" {
+  temporary(path => {
+    done(with_db(path, "", gate))
+    done(with_db(path, setting("DAWN_SQLITE_SIMPLE"), gate))
+  })
+}
+
+test "native closes body Err and panic connections without retaining locks" {
+  temporary(path => {
+    let r: Result[Unit, String] = with_db(path, "", () => {
+      execute("begin immediate", [])?
+      execute("create table abandoned(id integer)", [])?
+      Err("primary")
+    })
+    check(r == Err("primary"), "connection-body-error")
+    let panicked: Result[Unit, ForeignError] = catch_panic(() => {
+      let r: Result[Unit, String] = with_db(path, "", () => {
+        demand(execute("begin immediate", []))
+        demand(execute("create table abandoned(id integer)", []))
+        panic("connection panic")
+      })
+      demand(r)
+    })
+    check(match panicked { Err(e) -> str.contains(e.message, "connection panic")
+      Ok(_) -> false }, "connection-panic")
+    done(with_db(path, "", () => {
+      execute("begin immediate", [])?
+      execute("create table abandoned(id integer)", [])?
+      execute("rollback", [])
+    }))
+  })
+}
+
+pub fn main() -> Unit !io = {
+  let argv = args()
+  let mode = unwrap_or(get(argv, 0), "sql")
+  let path = unwrap_or(get(argv, 1), "")
+  let ext = unwrap_or(get(argv, 2), "")
+  if mode == "wal-error" || mode == "extension-error" {
+    let r: Result[Unit, String] = with_db(path, ext, () => Ok(()))
+    let label = if mode == "wal-error" { "startup-wal" } else { "startup-extension" }
+    check(match r { Err(m) -> str.contains(m, if mode == "wal-error" { "site.db.wal" } else { "sqlite.extension" })
+      Ok(_) -> false }, label)
+  } else if mode == "bench" {
+    let start = io.with_clock_real(() => io.now())
+    done(with_db(path, ext, () => {
+      check(scalar_int("select 1", [])? == 1, "bench-read")
+      Ok(())
+    }))
+    let stop = io.with_clock_real(() => io.now())
+    println(to_string(io.elapsed_ns(start, stop)))
+  } else if mode == "hold" {
+    done(with_db(path, "", () => {
+      execute("begin immediate", [])?
+      println("locked")
+      io.flush_stdout()
+      let _ = io.read_line()
+      execute("rollback", [])
+    }))
+  } else if mode == "contend" {
+    done(with_db(path, "", () => {
+      busy_timeout(150)?
+      let start = io.with_clock_real(() => io.now())
+      let r: Result[Unit, String] = with_immediate_tx(() => Ok(()))
+      let stop = io.with_clock_real(() => io.now())
+      check(match r { Err(m) -> str.contains(m, "sqlite.busy")
+        Ok(_) -> false }, "busy-refusal")
+      println("busy\t${io.elapsed_ns(start, stop)}")
+      Ok(())
+    }))
+  } else if mode == "gate" { done(with_db(path, ext, gate)) }
+  else if mode == "fts" { done(with_db(path, ext, fts_suite)) }
+  else if mode == "sql" { done(with_db(path, ext, sql_suite)) }
+  else { panic("unknown probe mode") }
+}

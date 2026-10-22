@@ -64,6 +64,11 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - 测试：`python3 scripts/test_project.py`，由 build.sh 自动调用。test/{core,jvm} 的
   白盒测试与夹具在一次性 JVM 同模块镜像内接回同名模块，调用私有函数无需扩大生产 API。
   镜像仍使用 Dawn 路径依赖，生产构建直接消费原始 app/jvm，测试目录不进入部署 jar。
+- native SQLite：仓库根执行 `backend-dawn/scripts/native-sqlite/run.sh`，使用钉住的
+  dawnc 检查 adapter、构建测试 consumer、运行 native 单测、JDBC/native SQL 对拍与
+  必须取得的 simple v0.7.1 FTS 夹具、真实源码负控、双进程 BUSY 和完整插桩引擎的
+  ASan/UBSan/LSan。需要 clang；下载物逐次验摘要，缺失或损坏直接失败。`--benchmark 300`
+  加测新进程每连接初始化成本；`--work <空目录>` 保留日志与样本。
   保留原有全部 433 项并补充 4 项 Db 测试（含依赖包共 437 项）及 11 条 FFI 断言；无需 .env、外部库或真实服务。
 - core 门禁：`python3 scripts/check_core.py --negative-controls`。对整个 core 根运行
   发布版 native dawnc check，再扫描所有可达源码包的完整源码及 manifest，拒绝 Java、
@@ -147,12 +152,22 @@ svc/search、svc/export、svc/paste，以及原有 config、qiniu/creds、qiniu/
 app 留 25 个模块，包含 db/jdbc 与 db/db，及仍依赖 Clock、TTL、Upstream 的业务和 HTTP 入口。
 core 的完整 native 依赖闭包为四包 43 个源码文件，零 Java 依赖。
 
+S4 增加独立 `app/native` 包 site_sqlite，仅含 `db/native_sqlite` handler，core 不回指它。
+`test/sql` 保存两个真实 handler 共用的 SQL 场景；`test/native` 是可 check/build/test 的
+测试 consumer。JVM 生产与原 437 项测试仍用原命令、原根；native HTTP 入口尚属后续刀。
+
 以下模块名按原相对路径记：core 中的模块在 core/src 下，其余在 app/jvm/src 下，
 对应测试在 test/core 或 test/jvm。main 属于 app，config 属于 core。
 `qiniu_*`/`tencent_*` 进目录后丢前缀
 （`qiniu/sign`、`tencent/client`），`api_*`/`repo_*` 保留前缀——api 与 repo 是唯一会同名对撞的两层。
 
 **基础设施（预备刀 1–5）**
+- `app/native/src/db/native_sqlite.dawn` — sqlite 0.1.0 的连接 owner 与 Db 六臂。
+  `with_db(path, ext, body)` 返回 Result[T, String]；每次先装 busy_timeout=5000，
+  查询并核对 WAL，再按需用固定 sqlite3_simple_init 的 C 接口加载扩展；失败返回调用层，
+  不执行 body。SQL 扩展 gate 始终关闭。NULL、列名和重复 label、Bool、SQL quote row_sig
+  与 core 事务规则保持；不把 sqlite3_changes 用于 DDL 或编辑检测。版本和源码树摘要
+  固定到工具链同一个 v0.97.0 URL/subdir。详见 `docs/native-sqlite-design.md`（仓库根）。
 - `core/src/db/sql.dawn` — 站点 `Db` 效果与 `SqlV/Col/Cell/Row/QueryResult`：
   六个操作为 db_query、execute、execute_changes、last_id、busy_timeout、in_transaction，
   均返回 Result[..., String]。query/query_rows、exec、scalar_int、require_tx、row_sig 与普通泛型

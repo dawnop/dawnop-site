@@ -148,6 +148,9 @@ jobs:
       - name: native core dependency closure and negative controls
         run: python3 backend-dawn/scripts/check_core.py --negative-controls
 
+      - name: native SQLite handler check build test and contracts
+        run: backend-dawn/scripts/native-sqlite/run.sh
+
       - name: Java FFI boundaries
         run: python3 backend-dawn/scripts/check-ffi-boundaries.py
 

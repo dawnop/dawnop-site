@@ -63,7 +63,9 @@ dawnop-site/
 │   │   ├── src/                # main、api、其余 svc 与 JDBC/Clock/TTL/HTTP 接缝
 │   │   ├── dawn.toml           # web_jvm、sqlite-jdbc 与 site_core
 │   │   └── dawn.lock           # 原 JDBC artifact 锁，内容不变
+│   ├── app/native/             # site_sqlite：独立 Db handler；sqlite 0.1.0 固定 URL/hash/subdir
 │   ├── test/{core,jvm}/        # 按原模块路径保存测试与专用夹具
+│   ├── test/{sql,native}/      # 共用 SQL 场景与 native 测试 consumer
 │   ├── build.sh                # 临时镜像跑测试 → 直接 build app/jvm
 │   ├── scripts/test_project.py # 生成同模块白盒测试镜像，不扩大私有 API
 │   ├── scripts/check_core.py   # native check 与源码依赖闭包门禁，含真实负控
@@ -273,6 +275,7 @@ dawnop-site/
 ```bash
 # ---- 后端：Dawn（生产用的这套）----
 ./backend-dawn/build.sh                 # 取编译器 → 跑 test/ 白盒测试 → 打 jar（+ lib/）
+backend-dawn/scripts/native-sqlite/run.sh # native handler、SQL 双臂、真实 FTS、BUSY、ASan/LSan
 java -jar backend-dawn/backend-dawn.jar # 跑起来（lib/ 须在 jar 旁边）
 python3 backend-dawn/scripts/test_project.py # 独立运行全量白盒单测
 python3 backend-dawn/scripts/check_core.py --negative-controls # core native 门禁
