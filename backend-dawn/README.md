@@ -48,6 +48,10 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 ## 依赖与构建
 
+- 编译器钉在 v0.97.0；web 7.2.0（纯 Dawn）、web_jvm 1.1.0（JVM 服务器）、
+  json 与 sha2 都来自同版 tag 归档。入口使用 `web_jvm/server`，表单解析使用
+  `web/wire`；HTTP owner 在 `stream_response` 内用 `input_source` 把私有
+  InputStream 转成 web 的 BodySource。
 - 依赖：在 [`dawn.toml`](dawn.toml) 的 `[java-deps]` 里声明（现只剩 `sqlite-jdbc`；`jbcrypt` 已由纯 Dawn 的 `util/bcrypt` 取代——零传递依赖
   白名单，见 m6.md §2 G1）。`dawn run/test/build` 自动从 Maven 拉取并挂上 classpath；
   `dawn build` 另把它们复制进 jar 同级的 `lib/`，jar 的 manifest `Class-Path` 以相对路径引用它，
@@ -222,7 +226,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   本仓的安装点只有**两处**，都在最内层拥有一个完整文件工作单元的边界上：`main.dawn` 罩住
   `config.load`（整个进程唯一一次启动期读文件），`api/api_monitor` 的路由闭包罩住 `server_block`
   （读 /proc 的那一段；同样装不进 main，理由与 `Upstream` 那条一样）。
-  其余 `with_fs_real` 都在测试里，另有一处在 `packages/web` 自己的 `server.dawn`。
+  其余 `with_fs_real` 都在测试里，服务器的安装点位于依赖包 `web_jvm/server`。
 - **环境变量是 std 的具名效果 `Env`**（`io.getenv` 自 dawn 0.76.0 起为 `!Env`；0.78.0 起 `io` 是唯一的环境效果，
   其余效果必须写在签名上）。本仓只在启动期读两处环境变量：`config.lookup` 与 `main.env_or`，
   各自就地罩一层 `io.with_env_real`，签名保持 `!io`（调用方本来都是 `!io`，启动期读取也没有测试替身要装）。

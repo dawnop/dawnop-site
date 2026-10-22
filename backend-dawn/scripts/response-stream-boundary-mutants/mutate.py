@@ -76,11 +76,11 @@ def main() -> int:
             http,
             "pub fn stream_response(status: Int, content_type: String, "
             "stream: ResponseStream) -> Response =\n"
-            "  streaming(status, content_type, raw_response_stream(stream))\n",
+            "  streaming(status, content_type, input_source(raw_response_stream(stream)))\n",
             "pub fn stream_response(status: Int, content_type: String, "
             "stream: ResponseStream) -> Response = {\n"
             "  let forward = streaming\n"
-            "  forward(status, content_type, raw_response_stream(stream), None)\n"
+            "  forward(status, content_type, input_source(raw_response_stream(stream)), None)\n"
             "}\n",
         )
     elif args.mutant == "bypass-owner-adapter":
@@ -109,7 +109,7 @@ def main() -> int:
         replace_once(
             api_fm,
             "use std/map\n",
-            'use std/map\nuse java "java.net.URL"\n',
+            'use std/map\nuse java "java.net.URL"\nuse web_jvm/server.{input_source}\n',
         )
         replace_once(
             api_fm,
@@ -124,14 +124,14 @@ def main() -> int:
             "pub fn bypassed_owner_forward() -> Response !io = {\n"
             "  let forward = streaming\n"
             '  let raw_stream = URL.new("http://127.0.0.1").openStream()!\n'
-            '  forward(200, "application/octet-stream", raw_stream, None)\n'
+            '  forward(200, "application/octet-stream", input_source(raw_stream), None)\n'
             "}",
         )
     else:
         replace_once(
             api_fm,
             "use std/map\n",
-            'use std/map\nuse java "java.net.URL"\n',
+            'use std/map\nuse java "java.net.URL"\nuse web_jvm/server.{input_source}\n',
         )
         replace_once(
             api_fm,
@@ -144,7 +144,7 @@ def main() -> int:
             '  let raw_stream = URL.new("http://127.0.0.1").openStream()!\n'
             '  let mime = "application/octet-stream"\n'
             '  let _rendered = "${return '
-            'bypass_types.streaming(200, mime, raw_stream)}"\n'
+            'bypass_types.streaming(200, mime, input_source(raw_stream))}"\n'
             '  panic("interpolation did not return")\n'
             "}",
         )

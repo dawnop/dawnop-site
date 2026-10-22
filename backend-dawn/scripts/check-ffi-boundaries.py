@@ -44,11 +44,14 @@ RAW_RESPONSE_STREAM_DECLARATION = (
 )
 RESPONSE_STREAM_ADAPTER_ASSERTION = "ffi.response-stream-owner-adapter"
 WEB_STREAM_IMPORT = "use web/types.{Response, streaming}"
+WEB_INPUT_SOURCE_IMPORT = "use web_jvm/server.{input_source}"
 STREAM_RESPONSE_DECLARATION = (
     "pub fn stream_response(status: Int, content_type: String, "
     "stream: ResponseStream) -> Response ="
 )
-STREAM_RESPONSE_FORWARD = "streaming(status, content_type, raw_response_stream(stream))"
+STREAM_RESPONSE_FORWARD = (
+    "streaming(status, content_type, input_source(raw_response_stream(stream)))"
+)
 RESPONSE_BODY_SEAM_ASSERTION = "ffi.web3-response-body-seam-confined"
 RESPONSE_BODY_SEAM_IDENTIFIERS = frozenset({"Stream", "ResponseBody"})
 STREAMING_SYMBOL_ASSERTION = "ffi.web3-streaming-symbol-confined"
@@ -482,6 +485,7 @@ def report_response_stream_adapter_assertion(root: Path) -> bool:
     owner_tokens = token_values(owner.read_text(encoding="utf-8"))
     required = {
         "web3 streaming import": WEB_STREAM_IMPORT,
+        "JVM input source import": WEB_INPUT_SOURCE_IMPORT,
         "owner adapter declaration": STREAM_RESPONSE_DECLARATION,
         "owner adapter forward": STREAM_RESPONSE_FORWARD,
     }

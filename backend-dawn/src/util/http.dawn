@@ -7,6 +7,7 @@ use std/bytes
 use util/ferr.{fe_text}
 use util/errkind.{KUpstream, KTimeout, upstream, timeout, split_kind}
 use web/types.{Response, streaming}
+use web_jvm/server.{input_source}
 use java "java.net.URI"
 use java "java.net.http.HttpClient"
 use java "java.net.http.HttpRequest"
@@ -381,7 +382,7 @@ pub fn ok_stream(r: StreamResp) -> Bool = r.status >= 200 && r.status < 300
 
 ## Hand a live upstream stream to web3 without exposing its Java representation.
 pub fn stream_response(status: Int, content_type: String, stream: ResponseStream) -> Response =
-  streaming(status, content_type, raw_response_stream(stream))
+  streaming(status, content_type, input_source(raw_response_stream(stream)))
 
 ## Close an upstream stream, swallowing a close failure (non-fatal — the response is
 ## already committed, or was never sent). The server calls this after pumping; a
