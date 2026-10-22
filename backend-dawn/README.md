@@ -9,7 +9,12 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 与 `POST /api/fm/upload`（multipart 代理上传，`core/src/util/multipart.dawn`）**也已落地**。
 
 契约由 `scripts/golden/*.json` 钉住（`scripts/contract_run.py`，CI 每次 push 都跑）：
-播种固定 fixture → 起后端 → 355 条响应比对（read 58 / edge 102 / webdav 104 / qiniu 91）。
+播种固定 fixture → 起后端 → 每臂 355 条响应比对（read 58 / edge 102 / webdav 104 / qiniu 91）。
+`backend-dawn/scripts/dual-arm/run.sh` 构建 native，先跑四个负控，再跑独立 JVM/native
+两臂与另计的真实 simple FTS 路由。`contract_run.py` 默认仍为 JVM；`--arm both
+--native-binary /path/to/ELF` 使用同四套脚本、归一化与七个 skip。native 测试 listener
+只 accept 并把 socket 交给每请求一个实际 ELF，strace 追踪全部 exec，PATH 只提供 curl；
+包括迁移的任意 Java/JAR 执行尝试都会拒绝。
 
 **比的是什么，别当成「逐字节」**——三种粒度，各自的理由写在 `contract_golden.py` 与
 `contract_webdav.py` 的注释里：
@@ -92,7 +97,9 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   先用已有业务 schema 的隔离库和同一 DAWNOP_ENV 执行 --migrate，再喂请求到 stdin；此处无部署授权。
   fd teardown 在 flush 后半关闭写端，最多排空 8 MiB / 300 ms，随后退出，不会循环服务第二个交换。
   S10 在已有 backend CI job 执行，原 native-acceptance 仍跑 S2/S4/S5/S6/S8/S9，job 数与 timeout 不变。
-  S8 的完整暂存 TTFB 限制继续适用，355 native 双臂是 S11，部署包是 S12。
+  S8 的完整暂存 TTFB 限制继续适用；S11 的 355 双臂已接入 backend CI，部署包仍是 S12。
+  wire/headers 只重排第一次完整 head write，保持 JVM 的 Date、207 空 reason 与文件响应头顺序；
+  body 字节不进入该接缝。curl owner 接受七牛实际使用的三位状态 612，仍校验最终状态/头一致。
 - core 门禁：`python3 scripts/check_core.py --negative-controls`。对整个 core 根运行
   发布版 native dawnc check，再扫描所有可达源码包的完整源码及 manifest，拒绝 Java、
   java-deps、web_jvm 与回指 app/test 的本地依赖。CI 先证明 Java 导入与 app 导入负控会红。
@@ -170,7 +177,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 S10 保留独立的 core、JVM/native app 和 test 根。core 有 64 个模块，持有全部路由、业务、
 配置装配与迁移接口；两个入口通过路径依赖消费同一份 application.app_routes。
-JVM 只留 6 个模块（入口、JDBC、HTTP 适配及测试构造），native 有 5 个 Dawn 模块及 fd teardown C 接缝。
+JVM 只留 6 个模块（入口、JDBC、HTTP 适配及测试构造），native 有 6 个 Dawn 模块及 fd teardown C 接缝。
 测试仍在一次性 JVM 同模块镜像合并白盒片段；core 自身和 native 完整依赖图分别接受零 Java 扫描。
 
 - `core/src/db/runtime.dawn` 的 DbConfig 保存配置与纯 Dawn DbOps 工厂，泛型 with_db 在操作记录
