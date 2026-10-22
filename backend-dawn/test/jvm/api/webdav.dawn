@@ -403,3 +403,17 @@ test "OPTIONS advertises DAV class 1,2 and an Allow matching the routed verbs" {
   # Allow cannot drift from the verbs dav_routes actually registers.
   assert ALLOW == fold(DAV_VERBS, "", (acc, v) => if acc == "" { v } else { acc ++ ", " ++ v })
 }
+
+test "spilled body size errors retain WebDAV status 500" {
+  io.with_fs_real(() => {
+    let dir = match io.temp_dir("", "dav-size-") { Ok(p) -> p
+      Err(e) -> panic(e.message) }
+    for path in [dir, dir ++ "/missing"] {
+      match as_http(file_size(path), 500) {
+        Err(e) -> { assert e.status == 500 }
+        Ok(_) -> { assert false }
+      }
+    }
+    let _ = io.delete(dir)
+  })
+}

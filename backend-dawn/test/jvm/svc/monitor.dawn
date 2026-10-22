@@ -1,3 +1,4 @@
+use fake_clock
 use util/http_jvm.{new_client, with_upstream}
 use java "java.lang.String"
 use std/bytes
@@ -104,69 +105,69 @@ test "cpu_delta_pct is the busy share of the window it spans" {
 }
 
 test "a snapshot survives the cell verbatim, and ages out of it" {
-  let cell = test_cell()
-  assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) == None
-  cpu_put(cell, (1234, 5678))
-  assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) == Some((1234, 5678))
-  # older than the bound asked for is not a current reading, and is not offered
-  assert cpu_prev(cell, 0) == None
-  # anything else in the cell reads as no snapshot, never as (0, 0) -- which
-  # would be a delta against the boot of the machine
-  assert cpu_prev_of("") == None
-  assert cpu_prev_of("12") == None
-  assert cpu_prev_of("12 34 56") == None
-  assert cpu_prev_of("busy total") == None
+  fake_clock.with_fake(1000123, _clock => {
+    let cell = test_cell()
+    assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) == None
+    cpu_put(cell, (1234, 5678))
+    assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) == Some((1234, 5678))
+    assert cpu_prev(cell, 0) == None
+    assert cpu_prev_of("") == None
+    assert cpu_prev_of("12") == None
+    assert cpu_prev_of("12 34 56") == None
+    assert cpu_prev_of("busy total") == None
+  })
+}
+
+# Fixed increasing counters keep jiffy timing out of the CPU path assertions.
+fn sampled_cpu(cell: TtlCell, age: Int) -> Float !io.Clock !io = {
+  with handle CpuWait {
+    var n: Int = 0
+    wait_window(ms) => sleep_ms(ms)
+    read_sample() => { n = n + 1
+      (n * 10, n * 100) }
+  }
+  cpu_percent_sampled(cell, age)
 }
 
 test "a reading with a snapshot to difference against opens no window of its own" {
-  let cell = test_cell()
-  let waits = AtomicReference.new("0")
-  let samples = AtomicReference.new("0")
-  with handle CpuWait {
-    wait_window(ms) => {
-      assert ms == CPU_WINDOW_MS
-      waits.set(to_string(unwrap_or(parse_int(String.valueOf(waits.get()!)!), 0) + 1))
+  fake_clock.with_fake(1000123, clock => {
+    let cell = test_cell()
+    with handle CpuWait {
+      var n: Int = 0
+      wait_window(ms) => { assert ms == CPU_WINDOW_MS
+        sleep_ms(ms) }
+      read_sample() => { n = n + 1
+        (n * 10, n * 100) }
     }
-    read_sample() => {
-      let n = unwrap_or(parse_int(String.valueOf(samples.get()!)!), 0) + 1
-      samples.set(to_string(n))
-      (n * 10, n * 100)
-    }
-  }
-  let first = cpu_percent_sampled(cell, CPU_SNAPSHOT_MAX_AGE_S)
-  assert first == 10.0
-  assert String.valueOf(waits.get()!)! == "1"
-  let second = cpu_percent_sampled(cell, CPU_SNAPSHOT_MAX_AGE_S)
-  assert second == 10.0
-  assert String.valueOf(waits.get()!)! == "1"
+    assert cpu_percent_sampled(cell, CPU_SNAPSHOT_MAX_AGE_S) == 10.0
+    assert fake_clock.sleep_count(clock) == 1
+    assert fake_clock.slept_ns(clock) == CPU_WINDOW_MS * 1000000
+    assert cpu_percent_sampled(cell, CPU_SNAPSHOT_MAX_AGE_S) == 10.0
+    assert fake_clock.sleep_count(clock) == 1
+  })
 }
 
 test "every reading leaves its own snapshot behind" {
-  let cell = test_cell()
-  # a plausible snapshot, young enough that this call takes the delta path
-  cpu_put(cell, (0, 0))
-  let _x = io.with_fs_real(() => cpu_percent(cell, CPU_SNAPSHOT_MAX_AGE_S))
-  # the next call's window has to start here. A reading that differenced and
-  # left the cell alone would keep widening its window until the snapshot aged
-  # out, which is the drift this design exists to remove -- and it would look
-  # exactly like this one from the outside.
-  assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) != Some((0, 0))
-  assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) != None
+  fake_clock.with_fake(1000123, _clock => {
+    let cell = test_cell()
+    cpu_put(cell, (0, 0))
+    assert sampled_cpu(cell, CPU_SNAPSHOT_MAX_AGE_S) == 10.0
+    assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) != Some((0, 0))
+    assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) != None
+  })
 }
 
 test "a snapshot too old to describe now sends the call back to sampling" {
-  let cell = test_cell()
-  # present, and usable at the production bound
-  cpu_put(cell, (0, 0))
-  assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) != None
-  # ... but a call that accepts nothing older than 0s has to refuse it and open
-  # its own window. Differencing against a snapshot from an hour ago would put
-  # the hour's average on the dashboard and call it live.
-  let t0 = System.currentTimeMillis()
-  let stale = io.with_fs_real(() => cpu_percent(cell, 0))
-  let stale_ms = System.currentTimeMillis() - t0
-  assert stale >= 0.0
-  assert stale_ms >= CPU_WINDOW_MS
+  fake_clock.with_fake(1000123, clock => {
+    let cell = test_cell()
+    cpu_put(cell, (0, 0))
+    assert cpu_prev(cell, CPU_SNAPSHOT_MAX_AGE_S) != None
+    let start = io.now()
+    assert sampled_cpu(cell, 0) == 10.0
+    assert elapsed_ms(start) == CPU_WINDOW_MS
+    assert fake_clock.sleep_count(clock) == 1
+    assert fake_clock.slept_ns(clock) == CPU_WINDOW_MS * 1000000
+  })
 }
 
 # ---- fault isolation across the collect phase ----
@@ -517,4 +518,22 @@ test "an unconfigured lighthouse block puts nothing on the wire at all" {
   }
   assert log_read(seen) == ""
   assert j == obj([("configured", jbool(false))])
+}
+
+test "vault latency ignores a backwards wall clock" {
+  fake_clock.with_fake(2000, clock => {
+    with handle Upstream {
+      exchange(_req) => {
+        sleep_ms(37)
+        fake_clock.rewind_wall(clock, 2000000000)
+        Ok(HttpResp { status: 200, body: "alive" })
+      }
+      exchange_bytes(_req) => Err(no_answer("exchange_bytes"))
+      exchange_stream(_req) => Err(no_answer("exchange_stream"))
+      exchange_start(req) => Ok(pending(req.budget_s, () => Ok(HttpResp { status: 200, body: "{}" })))
+    }
+    let block = vault_measured("http://fixture.invalid/alive", "fixture")
+    assert field(block, "latency_ms") == jint(37)
+    assert fake_clock.sleep_count(clock) == 1
+  })
 }

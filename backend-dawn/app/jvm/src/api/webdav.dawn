@@ -21,7 +21,7 @@ use std/bytes
 use std/char
 use std/map
 use std/list
-use site_core/util/ferr.{catch_text}
+use site_core/util/fs
 use site_core/util/b64
 use site_core/util/uri.{Uri, is_opaque, percent_decode}
 use site_core/util/uri
@@ -34,8 +34,7 @@ use svc/auth.{Auth, scheme_param}
 use svc/files.{signed_url, gc_unreferenced, gc_rows_unreferenced, gc_copy_tree_unreferenced, copy_tree_objects}
 use site_core/repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}
 use site_core/util/paths.{basename, parent_rel, ext, ts, guess_mime, safe_persisted_mime, require_admissible_names}
-use qiniu/rs.{upload_file}
-use java "java.io.File"
+use site_core/qiniu/rs.{upload_file}
 use std/io.{Random, with_random_real}
 use std/io as io
 use site_core/util/crypto.{uuid, uuid_hex}
@@ -418,7 +417,7 @@ fn mutation_error(msg: String) -> HttpError = {
 # Size of the spilled body. The Content-Length header would be a client's claim;
 # the file on disk is what we actually received and are about to upload.
 fn file_size(path: String) -> Result[Int, String] !io =
-  catch_text(() => File.new(path).length())
+  io.with_fs_real(() => fs.file_size(path))
 
 fn put(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !Random !Upstream !io =
   if rel == "" {

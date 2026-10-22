@@ -268,6 +268,9 @@ jobs:
       - name: monitor batch dual arm timing isolation and negative controls
         run: backend-dawn/scripts/monitor-batch/run.sh --work "${RUNNER_TEMP}/monitor-batch"
 
+      - name: Clock and Fs primitives with compiling negative controls
+        run: backend-dawn/scripts/clock-fs/run.sh --work "${RUNNER_TEMP}/clock-fs"
+
   # Every mutation harness, one job per shard. These are the gates that prove
   # the other gates can fail: each mutant is a one-line production change that
   # must turn exactly one named assertion red.

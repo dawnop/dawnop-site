@@ -164,3 +164,17 @@ test "the final write refuses an expired or revoked link" {
   assert with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => commit_tx(1, "d.txt", "k4", None, "text/plain", 1, 0)))) == Ok(Err(Gone("上传链接已被吊销")))
   assert with_jdbc(c, () => scalar_int("select count(*) from files where key = 'k4'", [])) == Ok(0)
 }
+
+test "spilled body size errors retain drop Failed mapping" {
+  io.with_fs_real(() => {
+    let dir = match io.temp_dir("", "drop-size-") { Ok(p) -> p
+      Err(e) -> panic(e.message) }
+    for path in [dir, dir ++ "/missing"] {
+      match file_length(path) {
+        Err(Failed(m)) -> { assert m != "" }
+        _ -> { assert false }
+      }
+    }
+    let _ = io.delete(dir)
+  })
+}

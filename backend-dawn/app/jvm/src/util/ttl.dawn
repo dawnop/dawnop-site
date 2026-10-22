@@ -13,10 +13,16 @@ pub fn init_cache(path: String) -> Unit !io =
   required(with_db(path, "", cache.ensure_schema))
 
 pub fn cache_get(cell: TtlCell, ttl_s: Int) -> Option[String] !io =
-  required(with_db(cell.path, "", () => io.with_clock_real(() => cache.cache_get(cell.address, ttl_s))))
+  io.with_clock_real(() => cache_get_clock(cell, ttl_s))
+
+pub fn cache_get_clock(cell: TtlCell, ttl_s: Int) -> Option[String] !io.Clock !io =
+  required(with_db(cell.path, "", () => cache.cache_get(cell.address, ttl_s)))
 
 pub fn cache_put(cell: TtlCell, payload: String) -> Unit !io =
-  required(with_db(cell.path, "", () => io.with_clock_real(() => cache.cache_put(cell.address, payload))))
+  io.with_clock_real(() => cache_put_clock(cell, payload))
+
+pub fn cache_put_clock(cell: TtlCell, payload: String) -> Unit !io.Clock !io =
+  required(with_db(cell.path, "", () => cache.cache_put(cell.address, payload)))
 
 pub fn now_s() -> Int !io = system_s()
 

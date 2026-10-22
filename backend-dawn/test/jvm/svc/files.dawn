@@ -1,9 +1,9 @@
+use std/io
+use site_core/util/clock.{system_now}
 use db/jdbc.{DbConn, open, with_jdbc}
 use java "java.lang.String"
 use db/sql.{exec}
 use site_core/util/http.{HttpResp, MANAGEMENT_TIMEOUT_S, no_answer}
-use java "java.lang.System"
-use java "java.lang.Thread"
 use java "java.util.concurrent.atomic.AtomicReference"
 
 test "upload-token path joins the filename (not the bare dir)" {
@@ -134,13 +134,13 @@ test "gc's write transaction spans one outbound call, on the management budget" 
 
   let seen = gc_log_new()
   let stall_ms = 120
-  let t0 = System.currentTimeMillis()
+  let t0 = system_now()
   let outcome = {
     with handle Upstream {
       exchange(req) => {
         # what a hung rs endpoint looks like from inside the transaction
         gc_log_add(seen, "${req.method} budget=${to_string(req.budget_s)}")
-        Thread.sleep(stall_ms)
+        io.with_clock_real(() => io.sleep_ns(stall_ms * 1000000))
         Ok(HttpResp { status: 200, body: "{}" })
       }
       exchange_bytes(req) => Err(no_answer("exchange_bytes"))
@@ -149,7 +149,7 @@ test "gc's write transaction spans one outbound call, on the management budget" 
     }
     with_jdbc(c, () => gc_unreferenced_on(gc_test_qiniu(), Some("orphan-key")))
   }
-  let elapsed = System.currentTimeMillis() - t0
+  let elapsed = io.elapsed_ns(t0, system_now()) / 1000000
 
   assert gc_ok(outcome)
   # Exactly one call goes out, on the management budget. That is the window
@@ -176,7 +176,7 @@ test "a delete that times out leaves the writer free, it does not wedge the site
   let probe = open("jdbc:sqlite:file:gc_lock_timeout?mode=memory&cache=shared")
   gc_tables(c)
 
-  let t0 = System.currentTimeMillis()
+  let t0 = system_now()
   let outcome = {
     with handle Upstream {
       exchange(req) => Err(ForeignError {
@@ -190,7 +190,7 @@ test "a delete that times out leaves the writer free, it does not wedge the site
     }
     with_jdbc(c, () => gc_unreferenced_on(gc_test_qiniu(), Some("orphan-key")))
   }
-  let elapsed = System.currentTimeMillis() - t0
+  let elapsed = io.elapsed_ns(t0, system_now()) / 1000000
 
   assert gc_ok(outcome)
   assert writer_free(probe)

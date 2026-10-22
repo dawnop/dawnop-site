@@ -1,5 +1,7 @@
 # The same fake-clock cache cases run through JDBC and native SQLite.
 use std/io.{Clock}
+use std/io
+use fake_clock
 use site_core/util/cache
 use site_core/util/cache.{CacheSlot}
 use site_core/db/sql.{Db, execute, query, ColStr, ColInt, PStr, scalar_int, in_transaction}
@@ -24,10 +26,15 @@ fn observed(name: String) -> Unit !io = println("cache\t${name}")
 
 fn boundary() -> Result[Unit, String] !Db !io = {
   for (ns, ttl) in [("monitor.v1", 120), ("respack.v1", 300), ("space.v1", 600), ("dav.v1", 300), ("cpu.v1", 300)] {
-    put(ns, 1000123, "中文|\u{0}|${ns}")?
-    check(read(ns, 1000123 + ttl * 1000 - 1, ttl)? == Some("中文|\u{0}|${ns}"), "ttl-before-1ms")
-    check(read(ns, 1000123 + ttl * 1000, ttl)? == None, "ttl-exact-expiry")
-    check(read(ns, 1000123, 0)? == None, "ttl-zero")
+    fake_clock.with_fake(1000123, clock => {
+      check(cache.cache_put(cache.slot(ns), "中文|\u{0}|${ns}") == Ok(()), "ttl-put")
+      io.sleep_ns((ttl * 1000 - 1) * 1000000)
+      check(cache.cache_get(cache.slot(ns), ttl) == Ok(Some("中文|\u{0}|${ns}")), "ttl-before-1ms")
+      io.sleep_ns(1000000)
+      check(cache.cache_get(cache.slot(ns), ttl) == Ok(None), "ttl-exact-expiry")
+      check(cache.cache_get(cache.slot(ns), 0) == Ok(None), "ttl-zero")
+      check(fake_clock.sleep_count(clock) == 2 && fake_clock.slept_ns(clock) == ttl * 1000000000, "ttl-fake-sleep")
+    })
   }
   observed("five-slot-boundaries")
   Ok(())

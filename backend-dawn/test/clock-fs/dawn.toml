@@ -1,0 +1,6 @@
+schema = 1
+name = "clock_fs_probe"
+
+[deps]
+site_core = "../../core"
+sql_scenarios = "../sql"

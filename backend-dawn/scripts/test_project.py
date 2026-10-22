@@ -63,6 +63,9 @@ def stage_project(destination: Path, backend: Path = BACKEND) -> None:
         'fn check(ok: Bool, name: String) -> Unit = if not ok { panic("assertion: ${name}") }',
     )
     (destination / "src/cache_scenarios.dawn").write_text(cache_cases)
+    shutil.copy2(
+        backend / "test/sql/src/fake_clock.dawn", destination / "src/fake_clock.dawn"
+    )
     for kind in ("jvm", "core"):
         fragments = backend / "test" / kind
         for fragment in sorted(fragments.rglob("*.dawn")):

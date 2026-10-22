@@ -1,0 +1,11 @@
+# Keep filesystem failures in Result all the way to the existing HTTP mapper.
+use std/io
+use util/ferr.{fe_text}
+
+## Only a regular file has a body length. Empty files succeed with zero;
+## directories, absent paths and permission failures stay errors.
+pub fn file_size(path: String) -> Result[Int, String] !io.Fs =
+  match io.file_size(path) {
+    Ok(n) -> Ok(n)
+    Err(e) -> Err(fe_text(e))
+  }

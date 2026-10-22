@@ -1,25 +1,4 @@
-# The wall clock as a named effect (effect migration batch 1). Code that reads
-# "what time is it" and whose output a test wants to assert on reads it through
-# the `now_ms` operation instead of the machine; the production handler is
-# `with_system_clock`, and a test installs a frozen one and gets to pin bytes
-# that would otherwise change every second (TC3 Authorization, a JWT).
-#
-# Why the handler is not installed once in main.dawn: `with handle` supplies
-# evidence to the *rest of its own block*, and a closure built inside the block
-# does not capture it (spec §6.5, "the handler is the call site's, not the
-# creation site's"). Every route is a closure main hands to the router, which
-# knows nothing about Clock, so a route closure that emitted `!Clock` would not
-# type-check as a `Handler` at all. The handler therefore sits at the innermost
-# boundary that owns a whole unit of work. That is also what keeps `!Clock` off
-# the public surface of api/ and svc/ — see the two installation sites,
-# svc/monitor.lighthouse_start and svc/auth (login / auth_with).
-#
-# Sites still reading the machine clock directly, deliberately: the fm/webdav
-# qiniu deadlines, the monitor's boot time and its elapsed-time
-# probes, qiniu/stats' day windows. Each is reached only from inside a route
-# closure, so threading Clock there would put `!Clock` on the whole api/ surface
-# and then hit the wall above; and none of them has an assertion worth freezing.
-# The persistent cache instead uses std/io.Clock and millisecond fake clocks.
+# Wall time is for dates and persisted TTLs; Instant is for process durations.
 use std/io
 
 ## Wall-clock milliseconds since the epoch, from whichever clock the caller's
@@ -31,7 +10,7 @@ pub effect Clock {
 ## Wall-clock milliseconds straight from the machine. The one place this backend
 ## reads the host clock; `with_system_clock` is what wires it to the effect, and
 ## util/ttl.now_s is the reader for the sites that have not been migrated.
-pub fn system_ms() -> Int !io = io.with_clock_real(() => io.now_wall_ns() / 1000000)
+pub fn system_ms() -> Int !io = io.with_clock_real(wall_ms)
 
 ## Wall-clock seconds straight from the machine.
 pub fn system_s() -> Int !io = system_ms() / 1000
@@ -49,3 +28,15 @@ pub fn with_system_clock[T](body: fn() -> T !Clock !io) -> T !io = {
   with handle Clock { now_ms() => system_ms() }
   body()
 }
+
+## Milliseconds from the installed wall clock, including fractional truncation.
+pub fn wall_ms() -> Int !io.Clock = io.now_wall_ns() / 1000000
+
+## A host monotonic reading for boundaries whose callbacks only carry io.
+pub fn system_now() -> io.Instant !io = io.with_clock_real(io.now)
+
+## Milliseconds since a monotonic reading, independent of wall clock changes.
+pub fn elapsed_ms(start: io.Instant) -> Int !io.Clock = io.elapsed_ns(start, io.now()) / 1000000
+
+## Sleep on the installed clock so tests can observe and advance the wait.
+pub fn sleep_ms(ms: Int) -> Unit !io.Clock = io.sleep_ns(ms * 1000000)

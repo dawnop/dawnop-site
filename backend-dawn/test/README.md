@@ -11,3 +11,9 @@
 九组变异 harness 用同一脚本的 `--stage <空目录>`，生成带真实测试的项目后再变异、
 构建与执行原矩阵。`source_path` 负责按原模块名定位锚点。core 业务的 JDBC 白盒测试仍在 test/jvm，测试调用以 with_jdbc 安装真实连接，生产 core 不反向依赖 app。
 生产 `dawn build app/jvm` 直接消费原始源码和路径依赖，不读取本目录或测试镜像。
+
+S2 增加 `clock-fs/` 双后端 consumer 与 `sql/src/fake_clock.dawn` 共用假钟。
+假钟的 sleep 臂推进 wall/mono 并记录次数与累计纳秒；CPU 原四项变异保持原 owner，
+五槽 TTL 的末毫秒与到期边界通过假 sleep 推进。运行 `backend-dawn/scripts/clock-fs/run.sh`，
+先证明三个源码负控会红，再检查真实目录、缺失、权限错误、空文件与磁盘容量。
+JWT 生产和测试随 Clock 一并迁到 core，原有断言保留。

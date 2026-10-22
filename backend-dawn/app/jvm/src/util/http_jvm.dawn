@@ -1,7 +1,8 @@
 # JVM owner of the process HTTP client, publishers, futures and raw streams.
 use site_core/util/http.{HttpResp, BytesResp, StreamResp, OutReq, OutBody, NoBody, TextBody, RawBody, FileBody, RequestBody, Upstream, Pending, pending, response_stream, request_parts}
 use site_core/util/http_batch.{UpstreamBatch, BatchReq, BatchReply, unique_ids, failed, batch_fault}
-use java "java.lang.System"
+use std/io
+use site_core/util/clock.{system_now}
 use java "java.lang.Object"
 use java "java.util.concurrent.atomic.AtomicLong"
 use std/str
@@ -14,7 +15,6 @@ use java "java.net.http.HttpRequest.BodyPublisher"
 use java "java.net.http.HttpRequest.BodyPublishers"
 use java "java.net.http.HttpResponse.BodyHandlers"
 use java "java.io.File"
-use java "java.nio.file.Files"
 use java "java.io.InputStream"
 use java "java.time.Duration"
 use java "java.lang.String"
@@ -157,7 +157,7 @@ fn raw_body_publisher(body: RequestBody) -> Result[BodyPublisher, ForeignError] 
   let path = File.new(file.path).toPath()!
   # ofFile is the existing constant-memory production path. Refuse unsupported
   # slices rather than silently uploading the whole file under a partial claim.
-  if file.offset != 0 || file.length != Files.size(path) {
+  if file.offset != 0 || file.length != io.with_fs_real(() => io.file_size(file.path))? {
     return Err(ForeignError {
       kind: "site.upstream.unsupported_file_range",
       message: "JVM outbound file description must cover the complete stable file", cause: None,
@@ -179,35 +179,35 @@ fn add_headers(b: Builder, hs: List[(String, String)], i: Int) -> Builder !io =
     add_headers(b2, hs, i + 1)
   }
 
-# The completion callback records a monotonic timestamp for each exchange;
+# The completion callback records a monotonic duration for each exchange;
 # joining a slow earlier item cannot inflate a later item's duration.
 type BatchStarted = { response: CompletableFuture, completion: CompletableFuture }
-type BatchFuture = { item: BatchReq, future: Result[BatchStarted, ForeignError], start: Int, stop: AtomicLong }
+type BatchFuture = { item: BatchReq, future: Result[BatchStarted, ForeignError], start: io.Instant, stop: AtomicLong }
 
 fn wire_batch(cl: HttpCell, requests: List[BatchReq]) -> List[BatchReply] !io = {
   if not unique_ids(requests) {
     return map(requests, r => failed(r.id, batch_fault("duplicate or empty outbound batch ID")))
   }
   let started = map(requests, item => {
-    let start = System.nanoTime()
-    let stop = AtomicLong.new(0)
-    let future = batch_start(cl, item.req, stop)
-    match future { Err(_) -> stop.set(System.nanoTime())
+    let start = system_now()
+    let stop = AtomicLong.new(-1)
+    let future = batch_start(cl, item.req, start, stop)
+    match future { Err(_) -> stop.set(io.elapsed_ns(start, system_now()))
       Ok(_) -> () }
     BatchFuture { item: item, start: start, stop: stop, future: future }
   })
   map(started, batch_join)
 }
 
-fn batch_start(cl: HttpCell, req: OutReq, stop: AtomicLong) -> Result[BatchStarted, ForeignError] !io =
+fn batch_start(cl: HttpCell, req: OutReq, start: io.Instant, stop: AtomicLong) -> Result[BatchStarted, ForeignError] !io =
   flatten_fault(catch_fault(() => {
     let built = request_for(req)?
     let future = client_of(cl).sendAsync(built, BodyHandlers.ofString()!)!
     let completed = future.thenApply((raw: Object) => {
-      stop.set(System.nanoTime())
+      stop.set(io.elapsed_ns(start, system_now()))
       raw
     })!.exceptionally((error: Object) => {
-      stop.set(System.nanoTime())
+      stop.set(io.elapsed_ns(start, system_now()))
       error
     })!
     Ok(BatchStarted { response: future, completion: completed })
@@ -223,7 +223,7 @@ fn batch_join(started: BatchFuture) -> BatchReply !io = {
     }))
   }
   let stop = started.stop.get()
-  let elapsed = ((if stop == 0 { System.nanoTime() } else { stop }) - started.start) / 1000000
+  let elapsed = (if stop < 0 { io.elapsed_ns(started.start, system_now()) } else { stop }) / 1000000
   match result {
     Err(e) -> {
       let real = match e.cause {

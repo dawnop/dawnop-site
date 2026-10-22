@@ -1,9 +1,9 @@
+use site_core/util/clock.{system_now}
 use site_core/util/http.{FileSpan, request_body, fetch, post, post_bytes, post_body, fetch_bytes, fetch_stream, fetch_start, post_start, await_resp, ok_stream, close_stream, file_body, timed_out, as_outbound, HttpResp, BytesResp, StreamResp, MANAGEMENT_TIMEOUT_S, no_answer, bytes_stream, test_text_exchange, test_fetch_bytes_within, test_fetch_stream_within, test_start_within, test_deadline_text, test_unwrap_execution, test_response_source, TEST_TRANSFER_TIMEOUT_S}
 use std/bytes
 use site_core/util/errkind.{KUpstream, KTimeout, split_kind}
 use site_core/util/ferr.{fe_text}
 use web/types.{BodySource}
-use java "java.lang.Thread"
 use java "java.util.concurrent.atomic.AtomicReference"
 use java "com.sun.net.httpserver.HttpServer"
 use java "java.net.InetSocketAddress"
@@ -126,7 +126,7 @@ test "fetch_stream carries a non-2xx status; ok_stream is false" {
 fn stall_server(stall_ms: Int, status: Int, body: String) -> (HttpServer, Int) !io = {
   let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
   server.createContext("/", ex => {
-    Thread.sleep(stall_ms)
+    io.with_clock_real(() => io.sleep_ns(stall_ms * 1000000))
     let payload = bytes.utf8(body)
     ex.sendResponseHeaders(status, len(payload))
     let os = ex.getResponseBody()!
@@ -155,9 +155,9 @@ test "every request shape carries its deadline, whichever body handler it uses" 
   let ceiling = 4000
 
   let (s1, p1) = stall_server(stall_ms, 200, "late")
-  let t1 = System.currentTimeMillis()
+  let t1 = system_now()
   let bytes_outcome = with_upstream(new_client(), () => test_fetch_bytes_within("http://127.0.0.1:${p1}/", [], budget))
-  let e1 = System.currentTimeMillis() - t1
+  let e1 = io.elapsed_ns(t1, system_now()) / 1000000
   s1.stop(0)
   match bytes_outcome {
     Ok(_) -> panic("fetch_bytes rode out the stall: ${to_string(e1)}ms")
@@ -166,9 +166,9 @@ test "every request shape carries its deadline, whichever body handler it uses" 
   assert e1 <= ceiling
 
   let (s2, p2) = stall_server(stall_ms, 200, "late")
-  let t2 = System.currentTimeMillis()
+  let t2 = system_now()
   let stream_outcome = with_upstream(new_client(), () => test_fetch_stream_within("http://127.0.0.1:${p2}/", [], budget))
-  let e2 = System.currentTimeMillis() - t2
+  let e2 = io.elapsed_ns(t2, system_now()) / 1000000
   s2.stop(0)
   match stream_outcome {
     Ok(_) -> panic("fetch_stream rode out the stall: ${to_string(e2)}ms")
@@ -178,10 +178,10 @@ test "every request shape carries its deadline, whichever body handler it uses" 
 
   # the POST/publisher shape, i.e. what upload_file and upload_bytes ride on
   let (s3, p3) = stall_server(stall_ms, 200, "late")
-  let t3 = System.currentTimeMillis()
+  let t3 = system_now()
   let post_outcome = with_upstream(new_client(), () =>
       test_text_exchange("POST", "http://127.0.0.1:${p3}/", [], TextBody("x"), budget))
-  let e3 = System.currentTimeMillis() - t3
+  let e3 = io.elapsed_ns(t3, system_now()) / 1000000
   s3.stop(0)
   match post_outcome {
     Ok(_) -> panic("send_body rode out the stall: ${to_string(e3)}ms")
@@ -370,7 +370,7 @@ test "started requests travel together, not one after another" {
   let (s3, p3) = stall_server(stall_ms, 200, "three")
   let cl = new_client()
 
-  let t0 = System.currentTimeMillis()
+  let t0 = system_now()
   let started = with_upstream(cl, () => {
     let f1 = must(fetch_start("http://127.0.0.1:${p1}/", []))
     let f2 = must(fetch_start("http://127.0.0.1:${p2}/", []))
@@ -378,12 +378,12 @@ test "started requests travel together, not one after another" {
     (f1, f2, f3)
   })
   # starting must not be waiting: this is before any body has landed
-  let started_at = System.currentTimeMillis() - t0
+  let started_at = io.elapsed_ns(t0, system_now()) / 1000000
   let (g1, g2, g3) = started
   let r1 = must(await_resp(g1))
   let r2 = must(await_resp(g2))
   let r3 = must(await_resp(g3))
-  let elapsed = System.currentTimeMillis() - t0
+  let elapsed = io.elapsed_ns(t0, system_now()) / 1000000
   s1.stop(0)
   s2.stop(0)
   s3.stop(0)
@@ -503,9 +503,9 @@ test "an injected deadline is the production deadline, in microseconds" {
   # ten-second management budget and waiting for it. Every line below is the
   # same production code — test_deadline_text, timed_out, as_outbound, split_kind —
   # reached by answering the operation instead of the socket.
-  let t0 = System.currentTimeMillis()
+  let t0 = system_now()
   let outcome = with_text_answer(Err(wire_timeout()), () => fetch("http://127.0.0.1:1/", []))
-  let elapsed = System.currentTimeMillis() - t0
+  let elapsed = io.elapsed_ns(t0, system_now()) / 1000000
 
   match outcome {
     Ok(r) -> panic("a refusing handler must not answer: ${to_string(r.status)}")
