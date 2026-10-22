@@ -70,6 +70,9 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   必须取得的 simple v0.7.1 FTS 夹具、真实源码负控、双进程 BUSY 和完整插桩引擎的
   ASan/UBSan/LSan。需要 clang；下载物逐次验摘要，缺失或损坏直接失败。`--benchmark 300`
   加测新进程每连接初始化成本；`--work <空目录>` 保留日志与样本。
+  CI 的 S4/S5/S6 位于独立 `native-acceptance` job；`scripts/sqlite_ci_cache.py`
+  仅缓存固定摘要下载与完整插桩 SQLite 引擎，命中仍验摘要并重跑全部负控与 sanitizer。
+  缓存身份含源码摘要、编译器、参数、平台和实现摘要；`mutants-complete` 显式核对该 job 成功。
   保留原有全部 433 项并补充 4 项 Db 测试（含依赖包共 437 项）及 11 条 FFI 断言；无需 .env、外部库或真实服务。
 - core 门禁：`python3 scripts/check_core.py --negative-controls`。对整个 core 根运行
   发布版 native dawnc check，再扫描所有可达源码包的完整源码及 manifest，拒绝 Java、

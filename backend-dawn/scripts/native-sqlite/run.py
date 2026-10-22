@@ -28,12 +28,12 @@ GUARD_SPEC = importlib.util.spec_from_file_location(
 )
 GUARD = importlib.util.module_from_spec(GUARD_SPEC)
 GUARD_SPEC.loader.exec_module(GUARD)
-SAN = [
-    "-fsanitize=address,undefined",
-    "-fno-omit-frame-pointer",
-    "-fno-sanitize-recover=undefined",
-    "-g",
-]
+CACHE_SPEC = importlib.util.spec_from_file_location(
+    "sqlite_ci_cache", BACKEND / "scripts/sqlite_ci_cache.py"
+)
+CACHE = importlib.util.module_from_spec(CACHE_SPEC)
+CACHE_SPEC.loader.exec_module(CACHE)
+SAN = CACHE.SAN
 
 
 def run(argv, *, env=None, good=True, timeout=300):
@@ -322,26 +322,9 @@ def effect_controls(work, dawnc, env):
 
 
 def sanitized(work, dawnc, fixture, env):
-    cc = shutil.which("clang-20") or shutil.which("clang")
-    assert cc, "clang is required for full sanitizer instrumentation"
     support = ARCHIVE / "scripts/sqlite-contract"
     library = work / "libsqlite3-san.so"
-    _, elapsed = run(
-        [
-            cc,
-            "-std=c11",
-            "-O1",
-            "-shared",
-            "-fPIC",
-            "-DSQLITE_ENABLE_FTS5",
-            *SAN,
-            work / "sqlite3.c",
-            "-lm",
-            "-o",
-            library,
-        ]
-    )
-    ok(f"sanitized SQLite engine cold build wall_s={elapsed:.3f}")
+    cc = CACHE.engine(work / "sqlite3.c", library)
     loader = work / "loader.o"
     run([cc, *SAN, "-c", support / "loader.c", "-o", loader])
     wrapper = work / "cc-san"
