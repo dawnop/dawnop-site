@@ -1,0 +1,234 @@
+[
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: GET returns the status and body the server sent",
+    "destination": "test/jvm/util/http_jvm.dawn :: GET returns the status and body the server sent"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: a bad host is an Err, not a crash",
+    "destination": "test/jvm/util/http_jvm.dawn :: a bad host is an Err, not a crash"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: custom headers reach the server",
+    "destination": "test/jvm/util/http_jvm.dawn :: custom headers reach the server"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: a non-2xx status is Ok, not Err — the caller decides",
+    "destination": "test/jvm/util/http_jvm.dawn :: a non-2xx status is Ok, not Err — the caller decides"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: fetch_stream hands back a readable upstream stream",
+    "destination": "test/jvm/util/http_jvm.dawn :: fetch_stream hands back a readable upstream stream"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: fetch_stream carries a non-2xx status; ok_stream is false",
+    "destination": "test/jvm/util/http_jvm.dawn :: fetch_stream carries a non-2xx status; ok_stream is false"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: every request shape carries its deadline, whichever body handler it uses",
+    "destination": "test/jvm/util/http_jvm.dawn :: every request shape carries its deadline, whichever body handler it uses"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: the two deadlines say what they are for",
+    "destination": "test/jvm/util/http_jvm.dawn :: the two deadlines say what they are for"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: only a timeout is reworded; every other fault keeps its text",
+    "destination": "test/jvm/util/http_jvm.dawn :: only a timeout is reworded; every other fault keeps its text"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: one cell is one connection; a client built per call is not",
+    "destination": "test/jvm/util/http_jvm.dawn :: one cell is one connection; a client built per call is not"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: a timeout is classified apart from a refusal, and keeps its wire text",
+    "destination": "test/jvm/util/http_jvm.dawn :: a timeout is classified apart from a refusal, and keeps its wire text"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: the timeout text and the timeout tag are one judgement, not two",
+    "destination": "test/jvm/util/http_jvm.dawn :: the timeout text and the timeout tag are one judgement, not two"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: started requests travel together, not one after another",
+    "destination": "test/jvm/util/http_jvm.dawn :: started requests travel together, not one after another"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: an async timeout reads exactly like a blocking one",
+    "destination": "test/jvm/util/http_jvm.dawn :: an async timeout reads exactly like a blocking one"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: unwrap_execution recovers the fault the blocking path would have seen",
+    "destination": "test/jvm/util/http_jvm.dawn :: unwrap_execution recovers the fault the blocking path would have seen"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: an injected deadline is the production deadline, in microseconds",
+    "destination": "test/jvm/util/http_jvm.dawn :: an injected deadline is the production deadline, in microseconds"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: the connect-timeout class is a timeout here too, and a refusal is not",
+    "destination": "test/jvm/util/http_jvm.dawn :: the connect-timeout class is a timeout here too, and a refusal is not"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: the installed handler is what the callers see, and the machine is not",
+    "destination": "test/jvm/util/http_jvm.dawn :: the installed handler is what the callers see, and the machine is not"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: the arm reads the request it was given, not a constant",
+    "destination": "test/jvm/util/http_jvm.dawn :: the arm reads the request it was given, not a constant"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: every call shape asks for the budget its deadline was chosen for",
+    "destination": "test/jvm/util/http_jvm.dawn :: every call shape asks for the budget its deadline was chosen for"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: a stream can be answered without a socket",
+    "destination": "test/jvm/util/http_jvm.dawn :: a stream can be answered without a socket"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: an answered start delivers through await_resp, and its failure is reworded",
+    "destination": "test/jvm/util/http_jvm.dawn :: an answered start delivers through await_resp, and its failure is reworded"
+  },
+  {
+    "original": "test/jvm/util/http_jvm.dawn :: an unsupported JVM file slice is an outbound error before send",
+    "destination": "test/jvm/util/http_jvm.dawn :: an unsupported JVM file slice is an outbound error before send"
+  },
+  {
+    "original": "test/jvm/qiniu/rs.dawn :: Qiniu upload multipart replaces unsafe persisted MIME wholesale",
+    "destination": "test/jvm/qiniu/rs.dawn :: Qiniu upload multipart replaces unsafe persisted MIME wholesale"
+  },
+  {
+    "original": "test/jvm/qiniu/rs.dawn :: the streaming multipart body goes on the wire byte-exactly, across many chunks",
+    "destination": "test/jvm/qiniu/rs.dawn :: the streaming multipart body goes on the wire byte-exactly, across many chunks"
+  },
+  {
+    "original": "test/jvm/qiniu/rs.dawn :: a missing upload file keeps the upload_file error prefix",
+    "destination": "test/jvm/qiniu/rs.dawn :: a missing upload file keeps the upload_file error prefix"
+  },
+  {
+    "original": "test/jvm/qiniu/rs.dawn :: a refused qiniu call is an Err, not Ok(false)",
+    "destination": "test/jvm/qiniu/rs.dawn :: a refused qiniu call is an Err, not Ok(false)"
+  },
+  {
+    "original": "test/jvm/svc/files.dawn :: upload-token path joins the filename (not the bare dir)",
+    "destination": "test/jvm/svc/files.dawn :: upload-token path joins the filename (not the bare dir)"
+  },
+  {
+    "original": "test/jvm/svc/files.dawn :: a text save carries only a short alphanumeric extension into the key",
+    "destination": "test/jvm/svc/files.dawn :: a text save carries only a short alphanumeric extension into the key"
+  },
+  {
+    "original": "test/jvm/svc/files.dawn :: rebase moves a subtree row onto its new root",
+    "destination": "test/jvm/svc/files.dawn :: rebase moves a subtree row onto its new root"
+  },
+  {
+    "original": "test/jvm/svc/files.dawn :: text save size counts UTF-8 bytes",
+    "destination": "test/jvm/svc/files.dawn :: text save size counts UTF-8 bytes"
+  },
+  {
+    "original": "test/jvm/svc/files.dawn :: rename service rejects a parent change",
+    "destination": "test/jvm/svc/files.dawn :: rename service rejects a parent change"
+  },
+  {
+    "original": "test/jvm/svc/files.dawn :: best-effort GC isolates success, errors, and panics",
+    "destination": "test/jvm/svc/files.dawn :: best-effort GC isolates success, errors, and panics"
+  },
+  {
+    "original": "test/jvm/svc/files.dawn :: gc's write transaction spans one outbound call, on the management budget",
+    "destination": "test/jvm/svc/files.dawn :: gc's write transaction spans one outbound call, on the management budget"
+  },
+  {
+    "original": "test/jvm/svc/files.dawn :: a delete that times out leaves the writer free, it does not wedge the site",
+    "destination": "test/jvm/svc/files.dawn :: a delete that times out leaves the writer free, it does not wedge the site"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: cpu_of takes busy/total jiffies off the aggregate cpu line",
+    "destination": "test/jvm/svc/monitor.dawn :: cpu_of takes busy/total jiffies off the aggregate cpu line"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: cpu_count_of counts cpuN lines and not the aggregate or other cpu-prefixed keys",
+    "destination": "test/jvm/svc/monitor.dawn :: cpu_count_of counts cpuN lines and not the aggregate or other cpu-prefixed keys"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: a host without /proc answers the same keys with nothing in them",
+    "destination": "test/jvm/svc/monitor.dawn :: a host without /proc answers the same keys with nothing in them"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: loadavg_of reads the three averages, and only those",
+    "destination": "test/jvm/svc/monitor.dawn :: loadavg_of reads the three averages, and only those"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: meminfo_of reports used = total - available, in bytes",
+    "destination": "test/jvm/svc/monitor.dawn :: meminfo_of reports used = total - available, in bytes"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: net_totals_of sums every interface (recv = field 0, sent = field 8)",
+    "destination": "test/jvm/svc/monitor.dawn :: net_totals_of sums every interface (recv = field 0, sent = field 8)"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: uptime_of takes the first float, truncated to whole seconds",
+    "destination": "test/jvm/svc/monitor.dawn :: uptime_of takes the first float, truncated to whole seconds"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: cpu_delta_pct is the busy share of the window it spans",
+    "destination": "test/jvm/svc/monitor.dawn :: cpu_delta_pct is the busy share of the window it spans"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: a snapshot survives the cell verbatim, and ages out of it",
+    "destination": "test/jvm/svc/monitor.dawn :: a snapshot survives the cell verbatim, and ages out of it"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: a reading with a snapshot to difference against opens no window of its own",
+    "destination": "test/jvm/svc/monitor.dawn :: a reading with a snapshot to difference against opens no window of its own"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: every reading leaves its own snapshot behind",
+    "destination": "test/jvm/svc/monitor.dawn :: every reading leaves its own snapshot behind"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: a snapshot too old to describe now sends the call back to sampling",
+    "destination": "test/jvm/svc/monitor.dawn :: a snapshot too old to describe now sends the call back to sampling"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: a failing qiniu sub-fetch reports itself and leaves the other groups whole",
+    "destination": "test/jvm/svc/monitor.dawn :: a failing qiniu sub-fetch reports itself and leaves the other groups whole"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: each qiniu group fails alone, whichever one it is",
+    "destination": "test/jvm/svc/monitor.dawn :: each qiniu group fails alone, whichever one it is"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: a lighthouse call that fails to start is isolated like one that fails in flight",
+    "destination": "test/jvm/svc/monitor.dawn :: a lighthouse call that fails to start is isolated like one that fails in flight"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: an API-level Error is still one call's failure, not the block's",
+    "destination": "test/jvm/svc/monitor.dawn :: an API-level Error is still one call's failure, not the block's"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: an unconfigured block asks nothing and answers the constant",
+    "destination": "test/jvm/svc/monitor.dawn :: an unconfigured block asks nothing and answers the constant"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: the three lighthouse calls all go out before any reply is read",
+    "destination": "test/jvm/svc/monitor.dawn :: the three lighthouse calls all go out before any reply is read"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: an unconfigured lighthouse block puts nothing on the wire at all",
+    "destination": "test/jvm/svc/monitor.dawn :: an unconfigured lighthouse block puts nothing on the wire at all"
+  },
+  {
+    "original": "test/jvm/svc/monitor.dawn :: vault latency ignores a backwards wall clock",
+    "destination": "test/jvm/svc/monitor.dawn :: vault latency ignores a backwards wall clock"
+  },
+  {
+    "original": "test/core/util/http.dawn :: a response source keeps its error until consumption and closes after failure",
+    "destination": "test/core/util/http.dawn :: a response source keeps its error until consumption and closes after failure"
+  },
+  {
+    "original": "test/core/util/http.dawn :: source ownership closes successful rejected HEAD and disconnected responses",
+    "destination": "test/core/util/http.dawn :: source ownership closes successful rejected HEAD and disconnected responses"
+  },
+  {
+    "original": "test/core/util/http.dawn :: a request body is multipart bytes and an explicit stable file description",
+    "destination": "test/core/util/http.dawn :: a request body is multipart bytes and an explicit stable file description"
+  }
+]

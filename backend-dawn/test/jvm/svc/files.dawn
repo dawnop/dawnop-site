@@ -1,10 +1,9 @@
+use test_support
 use std/io
 use site_core/util/clock.{system_now}
 use db/jdbc.{DbConn, open, with_jdbc}
-use java "java.lang.String"
 use db/sql.{exec}
 use site_core/util/http.{HttpResp, MANAGEMENT_TIMEOUT_S, no_answer}
-use java "java.util.concurrent.atomic.AtomicReference"
 
 test "upload-token path joins the filename (not the bare dir)" {
   # subdir upload: full file path, key extension from the filename
@@ -96,11 +95,11 @@ fn gc_ok(r: Result[Unit, String]) -> Bool =
     Err(_m) -> false
   }
 
-fn gc_log_new() -> AtomicReference !io = AtomicReference.new("")
+fn gc_log_new() -> String !io = test_support.log_new()
 
-fn gc_log_read(r: AtomicReference) -> String !io = String.valueOf(r.get()!)!
+fn gc_log_read(r: String) -> String !io = test_support.log_read(r)
 
-fn gc_log_add(r: AtomicReference, s: String) -> Unit !io = r.set("${gc_log_read(r)}${s};")
+fn gc_log_add(r: String, s: String) -> Unit !io = test_support.log_add(r, s)
 
 fn gc_test_qiniu() -> Qiniu =
   Qiniu {

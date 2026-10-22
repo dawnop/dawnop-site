@@ -1,0 +1,47 @@
+# This module is materialized only in disposable white-box projects.
+use std/bytes
+use std/io
+use std/str
+use std/fmt.{parse_int}
+
+pub fn file(data: Bytes) -> String !io = io.with_fs_real(() => {
+  let dir = match io.temp_dir(SCRATCH, "fixture-") { Ok(p) -> p
+    Err(e) -> panic(e.message) }
+  let path = dir ++ "/data"
+  match io.write_bytes(path, data) { Ok(_) -> path
+    Err(e) -> panic(e.message) }
+})
+
+pub fn remove(path: String) -> Unit !io = io.with_fs_real(() => {
+  let _ = io.delete(path)
+  ()
+})
+
+pub fn log_new() -> String !io = file(bytes.utf8(""))
+pub fn log_read(path: String) -> String !io = io.with_fs_real(() => match io.read_file(path) {
+  Ok(s) -> s
+  Err(e) -> panic(e.message)
+})
+pub fn log_add(path: String, value: String) -> Unit !io = io.with_fs_real(() => {
+  match io.append_bytes(path, bytes.utf8(value ++ ";")) { Ok(_) -> ()
+    Err(e) -> panic(e.message) }
+})
+
+fn call(args: List[String]) -> String !io = {
+  let output = file(bytes.utf8(""))
+  let errors = file(bytes.utf8(""))
+  let code = io.with_proc_real(() => match io.run([PYTHON, PEER] ++ args, output, errors) {
+    Ok(n) -> n
+    Err(e) -> panic(e.message)
+  })
+  if code != 0 { panic(log_read(errors)) }
+  str.trim(log_read(output))
+}
+
+pub fn peer(mode: String, status: Int, body: String, delay: Int) -> (Int, Int) !io = {
+  let port = unwrap_or(parse_int(call(["start", mode, to_string(status), body, to_string(delay)])), 0)
+  if port == 0 { panic("external fixture did not start") }
+  (port, port)
+}
+pub fn stop(port: Int) -> Unit !io = { let _ = call(["stop", to_string(port)])
+  () }

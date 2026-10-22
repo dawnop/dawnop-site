@@ -17,3 +17,11 @@ S2 增加 `clock-fs/` 双后端 consumer 与 `sql/src/fake_clock.dawn` 共用假
 五槽 TTL 的末毫秒与到期边界通过假 sleep 推进。运行 `backend-dawn/scripts/clock-fs/run.sh`，
 先证明三个源码负控会红，再检查真实目录、缺失、权限错误、空文件与磁盘容量。
 JWT 生产和测试随 Clock 一并迁到 core，原有断言保留。
+
+S11 对照原诊断表逐条登记 89 条 Java 夹具诊断（`docs/dual-arm-diagnostics.json`），
+58 个相关测试的原名与落点在 `docs/dual-arm-test-migration.json`。测试 Java import
+从 16 减为 0，JVM adapter 的生产 Java interop 保留。`support.dawn` 仅由 stage_project
+物化到一次性项目：文件/日志走 std Fs，原始 source.close/await 的 IO 回调仍能观测；
+临时文件随测试项目清除。HTTP deadline、流和连接池测试仍实际走 socket，假对端改为
+外部 `scripts/test_peer.py`，按 PID 等待退出，异常时有总生命周期上限。monitor 的
+固定回包改为 Upstream handler，所有原测试名和断言保留，原变异 owner 不变。

@@ -1,13 +1,9 @@
+use test_support
 use util/http_jvm.{new_client, with_upstream}
 use std/str
 use std/char
 
 use site_core/util/paths.{FALLBACK_MIME}
-use java "java.io.File"
-use java "java.io.FileOutputStream"
-use java "java.io.ByteArrayOutputStream"
-use java "com.sun.net.httpserver.HttpServer"
-use java "java.net.InetSocketAddress"
 
 # ---- tests ----
 
@@ -44,11 +40,7 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
   # 20000 bytes: many times over the chunk size ofFile reads with, so the file
   # part really arrives in pieces — the case a single-chunk test would not catch.
   let payload = join(map(range(0, 2000), i => "0123456789"), "")
-  let src = File.createTempFile("dawn-test-src-", ".bin")!
-  let out = FileOutputStream.new(src)
-  out.write(bytes.utf8(payload))
-  out.close()
-  let src_path = src.getPath()!
+  let src_path = test_support.file(bytes.utf8(payload))
 
   # up_host is filled in once the stub server has a port; the upload token does
   # not cover the host, so the expected body can be built before that.
@@ -68,29 +60,15 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
 
   # The server accepts only an exact body and exact Content-Length. A successful
   # upload therefore proves the public upload_file path kept both contracts.
-  let server = HttpServer.create(InetSocketAddress.new("127.0.0.1", 0), 0)!
-  server.createContext("/", ex => {
-    let buf = ByteArrayOutputStream.new()
-    let _n = ex.getRequestBody()!.transferTo(buf)
-    let got = buf.toByteArray()!
-    let content_length = ex.getRequestHeaders()!.getFirst("Content-Length")!
-    let exact = got == expected && content_length == "${len(expected)}"
-    let status = if exact { 200 } else { 422 }
-    let response = if exact { bytes.utf8("{}") } else { bytes.utf8("mismatch") }
-    ex.sendResponseHeaders(status, len(response))
-    let os = ex.getResponseBody()!
-    os.write(response)
-    os.close()
-  })
-  server.start()
-  let port = server.getAddress()!.getPort()
+  let expected_path = test_support.file(expected)
+  let (server, port) = test_support.peer("multipart", 200, expected_path, 0)
   let q = Qiniu { ..creds, up_host: "http://127.0.0.1:${port}" }
 
   match with_upstream(new_client(), () => upload_file(q, key, src_path, mime, deadline)) {
     Err(m) -> panic("byte-exact upload failed: ${m}")
     Ok(_) -> ()
   }
-  server.stop(0)
+  test_support.stop(server)
 
   # A transport error passes through post_body unchanged. upload_file must not
   # add its operation label to a failure that occurs after body construction.
@@ -101,14 +79,14 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
       ()
     }
   }
-  let _b = File.new(src_path).delete()
+  test_support.remove(src_path)
+  test_support.remove(expected_path)
   ()
 }
 
 test "a missing upload file keeps the upload_file error prefix" {
-  let src = File.createTempFile("dawn-test-missing-", ".bin")!
-  let path = src.getPath()!
-  let _deleted = src.delete()
+  let path = test_support.file(bytes.utf8(""))
+  test_support.remove(path)
   let q = Qiniu {
     ak: "ak",
     sk: "sk",
