@@ -87,8 +87,8 @@ def main() -> int:
     elif args.mutant == "bypass-owner-adapter":
         replace_once(
             api_fm,
-            "use db/sql.{DbConn}\n",
-            "use db/sql.{DbConn}\nuse web/types as bypass_types # owner bypass alias\n",
+            "use db/sql.{Db}\n",
+            "use db/sql.{Db}\nuse web/types as bypass_types # owner bypass alias\n",
         )
         # web5 made Response opaque, so the bypass reads the body seam through
         # the public accessor. web6 removed the sized constructor the web5 port
@@ -136,8 +136,8 @@ def main() -> int:
         )
         replace_once(
             api_fm,
-            "use db/sql.{DbConn}\n",
-            "use db/sql.{DbConn}\nuse web/types as bypass_types\n",
+            "use db/sql.{Db}\n",
+            "use db/sql.{Db}\nuse web/types as bypass_types\n",
         )
         append_once(
             api_fm,

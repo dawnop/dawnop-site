@@ -1,3 +1,48 @@
+use db/sql.{ColStr, exec, query, first_str_or}
+use db/jdbc.{DbConn, open, with_jdbc}
+# ---- tests (need --cp lib/sqlite-jdbc-*.jar) ----
+#
+# updated_at only advances for a real edit, so these fix the stored timestamp at
+# a distinctly old value and check whether the update moved it. A wall-clock
+# comparison could not tell "not written" from "rewritten in the same second".
+
+const STALE: String = "2000-01-01 00:00:00"
+
+# a schema or seed typo must fail here, not as a puzzling assertion later
+fn must(r: Result[Int, String]) -> Int =
+  match r {
+    Ok(n) -> n
+    Err(m) -> panic(m)
+  }
+
+fn viz_test_db() -> DbConn !io = {
+  let c = open("jdbc:sqlite::memory:")
+  let _t = must(with_jdbc(c, () => exec("create table viz_components (id integer primary key, slug text unique, name text, source text, compiled text, style text, created_at text, updated_at text)", [])))
+  let _r = must(with_jdbc(c, () => exec("insert into viz_components values (1, 'chart', 'Chart', 'SRC', 'CMP', 'STY', '2020-01-01 00:00:00', '${STALE}')", [])))
+  c
+}
+
+fn viz_updated(c: DbConn) -> String !io =
+  match with_jdbc(c, () => query("select updated_at from viz_components where id = 1", [], [ColStr])) {
+    Ok(rows) -> first_str_or(rows, "")
+    Err(e) -> panic(e)
+  }
+
+# run one PUT body through the update path, failing loudly on anything but 200
+fn put_viz(c: DbConn, body: String) -> Unit !io = {
+  let m = match body_obj(body) {
+    Ok(x) -> x
+    Err(e) -> panic("bad test body: ${e}")
+  }
+  match with_jdbc(c, () => viz_update_read(1, m)) {
+    Ok(Some(_j)) -> { }
+    Ok(None) -> panic("component vanished")
+    Err(e) -> panic(e)
+  }
+}
+
+const SAME_VIZ: String = "{\"slug\":\"chart\",\"name\":\"Chart\",\"source\":\"SRC\",\"compiled\":\"CMP\",\"style\":\"STY\"}"
+
 use db/sql.{scalar_int}
 test "PUT viz: re-saving every field with the stored value is not an edit" {
   let c = viz_test_db()
@@ -15,7 +60,7 @@ test "PUT viz: changing one field advances updated_at" {
   let c = viz_test_db()
   put_viz(c, "{\"name\":\"Chart 2\"}")
   assert viz_updated(c) != STALE
-  assert scalar_int(c, "select count(*) from viz_components where name = 'Chart 2'", []) == Ok(1)
+  assert with_jdbc(c, () => scalar_int("select count(*) from viz_components where name = 'Chart 2'", [])) == Ok(1)
 }
 
 test "PUT viz: each field on its own counts as an edit" {
@@ -36,5 +81,5 @@ test "PUT viz: an explicit null is skipped so it is not an edit either" {
   let c = viz_test_db()
   put_viz(c, "{\"name\":null,\"style\":null}")
   assert viz_updated(c) == STALE
-  assert scalar_int(c, "select count(*) from viz_components where name = 'Chart' and style = 'STY'", []) == Ok(1)
+  assert with_jdbc(c, () => scalar_int("select count(*) from viz_components where name = 'Chart' and style = 'STY'", [])) == Ok(1)
 }

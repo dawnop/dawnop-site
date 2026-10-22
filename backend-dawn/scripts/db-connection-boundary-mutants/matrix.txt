@@ -14,6 +14,7 @@
 make-dbconn-transparent|ffi.db-conn-opaque
 leak-java-sql|ffi.java-sql-confined
 leak-raw-connection|ffi.db-conn-raw-confined
-guard-tx-by-autocommit|a refused entry leaves the transaction it found alone;;both transaction entries refuse an already-open transaction by name;;getAutoCommit is blind to a raw begin immediate; SQLite is not
+guard-tx-by-autocommit|a refused entry leaves the transaction it found alone;;a reservation is visible only to the drop that made it;;a reserved name is not free for another key, but is for its own;;both transaction entries refuse an already-open transaction by name;;finalize_register atomically validates and consumes its ledger claim;;getAutoCommit is blind to a raw begin immediate; SQLite is not;;require_tx tells a transaction from no transaction;;the final write consumes a reservation once and refuses its replay;;the final write never overwrites: a taken name gets the next counter;;the upload receipt is read inside the transaction that wrote it;;upgrading hash-only links discards capabilities but preserves files and orphan accounting
 rollback-open-tx-on-entry|a refused entry leaves the transaction it found alone;;both transaction entries refuse an already-open transaction by name;;with_immediate_tx closes its transaction on every exit path
 unnamed-nested-refusal|both transaction entries refuse an already-open transaction by name;;with_immediate_tx closes its transaction on every exit path
+first-duplicate-column-wins|query_rows resolves duplicate column labels to the last column

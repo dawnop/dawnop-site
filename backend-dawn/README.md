@@ -62,9 +62,9 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   「重建 jar」提交追平），而 `lib/` 本就 ignore，从 checkout 里那个 jar 根本跑不起来。
   现在由 CI 构建并上传 artifact，部署取的就是它。
 - 测试：`python3 scripts/test_project.py`，由 build.sh 自动调用。test/{core,jvm} 的
-  白盒测试与夹具在一次性 core/app 镜像内接回同名模块，调用私有函数无需扩大生产 API。
+  白盒测试与夹具在一次性 JVM 同模块镜像内接回同名模块，调用私有函数无需扩大生产 API。
   镜像仍使用 Dawn 路径依赖，生产构建直接消费原始 app/jvm，测试目录不进入部署 jar。
-  保留原有全部 433 项（含依赖包）及 11 条 FFI 断言；无需 .env、外部库或真实服务。
+  保留原有全部 433 项并补充 4 项 Db 测试（含依赖包共 437 项）及 11 条 FFI 断言；无需 .env、外部库或真实服务。
 - core 门禁：`python3 scripts/check_core.py --negative-controls`。对整个 core 根运行
   发布版 native dawnc check，再扫描所有可达源码包的完整源码及 manifest，拒绝 Java、
   java-deps、web_jvm 与回指 app/test 的本地依赖。CI 先证明 Java 导入与 app 导入负控会红。
@@ -140,11 +140,12 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 ## 模块地图
 
-S1 采用 `core/src`、`app/jvm/src`、`test/{core,jvm}` 三类物理根。
+S1 的 `core/src`、`app/jvm/src`、`test/{core,jvm}` 三类物理根继续保留。
 core 是名为 site_core 的 Dawn 包，app 通过 `[deps] site_core = "../../core"` 消费，
-跨根导入写为 `use site_core/...`。core 的 19 个模块是整个业务源码图中今天可移植的最大
-闭包：config、qiniu/creds、qiniu/sign、tencent/sign 与 15 个 util 模块。
-其余 38 个模块因直接或传递依赖 JDBC、Clock、TTL、Upstream 而留在 app，后续分刀迁移。
+跨根导入写为 `use site_core/...`。S3 后 core 有 33 个模块，包含 db/sql、全部 10 个 repo、
+svc/search、svc/export、svc/paste，以及原有 config、qiniu/creds、qiniu/sign、tencent/sign 与纯 util。
+app 留 25 个模块，包含 db/jdbc 与 db/db，及仍依赖 Clock、TTL、Upstream 的业务和 HTTP 入口。
+core 的完整 native 依赖闭包为四包 43 个源码文件，零 Java 依赖。
 
 以下模块名按原相对路径记：core 中的模块在 core/src 下，其余在 app/jvm/src 下，
 对应测试在 test/core 或 test/jvm。main 属于 app，config 属于 core。
@@ -152,16 +153,20 @@ core 是名为 site_core 的 Dawn 包，app 通过 `[deps] site_core = "../../co
 （`qiniu/sign`、`tencent/client`），`api_*`/`repo_*` 保留前缀——api 与 repo 是唯一会同名对撞的两层。
 
 **基础设施（预备刀 1–5）**
-- `db/sql.dawn` — SQLite JDBC 薄包装：`SqlV/Col/Cell` ADT、`query/exec/with_tx`、类型化取值、
-  `first_*` 首行取值（`match get(rows, 0)` 的样板收在这里）。
-  JDBC `Connection` 只在本模块可见，其他模块统一使用公开不透明的 `DbConn`。
-  **「这条连接上是不是已经有事务」只有 SQLite 答得了**（`nested_tx_refusal`，两个事务入口与
-  `require_tx` 共读这一处判据）：sqlite-jdbc 自留一份 JDBC 层 autoCommit 标志，而本后端的事务
-  全部由裸 `begin immediate` 开出，压根不碰那个标志——实测在 `with_immediate_tx` 体内
-  `getAutoCommit()` 仍读到 true。两个入口原先用它当守卫，既发不出来，也不该发：真发出来时它
-  回滚的是**外层调用方**的未提交写入。现在两个入口都**拒绝**而不是回滚，把它找到的事务原样留下
-  （`with_immediate_tx` 直接读 `begin immediate` 自己的拒绝，不额外探测；`with_tx` 用 `in_tx`
-  探一次，它没有生产调用方）。负控在 `scripts/db-connection-boundary-mutants/`。
+- `core/src/db/sql.dawn` — 站点 `Db` 效果与 `SqlV/Col/Cell/Row/QueryResult`：
+  六个操作为 db_query、execute、execute_changes、last_id、busy_timeout、in_transaction，
+  均返回 Result[..., String]。query/query_rows、exec、scalar_int、require_tx、row_sig 与普通泛型
+  事务函数在 core 组合这些操作；业务使用隐含的当前连接并声明 !Db。
+  query_rows 在 core 从完整列名建立索引，同名列后者覆盖；空结果的 QueryResult 仍保留列名。
+- `app/jvm/src/db/jdbc.dawn` — 唯一 JDBC owner，不透明 DbConn 仅供适配层和 JVM 测试使用。
+  with_connection 在连接 bracket 内执行 with_jdbc，实际回调执行时才安装 Db，连接与语句正常及异常
+  路径均关闭。ForeignError 统一经过 catch_text，JDBC 版本和 Result 错误文本保持原状。
+  **事务状态由 SQLite 回答**：JDBC autoCommit 标志看不见裸 begin immediate。adapter 用 begin
+  探测并立即撤销自己的空事务，嵌套拒绝则保留外层；core 的 with_tx 和 require_tx 读 in_transaction。
+  with_immediate_tx 直接读 begin immediate 的拒绝，不额外探测。两种入口都拒绝嵌套，不清外层；
+  Err、panic 和提交失败都会释放本次事务。with_tx 仍无生产调用方，改用可移植的 SQL begin。
+  负控在 scripts/db-connection-boundary-mutants：移除真实 handler 必须编译失败，后者覆盖改前者、
+  autoCommit 误判、清外层与错误文案变异均真实编译并核对专属红集。
   **按列名读行（`query_rows` + `row.col_int("id")`）只用在选择列表是共享常量的三处**：
   `repo_article` 的 `LIST_COLS`(12 列)、`repo_page` 的 `PAGE_COLS`(11 列)、`repo_viz` 的
   `OUT_COLS`(8 列)——这类列表被多条查询共用，加一列就得数所有下标，位置索引在这里是负担。
@@ -176,7 +181,7 @@ core 是名为 site_core 的 Dawn 包，app 通过 `[deps] site_core = "../../co
   迁过来时没有一个端点要改措辞。从前是在 API 层匹配中文子串（「已存在」「所属页面」「七牛」）反推，
   那是一份没人声明的跨层契约，改一句话就悄悄改了状态码——并且已经错过一次（`qiniu/rs` 写的是
   `qiniu` 不是「七牛」，于是被对象存储拒掉的 WebDAV COPY 回 500，而 FastAPI 参照回 502）。
-- `db/db.dawn` — 每请求一连接（`with_db`）：WAL + `load_extension(libsimple)`。
+- `app/jvm/src/db/db.dawn` — 配置记录 DbConfig 与每工作单元一连接的 with_db：WAL、5000ms busy timeout 与原有扩展初始化；回调为 fn() 并由连接 handler 消解 Db。
 - `util/bcrypt.dawn` — 纯 Dawn 的 bcrypt（`$2a$`）校验，取代 jBCrypt；状态是 `std/mem` 的 `I64Buf`（`with_mem` 内生灭，对外纯函数）；cost 12 校验与 jBCrypt 同量级（JVM 约 0.16 s），换 cost 前先重测。
 - `util/crypto.dawn` — sha256 / hmac-sha1 / hmac-sha256 / base64url / uuid（auth、七牛、JWT、腾讯共用）。
 - `util/http.dawn` — java.net.http 出站客户端：`fetch/post` + `fetch_bytes`（二进制体，G6）；
@@ -195,7 +200,7 @@ core 是名为 site_core 的 Dawn 包，app 通过 `[deps] site_core = "../../co
   公开路由，连同 Clock 一起装）。其余 `with_upstream` 都在测试里。
   **装不进 main**：`with handle` 只给自己块的剩余部分供证据，路由闭包不捕获它，而
   web 的 `Handler` 别名是闭合行（`!io`），发 `!Upstream` 的闭包根本不是 `Handler`——和 `util/clock`
-  记的是同一堵墙。`db/sql` 的 `with_db` / `with_immediate_tx` 因此改成效果多态（`!e`）：它们是
+  记的是同一堵墙。`db/db` 的 `with_db` 与 core `db/sql` 的 `with_immediate_tx` 使用效果多态（`!e`）：它们是
   纯转发器，闭在 `!io` 上会挡住「在写事务里做一次出站调用」这件生产每天都在做的事。
   故意留在 `!io` 的三处：`new_client`（它造的正是臂用的客户端）、`file_body`（只装配请求体）、
   `close_stream`（放掉臂已经交出来的流）——都不碰对端，也都没有值得注入的断言。

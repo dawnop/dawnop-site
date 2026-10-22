@@ -21,10 +21,11 @@ def combine(source: str, fragment: str) -> str:
         if module not in imports:
             return match[0]
         old = imports[module]
-        source = source.replace(
-            f"use {module}.{{{old}}}", f"use {module}.{{{old}, {names}}}"
+        merged = ", ".join(
+            dict.fromkeys(name.strip() for name in (old + ", " + names).split(","))
         )
-        imports[module] = old + ", " + names
+        source = source.replace(f"use {module}.{{{old}}}", f"use {module}.{{{merged}}}")
+        imports[module] = merged
         return ""
 
     fragment = re.sub(pattern, merge, fragment)
@@ -46,19 +47,28 @@ def stage_project(destination: Path, backend: Path = BACKEND) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     if any(destination.iterdir()):
         raise ValueError(f"test destination must be empty: {destination}")
+    # The disposable JVM mirror reunites modules so core white-box tests can
+    # import the adapter without introducing a production package cycle.
     shutil.copytree(backend / "app/jvm/src", destination / "src")
-    shutil.copytree(backend / "core", destination / "core")
+    shutil.copytree(backend / "core/src", destination / "src", dirs_exist_ok=True)
     manifest = (backend / "app/jvm/dawn.toml").read_text()
-    manifest = manifest.replace('site_core = "../../core"', 'site_core = "core"')
+    manifest = manifest.replace('[deps]\nsite_core = "../../core"', "")
     (destination / "dawn.toml").write_text(manifest)
     shutil.copy2(backend / "app/jvm/dawn.lock", destination / "dawn.lock")
-    for kind, target in (("jvm", destination), ("core", destination / "core")):
+    for source in (destination / "src").rglob("*.dawn"):
+        source.write_text(source.read_text().replace("use site_core/", "use "))
+    for kind in ("jvm", "core"):
         fragments = backend / "test" / kind
         for fragment in sorted(fragments.rglob("*.dawn")):
-            source = target / "src" / fragment.relative_to(fragments)
+            source = destination / "src" / fragment.relative_to(fragments)
             if not source.is_file():
                 raise ValueError(f"test fragment has no production module: {fragment}")
-            source.write_text(combine(source.read_text(), fragment.read_text()))
+            source.write_text(
+                combine(
+                    source.read_text(),
+                    fragment.read_text().replace("use site_core/", "use "),
+                )
+            )
 
 
 def main() -> int:

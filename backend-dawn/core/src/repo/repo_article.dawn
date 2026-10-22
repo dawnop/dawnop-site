@@ -3,9 +3,9 @@
 # structure. Word count is computed here (CJK chars + [A-Za-z0-9]+ runs), same
 # as the Python model's `word_count` property.
 use std/str
-use db/sql.{DbConn, SqlV, PInt, PStr, Col, ColInt, ColStr, Row, query, query_rows, exec, col_int, col_str, col_bool, col_opt_int, col_opt_str, first_int_or, first_bool}
+use db/sql.{Db, SqlV, PInt, PStr, Col, ColInt, ColStr, Row, query, query_rows, exec, col_int, col_str, col_bool, col_opt_int, col_opt_str, first_int_or, first_bool}
 use json/value.{Json, JArr}
-use site_core/util/jsonx.{obj, jint, jstr, jbool, jopt_int, jopt_str, jdatetime}
+use util/jsonx.{obj, jint, jstr, jbool, jopt_int, jopt_str, jdatetime}
 
 # ---- word count (matches app/models/article.py) ----
 
@@ -36,9 +36,8 @@ fn is_alnum(c: Char) -> Bool =
 
 ## The tags of one article as JSON [{id,name,slug}], ordered by name (matches
 ## the relationship's default ordering used by the API).
-pub fn tags_json(c: DbConn, article_id: Int) -> Result[List[Json], String] !io = {
-  let rows = query_rows(c,
-    "select t.id, t.name, t.slug from tags t join article_tags at on at.tag_id = t.id where at.article_id = ? order by t.name",
+pub fn tags_json(article_id: Int) -> Result[List[Json], String] !Db !io = {
+  let rows = query_rows("select t.id, t.name, t.slug from tags t join article_tags at on at.tag_id = t.id where at.article_id = ? order by t.name",
     [PInt(article_id)], [ColInt, ColStr, ColStr])?
   Ok(map(rows, r => obj([
     ("id", jint(r.col_int("id"))),
@@ -59,9 +58,9 @@ fn list_col_types() -> List[Col] =
   [ColInt, ColStr, ColStr, ColStr, ColInt, ColInt, ColInt, ColStr, ColStr, ColStr, ColInt]
 
 ## Shape one list row (with its tags) into the ArticleListItem JSON.
-fn list_item_json(c: DbConn, r: Row) -> Result[Json, String] !io = {
+fn list_item_json(r: Row) -> Result[Json, String] !Db !io = {
   let id = r.col_int("id")
-  let tags = tags_json(c, id)?
+  let tags = tags_json(id)?
   Ok(obj([
     ("id", jint(id)),
     ("title", jstr(r.col_str("title"))),
@@ -77,19 +76,19 @@ fn list_item_json(c: DbConn, r: Row) -> Result[Json, String] !io = {
   ]))
 }
 
-fn shape_items(c: DbConn, rows: List[Row], i: Int, acc: List[Json]) -> Result[List[Json], String] !io =
+fn shape_items(rows: List[Row], i: Int, acc: List[Json]) -> Result[List[Json], String] !Db !io =
   if i == len(rows) {
     Ok(acc)
   } else {
-    let item = list_item_json(c, rows[i])?
-    shape_items(c, rows, i + 1, acc ++ [item])
+    let item = list_item_json(rows[i])?
+    shape_items(rows, i + 1, acc ++ [item])
   }
 
 ## Shape one full-detail row (with content + tags) into the Article JSON. Shared
 ## by the admin-get and both public detail paths; `id` is read from the row.
-fn detail_json(c: DbConn, r: Row) -> Result[Json, String] !io = {
+fn detail_json(r: Row) -> Result[Json, String] !Db !io = {
   let id = r.col_int("id")
-  let tags = tags_json(c, id)?
+  let tags = tags_json(id)?
   Ok(obj([
     ("id", jint(id)),
     ("title", jstr(r.col_str("title"))),
@@ -108,27 +107,25 @@ fn detail_json(c: DbConn, r: Row) -> Result[Json, String] !io = {
 }
 
 ## Published articles, newest first, one page. Returns (total, items-json).
-pub fn list_published(c: DbConn, tag: Option[String], page: Int, size: Int) -> Result[(Int, List[Json]), String] !io = {
+pub fn list_published(tag: Option[String], page: Int, size: Int) -> Result[(Int, List[Json]), String] !Db !io = {
   let offset = (page - 1) * size
-  let total = count_published(c, tag)?
+  let total = count_published(tag)?
   let rows = match tag {
     Some(slug) ->
-      query_rows(c,
-        "select ${LIST_COLS} from articles a where a.published = 1 and exists (select 1 from article_tags at join tags t on t.id = at.tag_id where at.article_id = a.id and t.slug = ?) order by a.created_at desc limit ? offset ?",
+      query_rows("select ${LIST_COLS} from articles a where a.published = 1 and exists (select 1 from article_tags at join tags t on t.id = at.tag_id where at.article_id = a.id and t.slug = ?) order by a.created_at desc limit ? offset ?",
         [PStr(slug), PInt(size), PInt(offset)], list_col_types())?
     None ->
-      query_rows(c,
-        "select ${LIST_COLS} from articles a where a.published = 1 order by a.created_at desc limit ? offset ?",
+      query_rows("select ${LIST_COLS} from articles a where a.published = 1 order by a.created_at desc limit ? offset ?",
         [PInt(size), PInt(offset)], list_col_types())?
   }
-  let items = shape_items(c, rows, 0, [])?
+  let items = shape_items(rows, 0, [])?
   Ok((total, items))
 }
 
 ## Admin list: all articles, optionally filtered by published status, owning list
 ## page (`page_id`), and a title substring (`q`, case-insensitive LIKE), newest
 ## first. Mirrors FastAPI's list_all. Returns (total, items).
-pub fn list_admin(c: DbConn, pub_filter: Option[Bool], page_id: Option[Int], q: Option[String], page: Int, size: Int) -> Result[(Int, List[Json]), String] !io = {
+pub fn list_admin(pub_filter: Option[Bool], page_id: Option[Int], q: Option[String], page: Int, size: Int) -> Result[(Int, List[Json]), String] !Db !io = {
   let offset = (page - 1) * size
   # build the WHERE conditions and their bound params in lockstep
   let c0: List[String] = match pub_filter { Some(true) -> ["a.published = 1"], Some(false) -> ["a.published = 0"], None -> [] }
@@ -137,10 +134,10 @@ pub fn list_admin(c: DbConn, pub_filter: Option[Bool], page_id: Option[Int], q: 
   let where = if len(c2) == 0 { "" } else { "where ${join(c2, " and ")}" }
   let p0: List[SqlV] = match page_id { Some(id) -> [PInt(id)], None -> [] }
   let params: List[SqlV] = match q_filter(q) { Some(s) -> p0 ++ [PStr("%${s}%")], None -> p0 }
-  let cnt = query(c, "select count(*) from articles a ${where}", params, [ColInt])?
+  let cnt = query("select count(*) from articles a ${where}", params, [ColInt])?
   let total = first_int_or(cnt, 0)
-  let rows = query_rows(c, "select ${LIST_COLS} from articles a ${where} order by a.created_at desc limit ? offset ?", params ++ [PInt(size), PInt(offset)], list_col_types())?
-  let items = shape_items(c, rows, 0, [])?
+  let rows = query_rows("select ${LIST_COLS} from articles a ${where} order by a.created_at desc limit ? offset ?", params ++ [PInt(size), PInt(offset)], list_col_types())?
+  let items = shape_items(rows, 0, [])?
   Ok((total, items))
 }
 
@@ -152,11 +149,11 @@ fn q_filter(q: Option[String]) -> Option[String] =
   }
 
 ## Admin stats: {total, published, drafts, total_views}.
-pub fn stats(c: DbConn) -> Result[Json, String] !io = {
-  let total = scalar0(c, "select count(*) from articles")?
-  let published = scalar0(c, "select count(*) from articles where published = 1")?
-  let drafts = scalar0(c, "select count(*) from articles where published = 0")?
-  let views = scalar0(c, "select coalesce(sum(views), 0) from articles")?
+pub fn stats() -> Result[Json, String] !Db !io = {
+  let total = scalar0("select count(*) from articles")?
+  let published = scalar0("select count(*) from articles where published = 1")?
+  let drafts = scalar0("select count(*) from articles where published = 0")?
+  let views = scalar0("select coalesce(sum(views), 0) from articles")?
   Ok(obj([
     ("total", jint(total)),
     ("published", jint(published)),
@@ -165,75 +162,72 @@ pub fn stats(c: DbConn) -> Result[Json, String] !io = {
   ]))
 }
 
-fn scalar0(c: DbConn, q: String) -> Result[Int, String] !io = {
-  let rows = query(c, q, [], [ColInt])?
+fn scalar0(q: String) -> Result[Int, String] !Db !io = {
+  let rows = query(q, [], [ColInt])?
   Ok(first_int_or(rows, 0))
 }
 
 ## Published articles belonging to a page (article_list page), newest first, one
 ## page. Returns (total, items-json). Matches GET /api/pages/{slug}/articles.
-pub fn list_by_page(c: DbConn, page_id: Int, page: Int, size: Int) -> Result[(Int, List[Json]), String] !io = {
+pub fn list_by_page(page_id: Int, page: Int, size: Int) -> Result[(Int, List[Json]), String] !Db !io = {
   let offset = (page - 1) * size
-  let cnt = query(c, "select count(*) from articles where published = 1 and page_id = ?", [PInt(page_id)], [ColInt])?
+  let cnt = query("select count(*) from articles where published = 1 and page_id = ?", [PInt(page_id)], [ColInt])?
   let total = first_int_or(cnt, 0)
-  let rows = query_rows(c,
-    "select ${LIST_COLS} from articles a where a.published = 1 and a.page_id = ? order by a.created_at desc limit ? offset ?",
+  let rows = query_rows("select ${LIST_COLS} from articles a where a.published = 1 and a.page_id = ? order by a.created_at desc limit ? offset ?",
     [PInt(page_id), PInt(size), PInt(offset)], list_col_types())?
-  let items = shape_items(c, rows, 0, [])?
+  let items = shape_items(rows, 0, [])?
   Ok((total, items))
 }
 
-fn count_published(c: DbConn, tag: Option[String]) -> Result[Int, String] !io = {
+fn count_published(tag: Option[String]) -> Result[Int, String] !Db !io = {
   let rows = match tag {
     Some(slug) ->
-      query(c,
-        "select count(*) from articles a where a.published = 1 and exists (select 1 from article_tags at join tags t on t.id = at.tag_id where at.article_id = a.id and t.slug = ?)",
+      query("select count(*) from articles a where a.published = 1 and exists (select 1 from article_tags at join tags t on t.id = at.tag_id where at.article_id = a.id and t.slug = ?)",
         [PStr(slug)], [ColInt])?
-    None -> query(c, "select count(*) from articles where published = 1", [], [ColInt])?
+    None -> query("select count(*) from articles where published = 1", [], [ColInt])?
   }
   Ok(first_int_or(rows, 0))
 }
 
 ## Full article detail by id, ignoring the published filter and not bumping
 ## views — for the admin get and the create/update responses.
-pub fn by_id_admin(c: DbConn, id: Int) -> Result[Option[Json], String] !io = {
-  let rows = query_rows(c, "select ${LIST_COLS} from articles a where a.id = ?", [PInt(id)], list_col_types())?
+pub fn by_id_admin(id: Int) -> Result[Option[Json], String] !Db !io = {
+  let rows = query_rows("select ${LIST_COLS} from articles a where a.id = ?", [PInt(id)], list_col_types())?
   match get(rows, 0) {
-    Some(r) -> Ok(Some(detail_json(c, r)?))
+    Some(r) -> Ok(Some(detail_json(r)?))
     None -> Ok(None)
   }
 }
 
 ## The published flag for a slug (None when the slug is absent). Drives the
 ## draft-preview / view-bump rules on the public detail endpoint.
-pub fn published_of(c: DbConn, slug: String) -> Result[Option[Bool], String] !io = {
-  let rows = query(c, "select published from articles where slug = ?", [PStr(slug)], [ColInt])?
+pub fn published_of(slug: String) -> Result[Option[Bool], String] !Db !io = {
+  let rows = query("select published from articles where slug = ?", [PStr(slug)], [ColInt])?
   Ok(first_bool(rows))
 }
 
 ## Full detail for any article by slug, regardless of published state and
 ## without bumping views (draft preview for logged-in admins).
-pub fn by_slug_any(c: DbConn, slug: String) -> Result[Option[Json], String] !io = {
-  let rows = query_rows(c, "select ${LIST_COLS} from articles a where a.slug = ?", [PStr(slug)], list_col_types())?
+pub fn by_slug_any(slug: String) -> Result[Option[Json], String] !Db !io = {
+  let rows = query_rows("select ${LIST_COLS} from articles a where a.slug = ?", [PStr(slug)], list_col_types())?
   match get(rows, 0) {
-    Some(r) -> Ok(Some(detail_json(c, r)?))
+    Some(r) -> Ok(Some(detail_json(r)?))
     None -> Ok(None)
   }
 }
 
 ## Increment a published article's view counter (the detail GET is a write in
 ## the FastAPI contract). No-op for missing/unpublished slugs.
-pub fn bump_views(c: DbConn, slug: String) -> Result[Int, String] !io =
-  exec(c, "update articles set views = coalesce(views, 0) + 1, updated_at = updated_at where slug = ? and published = 1", [PStr(slug)])
+pub fn bump_views(slug: String) -> Result[Int, String] !Db !io =
+  exec("update articles set views = coalesce(views, 0) + 1, updated_at = updated_at where slug = ? and published = 1", [PStr(slug)])
 
 ## One published article by slug, full detail (with content). None when missing
 ## or unpublished. Views are bumped by the caller (a write).
-pub fn by_slug(c: DbConn, slug: String) -> Result[Option[Json], String] !io = {
-  let rows = query_rows(c,
-    "select ${LIST_COLS} from articles a where a.slug = ? and a.published = 1",
+pub fn by_slug(slug: String) -> Result[Option[Json], String] !Db !io = {
+  let rows = query_rows("select ${LIST_COLS} from articles a where a.slug = ? and a.published = 1",
     [PStr(slug)], list_col_types())?
   match get(rows, 0) {
-    Some(r) -> Ok(Some(detail_json(c, r)?))
+    Some(r) -> Ok(Some(detail_json(r)?))
     None -> Ok(None)
   }
 }

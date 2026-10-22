@@ -12,7 +12,7 @@ HTTP_ASSERTION = "ffi.java-net-http-confined"
 HTTP_OWNER = Path("src/util/http.dawn")
 JAVA_NET_HTTP = re.compile(r'^\s*use java "java\.net\.http(?:\.|\")')
 SQL_ASSERTION = "ffi.java-sql-confined"
-SQL_OWNER = Path("src/db/sql.dawn")
+SQL_OWNER = Path("src/db/jdbc.dawn")
 JAVA_SQL = re.compile(r'^\s*use java "java\.sql(?:\.|\")')
 OPAQUE_ASSERTION = "ffi.db-conn-opaque"
 OPAQUE_DECLARATION = "pub opaque type DbConn = Connection"

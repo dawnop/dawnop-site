@@ -21,13 +21,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mutant_workdir import require_workdir  # noqa: E402
 from test_project import source_path  # noqa: E402
 
-ARTICLE_TOUCH = "let _u = if after != before { touch_article(c, id)? } else { 0 }"
-PAGE_TOUCH = "let _u = if after != before { touch_page(c, id)? } else { 0 }"
-VIZ_TOUCH = "let _t = if after != before { touch_viz(c, id)? } else { 0 }"
+ARTICLE_TOUCH = "let _u = if after != before { touch_article(id)? } else { 0 }"
+PAGE_TOUCH = "let _u = if after != before { touch_page(id)? } else { 0 }"
+VIZ_TOUCH = "let _t = if after != before { touch_viz(id)? } else { 0 }"
 
-ARTICLE_TAG_FOLD = """  let tags = article_tag_sig(c, id)?
-  Ok("${cols}|tags=${tags}")
-"""
+ARTICLE_TAG_FOLD = '  let tags = article_tag_sig(id)?\n  Ok("${cols}|tags=${tags}")\n'
 
 ARTICLE_COLS = '["title", "slug", "summary", "content", "published", "auto_title", "page_id", "created_at"]'
 
@@ -69,7 +67,7 @@ MUTANTS = {
     "article-touch-unconditional": (
         "src/repo/repo_write.dawn",
         ARTICLE_TOUCH,
-        "let _u = touch_article(c, id)?",
+        "let _u = touch_article(id)?",
     ),
     "article-never-touches": (
         "src/repo/repo_write.dawn",
@@ -79,7 +77,7 @@ MUTANTS = {
     "page-touch-unconditional": (
         "src/api/api_pages.dawn",
         PAGE_TOUCH,
-        "let _u = touch_page(c, id)?",
+        "let _u = touch_page(id)?",
     ),
     "page-never-touches": (
         "src/api/api_pages.dawn",
@@ -89,7 +87,7 @@ MUTANTS = {
     "viz-touch-unconditional": (
         "src/api/api_viz.dawn",
         VIZ_TOUCH,
-        "let _t = touch_viz(c, id)?",
+        "let _t = touch_viz(id)?",
     ),
     "viz-never-touches": (
         "src/api/api_viz.dawn",

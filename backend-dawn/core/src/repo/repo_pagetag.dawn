@@ -1,0 +1,158 @@
+# Page and tag write model (M6 knife 9): create/update/delete/reorder pages,
+# rename/merge/cleanup/delete tags. Mirrors app/api/pages.py and tags.py.
+use std/str
+use db/sql.{Db, SqlV, PInt, PStr, ColInt, ColStr, query, exec, last_id, str_at, first_str, first_str_or, first_bool_or, first_int_or, bool_int, row_sig}
+use repo/repo_write.{unique_slug, clip}
+
+# ---- pages ----
+
+pub type NewPage = {
+  title: String,
+  slug_hint: String,
+  kind: String,
+  description: String,
+  content: String,
+  auto_title: Bool,
+  nav_visible: Bool,
+  nav_order: Int,
+  # optional publish time; None = datetime('now'). Stored via datetime(?), see NewArticle.
+  created_at: Option[String],
+}
+
+## Create a page, returning its new id.
+pub fn create_page(p: NewPage) -> Result[Int, String] !Db !io = {
+  let base = if p.slug_hint == "" { p.title } else { p.slug_hint }
+  let slug = unique_slug("pages", base, None)?
+  let created_expr = match p.created_at { Some(_x) -> "datetime(?)", None -> "datetime('now')" }
+  let created_params: List[SqlV] = match p.created_at { Some(s) -> [PStr(s)], None -> [] }
+  let _i = exec("insert into pages (title, slug, type, description, content, nav_visible, nav_order, auto_title, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ${created_expr}, datetime('now'))",
+    [PStr(p.title), PStr(slug), PStr(p.kind), PStr(p.description), PStr(p.content), PInt(bool_int(p.nav_visible)), PInt(p.nav_order), PInt(bool_int(p.auto_title))] ++ created_params)?
+  last_id()
+}
+
+## Whether a page id exists, and whether it is a builtin page.
+pub fn page_kind(id: Int) -> Result[Option[String], String] !Db !io = {
+  let rows = query("select type from pages where id = ?", [PInt(id)], [ColStr])?
+  Ok(first_str(rows))
+}
+
+pub fn set_page_str(id: Int, col: String, v: String) -> Result[Int, String] !Db !io =
+  exec("update pages set ${col} = ? where id = ?", [PStr(v), PInt(id)])
+
+pub fn set_page_int(id: Int, col: String, v: Int) -> Result[Int, String] !Db !io =
+  exec("update pages set ${col} = ? where id = ?", [PInt(v), PInt(id)])
+
+pub fn touch_page(id: Int) -> Result[Int, String] !Db !io =
+  exec("update pages set updated_at = datetime('now') where id = ?", [PInt(id)])
+
+## The editable columns of a page, snapshotted for edit detection — see
+## db/sql.row_sig. nav_order is in the list because the PUT can set it; the
+## reorder endpoint writes it without touching updated_at by its own route.
+pub fn page_sig(id: Int) -> Result[String, String] !Db !io =
+  row_sig("pages",
+    ["title", "slug", "type", "description", "content", "auto_title", "nav_visible", "nav_order", "created_at"], id)
+
+# set created_at from a client ISO-8601 string, normalized via datetime(?)
+pub fn set_page_created(id: Int, iso: String) -> Result[Int, String] !Db !io =
+  exec("update pages set created_at = datetime(?) where id = ?", [PStr(iso), PInt(id)])
+
+pub fn regen_page_slug(id: Int, base: String) -> Result[Int, String] !Db !io = {
+  let slug = unique_slug("pages", base, Some(id))?
+  exec("update pages set slug = ? where id = ?", [PStr(slug), PInt(id)])
+}
+
+pub fn page_title(id: Int) -> Result[String, String] !Db !io = {
+  let rows = query("select title from pages where id = ?", [PInt(id)], [ColStr])?
+  Ok(first_str_or(rows, ""))
+}
+
+## Delete a page; articles pointing at it have page_id nulled first.
+pub fn delete_page(id: Int) -> Result[Int, String] !Db !io = {
+  let _u = exec("update articles set page_id = null where page_id = ?", [PInt(id)])?
+  exec("delete from pages where id = ?", [PInt(id)])
+}
+
+## Reorder: assign nav_order by position in the id list. Duplicate ids are
+## dropped preserving first-seen order (matches FastAPI's dedup) so a repeated id
+## doesn't shift later positions.
+pub fn reorder_pages(ids: List[Int]) -> Result[Int, String] !Db !io =
+  reorder_loop(dedup_ints(ids), 0)
+
+fn reorder_loop(ids: List[Int], i: Int) -> Result[Int, String] !Db !io =
+  if i == len(ids) {
+    Ok(0)
+  } else {
+    let _u = exec("update pages set nav_order = ? where id = ?", [PInt(i), PInt(ids[i])])?
+    reorder_loop(ids, i + 1)
+  }
+
+fn dedup_ints(xs: List[Int]) -> List[Int] =
+  fold(xs, [], (acc, x) => if int_member(acc, x) { acc } else { acc ++ [x] })
+
+fn int_member(xs: List[Int], x: Int) -> Bool =
+  fold(xs, false, (acc, y) => acc || y == x)
+
+# ---- tags ----
+
+fn tag_name(id: Int) -> Result[String, String] !Db !io = {
+  let rows = query("select name from tags where id = ?", [PInt(id)], [ColStr])?
+  Ok(first_str_or(rows, ""))
+}
+
+pub fn tag_exists(id: Int) -> Result[Bool, String] !Db !io = {
+  let rows = query("select count(*) from tags where id = ?", [PInt(id)], [ColInt])?
+  Ok(first_bool_or(rows, false))
+}
+
+## Rename a tag, regenerating slug. Err on empty name or a duplicate name.
+pub fn rename_tag(id: Int, raw: String) -> Result[Bool, String] !Db !io = {
+  let name = clip(str.trim(raw), 64)
+  if name == "" {
+    Err("标签名不能为空")
+  } else {
+    let dup = query("select name from tags where lower(name) = ? and id != ?", [PStr(str.to_lower(name)), PInt(id)], [ColStr])?
+    match get(dup, 0) {
+      Some(r) -> Err("已存在同名标签「${str_at(r, 0)}」，如需归并请用合并功能")
+      None -> {
+        # only rewrite (and regenerate slug) when the name actually changes, like
+        # FastAPI's `if name != tag.name` — a same-name rename must not disturb slug
+        let cur = tag_name(id)?
+        if name == cur {
+          Ok(true)
+        } else {
+          let slug = unique_slug("tags", name, Some(id))?
+          let _u = exec("update tags set name = ?, slug = ? where id = ?", [PStr(name), PStr(slug), PInt(id)])?
+          Ok(true)
+        }
+      }
+    }
+  }
+}
+
+## Merge source into target: move article links (skipping dups), delete source.
+pub fn merge_tags(source_id: Int, target_id: Int) -> Result[Int, String] !Db !io = {
+  let _m = exec("insert into article_tags (article_id, tag_id) select at.article_id, ? from article_tags at where at.tag_id = ? and at.article_id not in (select article_id from article_tags where tag_id = ?)",
+    [PInt(target_id), PInt(source_id), PInt(target_id)])?
+  let _d = exec("delete from article_tags where tag_id = ?", [PInt(source_id)])?
+  let _dt = exec("delete from tags where id = ?", [PInt(source_id)])?
+  target_published_count(target_id)
+}
+
+pub fn target_published_count(target_id: Int) -> Result[Int, String] !Db !io = {
+  let rows = query("select count(*) from article_tags where tag_id = ?", [PInt(target_id)], [ColInt])?
+  Ok(first_int_or(rows, 0))
+}
+
+## Delete tags used by no article; returns how many were removed.
+pub fn cleanup_tags() -> Result[Int, String] !Db !io = {
+  let rows = query("select count(*) from tags where id not in (select distinct tag_id from article_tags)", [], [ColInt])?
+  let n = first_int_or(rows, 0)
+  let _d = exec("delete from tags where id not in (select distinct tag_id from article_tags)", [])?
+  Ok(n)
+}
+
+## Delete a tag and its article links.
+pub fn delete_tag(id: Int) -> Result[Int, String] !Db !io = {
+  let _l = exec("delete from article_tags where tag_id = ?", [PInt(id)])?
+  exec("delete from tags where id = ?", [PInt(id)])
+}

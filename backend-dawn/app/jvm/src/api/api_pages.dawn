@@ -7,18 +7,18 @@ use std/list
 use web/types.{Handler, http_error, as_http, opt_param_int, json_ok, json_response, text, body_text}
 use web/router.{Route, route_get, route_post, route_put, route_delete}
 use json/value.{Json, JArr, JInt}
-use db/sql.{DbConn, ColStr, bool_int, open, exec, query, first_str_or}
+use site_core/db/sql.{Db, bool_int}
 use db/db.{with_db}
 use svc/auth.{Auth, guarded}
 use site_core/util/jsonread.{body_obj, has, str_or, opt_str, bool_or, opt_int}
-use repo/repo_page
-use repo/repo_pagetag.{NewPage, create_page, page_kind, delete_page, reorder_pages, set_page_str, set_page_int, set_page_created, touch_page, page_sig, regen_page_slug, page_title}
+use site_core/repo/repo_page
+use site_core/repo/repo_pagetag.{NewPage, create_page, page_kind, delete_page, reorder_pages, set_page_str, set_page_int, set_page_created, touch_page, page_sig, regen_page_slug, page_title}
 
 ## GET /api/pages/admin — all pages.
 pub fn pages_admin(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
-      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, c => repo_page.list_admin(c)), 500)?))))
+      Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, () => repo_page.list_admin()), 500)?))))
 
 ## GET /api/pages/admin/{page_id} — one page (builtin included), for the edit
 ## form; saves the editor pulling the whole admin list just to find one row.
@@ -27,7 +27,7 @@ pub fn page_admin_get(a: Auth) -> Handler =
   guarded(a, req, () =>
       match opt_param_int(req, "page_id") {
         Some(id) ->
-          match as_http(with_db(a.db.path, a.db.ext, c => repo_page.by_id_admin(c, id)), 500)? {
+          match as_http(with_db(a.db.path, a.db.ext, () => repo_page.by_id_admin(id)), 500)? {
             Some(j) -> Ok(json_ok(j))
             None -> Err(http_error(404, "页面不存在"))
           }
@@ -61,7 +61,7 @@ pub fn page_create(a: Auth) -> Handler =
               None -> 0 },
             created_at: opt_str(m, "created_at"),
           }
-          Ok(json_response(201, as_http(with_db(a.db.path, a.db.ext, c => page_create_read(c, np)), 500)?))
+          Ok(json_response(201, as_http(with_db(a.db.path, a.db.ext, () => page_create_read(np)), 500)?))
         }
       })
 
@@ -72,9 +72,9 @@ fn page_over_len(s: String) -> Bool = len(s) > 255
 fn bad_page_type(t: String) -> Bool = t != "content" && t != "article_list"
 
 # a key present with an explicit JSON null — a non-optional str field rejects it (422)
-fn page_create_read(c: DbConn, np: NewPage) -> Result[Json, String] !io = {
-  let id = create_page(c, np)?
-  match repo_page.by_id_admin(c, id)? {
+fn page_create_read(np: NewPage) -> Result[Json, String] !Db !io = {
+  let id = create_page(np)?
+  match repo_page.by_id_admin(id)? {
     Some(j) -> Ok(j)
     None -> Err("created page vanished")
   }
@@ -97,7 +97,7 @@ pub fn page_update(a: Auth) -> Handler =
             } else if has(m, "type") && bad_page_type(str_or(m, "type", "content")) {
               Err(http_error(422, "type 只能是 content 或 article_list"))
             } else {
-              match as_http(with_db(a.db.path, a.db.ext, c => page_update_read(c, id, m)), 500)? {
+              match as_http(with_db(a.db.path, a.db.ext, () => page_update_read(id, m)), 500)? {
                 Some(j) -> Ok(json_ok(j))
                 None -> Err(http_error(404, "页面不存在"))
               }
@@ -106,40 +106,40 @@ pub fn page_update(a: Auth) -> Handler =
         None -> Err(http_error(422, "page_id must be an integer"))
       })
 
-fn page_update_read(c: DbConn, id: Int, m: Map[String, Json]) -> Result[Option[Json], String] !io =
-  match page_kind(c, id)? {
+fn page_update_read(id: Int, m: Map[String, Json]) -> Result[Option[Json], String] !Db !io =
+  match page_kind(id)? {
     None -> Ok(None)
     Some(kind) -> {
       let builtin = kind == "builtin"
-      let before = page_sig(c, id)?
+      let before = page_sig(id)?
       # builtin pages accept only title/nav_visible/nav_order (slug/type/description/
       # content/auto_title/created_at are routing/render roots FastAPI's builtin
       # filter strips); non-builtin pages accept the full editable set.
-      let _t = if has(m, "title") { set_page_str(c, id, "title", str.trim(str_or(m, "title", "")))? } else { 0 }
-      let _nv = if has(m, "nav_visible") { set_page_int(c, id, "nav_visible", bool_int(bool_or(m, "nav_visible", false)))? } else { 0 }
-      let _no = if has(m, "nav_order") { set_page_int(c, id, "nav_order", nav_order_of(m))? } else { 0 }
-      let _ty = if not builtin && has(m, "type") { set_page_str(c, id, "type", str_or(m, "type", "content"))? } else { 0 }
-      let _de = if not builtin && has(m, "description") { set_page_str(c, id, "description", str_or(m, "description", ""))? } else { 0 }
-      let _co = if not builtin && has(m, "content") { set_page_str(c, id, "content", str_or(m, "content", ""))? } else { 0 }
-      let _au = if not builtin && has(m, "auto_title") { set_page_int(c, id, "auto_title", bool_int(bool_or(m, "auto_title", false)))? } else { 0 }
-      let _ca = if not builtin { match opt_str(m, "created_at") { Some(s) -> set_page_created(c, id, s)?, None -> 0 } } else { 0 }
-      let _sl = if not builtin && has(m, "slug") { regen_page_slug(c, id, slug_base(c, id, m)?)? } else { 0 }
+      let _t = if has(m, "title") { set_page_str(id, "title", str.trim(str_or(m, "title", "")))? } else { 0 }
+      let _nv = if has(m, "nav_visible") { set_page_int(id, "nav_visible", bool_int(bool_or(m, "nav_visible", false)))? } else { 0 }
+      let _no = if has(m, "nav_order") { set_page_int(id, "nav_order", nav_order_of(m))? } else { 0 }
+      let _ty = if not builtin && has(m, "type") { set_page_str(id, "type", str_or(m, "type", "content"))? } else { 0 }
+      let _de = if not builtin && has(m, "description") { set_page_str(id, "description", str_or(m, "description", ""))? } else { 0 }
+      let _co = if not builtin && has(m, "content") { set_page_str(id, "content", str_or(m, "content", ""))? } else { 0 }
+      let _au = if not builtin && has(m, "auto_title") { set_page_int(id, "auto_title", bool_int(bool_or(m, "auto_title", false)))? } else { 0 }
+      let _ca = if not builtin { match opt_str(m, "created_at") { Some(s) -> set_page_created(id, s)?, None -> 0 } } else { 0 }
+      let _sl = if not builtin && has(m, "slug") { regen_page_slug(id, slug_base(id, m)?)? } else { 0 }
       # a save that changed nothing is not an edit, so updated_at stays put —
       # see db/sql.row_sig
-      let after = page_sig(c, id)?
-      let _u = if after != before { touch_page(c, id)? } else { 0 }
-      repo_page.by_id_admin(c, id)
+      let after = page_sig(id)?
+      let _u = if after != before { touch_page(id)? } else { 0 }
+      repo_page.by_id_admin(id)
     }
   }
 
-fn slug_base(c: DbConn, id: Int, m: Map[String, Json]) -> Result[String, String] !io = {
+fn slug_base(id: Int, m: Map[String, Json]) -> Result[String, String] !Db !io = {
   let s = str_or(m, "slug", "")
   if s != "" {
     Ok(s)
   } else if has(m, "title") {
     Ok(str.trim(str_or(m, "title", "")))
   } else {
-    page_title(c, id)
+    page_title(id)
   }
 }
 
@@ -155,7 +155,7 @@ pub fn page_delete(a: Auth) -> Handler =
   guarded(a, req, () =>
       match opt_param_int(req, "page_id") {
         Some(id) ->
-          match as_http(with_db(a.db.path, a.db.ext, c => page_delete_guarded(c, id)), 500)? {
+          match as_http(with_db(a.db.path, a.db.ext, () => page_delete_guarded(id)), 500)? {
             0 -> Err(http_error(404, "页面不存在"))
             1 -> Ok(text(204, ""))
             _o -> Err(http_error(400, "内置页面不可删除，可在导航中隐藏"))
@@ -164,14 +164,14 @@ pub fn page_delete(a: Auth) -> Handler =
       })
 
 # returns 0=absent, 1=deleted, 2=builtin-refused
-fn page_delete_guarded(c: DbConn, id: Int) -> Result[Int, String] !io =
-  match page_kind(c, id)? {
+fn page_delete_guarded(id: Int) -> Result[Int, String] !Db !io =
+  match page_kind(id)? {
     None -> Ok(0)
     Some(kind) ->
       if kind == "builtin" {
         Ok(2)
       } else {
-        let _d = delete_page(c, id)?
+        let _d = delete_page(id)?
         Ok(1)
       }
   }
@@ -186,7 +186,7 @@ pub fn page_reorder(a: Auth) -> Handler =
         # non-integer element is a 422 in FastAPI (not a silently-empty reorder).
         match strict_int_list(m, "ids") {
           None -> Err(http_error(422, "ids 必须是整数数组"))
-          Some(ids) -> Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, c => reorder_read(c, ids)), 500)?)))
+          Some(ids) -> Ok(json_ok(JArr(as_http(with_db(a.db.path, a.db.ext, () => reorder_read(ids)), 500)?)))
         }
       })
 
@@ -208,9 +208,9 @@ fn all_ints(xs: List[Json], acc: List[Int]) -> Option[List[Int]] =
     }
   }
 
-fn reorder_read(c: DbConn, ids: List[Int]) -> Result[List[Json], String] !io = {
-  let _r = reorder_pages(c, ids)?
-  repo_page.list_admin(c)
+fn reorder_read(ids: List[Int]) -> Result[List[Json], String] !Db !io = {
+  let _r = reorder_pages(ids)?
+  repo_page.list_admin()
 }
 
 ## The pages admin routes. Static paths precede /{id} captures.
@@ -223,46 +223,3 @@ pub fn routes(a: Auth) -> List[Route] =
     route_put("/api/pages/{page_id}", page_update(a)),
     route_delete("/api/pages/{page_id}", page_delete(a)),
   ]
-
-# ---- tests (need --cp lib/sqlite-jdbc-*.jar) ----
-#
-# updated_at only advances for a real edit, so these fix the stored timestamp at
-# a distinctly old value and check whether the update moved it. A wall-clock
-# comparison could not tell "not written" from "rewritten in the same second".
-
-const STALE: String = "2000-01-01 00:00:00"
-
-# a schema or seed typo must fail here, not as a puzzling assertion later
-fn must(r: Result[Int, String]) -> Int =
-  match r {
-    Ok(n) -> n
-    Err(m) -> panic(m)
-  }
-
-fn page_test_db(kind: String) -> DbConn !io = {
-  let c = open("jdbc:sqlite::memory:")
-  let _t = must(exec(c, "create table pages (id integer primary key, title text, slug text unique, type text, description text, content text, nav_visible integer, nav_order integer, auto_title integer, created_at text, updated_at text)", []))
-  let _r = must(exec(c, "insert into pages values (1, 'Notes', 'notes', '${kind}', 'D', 'C', 1, 3, 0, '2020-01-01 00:00:00', '${STALE}')", []))
-  c
-}
-
-fn page_updated(c: DbConn) -> String !io =
-  match query(c, "select updated_at from pages where id = 1", [], [ColStr]) {
-    Ok(rows) -> first_str_or(rows, "")
-    Err(e) -> panic(e)
-  }
-
-# run one PUT body through the update path, failing loudly on anything but 200
-fn put_page(c: DbConn, body: String) -> Unit !io = {
-  let m = match body_obj(body) {
-    Ok(x) -> x
-    Err(e) -> panic("bad test body: ${e}")
-  }
-  match page_update_read(c, 1, m) {
-    Ok(Some(_j)) -> { }
-    Ok(None) -> panic("page vanished")
-    Err(e) -> panic(e)
-  }
-}
-
-const SAME_PAGE: String = "{\"title\":\"Notes\",\"slug\":\"notes\",\"type\":\"content\",\"description\":\"D\",\"content\":\"C\",\"nav_visible\":true,\"nav_order\":3,\"auto_title\":false}"

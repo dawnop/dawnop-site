@@ -7,7 +7,7 @@ use web/types.{Handler, json_ok, query}
 use web/router.{Route, route_get}
 use svc/auth.{Auth, current_user}
 use db/db.{with_db}
-use repo/repo_settings.{setting_int}
+use site_core/repo/repo_settings.{setting_int}
 use util/ttl.{TtlCell, cache_get, cache_put, now_s}
 use svc/monitor.{LighthousePending, QiniuPending, server_block, lighthouse_start, lighthouse_collect, qiniu_start, qiniu_collect, vault_block}
 use util/http.{Upstream, with_upstream}
@@ -131,7 +131,7 @@ fn with_quota(a: Auth, qn: Json) -> Json !io =
   match field(qn, "configured") {
     JBool(on) ->
       if on {
-        let gb = match with_db(a.db.path, a.db.ext, c => setting_int(c, "storage_quota_gb", a.storage_quota)) {
+        let gb = match with_db(a.db.path, a.db.ext, () => setting_int("storage_quota_gb", a.storage_quota)) {
           Ok(n) -> n
           Err(_m) -> a.storage_quota
         }

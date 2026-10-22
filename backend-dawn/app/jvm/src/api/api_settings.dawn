@@ -2,20 +2,20 @@
 # GET returns the DEFAULTS-merged table; PUT validates every key before writing
 # any of them, so an invalid key persists nothing.
 use std/map
-use db/sql.{DbConn, with_immediate_tx}
+use site_core/db/sql.{Db, with_immediate_tx}
 use web/types.{Handler, as_http, json_ok, body_text}
 use web/router.{Route, route_get, route_put}
 use json/value.{Json, JInt}
 use db/db.{with_db}
 use svc/auth.{Auth, guarded}
 use site_core/util/jsonread.{body_obj}
-use repo/repo_settings
+use site_core/repo/repo_settings
 
 ## GET /api/settings — merged global settings.
 pub fn get_settings(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
-      Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, c => repo_settings.read_all(c, a.storage_quota)), 500)?)))
+      Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, () => repo_settings.read_all(a.storage_quota)), 500)?)))
 
 ## PUT /api/settings — validate & upsert known integer keys, return merged.
 pub fn put_settings(a: Auth) -> Handler =
@@ -23,28 +23,28 @@ pub fn put_settings(a: Auth) -> Handler =
   guarded(a, req, () =>
       {
         let m = as_http(body_obj(body_text(req)?), 422)?
-        Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, c => write_settings(c, m, a.storage_quota)), 400)?))
+        Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, () => write_settings(m, a.storage_quota)), 400)?))
       })
 
 # Validate the prospective pair and write in one transaction, including partial PUTs.
-fn write_settings(c: DbConn, m: Map[String, Json], storage_quota: Int) -> Result[Json, String] !io =
-  with_immediate_tx(c, () => {
+fn write_settings(m: Map[String, Json], storage_quota: Int) -> Result[Json, String] !Db !io =
+  with_immediate_tx(() => {
     let keys = map.keys(m)
     let _v = validate_settings(keys, m, 0)?
-    let file_max = prospective(c, m, "drop_file_max_mb", 100)?
-    let total_max = prospective(c, m, "drop_total_max_mb", 1024)?
+    let file_max = prospective(m, "drop_file_max_mb", 100)?
+    let total_max = prospective(m, "drop_total_max_mb", 1024)?
     if total_max < file_max {
       Err("总上限不能小于单个文件上限")
     } else {
-      let _w = write_all_settings(c, keys, m, 0)?
-      repo_settings.read_all(c, storage_quota)
+      let _w = write_all_settings(keys, m, 0)?
+      repo_settings.read_all(storage_quota)
     }
   })
 
-fn prospective(c: DbConn, m: Map[String, Json], key: String, dflt: Int) -> Result[Int, String] !io =
+fn prospective(m: Map[String, Json], key: String, dflt: Int) -> Result[Int, String] !Db !io =
   match strict_int(m, key) {
     Some(n) -> Ok(n)
-    None -> repo_settings.setting_int(c, key, dflt)
+    None -> repo_settings.setting_int(key, dflt)
   }
 
 fn validate_settings(keys: List[String], m: Map[String, Json], i: Int) -> Result[Bool, String] !io =
@@ -68,14 +68,14 @@ fn validate_settings(keys: List[String], m: Map[String, Json], i: Int) -> Result
     }
   }
 
-fn write_all_settings(c: DbConn, keys: List[String], m: Map[String, Json], i: Int) -> Result[Bool, String] !io =
+fn write_all_settings(keys: List[String], m: Map[String, Json], i: Int) -> Result[Bool, String] !Db !io =
   if i == len(keys) {
     Ok(true)
   } else {
     let key = keys[i]
     let v = match strict_int(m, key) { Some(n) -> n, None -> 0 }
-    let _p = repo_settings.put_one(c, key, v)?
-    write_all_settings(c, keys, m, i + 1)
+    let _p = repo_settings.put_one(key, v)?
+    write_all_settings(keys, m, i + 1)
   }
 
 # a strict integer JSON value: JInt only. A float (JNum, incl. 3.0), bool, string,

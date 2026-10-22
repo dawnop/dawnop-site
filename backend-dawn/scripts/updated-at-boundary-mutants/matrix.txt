@@ -36,5 +36,5 @@ article-sig-includes-views|repo/repo_write :: article_sig ignores the view count
 # These two own the same pair of assertions through different faults: one drops
 # the separator (1,23 and 12,3 sign alike), the other drops the quoting (text
 # '1' and integer 1 sign alike). Distinct bugs, so distinct mutants.
-row-sig-drops-separator|db/sql :: row_sig reads through NULLs and never aliases two different rows,db/sql :: sig_expr quotes every column and separates them
-row-sig-unquoted-values|db/sql :: row_sig reads through NULLs and never aliases two different rows,db/sql :: sig_expr quotes every column and separates them
+row-sig-drops-separator|db/jdbc :: row_sig reads through NULLs and never aliases two different rows,db/jdbc :: sig_expr quotes every column and separates them
+row-sig-unquoted-values|db/jdbc :: row_sig reads through NULLs and never aliases two different rows,db/jdbc :: sig_expr quotes every column and separates them
