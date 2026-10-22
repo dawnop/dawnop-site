@@ -42,7 +42,7 @@ use site_core/util/crypto.{random_token, sha256_hex, uuid_hex}
 use util/clock.{Clock, now_s}
 use site_core/util/ferr.{catch_text}
 use site_core/util/errkind.{upstream}
-use util/http.{Upstream, as_outbound, tag_outbound}
+use site_core/util/http.{Upstream, as_outbound, tag_outbound}
 use site_core/qiniu/sign.{upload_token_limited}
 use qiniu/rs.{stat, upload_file}
 use json/value.{JObj, JInt, JNum, JStr}

@@ -115,17 +115,34 @@ def check(core: Path, dawnc: Path) -> bool:
 
 
 def negative_controls(dawnc: Path) -> bool:
-    for name in ("java-import", "app-import"):
+    for name in (
+        "java-import",
+        "app-import",
+        "upstream-input-stream",
+        "upstream-body-publisher",
+    ):
         with tempfile.TemporaryDirectory(prefix="dawnop-core-negative-") as temporary:
             backend = Path(temporary) / "backend-dawn"
             shutil.copytree(BACKEND / "core", backend / "core")
             shutil.copytree(BACKEND / "app/jvm", backend / "app/jvm")
             source = backend / "core/src/config.dawn"
-            injection = (
-                'use java "java.lang.System"\n'
-                if name == "java-import"
-                else "use backend_dawn/db/jdbc.{DbConn}\n"
-            )
+            if name.startswith("upstream-"):
+                source = backend / "core/src/util/http.dawn"
+                java_type = (
+                    "java.io.InputStream"
+                    if name == "upstream-input-stream"
+                    else "java.net.http.HttpRequest.BodyPublisher"
+                )
+                short = java_type.rsplit(".", 1)[1]
+                injection = (
+                    f'use java "{java_type}"\npub alias LeakedUpstream = {short}\n'
+                )
+            else:
+                injection = (
+                    'use java "java.lang.System"\n'
+                    if name == "java-import"
+                    else "use backend_dawn/db/jdbc.{DbConn}\n"
+                )
             source.write_text(injection + source.read_text())
             if name == "app-import":
                 manifest = backend / "core/dawn.toml"
@@ -135,7 +152,7 @@ def negative_controls(dawnc: Path) -> bool:
             errors, _, _ = closure_errors(backend / "core")
             expected = (
                 "forbidden use java"
-                if name == "java-import"
+                if name != "app-import"
                 else "forbidden local dependency backend_dawn"
             )
             if not any(expected in error for error in errors):

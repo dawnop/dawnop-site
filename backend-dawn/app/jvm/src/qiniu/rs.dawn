@@ -3,7 +3,7 @@
 # Pure Dawn over the http client — the official SDK drags okhttp+gson, so this
 # hand-rolls the three verbs fm needs.
 use std/bytes
-use util/http.{HttpResp, RequestBody, Upstream, post, post_bytes, file_body, post_body, fetch}
+use site_core/util/http.{HttpResp, RequestBody, Upstream, post, post_bytes, file_body, post_body, fetch}
 use site_core/util/paths.{safe_persisted_mime}
 use site_core/qiniu/creds.{Qiniu}
 use site_core/qiniu/sign.{entry_uri, entry_token, management_token, upload_token}

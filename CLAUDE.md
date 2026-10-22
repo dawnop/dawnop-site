@@ -56,8 +56,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 dawnop-site/
 ├── backend-dawn/               # 生产后端（Dawn → JVM 字节码）
-│   ├── core/                   # 可移植包 site_core，34 个模块；无 Java 依赖
-│   │   ├── src/                # config、db/sql、repo、svc/{search,export,paste} 与纯 util/qiniu/tencent
+│   ├── core/                   # 可移植包 site_core，36 个模块；无 Java 依赖
+│   │   ├── src/                # config、db/sql、repo、svc 与纯 util/qiniu/tencent，含 Upstream 与 HTTP 类型
 │   │   └── dawn.toml           # web/json/sha2，保持 v0.98.0 tag/hash
 │   ├── app/jvm/                # JVM 应用，25 个模块；路径依赖 ../../core
 │   │   ├── src/                # main、api、其余 svc 与 JDBC/Clock/HTTP 接缝及缓存地址包装
@@ -278,7 +278,7 @@ dawnop-site/
 backend-dawn/scripts/native-sqlite/run.sh # native handler、SQL 双臂、真实 FTS、BUSY、ASan/LSan
 java -jar backend-dawn/backend-dawn.jar # 跑起来（lib/ 须在 jar 旁边）
 python3 backend-dawn/scripts/test_project.py # 独立运行全量白盒单测
-python3 backend-dawn/scripts/check_core.py --negative-controls # core native 门禁
+python3 backend-dawn/scripts/check_core.py --negative-controls # core native 门禁（含 HTTP 类型泄漏负控）
 
 # 编译器版本由 .dawn-version 钉住，scripts/fetch-dawn.sh 自动下载并缓存到 .dawn/。
 # **升钉是两个文件一起改**：.dawn-version 换 tag，.dawn-version.sha256 补该 tag 的
@@ -332,7 +332,7 @@ backend-dawn/scripts/auth-cache/run.sh                  # 双臂认证、40进�
 # 同样的路径由 contract_qiniu.py 在假桶上钉住）。理由逐条写在 golden 的 skipped 里。
 # 不再需要 FastAPI 陪跑（脚本仍可 --base 指向它，golden 就是契约）。
 
-# ---- 变异体 harness（九个共 160 个变异体，CI 里分 19 个并行 job 跑）----
+# ---- 变异体 harness（九个共 161 个变异体，CI 里分 19 个并行 job 跑）----
 backend-dawn/scripts/fm-ancestor-contract/run.sh              # 全量，本地约 70 分钟
 backend-dawn/scripts/fm-ancestor-contract/run.sh --shard 0/9  # CI 跑的那一片，约 10 分钟
 backend-dawn/scripts/fm-ancestor-contract/run.sh --preflight-only  # 只验锚点，约 1 分钟
@@ -356,7 +356,7 @@ SQLite 五槽缓存的表、语义与验证命令见 `backend-dawn/README.md` �
 - **CI**（`.github/workflows/ci.yml`，push main + PR 触发）：`secrets`（三道守卫 + shellcheck）、
   `backend`（Dawn 测试 + 打 jar 传 artifact + 四套 golden）、
   `native-acceptance`（S4/S5/S6 双臂验收，含完整负控与 sanitizer）、`mutants`（**19 个并行分片**，
-  跑九个变异体 harness 共 160 个变异体）、`mutants-complete`（断言各分片并集覆盖全矩阵）、
+  跑九个变异体 harness 共 161 个变异体）、`mutants-complete`（断言各分片并集覆盖全矩阵）、
   `python-backend`（**钉 Python 3.10**，对齐生产 + ruff）、`frontend`（lint/format/build）。
   任一红都别合。
   > **变异体矩阵是分片跑的，加变异体要顺手看一眼 job 数**。单个变异体约 52s（实测

@@ -17,7 +17,7 @@ use util/clock.{Clock, system_ms}
 use site_core/util/time.{utc_datetime}
 use qiniu/stats.{field, int_of, last_nonzero, PendingQ, PendingRespack, kodo_series_start, kodo_series_finish, flow_series_start, flow_series_finish, cdn_domains_start, cdn_domains_finish, cdn_tune_start, cdn_tune_finish, respack_start, respack_finish, respack_summary}
 use tencent/client.{PendingTc}
-use util/http.{Upstream, fetch, fetch_start, await_resp}
+use site_core/util/http.{Upstream, fetch, fetch_start, await_resp}
 use json/value.{Json, JNull, JNum, JInt, JStr, JArr, JObj}
 use json/render.{render}
 use json/parser.{parse}

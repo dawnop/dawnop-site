@@ -1,29 +1,9 @@
-use java "java.io.ByteArrayInputStream"
-use java "java.util.Objects"
-
-## The fault an arm answers with for a shape it does not mean to serve. A
-## handler that answers one operation and refuses the other three is the ordinary
-## shape of a test; refusing loudly beats handing back a plausible blank.
-pub fn no_answer(op: String) -> ForeignError =
-  ForeignError { kind: "dawnop.UpstreamNotAnswered", message: op, cause: None }
-
-## A stream over bytes already in hand. Nothing in production calls it: it is how
-## a handler arm answers `exchange_stream` without a socket, which is the only
-## way the streaming path gets a test that does not need one.
-pub fn bytes_stream(b: Bytes) -> ResponseStream !io = {
-  # a ByteArrayInputStream is an InputStream, but Dawn has no Java upcast: the
-  # only widening this backend has is `cast`, and `cast` wants an Object.
-  # requireNonNull's erased return type is that Object.
-  let boxed = Objects.requireNonNull(ByteArrayInputStream.new(b))!
-  let raw: Result[InputStream, ForeignError] = cast(boxed)
-  match raw {
-    Ok(s) -> s
-    Err(e) -> panic(fe_text(e))
-  }
-}
-
+use std/str
+use site_core/util/http.{FileSpan, request_body, fetch, post, post_bytes, post_body, fetch_bytes, fetch_stream, fetch_start, post_start, await_resp, ok_stream, close_stream, file_body, timed_out, as_outbound, HttpResp, BytesResp, StreamResp, MANAGEMENT_TIMEOUT_S, no_answer, bytes_stream, test_text_exchange, test_fetch_bytes_within, test_fetch_stream_within, test_start_within, test_deadline_text, test_unwrap_execution, test_response_source, TEST_TRANSFER_TIMEOUT_S}
 use std/bytes
 use site_core/util/errkind.{KUpstream, KTimeout, split_kind}
+use site_core/util/ferr.{fe_text}
+use web/types.{BodySource}
 use java "java.lang.System"
 use java "java.lang.Thread"
 use java "java.util.concurrent.atomic.AtomicReference"
@@ -116,7 +96,7 @@ test "fetch_stream hands back a readable upstream stream" {
       assert r.status == 200
       assert ok_stream(r)
       # the body is a live stream, not materialized up front; drain it here
-      let raw = raw_response_stream(r.stream).readAllBytes()!
+      let raw = read_all(test_response_source(r.stream))
       close_stream(r.stream)
       assert bytes.decode_utf8_lossy(raw) == "streamed:s"
     }
@@ -178,7 +158,7 @@ test "every request shape carries its deadline, whichever body handler it uses" 
 
   let (s1, p1) = stall_server(stall_ms, 200, "late")
   let t1 = System.currentTimeMillis()
-  let bytes_outcome = with_upstream(new_client(), () => fetch_bytes_within("http://127.0.0.1:${p1}/", [], budget))
+  let bytes_outcome = with_upstream(new_client(), () => test_fetch_bytes_within("http://127.0.0.1:${p1}/", [], budget))
   let e1 = System.currentTimeMillis() - t1
   s1.stop(0)
   match bytes_outcome {
@@ -189,7 +169,7 @@ test "every request shape carries its deadline, whichever body handler it uses" 
 
   let (s2, p2) = stall_server(stall_ms, 200, "late")
   let t2 = System.currentTimeMillis()
-  let stream_outcome = with_upstream(new_client(), () => fetch_stream_within("http://127.0.0.1:${p2}/", [], budget))
+  let stream_outcome = with_upstream(new_client(), () => test_fetch_stream_within("http://127.0.0.1:${p2}/", [], budget))
   let e2 = System.currentTimeMillis() - t2
   s2.stop(0)
   match stream_outcome {
@@ -202,7 +182,7 @@ test "every request shape carries its deadline, whichever body handler it uses" 
   let (s3, p3) = stall_server(stall_ms, 200, "late")
   let t3 = System.currentTimeMillis()
   let post_outcome = with_upstream(new_client(), () =>
-      text_exchange("POST", "http://127.0.0.1:${p3}/", [], TextBody("x"), budget))
+      test_text_exchange("POST", "http://127.0.0.1:${p3}/", [], TextBody("x"), budget))
   let e3 = System.currentTimeMillis() - t3
   s3.stop(0)
   match post_outcome {
@@ -219,8 +199,8 @@ test "the two deadlines say what they are for" {
   assert MANAGEMENT_TIMEOUT_S <= 30
   # A transfer moves object bytes and the deadline is a hard cap on duration,
   # not an idle timer, so it must not be anywhere near the management value.
-  assert TRANSFER_TIMEOUT_S >= 600
-  assert TRANSFER_TIMEOUT_S > MANAGEMENT_TIMEOUT_S * 10
+  assert TEST_TRANSFER_TIMEOUT_S >= 600
+  assert TEST_TRANSFER_TIMEOUT_S > MANAGEMENT_TIMEOUT_S * 10
 }
 
 test "only a timeout is reworded; every other fault keeps its text" {
@@ -229,7 +209,7 @@ test "only a timeout is reworded; every other fault keeps its text" {
     message: "request timed out",
     cause: None
   }
-  assert deadline_text(10, timed_out) ==
+  assert test_deadline_text(10, timed_out) ==
     "outbound HTTP timed out after 10s: java.net.http.HttpTimeoutException: request timed out"
 
   # the connect variant is a different class and must be recognised too
@@ -238,7 +218,7 @@ test "only a timeout is reworded; every other fault keeps its text" {
     message: "HTTP connect timed out",
     cause: None
   }
-  assert str.contains(deadline_text(10, connect_timed_out), "outbound HTTP timed out after 10s")
+  assert str.contains(test_deadline_text(10, connect_timed_out), "outbound HTTP timed out after 10s")
 
   # a refusal is not a timeout: its text stays byte for byte what it was, which
   # is what callers' error surfaces and the contract goldens were recorded on
@@ -247,8 +227,8 @@ test "only a timeout is reworded; every other fault keeps its text" {
     message: "Connection refused",
     cause: None
   }
-  assert deadline_text(10, refused) == "java.net.ConnectException: Connection refused"
-  assert deadline_text(10, refused) == fe_text(refused)
+  assert test_deadline_text(10, refused) == "java.net.ConnectException: Connection refused"
+  assert test_deadline_text(10, refused) == fe_text(refused)
 }
 
 ## A peer that answers with the requesting client's own source port. Two
@@ -296,7 +276,7 @@ test "one cell is one connection; a client built per call is not" {
 }
 
 test "a timeout is classified apart from a refusal, and keeps its wire text" {
-  let timed: Result[Unit, String] = Err(deadline_text(10, ForeignError {
+  let timed: Result[Unit, String] = Err(test_deadline_text(10, ForeignError {
     kind: "java.net.http.HttpTimeoutException",
     message: "request timed out",
     cause: None
@@ -307,7 +287,7 @@ test "a timeout is classified apart from a refusal, and keeps its wire text" {
       let (k, text) = split_kind(m)
       assert k == KTimeout
       # the tag is a prefix split_kind strips: the message on the wire is still
-      # byte for byte the one deadline_text wrote
+      # byte for byte the one test_deadline_text wrote
       assert text == "outbound HTTP timed out after 10s: java.net.http.HttpTimeoutException: request timed out"
     }
   }
@@ -330,7 +310,7 @@ test "a timeout is classified apart from a refusal, and keeps its wire text" {
 
 # Does the rewording and the tagging agree about this fault?
 fn text_and_tag_agree(e: ForeignError) -> Bool = {
-  let text = deadline_text(10, e)
+  let text = test_deadline_text(10, e)
   let reworded = text != fe_text(e)
   let tagged: Result[Unit, String] = as_outbound(Err(text))
   let tagged_timeout =
@@ -434,7 +414,7 @@ test "an async timeout reads exactly like a blocking one" {
   let stall_ms = 6000
   let (server, port) = stall_server(stall_ms, 200, "late")
   let started = with_upstream(new_client(), () =>
-      must(start_within("GET", "http://127.0.0.1:${port}/", [], NoBody, budget)))
+      must(test_start_within("GET", "http://127.0.0.1:${port}/", [], NoBody, budget)))
   let outcome = await_resp(started)
   server.stop(0)
   match outcome {
@@ -462,8 +442,8 @@ test "unwrap_execution recovers the fault the blocking path would have seen" {
     message: "java.net.ConnectException: Connection refused",
     cause: Some("java.net.ConnectException: Connection refused"),
   }
-  assert fe_text(unwrap_execution(wrapped)) == "java.net.ConnectException: Connection refused"
-  assert deadline_text(10, unwrap_execution(wrapped)) == "java.net.ConnectException: Connection refused"
+  assert fe_text(test_unwrap_execution(wrapped)) == "java.net.ConnectException: Connection refused"
+  assert test_deadline_text(10, test_unwrap_execution(wrapped)) == "java.net.ConnectException: Connection refused"
 
   # a cause with no message of its own is all class name
   let bare = ForeignError {
@@ -471,7 +451,7 @@ test "unwrap_execution recovers the fault the blocking path would have seen" {
     message: "java.io.EOFException",
     cause: Some("java.io.EOFException"),
   }
-  assert fe_text(unwrap_execution(bare)) == "java.io.EOFException"
+  assert fe_text(test_unwrap_execution(bare)) == "java.io.EOFException"
 
   # a message containing ": " keeps every colon after the first
   let chatty = ForeignError {
@@ -479,11 +459,11 @@ test "unwrap_execution recovers the fault the blocking path would have seen" {
     message: "x",
     cause: Some("java.io.IOException: read: connection reset"),
   }
-  assert fe_text(unwrap_execution(chatty)) == "java.io.IOException: read: connection reset"
+  assert fe_text(test_unwrap_execution(chatty)) == "java.io.IOException: read: connection reset"
 
   # nothing to unwrap (an interrupt, say) leaves the fault alone
   let direct = ForeignError { kind: "java.lang.InterruptedException", message: "", cause: None }
-  assert fe_text(unwrap_execution(direct)) == "java.lang.InterruptedException"
+  assert fe_text(test_unwrap_execution(direct)) == "java.lang.InterruptedException"
 }
 
 # ---- tests that install a handler instead of a peer ----
@@ -523,7 +503,7 @@ test "an injected deadline is the production deadline, in microseconds" {
   # timeout is worded with its budget, recognised by `timed_out`, tagged
   # KTimeout and turned into a 504 meant standing up a peer that stalls past the
   # ten-second management budget and waiting for it. Every line below is the
-  # same production code — deadline_text, timed_out, as_outbound, split_kind —
+  # same production code — test_deadline_text, timed_out, as_outbound, split_kind —
   # reached by answering the operation instead of the socket.
   let t0 = System.currentTimeMillis()
   let outcome = with_text_answer(Err(wire_timeout()), () => fetch("http://127.0.0.1:1/", []))
@@ -652,7 +632,7 @@ fn body_tag(b: OutBody) -> String =
     NoBody -> "none"
     TextBody(s) -> "text:${s}"
     RawBody(raw) -> "raw:${to_string(len(raw))}"
-    PublishedBody(_p) -> "published"
+    FileBody(_p) -> "published"
   }
 
 test "every call shape asks for the budget its deadline was chosen for" {
@@ -694,7 +674,7 @@ test "every call shape asks for the budget its deadline was chosen for" {
   let _deleted = tmp.delete()
 
   let m = to_string(MANAGEMENT_TIMEOUT_S)
-  let t = to_string(TRANSFER_TIMEOUT_S)
+  let t = to_string(TEST_TRANSFER_TIMEOUT_S)
   # a management call is small and may run inside the SQLite write lock; a
   # transfer moves object bytes and its deadline is a cap on duration
   assert log_read(seen) ==
@@ -703,7 +683,7 @@ test "every call shape asks for the budget its deadline was chosen for" {
 
 test "a stream can be answered without a socket" {
   # The streaming path had no test that did not need a peer, because a
-  # StreamResp carries a live InputStream. `bytes_stream` is how an arm builds
+  # StreamResp carries a sequential source. `bytes_stream` is how an arm builds
   # one, which is what puts webdav's and fm's proxy paths within reach of a
   # handler.
   let served = {
@@ -719,7 +699,7 @@ test "a stream can be answered without a socket" {
     Ok(r) -> {
       assert r.status == 206
       assert ok_stream(r)
-      let raw = raw_response_stream(r.stream).readAllBytes()!
+      let raw = read_all(test_response_source(r.stream))
       close_stream(r.stream)
       assert bytes.decode_utf8_lossy(raw) == "partial"
     }
@@ -772,4 +752,28 @@ test "an answered start delivers through await_resp, and its failure is reworded
     }
   }
   assert log_read(seen) == "start http://x/ok;start http://x/slow;await http://x/ok;await http://x/slow;"
+}
+
+fn read_all(source: BodySource) -> Bytes !io = read_from(source, 0, bytes.utf8(""))
+
+fn read_from(source: BodySource, pos: Int, acc: Bytes) -> Bytes !io = {
+  let chunk = source.read(pos, 65536)
+  if len(chunk) == 0 { acc } else { read_from(source, pos + len(chunk), bytes.freeze(bytes.put_bytes(bytes.put_bytes(bytes.buf(), acc), chunk))) }
+}
+
+test "an unsupported JVM file slice is an outbound error before send" {
+  let file = File.createTempFile("dawn-slice-", ".bin")!
+  let body = request_body(bytes.utf8(""), FileSpan {
+    path: file.getPath()!, offset: 1, length: 0,
+  }, bytes.utf8(""))
+  let outcome = with_upstream(new_client(), () => post_body("http://127.0.0.1:1/", [], body))
+  let _ = file.delete()
+  match as_outbound(outcome) {
+    Ok(_) -> { assert false }
+    Err(m) -> {
+      let (kind, text) = split_kind(m)
+      assert kind == KUpstream
+      assert text == "site.upstream.unsupported_file_range: JVM outbound file description must cover the complete stable file"
+    }
+  }
 }

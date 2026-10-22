@@ -37,6 +37,7 @@ def main() -> int:
             "leak-java-input-stream",
             "leak-raw-input-stream",
             "make-response-stream-transparent",
+            "discard-source-error",
         ),
     )
     parser.add_argument("project", type=Path)
@@ -45,12 +46,13 @@ def main() -> int:
     project = require_workdir(args.project)
 
     http = source_path(project, "src/util/http.dawn")
+    jvm = source_path(project, "src/util/http_jvm.dawn")
     api_fm = source_path(project, "src/api/api_fm.dawn")
     if args.mutant == "make-response-stream-transparent":
         replace_once(
             http,
-            "pub opaque type ResponseStream = InputStream\n",
-            "pub alias ResponseStream = InputStream\n",
+            "pub opaque type ResponseStream = BodySource\n",
+            "pub alias ResponseStream = BodySource\n",
         )
     elif args.mutant == "leak-java-input-stream":
         replace_once(
@@ -63,12 +65,15 @@ def main() -> int:
             "pub fn leaked_java_input_stream(s: InputStream) -> InputStream = s",
         )
     elif args.mutant == "leak-raw-input-stream":
-        replace_once(
-            http,
-            "fn raw_response_stream(s: ResponseStream) -> InputStream = s\n",
-            "fn raw_response_stream(s: ResponseStream) -> InputStream = s\n\n"
-            "pub fn leaked_raw_response_stream(s: ResponseStream) -> InputStream = "
-            "raw_response_stream(s)\n",
+        append_once(
+            jvm,
+            "pub fn leaked_raw_response_stream(cl: HttpCell, req: OutReq) -> Result[InputStream, ForeignError] !io =\n"
+            "  flatten_fault(catch_fault(() => {\n"
+            "    let built = request_for(req)?\n"
+            "    let resp = client_of(cl).send(built, BodyHandlers.ofInputStream()!)!\n"
+            "    let got: Result[InputStream, ForeignError] = cast(resp.body()!)\n"
+            "    got\n"
+            "  }))",
         )
     elif args.mutant == "break-owner-adapter":
         # web6 gave `streaming` a defaulted `length`; a function value does not
@@ -77,11 +82,11 @@ def main() -> int:
             http,
             "pub fn stream_response(status: Int, content_type: String, "
             "stream: ResponseStream) -> Response =\n"
-            "  streaming(status, content_type, input_source(raw_response_stream(stream)))\n",
+            "  streaming(status, content_type, raw_response_source(stream))\n",
             "pub fn stream_response(status: Int, content_type: String, "
             "stream: ResponseStream) -> Response = {\n"
             "  let forward = streaming\n"
-            "  forward(status, content_type, input_source(raw_response_stream(stream)), None)\n"
+            "  forward(status, content_type, raw_response_source(stream), None)\n"
             "}\n",
         )
     elif args.mutant == "bypass-owner-adapter":
@@ -127,6 +132,20 @@ def main() -> int:
             '  let raw_stream = URL.new("http://127.0.0.1").openStream()!\n'
             '  forward(200, "application/octet-stream", input_source(raw_stream), None)\n'
             "}",
+        )
+    elif args.mutant == "discard-source-error":
+        if "use std/bytes\n" not in http.read_text(encoding="utf-8"):
+            replace_once(http, "use std/str\n", "use std/str\nuse std/bytes\n")
+        replace_once(
+            http,
+            "pub fn response_stream(source: BodySource) -> ResponseStream = source\n",
+            "pub fn response_stream(source: BodySource) -> ResponseStream = BodySource {\n"
+            "  read: (pos, n) => match catch_panic(() => catch_fault(() => source.read(pos, n))) {\n"
+            "    Ok(Ok(piece)) -> piece\n"
+            '    _ -> bytes.utf8("")\n'
+            "  },\n"
+            "  close: source.close,\n"
+            "}\n",
         )
     else:
         replace_once(

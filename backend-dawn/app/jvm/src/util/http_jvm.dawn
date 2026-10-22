@@ -1,0 +1,174 @@
+# JVM owner of the process HTTP client, publishers, futures and raw streams.
+use site_core/util/http.{HttpResp, BytesResp, StreamResp, OutReq, OutBody, NoBody, TextBody, RawBody, FileBody, RequestBody, Upstream, Pending, pending, response_stream, request_parts}
+use web_jvm/server.{input_source}
+use java "java.net.URI"
+use java "java.net.http.HttpClient"
+use java "java.net.http.HttpRequest"
+use java "java.net.http.HttpRequest.Builder"
+use java "java.net.http.HttpRequest.BodyPublisher"
+use java "java.net.http.HttpRequest.BodyPublishers"
+use java "java.net.http.HttpResponse.BodyHandlers"
+use java "java.io.File"
+use java "java.nio.file.Files"
+use java "java.io.InputStream"
+use java "java.time.Duration"
+use java "java.lang.String"
+use java "java.net.http.HttpResponse"
+use java "java.util.concurrent.CompletableFuture"
+
+## The process's outbound HTTP client, and the only thing in this module that is
+## meant to outlive a request.
+##
+## It has to be a value someone holds. Dawn has no mutable global state (spec
+## §6.1 puts it behind `!io` and Java interop, which is to say behind a static
+## field this repo does not have a Java source file to declare), so "shared"
+## cannot mean "a lazily-initialised singleton somewhere in here". It means main
+## builds one at startup and threads it into JVM route closures separately
+## from the portable Auth configuration.
+##
+## Sharing is the point, not tidiness. `HttpClient` owns the connection pool: a
+## client built per call starts with an empty pool, so every outbound request
+## reopens the TCP connection and, against qiniu, redoes the TLS handshake. One
+## client keeps the connection alive across calls. `send` is thread-safe and the
+## JDK documents the client as intended to be shared, so the virtual thread per
+## request does not need one of its own.
+pub opaque type HttpCell = HttpClient
+
+## Ceiling on the TCP (and TLS) handshake alone. The request deadline covers
+## connect as well and is the one that bounds the whole exchange; this only
+## keeps a blackholed SYN from eating a long transfer budget.
+const CONNECT_TIMEOUT_S: Int = 10
+
+## Build the client. Called once, from main. Calling it per request would put
+## this module back where it started, so nothing below this line calls it.
+pub fn new_client() -> HttpCell !io = {
+  let connect = Duration.ofSeconds(CONNECT_TIMEOUT_S)!
+  HttpClient.newBuilder()!.connectTimeout(connect)!.build()!
+}
+
+fn client_of(cell: HttpCell) -> HttpClient = cell
+
+## Run `body` against the real network, through the process's shared client.
+##
+## This is the production handler, and unlike util/clock's `with_system_clock` it
+## is the form that gets used. Clock had three installation sites and one arm to
+## write at each, so writing the arm inline read better; Upstream has a dozen
+## sites and four arms apiece, and a dozen copies of the same four arms is a
+## dozen places for them to drift.
+pub fn with_upstream[T](cl: HttpCell, body: fn() -> T !Upstream !io) -> T !io = {
+  with handle Upstream {
+    exchange(req) => wire_exchange(cl, req)
+    exchange_bytes(req) => wire_exchange_bytes(cl, req)
+    exchange_stream(req) => wire_exchange_stream(cl, req)
+    exchange_start(req) => wire_start(cl, req)
+  }
+  body()
+}
+
+# ---- the arms that do reach a peer ----
+
+fn wire_exchange(cl: HttpCell, req: OutReq) -> Result[HttpResp, ForeignError] !io =
+  flatten_fault(catch_fault(() => {
+    let built = request_for(req)?
+    let resp = client_of(cl).send(built, BodyHandlers.ofString()!)!
+    Ok(HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! })
+  }))
+
+# resp.body() is an erased-generic Object that is a byte[] at runtime — cast
+# reclaims it (Result since v0.33.0; a mismatch was a ClassCastException that
+# catch_fault turned into a fault, and it still lands in the same Err).
+fn wire_exchange_bytes(cl: HttpCell, req: OutReq) -> Result[BytesResp, ForeignError] !io =
+  flatten_fault(catch_fault(() => {
+    let built = request_for(req)?
+    let resp = client_of(cl).send(built, BodyHandlers.ofByteArray()!)!
+    let got: Result[Bytes, ForeignError] = cast(resp.body()!)
+    match got {
+      Ok(b) -> Ok(BytesResp { status: resp.statusCode(), bytes: b })
+      Err(e) -> Err(e)
+    }
+  }))
+
+# ofInputStream returns as soon as the headers land; the body is NOT buffered.
+# The stream is unconsumed here — reading it later pumps bytes, and it MUST be
+# closed (transferTo to EOF, or close_stream) or the HttpClient connection leaks.
+fn wire_exchange_stream(cl: HttpCell, req: OutReq) -> Result[StreamResp, ForeignError] !io =
+  flatten_fault(catch_fault(() => {
+    let built = request_for(req)?
+    let resp = client_of(cl).send(built, BodyHandlers.ofInputStream()!)!
+    let got: Result[InputStream, ForeignError] = cast(resp.body()!)
+    match got {
+      Ok(s) -> Ok(StreamResp { status: resp.statusCode(), stream: response_stream(input_source(s)) })
+      Err(e) -> Err(e)
+    }
+  }))
+
+fn wire_start(cl: HttpCell, req: OutReq) -> Result[Pending, ForeignError] !io =
+  flatten_fault(catch_fault(() => {
+    let built = request_for(req)?
+    let f: CompletableFuture = client_of(cl).sendAsync(built, BodyHandlers.ofString()!)!
+    Ok(pending(req.budget_s, () => future_reply(f)))
+  }))
+
+fn future_reply(f: CompletableFuture) -> Result[HttpResp, ForeignError] !io =
+  flatten_fault(catch_fault(() => {
+    let got: Result[HttpResponse, ForeignError] = cast(f.get()!)
+    match got {
+      Ok(resp) -> Ok(HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! })
+      Err(e) -> Err(e)
+    }
+  }))
+
+fn flatten_fault[T](r: Result[Result[T, ForeignError], ForeignError]) -> Result[T, ForeignError] =
+  match r {
+    Ok(inner) -> inner
+    Err(e) -> Err(e)
+  }
+
+# The one place a request is assembled, so the deadline cannot be forgotten by a
+# body handler that gets added later. Every outbound call in this module comes
+# through here; there is exactly one `.timeout(` in the file and this is it.
+fn request_for(req: OutReq) -> Result[HttpRequest, ForeignError] !io =
+  flatten_fault(catch_fault(() => {
+    let uri = URI.create(req.url)!
+    let base = HttpRequest.newBuilder()!.uri(uri)!
+    let timed = base.timeout(Duration.ofSeconds(req.budget_s)!)!
+    let withHeaders = add_headers(timed, req.headers, 0)
+    let publisher = publisher_for(req.body)?
+    Ok(withHeaders.method(req.method, publisher)!.build()!)
+  }))
+
+fn publisher_for(b: OutBody) -> Result[BodyPublisher, ForeignError] !io =
+  match b {
+    NoBody -> Ok(BodyPublishers.noBody()!)
+    TextBody(s) -> Ok(BodyPublishers.ofString(s)!)
+    RawBody(raw) -> Ok(BodyPublishers.ofByteArray(raw)!)
+    FileBody(p) -> raw_body_publisher(p)
+  }
+
+fn raw_body_publisher(body: RequestBody) -> Result[BodyPublisher, ForeignError] !io = {
+  let parts = request_parts(body)
+  let file = parts.file
+  let path = File.new(file.path).toPath()!
+  # ofFile is the existing constant-memory production path. Refuse unsupported
+  # slices rather than silently uploading the whole file under a partial claim.
+  if file.offset != 0 || file.length != Files.size(path) {
+    return Err(ForeignError {
+      kind: "site.upstream.unsupported_file_range",
+      message: "JVM outbound file description must cover the complete stable file", cause: None,
+    })
+  }
+  let h = BodyPublishers.ofByteArray(parts.head)!
+  let f = BodyPublishers.ofFile(path)!
+  let t = BodyPublishers.ofByteArray(parts.tail)!
+  Ok(BodyPublishers.concat(h, f, t)!)
+}
+
+# apply (header_name, value) pairs onto a builder, threading the builder through
+fn add_headers(b: Builder, hs: List[(String, String)], i: Int) -> Builder !io =
+  if i == len(hs) {
+    b
+  } else {
+    let (k, v) = hs[i]
+    let b2 = b.header(k, v)!
+    add_headers(b2, hs, i + 1)
+  }

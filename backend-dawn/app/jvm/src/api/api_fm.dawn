@@ -1,13 +1,14 @@
 # File-manager handlers (M6 knife 11), pure-metadata subset: list, create-folder,
 # rename, move. These never touch qiniu (rename/move only rewrite paths); the
 # qiniu-mutating endpoints (upload/delete/copy/save) are added separately.
+use util/http_jvm.{HttpCell, with_upstream}
 use std/str
 use std/bytes
 use std/map
 use site_core/db/sql.{Db}
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, as_http_with, json_ok, query, redirect, header, body_text}
 use site_core/util/multipart.{Part, boundary_of, parse_multipart, part_named}
-use util/http.{Upstream, fetch_stream, ok_stream, stream_response, close_stream, as_outbound, with_upstream}
+use site_core/util/http.{Upstream, fetch_stream, ok_stream, stream_response, close_stream, as_outbound}
 use web/router.{Route, route_get, route_post, tagged}
 use site_core/util/jsonx.{obj, jstr, jint}
 use db/db.{with_db}
@@ -37,8 +38,8 @@ use json/parser.{parse}
 # innermost thing that owns a whole outbound unit of work: web's `Handler` type
 # is closed at `!io`, so a closure emitting `!Upstream` cannot BE a route (see
 # util/http). Routes that never call out keep plain `guarded`.
-fn guarded_out(a: Auth, req: Request, body: fn() -> Result[Response, HttpError] !Random !Upstream !io) -> Result[Response, HttpError] !io =
-  guarded(a, req, () => with_upstream(a.http, () => with_random_real(body)))
+fn guarded_out(a: Auth, cl: HttpCell, req: Request, body: fn() -> Result[Response, HttpError] !Random !Upstream !io) -> Result[Response, HttpError] !io =
+  guarded(a, req, () => with_upstream(cl, () => with_random_real(body)))
 
 ## GET /api/fm?path= — directory listing (FsData).
 pub fn fm_list(a: Auth) -> Handler =
@@ -158,9 +159,9 @@ pub fn sign(a: Auth) -> Handler =
 ## dirs, quota}. Local (DB) figures are exact; remote is the 600s-cached qiniu
 ## bucket space (null when unavailable); quota prefers the storage respack
 ## capacity over the settings value, like the FastAPI handler.
-pub fn stats(a: Auth, space_cell: TtlCell, respack_cell: TtlCell) -> Handler =
+pub fn stats(a: Auth, cl: HttpCell, space_cell: TtlCell, respack_cell: TtlCell) -> Handler =
   req =>
-  guarded_out(a, req, () =>
+  guarded_out(a, cl, req, () =>
       {
         let (used_local, files, dirs) = as_http(with_db(a.db.path, a.db.ext, () => stats_db()), 500)?
         {
@@ -220,9 +221,9 @@ fn quota_bytes(a: Auth, respack_cell: TtlCell) -> Int !Upstream !io = {
 
 ## GET /api/fm/content?path= — proxy the object bytes through the backend (the
 ## fallback when a cross-origin 302 to qiniu is CORS-blocked). Binary body (G6).
-pub fn content(a: Auth) -> Handler =
+pub fn content(a: Auth, cl: HttpCell) -> Handler =
   req =>
-  guarded_out(a, req, () => {
+  guarded_out(a, cl, req, () => {
     let rel = fm_split(qparam(req, "path"))
     match as_http(with_db(a.db.path, a.db.ext, () => get_row(rel)), 500)? {
       Some(o) ->
@@ -415,9 +416,9 @@ fn qparam(req: Request, name: String) -> String = unwrap_or(query(req, name), ""
 ## POST /api/fm/delete: {path, items:[{path}]}. Atomically removes every
 ## requested metadata subtree, then best-effort collects unreferenced objects.
 ## Returns FsData + {deleted}.
-pub fn delete(a: Auth) -> Handler =
+pub fn delete(a: Auth, cl: HttpCell) -> Handler =
   req =>
-  guarded_out(a, req, () =>
+  guarded_out(a, cl, req, () =>
       {
         let m = as_http(body_obj(body_text(req)?), 422)?
         let cur = fm_split(str_or(m, "path", ""))
@@ -428,9 +429,9 @@ pub fn delete(a: Auth) -> Handler =
       })
 
 ## POST /api/fm/create-file — {path, name}. Creates an empty file object.
-pub fn create_file(a: Auth) -> Handler =
+pub fn create_file(a: Auth, cl: HttpCell) -> Handler =
   req =>
-  guarded_out(a, req, () =>
+  guarded_out(a, cl, req, () =>
       {
         let m = as_http(body_obj(body_text(req)?), 422)?
         let cur = fm_split(str_or(m, "path", ""))
@@ -450,9 +451,9 @@ pub fn create_file(a: Auth) -> Handler =
 ## POST /api/fm/save — {path, content}. Writes text to a NEW qiniu key (CDN
 ## caches by URL, so overwrite would read stale), updates the DB, deletes the
 ## old key. Returns {path}.
-pub fn save(a: Auth) -> Handler =
+pub fn save(a: Auth, cl: HttpCell) -> Handler =
   req =>
-  guarded_out(a, req, () =>
+  guarded_out(a, cl, req, () =>
       {
         let m = as_http(body_obj(body_text(req)?), 422)?
         let rel = fm_split(str_or(m, "path", ""))
@@ -467,9 +468,9 @@ pub fn save(a: Auth) -> Handler =
 
 ## POST /api/fm/copy — {path, destination, sources[]}. Copies each subtree;
 ## files get a fresh qiniu object (new uuid key), dirs are recreated.
-pub fn copy(a: Auth) -> Handler =
+pub fn copy(a: Auth, cl: HttpCell) -> Handler =
   req =>
-  guarded_out(a, req, () =>
+  guarded_out(a, cl, req, () =>
       {
         let m = as_http(body_obj(body_text(req)?), 422)?
         let cur = fm_split(str_or(m, "path", ""))
@@ -482,9 +483,9 @@ pub fn copy(a: Auth) -> Handler =
 ## POST /api/fm/register — {path, key, size?, content_type?}. Confirms the
 ## object exists in qiniu (stat), records the FileObject with qiniu's authoritative
 ## size/mime, clears the ledger row. Rejects if the object isn't really there.
-pub fn register(a: Auth) -> Handler =
+pub fn register(a: Auth, cl: HttpCell) -> Handler =
   req =>
-  guarded_out(a, req, () =>
+  guarded_out(a, cl, req, () =>
       {
         let m = as_http(body_obj(body_text(req)?), 422)?
         let rel = fm_split(str_or(m, "path", ""))
@@ -579,9 +580,9 @@ pub fn fm_search(a: Auth) -> Handler =
 ## ride through the backend (qiniu won't accept a client PUT), recovered byte-exact
 ## from the raw request Bytes (Request.body) via the multipart parser, then
 ## re-POSTed to qiniu. Matches FastAPI: form field `path` (target dir) + file part.
-pub fn upload(a: Auth) -> Handler =
+pub fn upload(a: Auth, cl: HttpCell) -> Handler =
   req =>
-  guarded_out(a, req, () =>
+  guarded_out(a, cl, req, () =>
       match header(req, "content-type") {
         None -> Err(http_error(422, "expected multipart/form-data"))
         Some(ct) ->
@@ -627,24 +628,24 @@ fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpErro
   Ok(json_ok(as_http_with(run_upload(a, rel, fp.content, mime, size), mutation_failure)?))
 }
 
-pub fn routes(a: Auth, space_cell: TtlCell, respack_cell: TtlCell) -> List[Route] =
+pub fn routes(a: Auth, cl: HttpCell, space_cell: TtlCell, respack_cell: TtlCell) -> List[Route] =
   [
     route_get("/api/fm", fm_list(a)),
     route_get("/api/fm/sign", sign(a)),
     route_get("/api/fm/preview", preview(a)),
     route_get("/api/fm/download", download(a)),
-    route_get("/api/fm/content", content(a)),
-    route_get("/api/fm/stats", stats(a, space_cell, respack_cell)),
+    route_get("/api/fm/content", content(a, cl)),
+    route_get("/api/fm/stats", stats(a, cl, space_cell, respack_cell)),
     route_get("/api/fm/search", fm_search(a)),
     route_post("/api/fm/create-folder", create_folder(a)),
     route_post("/api/fm/rename", rename(a)),
     route_post("/api/fm/move", move(a)),
-    route_post("/api/fm/delete", delete(a)),
-    route_post("/api/fm/copy", copy(a)),
-    route_post("/api/fm/save", save(a)),
-    route_post("/api/fm/create-file", create_file(a)),
-    route_post("/api/fm/register", register(a)),
+    route_post("/api/fm/delete", delete(a, cl)),
+    route_post("/api/fm/copy", copy(a, cl)),
+    route_post("/api/fm/save", save(a, cl)),
+    route_post("/api/fm/create-file", create_file(a, cl)),
+    route_post("/api/fm/register", register(a, cl)),
     route_post("/api/fm/upload-token", upload_token_ep(a)),
     # raw-body: multipart proxy upload carries file bytes (bounded by nginx).
-    tagged(route_post("/api/fm/upload", upload(a)), ["raw-body"]),
+    tagged(route_post("/api/fm/upload", upload(a, cl)), ["raw-body"]),
   ]

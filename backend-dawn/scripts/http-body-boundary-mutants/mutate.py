@@ -29,13 +29,13 @@ def main() -> int:
 
     project = require_workdir(args.project)
 
-    http = source_path(project, "src/util/http.dawn")
+    http = source_path(project, "src/util/http_jvm.dawn")
     qiniu = source_path(project, "src/qiniu/rs.dawn")
     if args.mutant == "swap-file-tail":
         replace_once(
             http,
-            "    BodyPublishers.concat(h, f, t)!\n",
-            "    BodyPublishers.concat(h, t, f)!\n",
+            "  Ok(BodyPublishers.concat(h, f, t)!)\n",
+            "  Ok(BodyPublishers.concat(h, t, f)!)\n",
         )
     elif args.mutant == "drop-upload-prefix":
         replace_once(
@@ -50,10 +50,14 @@ def main() -> int:
         replace_once(
             qiniu,
             "use std/char\n",
-            'use std/char\nuse java "java.net.http.HttpRequest.BodyPublisher"\n',
+            'use std/char\nuse java "java.net.http.HttpRequest.BodyPublishers"\n',
         )
         with qiniu.open("a", encoding="utf-8") as f:
-            f.write("\nfn leaked_publisher(p: BodyPublisher) -> BodyPublisher = p\n")
+            f.write(
+                "\nfn leaked_publisher() -> Unit !io = {\n"
+                '  let _body = BodyPublishers.ofString("bypass owner")!\n'
+                "  ()\n}\n"
+            )
     return 0
 
 

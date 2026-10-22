@@ -1,7 +1,7 @@
 use db/jdbc.{DbConn, open, with_jdbc}
 use java "java.lang.String"
 use db/sql.{exec}
-use util/http.{HttpResp, MANAGEMENT_TIMEOUT_S, no_answer}
+use site_core/util/http.{HttpResp, MANAGEMENT_TIMEOUT_S, no_answer}
 use java "java.lang.System"
 use java "java.lang.Thread"
 use java "java.util.concurrent.atomic.AtomicReference"

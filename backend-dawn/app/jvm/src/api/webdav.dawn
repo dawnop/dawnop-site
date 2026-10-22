@@ -15,6 +15,7 @@
 # through memory, with Range passthrough (forwards the client Range to qiniu,
 # relays 206 + Content-Range) — and clients that follow redirects skip the proxy
 # entirely (302 straight to qiniu), so only webdavfs/mini-redirector pay it.
+use util/http_jvm.{HttpCell, with_upstream}
 use std/str
 use std/bytes
 use std/char
@@ -38,7 +39,7 @@ use java "java.io.File"
 use std/io.{Random, with_random_real}
 use std/io as io
 use site_core/util/crypto.{uuid, uuid_hex}
-use util/http.{Upstream, fetch_stream, ok_stream, stream_response, close_stream, as_outbound, tag_outbound, with_upstream}
+use site_core/util/http.{Upstream, fetch_stream, ok_stream, stream_response, close_stream, as_outbound, tag_outbound}
 use util/ttl.{now_s}
 use site_core/util/errkind.{KConflict, KPrecondition, KUpstream, KTimeout, split_kind}
 use site_core/svc/export.{url_encode}
@@ -1097,7 +1098,7 @@ fn dav_guard(a: Auth) -> Guard =
 
 # ---- routes ----
 
-fn dav_handler(a: Auth, method: String) -> Handler =
+fn dav_handler(a: Auth, cl: HttpCell, method: String) -> Handler =
   req =>
   if method == "OPTIONS" {
     Ok(options_response())
@@ -1110,7 +1111,7 @@ fn dav_handler(a: Auth, method: String) -> Handler =
         # the innermost thing that owns a request, and the closure it lives in
         # is a web `Handler`, whose type is closed at `!io` (util/http says
         # why). GET/PUT/DELETE/MOVE/COPY all reach qiniu from in here.
-        with_upstream(a.http, () => with_random_real(() =>
+        with_upstream(cl, () => with_random_real(() =>
             match method {
               "PROPFIND" -> propfind(a, req, rel)
               "HEAD" -> get_or_head(a, req, rel, true)
@@ -1129,7 +1130,7 @@ fn dav_handler(a: Auth, method: String) -> Handler =
   }
 
 ## All WebDAV routes under /dav/{rest*} (the tail matches /dav and any depth).
-pub fn dav_routes(a: Auth) -> List[Route] = {
+pub fn dav_routes(a: Auth, cl: HttpCell) -> List[Route] = {
   let verbs = DAV_VERBS
   # raw-body: WebDAV PUT carries file bytes (bounded by nginx, not the JSON limit).
   # no-cors: WebDAV is not browser traffic — skip the CORS middleware entirely.
@@ -1143,11 +1144,11 @@ pub fn dav_routes(a: Auth) -> List[Route] = {
   # read, so an anonymous request is a 401 with nothing read and nothing spilled.
   # OPTIONS stays open, as in the handler: it is the capability probe a client
   # sends before it has credentials to offer. PUT also carries its own ceiling.
-  map(verbs, v => dav_route(a, v))
+  map(verbs, v => dav_route(a, cl, v))
 }
 
-fn dav_route(a: Auth, v: String) -> Route = {
-  let base = tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, v)),
+fn dav_route(a: Auth, cl: HttpCell, v: String) -> Route = {
+  let base = tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, cl, v)),
     if v == "PUT" { ["raw-body", "no-cors", "stream-body"] } else { ["raw-body", "no-cors"] })
   let bounded = if v == "PUT" { body_limit(base, DAV_PUT_MAX_BYTES) } else { base }
   if v == "OPTIONS" { bounded } else { guarded(bounded, dav_guard(a)) }
