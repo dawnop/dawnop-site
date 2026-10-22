@@ -1,0 +1,7 @@
+schema = 1
+name = "sqlite_probe"
+
+[deps]
+site_sqlite = "../../app/native"
+site_core = "../../core"
+sql_scenarios = "../sql"
