@@ -1,0 +1,28 @@
+# Portable connection operations. Drivers own resource lifetimes.
+use db/sql.{Db, SqlV, Col, QueryResult}
+
+pub type DbOps = {
+  query: fn(String, List[SqlV], List[Col]) -> Result[QueryResult, String] !io,
+  execute: fn(String, List[SqlV]) -> Result[Unit, String] !io,
+  changes: fn(String, List[SqlV]) -> Result[Int, String] !io,
+  last_id: fn() -> Result[Int, String] !io,
+  busy_timeout: fn(Int) -> Result[Unit, String] !io,
+  in_transaction: fn() -> Result[Bool, String] !io,
+  close: fn() -> Unit !io,
+}
+pub type DbConfig = { path: String, ext: String, connect: fn(String, String) -> DbOps !io }
+
+pub fn with_db[T, !e](db: DbConfig, body: fn() -> T !Db !e) -> T !io = {
+  with c <- bracket(db.connect(db.path, db.ext), c => (c.close)())
+  with handle Db {
+    db_query(q, ps, cols) => (c.query)(q, ps, cols)
+    execute(q, ps) => (c.execute)(q, ps)
+    execute_changes(q, ps) => (c.changes)(q, ps)
+    last_id() => (c.last_id)()
+    busy_timeout(ms) => (c.busy_timeout)(ms)
+    in_transaction() => (c.in_transaction)()
+  }
+  body()
+}
+
+pub fn without_extension(db: DbConfig) -> DbConfig = DbConfig { ..db, ext: "" }

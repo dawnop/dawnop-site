@@ -1,4 +1,5 @@
 # Native connection owner. The portable core never imports this module.
+use site_core/db/runtime.{DbConfig, DbOps}
 use sqlite/sqlite
 use site_core/util/ferr.{fe_text}
 use site_core/db/sql.{Db, SqlV, PInt, PFloat, PStr, PNull, Col, ColInt, ColFloat, ColStr, Cell, VInt, VFloat, VStr, VNull, QueryResult}
@@ -53,6 +54,10 @@ fn initialize(c: sqlite.Db, ext: String) -> Result[Unit, ForeignError] !io = {
     [[sqlite.Text("wal")]] -> ()
     _ -> return Err(ForeignError { kind: "site.db.wal", message: "SQLite did not enter WAL mode", cause: None })
   }
+  load_simple(c, ext)
+}
+
+fn load_simple(c: sqlite.Db, ext: String) -> Result[Unit, ForeignError] !io = {
   if ext != "" { sqlite.load_extension(c, ext, Some("sqlite3_simple_init"))? }
   Ok(())
 }
@@ -72,3 +77,28 @@ pub fn with_db[T, !e](path: String, ext: String, body: fn() -> Result[T, String]
     Err(e) -> Err(if e.kind == "site.db.body" { e.message } else { fe_text(e) })
   }
 }
+
+# A borrowed operations record never leaves the enclosing sqlite.with_db callback.
+fn connection(c: sqlite.Db) -> DbOps = DbOps {
+  query: (q, ps, cols) => native_query(c, q, ps, cols),
+  execute: (q, ps) => result(sqlite.execute(c, q, map(ps, value))),
+  changes: (q, ps) => result(sqlite.execute_changes(c, q, map(ps, value))),
+  last_id: () => result(sqlite.last_id(c)),
+  busy_timeout: ms => result(sqlite.busy_timeout(c, ms)),
+  in_transaction: () => result(sqlite.in_transaction(c)),
+  close: () => (),
+}
+
+## Serve mode only checks persistent WAL mode. Migration mode may establish it.
+pub fn with_database[T](path: String, ext: String, migrate: Bool, body: fn(DbConfig) -> T !io) -> Result[T, String] !io =
+  result(sqlite.with_db(path, c => {
+    sqlite.busy_timeout(c, 5000)?
+    let mode = sqlite.query(c, if migrate { "PRAGMA journal_mode=WAL" } else { "PRAGMA journal_mode" }, [], [sqlite.ColText])?
+    if mode.rows != [[sqlite.Text("wal")]] { return Err(ForeignError { kind: "site.db.wal", message: "database must be migrated to WAL before serving", cause: None }) }
+    load_simple(c, ext)?
+    let ops = connection(c)
+    Ok(body(DbConfig { path: path, ext: ext, connect: (requested, requested_ext) => {
+      if requested != path || (requested_ext != "" && requested_ext != ext) { panic("database scope mismatch") }
+      ops
+    } }))
+  }))

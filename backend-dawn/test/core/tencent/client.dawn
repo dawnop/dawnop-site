@@ -1,5 +1,8 @@
+use std/io
 test "TC3 headers are byte-for-byte the reference signature, at a frozen instant" {
-  with handle Clock { now_ms() => FROZEN_MS }
+  with handle io.Clock { clock_wall_ns() => (FROZEN_MS) * 1000000
+    clock_mono() => io.instant_at_ns(0)
+    clock_sleep_ns(_ns) => () }
   let h = tc3_headers(
     "AKIDtestidtestidtestid",
     "SKtestkeytestkeytestkey",
@@ -36,7 +39,9 @@ test "moving the clock moves the signature" {
   # the negative control for the golden above: without this, a handler that
   # ignored its argument and a frozen constant would look the same.
   let at = (ms: Int) => {
-    with handle Clock { now_ms() => ms }
+    with handle io.Clock { clock_wall_ns() => (ms) * 1000000
+      clock_mono() => io.instant_at_ns(0)
+      clock_sleep_ns(_ns) => () }
     tc3_headers("id", "key", "lighthouse", "DescribeInstances", "2020-03-24", "ap-guangzhou", "{}")
   }
   assert at(FROZEN_MS) == at(FROZEN_MS)

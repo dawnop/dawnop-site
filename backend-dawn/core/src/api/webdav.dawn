@@ -15,35 +15,35 @@
 # through memory, with Range passthrough (forwards the client Range to qiniu,
 # relays 206 + Content-Range) — and clients that follow redirects skip the proxy
 # entirely (302 straight to qiniu), so only webdavfs/mini-redirector pay it.
-use util/http_jvm.{HttpCell, with_upstream}
+use util/http_runtime.{HttpCell, with_upstream}
 use std/str
 use std/bytes
 use std/char
 use std/map
 use std/list
-use site_core/util/fs
-use site_core/util/b64
-use site_core/util/uri.{Uri, is_opaque, percent_decode}
-use site_core/util/uri
-use site_core/db/sql.{Db}
-use site_core/util/time.{http_date, iso_date}
+use util/fs
+use util/b64
+use util/uri.{Uri, is_opaque, percent_decode}
+use util/uri
+use db/sql.{Db}
+use util/time.{http_date, iso_date}
 use web/types.{Request, Response, HttpError, Handler, Guard, http_error, as_http, as_http_with, text, raw, binary, redirect, with_header, header, headers_all, param_segs}
 use web/router.{Route, route_method_of, tagged, body_limit, guarded}
-use db/db.{with_db}
+use db/runtime.{with_db, without_extension}
 use svc/auth.{Auth, scheme_param}
 use svc/files.{signed_url, gc_unreferenced, gc_rows_unreferenced, gc_copy_tree_unreferenced, copy_tree_objects}
-use site_core/repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}
-use site_core/util/paths.{basename, parent_rel, ext, ts, guess_mime, safe_persisted_mime, require_admissible_names}
-use site_core/qiniu/rs.{upload_file}
+use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}
+use util/paths.{basename, parent_rel, ext, ts, guess_mime, safe_persisted_mime, require_admissible_names}
+use qiniu/rs.{upload_file}
 use std/io.{Random, with_random_real}
 use std/io as io
-use site_core/util/crypto.{uuid, uuid_hex}
-use site_core/util/http.{Upstream, fetch_stream, ok_stream, stream_response, close_stream, as_outbound, tag_outbound}
-use util/ttl.{now_s}
-use site_core/util/errkind.{KConflict, KPrecondition, KUpstream, KTimeout, split_kind}
-use site_core/svc/export.{url_encode}
+use util/crypto.{uuid, uuid_hex}
+use util/http.{Upstream, fetch_stream, ok_stream, stream_response, close_stream, as_outbound, tag_outbound}
+use util/runtime_ttl.{now_s}
+use util/errkind.{KConflict, KPrecondition, KUpstream, KTimeout, split_kind}
+use svc/export.{url_encode}
 
-use site_core/svc/dav_auth as dav_credentials
+use svc/dav_auth as dav_credentials
 
 # Ceiling on one WebDAV PUT body, 512 MiB. It matches the client_max_body_size the
 # production nginx sets on the dav vhost, which was sized from the slowest
@@ -202,7 +202,7 @@ fn propfind_depth(req: Request) -> Result[String, HttpError] = {
 fn propfind(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io = {
   let prefix = dav_prefix(req)
   let depth = propfind_depth(req)?
-  match as_http(with_db(a.db.path, a.db.ext, () => propfind_body(prefix, rel, depth)), 500)? {
+  match as_http(with_db(a.db, () => propfind_body(prefix, rel, depth)), 500)? {
     Some(body) -> Ok(raw(207, "application/xml; charset=\"utf-8\"", body))
     None -> Err(http_error(404, "资源不存在"))
   }
@@ -236,7 +236,7 @@ fn get_or_head(a: Auth, req: Request, rel: String, head: Bool) -> Result[Respons
   if rel == "" {
     Err(http_error(405, "不能下载目录"))
   } else {
-    match as_http(with_db(a.db.path, a.db.ext, () => get_row(rel)), 500)? {
+    match as_http(with_db(a.db, () => get_row(rel)), 500)? {
       None -> Err(http_error(404, "资源不存在"))
       Some(o) ->
         if o.is_dir {
@@ -367,7 +367,7 @@ fn parent_is_directory(parent: String, row: Option[FileRow]) -> Bool =
   }
 
 fn parent_exists(a: Auth, rel: String) -> Result[Bool, String] !io = {
-  with_db(a.db.path, a.db.ext, () => {
+  with_db(a.db, () => {
     let parent = parent_rel(rel)
     let found: Result[Option[FileRow], String] = if parent == "" { Ok(None) } else { get_row(parent) }
     let row = found?
@@ -424,7 +424,7 @@ fn put(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !Rando
     Err(http_error(405, "不能写入根"))
   } else {
     let _n = require_admissible_names(rel)?
-    match as_http_with(with_db(a.db.path, a.db.ext, () => put_preflight(rel)), conflict_or(500))? {
+    match as_http_with(with_db(a.db, () => put_preflight(rel)), conflict_or(500))? {
       Some(o) -> if o.is_dir { Err(http_error(405, "目标是目录")) } else { put_do(a, req, rel) }
       None -> put_do(a, req, rel)
     }
@@ -473,7 +473,7 @@ fn put_do(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !Ra
   }
 
 fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int) -> Result[Response, HttpError] !Upstream !io =
-  match with_db(a.db.path, a.db.ext, () => replace_file_strict(rel, key, mime, size)) {
+  match with_db(a.db, () => replace_file_strict(rel, key, mime, size)) {
     Ok(outcome) -> {
       let _gc = gc_unreferenced(a, outcome.superseded_key)
       Ok(text(if outcome.target_existed { 204 } else { 201 }, ""))
@@ -490,7 +490,7 @@ fn del(a: Auth, rel: String) -> Result[Response, HttpError] !Upstream !io =
   if rel == "" {
     Err(http_error(405, "不能删除根"))
   } else {
-    let rows = as_http(with_db(a.db.path, a.db.ext, () => delete_subtree(rel)), 500)?
+    let rows = as_http(with_db(a.db, () => delete_subtree(rel)), 500)?
     if len(rows) == 0 {
       Err(http_error(404, "资源不存在"))
     } else {
@@ -506,14 +506,14 @@ fn mkcol(a: Auth, rel: String) -> Result[Response, HttpError] !io =
     Err(http_error(405, "根已存在"))
   } else {
     let _n = require_admissible_names(rel)?
-    match as_http(with_db(a.db.path, a.db.ext, () => get_row(rel)), 500)? {
+    match as_http(with_db(a.db, () => get_row(rel)), 500)? {
       Some(_) -> Err(http_error(405, "已存在同名项"))
       None -> {
         let ok = as_http(parent_exists(a, rel), 500)?
         if not ok {
           Err(http_error(409, "父目录不存在"))
         } else {
-          let _i = as_http_with(with_db(a.db.path, a.db.ext, () => insert_folder_strict(rel)), conflict_or(500))?
+          let _i = as_http_with(with_db(a.db, () => insert_folder_strict(rel)), conflict_or(500))?
           Ok(text(201, ""))
         }
       }
@@ -901,7 +901,7 @@ fn move_or_copy(a: Auth, req: Request, rel: String, is_move: Bool) -> Result[Res
   if rel == "" {
     Err(http_error(405, "不能操作根"))
   } else {
-    match as_http(with_db(a.db.path, a.db.ext, () => get_row(rel)), 500)? {
+    match as_http(with_db(a.db, () => get_row(rel)), 500)? {
       None -> Err(http_error(404, "源不存在"))
       Some(source) -> {
         let overwrite = validate_move_copy_request(req, is_move, source.is_dir)?
@@ -931,7 +931,7 @@ fn destination_is_source_ancestor(rel: String, dst: String) -> Bool =
 
 fn mc_check_dst(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Random !Upstream !io =
   {
-    let dst_existing = as_http(with_db(a.db.path, a.db.ext, () => get_row(dst)), 500)?
+    let dst_existing = as_http(with_db(a.db, () => get_row(dst)), 500)?
     match dst_existing {
       Some(_) ->
         if not overwrite {
@@ -939,15 +939,15 @@ fn mc_check_dst(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Boo
         } else if destination_is_source_ancestor(rel, dst) {
           Err(http_error(409, "不能移动/复制到自身或祖先目录"))
         } else {
-          let _v = as_http_with(with_db(a.db.path, a.db.ext, () => validate_webdav_subtree_destination(rel, dst)), conflict_or(500))?
+          let _v = as_http_with(with_db(a.db, () => validate_webdav_subtree_destination(rel, dst)), conflict_or(500))?
           let _c = mc_validate_copy_source(a, rel, is_move)?
           mc_require_parent(a, rel, dst, is_move, overwrite)
         }
       None -> if destination_is_source_ancestor(rel, dst) {
         Err(http_error(409, "不能移动/复制到自身或祖先目录"))
       } else {
-        let _v = as_http_with(with_db(a.db.path, a.db.ext, () => validate_webdav_subtree_destination(rel, dst)), conflict_or(500))?
-        let _e = as_http_with(with_db(a.db.path, a.db.ext, () => validate_webdav_destination_preflight(dst, overwrite)), conflict_or(500))?
+        let _v = as_http_with(with_db(a.db, () => validate_webdav_subtree_destination(rel, dst)), conflict_or(500))?
+        let _e = as_http_with(with_db(a.db, () => validate_webdav_destination_preflight(dst, overwrite)), conflict_or(500))?
         let _c = mc_validate_copy_source(a, rel, is_move)?
         mc_require_parent(a, rel, dst, is_move, overwrite)
       }
@@ -958,7 +958,7 @@ fn mc_validate_copy_source(a: Auth, rel: String, is_move: Bool) -> Result[Unit, 
   if is_move {
     Ok(())
   } else {
-    as_http_with(with_db(a.db.path, a.db.ext, () => validate_copy_source_objects(rel)), conflict_or(500))
+    as_http_with(with_db(a.db, () => validate_copy_source_objects(rel)), conflict_or(500))
   }
 
 fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Random !Upstream !io =
@@ -974,7 +974,7 @@ fn mc_require_parent(a: Auth, rel: String, dst: String, is_move: Bool, overwrite
 fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -> Result[Response, HttpError] !Random !Upstream !io = {
   let result: Result[SubtreeWriteOutcome, String] =
     if is_move {
-      with_db(a.db.path, a.db.ext, () => commit_webdav_move(rel, dst, overwrite))
+      with_db(a.db, () => commit_webdav_move(rel, dst, overwrite))
     } else {
       copy_subtree(a, rel, dst, overwrite)
     }
@@ -990,9 +990,9 @@ fn mc_apply(a: Auth, rel: String, dst: String, is_move: Bool, overwrite: Bool) -
 
 # COPY: recreate dirs, and for each file copy the qiniu object to a fresh key.
 fn copy_subtree(a: Auth, rel: String, dst: String, overwrite: Bool) -> Result[SubtreeWriteOutcome, String] !Random !Upstream !io = {
-  let planned = with_db(a.db.path, a.db.ext, () => prepare_webdav_copy(rel, dst, overwrite))?
+  let planned = with_db(a.db, () => prepare_webdav_copy(rel, dst, overwrite))?
   let copied = copy_tree_objects(a.qiniu, planned)?
-  match with_db(a.db.path, a.db.ext, () => commit_webdav_copy(copied, overwrite)) {
+  match with_db(a.db, () => commit_webdav_copy(copied, overwrite)) {
     Ok(outcome) -> Ok(outcome)
     Err(m) -> {
       let _gc = gc_copy_tree_unreferenced(a, copied)
@@ -1062,7 +1062,7 @@ fn dav_auth(a: Auth, req: Request) -> Result[Unit, HttpError] !io =
             } else {
               let user = parts[0]
               let pass = join(list.drop(parts, 1), ":")
-              match with_db(a.db.path, "", () => io.with_clock_real(() => with_random_real(() =>
+              match with_db(without_extension(a.db), () => io.with_clock_real(() => with_random_real(() =>
                   dav_credentials.authenticate(a.secret, user, pass, dav_credentials.verify_password)))) {
                 Ok(true) -> Ok(())
                 _ -> Err(unauthorized())

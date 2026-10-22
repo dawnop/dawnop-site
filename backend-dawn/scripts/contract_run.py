@@ -227,6 +227,20 @@ def main() -> int:
             # fresh fixture per script: each golden then describes one backend
             # from one known state, whatever the previous script mutated
             contract_fixture.build(str(db))
+            # Resetting the fixture also discards additive schemas. Prepare them
+            # explicitly, exactly as deployment prepare must, outside requests.
+            subprocess.run(
+                [java, "-Duser.timezone=UTC", "-jar", str(jar), "--migrate"],
+                env={
+                    **os.environ,
+                    "DAWNOP_ENV": str(servers[tag][1]),
+                    "DAWN_DB_PATH": str(db),
+                    "DAWN_SIMPLE_EXT": "",
+                },
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
             print(f"\n{'=' * 62}\n== contract_{name}\n{'=' * 62}")
             cmd = [
                 sys.executable,

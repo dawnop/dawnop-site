@@ -169,6 +169,11 @@ jobs:
       - name: contract goldens (read / edge / webdav / qiniu)
         run: python3 backend-dawn/scripts/contract_run.py
 
+      # Keep S10 on this shorter job so the existing native component job
+      # retains its measured 20 minute budget and the runner count stays fixed.
+      - name: native single exchange wire resources and negative controls
+        run: backend-dawn/scripts/native-entry/run.sh --work "${RUNNER_TEMP}/native-entry"
+
       - name: administrator settings and atomic updates
         run: python3 backend-dawn/scripts/check-settings.py
 

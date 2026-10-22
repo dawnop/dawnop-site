@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """两个后端读同一个 .env，那它们对「没写这个键」的理解也必须是同一个。
 
-**为什么存在。** `backend-dawn/app/jvm/src/main.dawn` 里有一句注释：
+**为什么存在。** 原 `backend-dawn/app/jvm/src/main.dawn`（现 `core/src/application.dawn`）里有一句注释：
 
     # defaults mirror app/config.py (Settings field defaults)
 
@@ -50,7 +50,10 @@ import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-DAWN_SRC = REPO / "backend-dawn" / "app" / "jvm" / "src"
+DAWN_SRC = REPO / "backend-dawn"
+DAWN_ROOTS = tuple(
+    DAWN_SRC / root for root in ("core/src", "app/jvm/src", "app/native/src")
+)
 PY_CONFIG = REPO / "backend" / "app" / "config.py"
 TEMPLATE = REPO / "backend" / ".env.example"
 
@@ -180,8 +183,9 @@ def dawn_defaults(sources: dict[str, str]) -> dict[str, tuple[str, str]]:
 
 def dawn_sources() -> dict[str, str]:
     files = {
-        p.name: p.read_text(encoding="utf-8")
-        for p in sorted(DAWN_SRC.rglob("*.dawn"))
+        str(p.relative_to(DAWN_SRC)): p.read_text(encoding="utf-8")
+        for root in DAWN_ROOTS
+        for p in sorted(root.rglob("*.dawn"))
         if p.name not in DAWN_SKIP
     }
     if not files:
@@ -708,8 +712,8 @@ def mutants() -> int:
     # 7. 不是模板的判词：把 Dawn 侧读 LIGHTHOUSE_INSTANCE_ID 那一行删掉，#272 那批规则
     #    必须照样红。新加的三张表不能把老判词挤下去。
     mutated = dict(srcs)
-    mutated["main.dawn"] = _mutate(
-        srcs["main.dawn"],
+    mutated["core/src/application.dawn"] = _mutate(
+        srcs["core/src/application.dawn"],
         '    instance: get_or(cfg, "LIGHTHOUSE_INSTANCE_ID", ""),\n',
         "",
     )

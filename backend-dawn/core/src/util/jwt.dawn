@@ -1,3 +1,4 @@
+use std/io
 # JWT HS256 (M6 knife 7), interoperable with PyJWT: same secret, same claims
 # ({sub, exp}). Dawn-issued tokens verify under PyJWT and vice versa — the
 # signature covers the exact "header.payload" string, so byte layout need not
@@ -5,14 +6,14 @@
 use std/str
 use std/map
 use util/crypto.{hmac_sha256_b64url_nopad, b64url_encode_nopad, b64url_decode, eq_const}
-use util/clock.{Clock, now_s}
+use util/clock.{now_s}
 use json/value.{JObj, JNum, JInt, JStr}
 use util/jsonread.{parse_text}
 
 const HEADER_JSON: String = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}"
 
 ## Sign a token for `sub` valid for `exp_minutes`.
-pub fn sign(secret: String, sub: String, exp_minutes: Int) -> String !Clock !io = {
+pub fn sign(secret: String, sub: String, exp_minutes: Int) -> String !io.Clock !io = {
   let head = b64url_encode_nopad(HEADER_JSON)
   let exp = now_s() + exp_minutes * 60
   let payload = b64url_encode_nopad("{\"sub\":\"${sub}\",\"exp\":${exp}}")
@@ -22,7 +23,7 @@ pub fn sign(secret: String, sub: String, exp_minutes: Int) -> String !Clock !io 
 }
 
 ## Verify a token's signature and expiry; Ok carries the subject.
-pub fn verify(secret: String, token: String) -> Result[String, String] !Clock !io = {
+pub fn verify(secret: String, token: String) -> Result[String, String] !io.Clock !io = {
   let parts = str.split(token, ".")
   if len(parts) != 3 {
     Err("malformed token")
@@ -38,7 +39,7 @@ pub fn verify(secret: String, token: String) -> Result[String, String] !Clock !i
   }
 }
 
-fn claims_of(payload_json: String) -> Result[String, String] !Clock !io = {
+fn claims_of(payload_json: String) -> Result[String, String] !io.Clock !io = {
   let j = parse_text(payload_json)?
   match j {
     JObj(m) -> {

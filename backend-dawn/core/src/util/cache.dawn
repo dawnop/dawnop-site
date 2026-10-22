@@ -1,6 +1,7 @@
+use std/io
 # Persistent single-slot caches. All access uses the caller's Db capability.
 use std/str
-use std/io.{Clock, now_wall_ns}
+use std/io.{now_wall_ns}
 use db/sql.{Db, execute, query, ColInt, ColStr, PInt, PStr, int_at, str_at, with_immediate_tx}
 
 pub type CacheSlot = { namespace: String, key: String }
@@ -11,7 +12,7 @@ pub fn ensure_schema() -> Result[Unit, String] !Db =
   execute("create table if not exists runtime_cache(namespace text not null, cache_key text not null, payload text not null, created_ms integer not null, primary key(namespace, cache_key)) without rowid", [])
 
 ## A hit is only a SELECT, including when the row has expired or time reversed.
-pub fn cache_get(cell: CacheSlot, ttl_s: Int) -> Result[Option[String], String] !Db !Clock = {
+pub fn cache_get(cell: CacheSlot, ttl_s: Int) -> Result[Option[String], String] !Db !io.Clock = {
   let now = now_wall_ns() / 1000000
   let rows = match query("select payload, created_ms from runtime_cache where namespace = ? and cache_key = ?", [PStr(cell.namespace), PStr(cell.key)], [ColStr, ColInt]) {
     Ok(rows) -> rows
@@ -29,10 +30,9 @@ pub fn cache_get(cell: CacheSlot, ttl_s: Int) -> Result[Option[String], String] 
 }
 
 ## No upstream work belongs inside this transaction. A put replaces one slot.
-pub fn cache_put(cell: CacheSlot, payload: String) -> Result[Unit, String] !Db !Clock !io = {
+pub fn cache_put(cell: CacheSlot, payload: String) -> Result[Unit, String] !Db !io.Clock !io = {
   let created = now_wall_ns() / 1000000
   with_immediate_tx(() => {
-    ensure_schema()?
     execute("insert into runtime_cache(namespace, cache_key, payload, created_ms) values(?,?,?,?) on conflict(namespace, cache_key) do update set payload=excluded.payload, created_ms=excluded.created_ms", [PStr(cell.namespace), PStr(cell.key), PStr(payload), PInt(created)])
   })
 }

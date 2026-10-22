@@ -1,0 +1,70 @@
+# Shared configuration, route order and application composition.
+use config.{Config, get_or, require_int_in_range}
+use db/runtime.{DbConfig}
+use util/http_runtime.{HttpCell}
+use util/runtime_ttl.{new_cell}
+use web/router.{Route}
+use api/api_public
+use api/api_articles
+use api/api_settings
+use api/api_tags
+use api/api_pages
+use api/api_viz
+use api/api_fm
+use api/api_paste
+use api/api_drop
+use api/api_monitor.{MonCfg, mon_routes}
+use svc/auth.{Auth, routes}
+use qiniu/creds.{Qiniu}
+use api/webdav.{dav_routes}
+
+pub type Application = { port: Int, origin: String, auth: Auth, monitor: MonCfg }
+pub fn configure(cfg: Config, db: DbConfig) -> Application !io = {
+  let port = parse_or(get_or(cfg, "DAWN_PORT", "8001"), 8001)
+  let origin = get_or(cfg, "DAWN_CORS_ORIGIN", "https://dawnop.com")
+  let secret = get_or(cfg, "SECRET_KEY", "dev-insecure-secret-change-me-before-deploying-to-production")
+  let expire_min = parse_or(get_or(cfg, "ACCESS_TOKEN_EXPIRE_MINUTES", "1440"), 1440)
+  let storage_quota = parse_or(get_or(cfg, "STORAGE_QUOTA_GB", "10"), 10)
+  let qiniu = Qiniu {
+    ak: get_or(cfg, "QINIU_ACCESS_KEY", ""),
+    sk: get_or(cfg, "QINIU_SECRET_KEY", ""),
+    bucket: get_or(cfg, "QINIU_BUCKET", ""),
+    domain: get_or(cfg, "QINIU_DOMAIN", ""),
+    # Every qiniu deadline this backend signs is now() + this: the upload tokens
+    # /upload-token hands the browser, the private download URLs behind preview
+    # and download, the proxy uploads. One second is the shortest useful window
+    # and one day the longest defensible one, and a value outside that is a
+    # refusal to start rather than a silent 3600 (see config.int_in_range).
+    expires: require_int_in_range(cfg, "QINIU_TOKEN_EXPIRES", 1, 86400, 3600),
+    # The real qiniu endpoints unless overridden. Nothing in production sets
+    # these; the contract harness points them (and QINIU_DOMAIN) at its fake
+    # object store so the copy/upload/delete paths can be held to a golden.
+    rs_host: get_or(cfg, "QINIU_RS_HOST", "https://rs.qiniu.com"),
+    up_host: get_or(cfg, "QINIU_UP_HOST", "https://upload.qiniup.com"),
+  }
+  let moncfg = MonCfg {
+    tencent_id: get_or(cfg, "TENCENT_SECRET_ID", ""),
+    tencent_key: get_or(cfg, "TENCENT_SECRET_KEY", ""),
+    region: get_or(cfg, "TENCENT_REGION", "ap-shanghai"),
+    instance: get_or(cfg, "LIGHTHOUSE_INSTANCE_ID", ""),
+    vault_alive: get_or(cfg, "VAULT_ALIVE_URL", "http://127.0.0.1:8222/alive"),
+    vault_public: get_or(cfg, "VAULT_PUBLIC_URL", "https://vault.dawnop.com"),
+  }
+  let a = Auth { db: db, secret: secret, expire_min: expire_min,
+    storage_quota: storage_quota, qiniu: qiniu }
+  Application { port: port, origin: origin, auth: a, monitor: moncfg }
+}
+
+pub fn app_routes(app: Application, http: HttpCell) -> List[Route] = {
+  let a = app.auth
+  let db = a.db
+  let moncfg = app.monitor
+  let mon_cell = new_cell(db, "monitor.v1")
+  let respack_cell = new_cell(db, "respack.v1")
+  let space_cell = new_cell(db, "space.v1")
+  let cpu_cell = new_cell(db, "cpu.v1")
+  api_articles.routes(a) ++ api_settings.routes(a) ++ api_tags.routes(a) ++ api_pages.routes(a) ++ api_viz.routes(a) ++ api_fm.routes(a, http, space_cell, respack_cell) ++ api_drop.routes(a, http) ++ api_paste.routes(a) ++ mon_routes(a, http, moncfg, mon_cell, respack_cell, cpu_cell) ++ api_public.routes(db, a) ++ routes(a) ++ dav_routes(a, http)
+}
+
+fn parse_or(s: String, fallback: Int) -> Int = match parse_int(s) { Some(n) -> n
+  None -> fallback }

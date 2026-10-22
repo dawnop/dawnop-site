@@ -16,20 +16,20 @@
 use std/str
 use std/map
 use std/bytes
-use site_core/db/sql.{Db, with_immediate_tx}
+use db/sql.{Db, with_immediate_tx}
 use svc/auth.{Auth}
-use site_core/qiniu/creds.{Qiniu}
-use db/db.{with_db}
-use site_core/util/paths.{fm_split, parent_rel, basename, ext, key_ext_ok, fm_join, full, guess_mime, safe_persisted_mime, strip_slashes, strip_trailing_slash}
-use site_core/repo/repo_fm.{FileRow, ReplaceOutcome, MovePlan, CopiedRow, CopyTree, fs_data, taken, insert_folder, replace_file, replace_file_receipt, create_file_once, reparent_allow_missing, prepare_fm_move, commit_fm_moves, get_row, delete_subtrees, entry_json, key_referenced, key_pending, validate_fm_ancestors, validate_fm_file_target, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}
+use qiniu/creds.{Qiniu}
+use db/runtime.{with_db}
+use util/paths.{fm_split, parent_rel, basename, ext, key_ext_ok, fm_join, full, guess_mime, safe_persisted_mime, strip_slashes, strip_trailing_slash}
+use repo/repo_fm.{FileRow, ReplaceOutcome, MovePlan, CopiedRow, CopyTree, fs_data, taken, insert_folder, replace_file, replace_file_receipt, create_file_once, reparent_allow_missing, prepare_fm_move, commit_fm_moves, get_row, delete_subtrees, entry_json, key_referenced, key_pending, validate_fm_ancestors, validate_fm_file_target, prepare_fm_copy, validate_copy_plan_targets, commit_fm_copies}
 use std/io.{Random}
-use site_core/util/crypto.{uuid_hex}
-use site_core/qiniu/sign.{private_url}
-use site_core/qiniu/rs.{delete_obj, copy_obj, upload_text, upload_bytes}
-use site_core/util/errkind.{conflict}
-use site_core/util/http.{Upstream, as_outbound}
-use site_core/util/jsonx.{obj, jstr}
-use util/ttl.{now_s}
+use util/crypto.{uuid_hex}
+use qiniu/sign.{private_url}
+use qiniu/rs.{delete_obj, copy_obj, upload_text, upload_bytes}
+use util/errkind.{conflict}
+use util/http.{Upstream, as_outbound}
+use util/jsonx.{obj, jstr}
+use util/runtime_ttl.{now_s}
 use json/value.{Json, JArr, JObj, JStr}
 
 # ---- object-store primitives (shared with webdav.dawn) ----
@@ -54,7 +54,7 @@ fn best_effort_gc[!e](body: fn() -> Result[Unit, String] !e !io) -> Unit !e !io 
 
 pub fn gc_unreferenced(a: Auth, candidate: Option[String]) -> Unit !Upstream !io =
   best_effort_gc(() =>
-      with_db(a.db.path, a.db.ext, () => gc_unreferenced_on(a.qiniu, candidate)))
+      with_db(a.db, () => gc_unreferenced_on(a.qiniu, candidate)))
 
 fn gc_unreferenced_on(q: Qiniu, candidate: Option[String]) -> Result[Unit, String] !Upstream !Db !io =
   match candidate {
@@ -371,7 +371,7 @@ pub fn merge_deleted(base: Json, deleted: List[Json]) -> Json =
 # ---- create empty file / save text ----
 
 pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json], String] !Random !Upstream !io = {
-  let checked: Result[Bool, String] = with_db(a.db.path, a.db.ext, () => {
+  let checked: Result[Bool, String] = with_db(a.db, () => {
     let _v = validate_effect_path(rel)?
     taken(rel)
   })
@@ -382,7 +382,7 @@ pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json],
     let mime = guess_mime(rel)
     let key = uuid_hex()
     let _up = as_outbound(upload_text(a.qiniu, key, "", mime, now_s() + a.qiniu.expires))?
-    match with_db(a.db.path, a.db.ext, () => create_file_db(rel, key, mime, cur)) {
+    match with_db(a.db, () => create_file_db(rel, key, mime, cur)) {
       Ok(d) -> Ok(Some(d))
       Err(m) -> {
         let _gc = gc_unreferenced(a, Some(key))
@@ -400,7 +400,7 @@ fn create_file_db(rel: String, key: String, mime: String, cur: String) -> Result
 ## Write text to a NEW qiniu key, repoint the row, then best-effort collect the
 ## old key only when no metadata row still references it. Returns {path}.
 pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !Random !Upstream !io = {
-  let checked: Result[Option[FileRow], String] = with_db(a.db.path, a.db.ext, () => {
+  let checked: Result[Option[FileRow], String] = with_db(a.db, () => {
     let _v = validate_effect_path(rel)?
     get_row(rel)
   })
@@ -408,7 +408,7 @@ pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !R
   let mime = save_mime(existing, rel)
   let new_key = save_key(rel)
   let _up = as_outbound(upload_text(a.qiniu, new_key, content, mime, now_s() + a.qiniu.expires))?
-  match with_db(a.db.path, a.db.ext, () => save_db(rel, new_key, mime, text_byte_size(content))) {
+  match with_db(a.db, () => save_db(rel, new_key, mime, text_byte_size(content))) {
     Ok(outcome) -> {
       let _gc = gc_unreferenced(a, outcome.superseded_key)
       Ok(obj([("path", jstr(full(rel)))]))
@@ -452,11 +452,11 @@ fn key_for_save(id: String, rel: String) -> String = {
 # ---- proxy upload ----
 
 pub fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int) -> Result[Json, String] !Random !Upstream !io = {
-  let checked: Result[Unit, String] = with_db(a.db.path, a.db.ext, () => validate_effect_path(rel))
+  let checked: Result[Unit, String] = with_db(a.db, () => validate_effect_path(rel))
   let _v = checked?
   let key = upload_key()
   let _up = as_outbound(upload_bytes(a.qiniu, key, content, mime, now_s() + a.qiniu.expires))?
-  match with_db(a.db.path, a.db.ext, () => replace_upload(rel, key, mime, size)) {
+  match with_db(a.db, () => replace_upload(rel, key, mime, size)) {
     Ok(result) -> {
       let (uploaded, outcome) = result
       let _gc = gc_unreferenced(a, outcome.superseded_key)

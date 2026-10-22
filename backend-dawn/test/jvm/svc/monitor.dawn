@@ -1,3 +1,4 @@
+use std/io
 use fake_clock
 use util/http_jvm.{new_client, with_upstream}
 use java "java.lang.String"
@@ -5,7 +6,7 @@ use std/bytes
 use site_core/qiniu/creds.{Qiniu}
 use util/ttl.{test_cell}
 use site_core/util/http.{HttpResp, pending, no_answer}
-use db/db.{DbConfig}
+use db/db.{config as db_config}
 use java "java.util.concurrent.atomic.AtomicReference"
 use java "com.sun.net.httpserver.HttpServer"
 use java "java.net.InetSocketAddress"
@@ -223,7 +224,7 @@ fn stub_tc(port: Int, path: String, action: String) -> Result[PendingTc, String]
 
 fn test_auth_with(ak: String) -> Auth =
   Auth {
-    db: DbConfig { path: "", ext: "" },
+    db: db_config("", ""),
     secret: "test",
     expire_min: 1,
     storage_quota: 10,

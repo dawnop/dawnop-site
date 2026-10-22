@@ -1,0 +1,33 @@
+# Explicit additive migrations and independent paste cleanup.
+use db/runtime.{DbConfig, with_db, without_extension}
+use db/sql.{query, ColStr, ColInt, with_immediate_tx}
+use repo/repo_drop
+use repo/repo_paste
+use svc/dav_auth
+use util/clock.{system_s}
+
+pub fn migrate(db: DbConfig) -> Result[Unit, String] !io =
+  with_db(without_extension(db), () => {
+    with_immediate_tx(dav_auth.ensure_schema)?
+    repo_drop.ensure_schema()?
+    with_immediate_tx(repo_paste.ensure_schema)
+  })
+
+pub fn check_schema(db: DbConfig) -> Result[Unit, String] !io =
+  with_db(without_extension(db), () => {
+    let _ = query("select namespace,cache_key,payload,created_ms from runtime_cache limit 0", [], [ColStr, ColStr, ColStr, ColStr])?
+    let _ = query("select user_id,enabled from auth_account_state limit 0", [], [ColStr, ColStr])?
+    let _ = query("select cache_key,owner,account_version,claimed_ms,expires_ms,outcome from auth_verify_leases limit 0", [], [ColStr, ColStr, ColStr, ColStr, ColStr, ColStr])?
+    let _ = query("select 1 from upload_drops limit 0", [], [ColInt])?
+    let _ = query("select 1 from drop_pending limit 0", [], [ColInt])?
+    let _ = query("select 1 from pastes limit 0", [], [ColInt])?
+    let _ = query("select 1 from paste_budgets limit 0", [], [ColInt])?
+    let _ = query("select 1 from paste_settings limit 0", [], [ColInt])?
+    let _ = query("select 1 from paste_fts limit 0", [], [ColInt])?
+    Ok(())
+  })
+
+pub fn cleanup(db: DbConfig) -> Result[Int, String] !io = {
+  let now = system_s()
+  with_db(without_extension(db), () => with_immediate_tx(() => repo_paste.cleanup(now)))
+}

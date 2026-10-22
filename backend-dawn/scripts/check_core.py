@@ -18,7 +18,9 @@ ffi = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ffi)
 
 
-def closure_errors(core: Path) -> tuple[list[str], int, int]:
+def closure_errors(
+    core: Path, local_roots: tuple[Path, ...] = ()
+) -> tuple[list[str], int, int]:
     errors = []
     seen = set()
     files = 0
@@ -40,7 +42,9 @@ def closure_errors(core: Path) -> tuple[list[str], int, int]:
                 for name, value in re.findall(r'(?m)^\s*(\w+)\s*=\s*"([^"\n]+)"', body):
                     target = (package / value).resolve()
                     # Local core packages must remain inside the portable root.
-                    if target != boundary and boundary not in target.parents:
+                    if target in local_roots:
+                        dependencies[name] = (target, target)
+                    elif target != boundary and boundary not in target.parents:
                         errors.append(
                             f"{package}: forbidden local dependency {name}: {value}"
                         )

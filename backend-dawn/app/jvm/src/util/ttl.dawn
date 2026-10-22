@@ -1,32 +1,12 @@
-# JVM boundary for the portable SQLite cache. Cells carry addresses, not state.
+# JVM constructors for the portable runtime cache addresses.
 use std/io
-use db/db.{with_db}
-use site_core/util/cache
-use site_core/util/clock.{system_s}
-
-pub type TtlCell = { path: String, address: cache.CacheSlot }
-
-pub fn new_cell(path: String, namespace: String) -> TtlCell =
-  TtlCell { path: path, address: cache.slot(namespace) }
-
-pub fn init_cache(path: String) -> Unit !io =
-  required(with_db(path, "", cache.ensure_schema))
-
-pub fn cache_get(cell: TtlCell, ttl_s: Int) -> Option[String] !io =
-  io.with_clock_real(() => cache_get_clock(cell, ttl_s))
-
-pub fn cache_get_clock(cell: TtlCell, ttl_s: Int) -> Option[String] !io.Clock !io =
-  required(with_db(cell.path, "", () => cache.cache_get(cell.address, ttl_s)))
-
-pub fn cache_put(cell: TtlCell, payload: String) -> Unit !io =
-  io.with_clock_real(() => cache_put_clock(cell, payload))
-
-pub fn cache_put_clock(cell: TtlCell, payload: String) -> Unit !io.Clock !io =
-  required(with_db(cell.path, "", () => cache.cache_put(cell.address, payload)))
-
-pub fn now_s() -> Int !io = system_s()
-
-fn required[T](r: Result[T, String]) -> T = match r {
-  Ok(v) -> v
-  Err(m) -> panic("runtime cache: ${m}")
-}
+use db/db.{config}
+use site_core/util/runtime_ttl as runtime
+use site_core/util/runtime_ttl.{TtlCell}
+pub fn new_cell(path: String, namespace: String) -> TtlCell = runtime.new_cell(config(path, ""), namespace)
+pub fn init_cache(path: String) -> Unit !io = runtime.init_cache(config(path, ""))
+pub fn cache_get(cell: TtlCell, ttl_s: Int) -> Option[String] !io = runtime.cache_get(cell, ttl_s)
+pub fn cache_put(cell: TtlCell, payload: String) -> Unit !io = runtime.cache_put(cell, payload)
+pub fn cache_get_clock(cell: TtlCell, ttl_s: Int) -> Option[String] !io.Clock !io = runtime.cache_get_clock(cell, ttl_s)
+pub fn cache_put_clock(cell: TtlCell, payload: String) -> Unit !io.Clock !io = runtime.cache_put_clock(cell, payload)
+pub fn now_s() -> Int !io = runtime.now_s()

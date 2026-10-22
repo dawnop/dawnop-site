@@ -1,3 +1,4 @@
+use std/io
 # Tencent Cloud v3 client (M6 knife 12) for the monitor page. Assembles the full
 # TC3-HMAC-SHA256 canonical request / string-to-sign / Authorization and POSTs
 # via the http client. Signing is tencent/sign (byte-for-byte vs the reference);
@@ -5,7 +6,7 @@
 use std/str
 use util/time.{utc_date}
 use util/crypto.{sha256_hex}
-use util/clock.{Clock, now_s}
+use util/clock.{now_s}
 use tencent/sign.{tc3_signature}
 use util/http.{Pending, Upstream, OutReq, TextBody, MANAGEMENT_TIMEOUT_S, exchange_start, deadline_text, await_resp}
 use json/value.{Json}
@@ -14,7 +15,7 @@ use util/jsonread.{parse_text}
 ## Call a Tencent Cloud v3 action. `payload` is a compact JSON body string.
 ## Returns the parsed Response JSON, or Err on transport / non-200. The caller
 ## supplies the clock the signature is stamped with (svc/monitor installs it).
-pub fn call(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[Json, String] !Clock !Upstream !io =
+pub fn call(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[Json, String] !io.Clock !Upstream !io =
   call_finish(call_start(secret_id, secret_key, service, action, version, region, payload)?)
 
 ## A Tencent action on the wire. The action name rides along because the
@@ -24,7 +25,7 @@ pub type PendingTc = { p: Pending, action: String }
 ## Issue a Tencent Cloud v3 action without waiting. The monitor page makes three
 ## independent ones; the signature is stamped with the current second, so a
 ## started call must be read through the PendingTc it returned.
-pub fn call_start(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[PendingTc, String] !Clock !Upstream !io = {
+pub fn call_start(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[PendingTc, String] !io.Clock !Upstream !io = {
   let req = call_request(secret_id, secret_key, service, action, version, region, payload)
   match exchange_start(req) {
     Ok(p) -> Ok(PendingTc { p: p, action: action })
@@ -33,7 +34,7 @@ pub fn call_start(secret_id: String, secret_key: String, service: String, action
 }
 
 ## Prepare a signed request without issuing it.
-pub fn call_request(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> OutReq !Clock !io = {
+pub fn call_request(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> OutReq !io.Clock !io = {
   let host = tc_host(service)
   let headers = tc3_headers(secret_id, secret_key, service, action, version, region, payload)
   OutReq { method: "POST", url: "https://${host}", headers: headers,
@@ -49,7 +50,7 @@ pub fn tc_host(service: String) -> String = "${service}.tencentcloudapi.com"
 ## scope, string-to-sign, signature — is a value a test can hold to a golden;
 ## the timestamp comes from the installed Clock, so freezing the clock freezes
 ## every byte of the result.
-pub fn tc3_headers(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> List[(String, String)] !Clock !io = {
+pub fn tc3_headers(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> List[(String, String)] !io.Clock !io = {
   let host = tc_host(service)
   let ts = now_s()
   let date = utc_date(ts)

@@ -55,11 +55,7 @@ fn client_of(cell: HttpCell) -> HttpClient = cell
 
 ## Run `body` against the real network, through the process's shared client.
 ##
-## This is the production handler, and unlike util/clock's `with_system_clock` it
-## is the form that gets used. Clock had three installation sites and one arm to
-## write at each, so writing the arm inline read better; Upstream has a dozen
-## sites and four arms apiece, and a dozen copies of the same four arms is a
-## dozen places for them to drift.
+## Install the shared outbound capabilities at the actual callback boundary.
 pub fn with_upstream[T](cl: HttpCell, body: fn() -> T !Upstream !UpstreamBatch !io) -> T !io = {
   with handle UpstreamBatch { exchange_batch(requests) => wire_batch(cl, requests) }
   with handle Upstream {

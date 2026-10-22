@@ -2,20 +2,20 @@
 # GET returns the DEFAULTS-merged table; PUT validates every key before writing
 # any of them, so an invalid key persists nothing.
 use std/map
-use site_core/db/sql.{Db, with_immediate_tx}
+use db/sql.{Db, with_immediate_tx}
 use web/types.{Handler, as_http, json_ok, body_text}
 use web/router.{Route, route_get, route_put}
 use json/value.{Json, JInt}
-use db/db.{with_db}
+use db/runtime.{with_db}
 use svc/auth.{Auth, guarded}
-use site_core/util/jsonread.{body_obj}
-use site_core/repo/repo_settings
+use util/jsonread.{body_obj}
+use repo/repo_settings
 
 ## GET /api/settings — merged global settings.
 pub fn get_settings(a: Auth) -> Handler =
   req =>
   guarded(a, req, () =>
-      Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, () => repo_settings.read_all(a.storage_quota)), 500)?)))
+      Ok(json_ok(as_http(with_db(a.db, () => repo_settings.read_all(a.storage_quota)), 500)?)))
 
 ## PUT /api/settings — validate & upsert known integer keys, return merged.
 pub fn put_settings(a: Auth) -> Handler =
@@ -23,7 +23,7 @@ pub fn put_settings(a: Auth) -> Handler =
   guarded(a, req, () =>
       {
         let m = as_http(body_obj(body_text(req)?), 422)?
-        Ok(json_ok(as_http(with_db(a.db.path, a.db.ext, () => write_settings(m, a.storage_quota)), 400)?))
+        Ok(json_ok(as_http(with_db(a.db, () => write_settings(m, a.storage_quota)), 400)?))
       })
 
 # Validate the prospective pair and write in one transaction, including partial PUTs.

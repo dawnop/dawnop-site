@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import resource
 import shutil
 import signal
@@ -36,6 +37,8 @@ def project(work, arm, backend=BACKEND):
     (dest / "src").mkdir(parents=True)
     if arm == "native":
         manifest = (backend / "app/native/dawn.toml").read_text()
+        # Native sources belong to the dependency, not this consumer root.
+        manifest = re.sub(r"(?ms)^\[native\]\n.*?(?=^\[|\Z)", "", manifest)
         # The consumer needs web directly as well as through the common package.
         manifest = manifest.replace('name = "site_sqlite"', 'name = "curl_probe"')
         manifest = manifest.replace(
