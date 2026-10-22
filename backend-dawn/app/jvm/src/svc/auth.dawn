@@ -2,7 +2,7 @@
 # (JWT verify). bcrypt hashes are read as-is from the shared users table, so
 # existing passwords keep working; JWTs interoperate with PyJWT (see jwt.dawn).
 use std/str
-use site_core/util/bcrypt.{checkpw}
+use site_core/svc/dav_auth.{verify_password}
 use web/types.{Request, Response, HttpError, Handler, http_error, as_http, json_ok, header, body_text}
 # db/sql exports a `query` too, so web's is reached through the module name.
 use web/types as wtypes
@@ -38,35 +38,6 @@ pub type Auth = {
 }
 
 # ---- user lookup ----
-
-# util/bcrypt understands only the $2a$ revision; Python's bcrypt writes $2b$
-# (the revisions hash identically for passwords <= 72 bytes, differing only in a
-# long-password wraparound flag), and $2y$ is a third spelling. Normalize the
-# prefix so existing $2b$ hashes verify unchanged. A malformed hash is false,
-# as FastAPI's verify_password does, so it becomes a 401 not a 500.
-#
-# In string literals the prefixes are written `\$`, always. Bare `$2a$` happens
-# to lex the same (a digit cannot start an identifier, so the `$` falls back to
-# a literal), but that is a fallback and not a rule — comments below use the
-# bare form because a comment is not lexed at all.
-fn verify_password(plain: String, hashed: String) -> Bool = {
-  let normalized =
-    if str.starts_with(hashed, "\$2b\$") || str.starts_with(hashed, "\$2y\$") {
-      "\$2a\$" ++ str.slice(hashed, 4, len(hashed))
-    } else {
-      hashed
-    }
-  checkpw(plain, normalized)
-}
-
-## Verify a username/password against the users table (bcrypt). For WebDAV's
-## HTTP Basic auth — same credential store as JWT login. False on unknown user,
-## wrong password, or a malformed hash (never a 500).
-pub fn check_basic(username: String, password: String) -> Result[Bool, String] !Db !io =
-  match hash_of(username)? {
-    Some(h) -> Ok(verify_password(password, h))
-    None -> Ok(false)
-  }
 
 fn hash_of(username: String) -> Result[Option[String], String] !Db !io = {
   let rows = query("select password_hash from users where username = ?", [PStr(username)], [ColStr])?

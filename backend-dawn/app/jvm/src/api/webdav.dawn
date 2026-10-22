@@ -29,20 +29,21 @@ use site_core/util/time.{http_date, iso_date}
 use web/types.{Request, Response, HttpError, Handler, Guard, http_error, as_http, as_http_with, text, raw, binary, redirect, with_header, header, headers_all, param_segs}
 use web/router.{Route, route_method_of, tagged, body_limit, guarded}
 use db/db.{with_db}
-use svc/auth.{Auth, check_basic, scheme_param}
+use svc/auth.{Auth, scheme_param}
 use svc/files.{signed_url, gc_unreferenced, gc_rows_unreferenced, gc_copy_tree_unreferenced, copy_tree_objects}
 use site_core/repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}
 use site_core/util/paths.{basename, parent_rel, ext, ts, guess_mime, safe_persisted_mime, require_admissible_names}
 use qiniu/rs.{upload_file}
 use java "java.io.File"
 use std/io.{Random, with_random_real}
-use site_core/util/crypto.{sha256_hex, uuid, uuid_hex}
+use std/io as io
+use site_core/util/crypto.{uuid, uuid_hex}
 use util/http.{Upstream, fetch_stream, ok_stream, stream_response, close_stream, as_outbound, tag_outbound, with_upstream}
-use util/ttl.{TtlCell, cache_get, cache_put, now_s}
+use util/ttl.{now_s}
 use site_core/util/errkind.{KConflict, KPrecondition, KUpstream, KTimeout, split_kind}
 use site_core/svc/export.{url_encode}
 
-const AUTH_TTL: Int = 300
+use site_core/svc/dav_auth as dav_credentials
 
 # Ceiling on one WebDAV PUT body, 512 MiB. It matches the client_max_body_size the
 # production nginx sets on the dav vhost, which was sized from the slowest
@@ -1038,9 +1039,9 @@ fn options_response() -> Response =
 fn unauthorized() -> HttpError =
   HttpError { ..http_error(401, "需要认证"), headers: [("WWW-Authenticate", "Basic realm=\"dawnop-webdav\"")] }
 
-# Ok = authorized; Err = the 401 to answer. A single-admin TTL cache
-# (keyed by sha256("user:pass")) skips bcrypt on the mount's high-frequency calls.
-fn dav_auth(a: Auth, cell: TtlCell, req: Request) -> Result[Unit, HttpError] !io =
+# Ok = authorized; Err = the 401 to answer. The shared HMAC cache and SQLite
+# lease check current account state without holding a write lock over bcrypt.
+fn dav_auth(a: Auth, req: Request) -> Result[Unit, HttpError] !io =
   match header(req, "authorization") {
     None -> Err(unauthorized())
     Some(h) -> {
@@ -1061,10 +1062,10 @@ fn dav_auth(a: Auth, cell: TtlCell, req: Request) -> Result[Unit, HttpError] !io
             } else {
               let user = parts[0]
               let pass = join(list.drop(parts, 1), ":")
-              let key = sha256_hex(raw_cred)
-              match cache_get(cell, AUTH_TTL) {
-                Some(cached) -> if cached == key { Ok(()) } else { verify_cache(a, cell, user, pass, key) }
-                None -> verify_cache(a, cell, user, pass, key)
+              match with_db(a.db.path, "", () => io.with_clock_real(() => with_random_real(() =>
+                  dav_credentials.authenticate(a.secret, user, pass, dav_credentials.verify_password)))) {
+                Ok(true) -> Ok(())
+                _ -> Err(unauthorized())
               }
             }
           }
@@ -1086,31 +1087,22 @@ fn b64_decode_try(s: String) -> Result[String, String] !io =
       }
   }
 
-fn verify_cache(a: Auth, cell: TtlCell, user: String, pass: String, key: String) -> Result[Unit, HttpError] !io =
-  match with_db(a.db.path, a.db.ext, () => check_basic(user, pass)) {
-    Ok(true) -> {
-      let _p = cache_put(cell, key)
-      Ok(())
-    }
-    _ -> Err(unauthorized())
-  }
-
 # The pre-body guard on every authenticated DAV route: the same check, run by the
 # server before it reads a byte of the body. On PUT that is the whole point,
 # since the route spills its body to disk and an anonymous client could otherwise
 # have the temp file written in full before its 401 (dawn-lang#310). The handler
 # still calls dav_auth itself, as depth: a route that loses its guard stays closed.
-fn dav_guard(a: Auth, cell: TtlCell) -> Guard =
-  req => dav_auth(a, cell, req)
+fn dav_guard(a: Auth) -> Guard =
+  req => dav_auth(a, req)
 
 # ---- routes ----
 
-fn dav_handler(a: Auth, cell: TtlCell, method: String) -> Handler =
+fn dav_handler(a: Auth, method: String) -> Handler =
   req =>
   if method == "OPTIONS" {
     Ok(options_response())
   } else {
-    match dav_auth(a, cell, req) {
+    match dav_auth(a, req) {
       Err(e) -> Err(e)
       Ok(_) -> {
         let rel = dav_rel(req)?
@@ -1137,7 +1129,7 @@ fn dav_handler(a: Auth, cell: TtlCell, method: String) -> Handler =
   }
 
 ## All WebDAV routes under /dav/{rest*} (the tail matches /dav and any depth).
-pub fn dav_routes(a: Auth, cell: TtlCell) -> List[Route] = {
+pub fn dav_routes(a: Auth) -> List[Route] = {
   let verbs = DAV_VERBS
   # raw-body: WebDAV PUT carries file bytes (bounded by nginx, not the JSON limit).
   # no-cors: WebDAV is not browser traffic — skip the CORS middleware entirely.
@@ -1151,14 +1143,14 @@ pub fn dav_routes(a: Auth, cell: TtlCell) -> List[Route] = {
   # read, so an anonymous request is a 401 with nothing read and nothing spilled.
   # OPTIONS stays open, as in the handler: it is the capability probe a client
   # sends before it has credentials to offer. PUT also carries its own ceiling.
-  map(verbs, v => dav_route(a, cell, v))
+  map(verbs, v => dav_route(a, v))
 }
 
-fn dav_route(a: Auth, cell: TtlCell, v: String) -> Route = {
-  let base = tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, cell, v)),
+fn dav_route(a: Auth, v: String) -> Route = {
+  let base = tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, v)),
     if v == "PUT" { ["raw-body", "no-cors", "stream-body"] } else { ["raw-body", "no-cors"] })
   let bounded = if v == "PUT" { body_limit(base, DAV_PUT_MAX_BYTES) } else { base }
-  if v == "OPTIONS" { bounded } else { guarded(bounded, dav_guard(a, cell)) }
+  if v == "OPTIONS" { bounded } else { guarded(bounded, dav_guard(a)) }
 }
 
 # A bare request carrying only the tail capture dav_rel reads.

@@ -1,3 +1,5 @@
+use site_core/util/bcrypt.{checkpw}
+
 test "verify_password accepts the \$2b hashes the shared users table holds" {
   # seed_admin.py hashed with Python's bcrypt, which writes the $2b revision;
   # util/bcrypt parses only $2a. The revisions are the same algorithm for

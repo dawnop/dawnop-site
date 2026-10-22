@@ -1,0 +1,130 @@
+# Shared WebDAV authentication. SQLite leases coordinate independent processes.
+use std/str
+use std/io.{Clock, Random, now_wall_ns, now, elapsed_ns, sleep_ns}
+use util/crypto.{hmac_sha256_hex, eq_const, random_token}
+use util/bcrypt.{checkpw}
+use util/cache
+use db/sql.{Db, PStr, PInt, ColInt, ColStr, query, execute, scalar_int, int_at, str_at, in_transaction, with_immediate_tx}
+
+const TTL_MS: Int = 300000
+const LEASE_MS: Int = 5000
+const WAIT_NS: Int = 15000000000
+
+type Account = { id: Int, hash: String, version: String }
+type Claim = AuthHit | AuthDenied | AuthWait | AuthOwner(account: Account)
+
+## Prefixes separate credentials and account versions from every other HMAC use.
+pub fn credential_key(secret: String, raw: String) -> String =
+  hmac_sha256_hex(secret, "dawnop.dav.credentials.v2\u{0}" ++ raw)
+
+fn version(secret: String, id: Int, username: String, hash: String, created: String) -> String =
+  hmac_sha256_hex(secret, "dawnop.dav.account.v2\u{0}${id}\u{0}${username}\u{0}${hash}\u{0}${created}")
+
+## Normalize Python $2b$ and $2y$ hashes for the pure Dawn $2a$ verifier.
+## Malformed hashes are false, preserving the existing login and DAV refusal.
+pub fn verify_password(plain: String, hashed: String) -> Bool = {
+  let normalized = if str.starts_with(hashed, "\$2b\$") || str.starts_with(hashed, "\$2y\$") {
+    "\$2a\$" ++ str.slice(hashed, 4, len(hashed))
+  } else { hashed }
+  checkpw(plain, normalized)
+}
+
+pub fn ensure_schema() -> Result[Unit, String] !Db = {
+  cache.ensure_schema()?
+  execute("create table if not exists auth_account_state(user_id integer primary key, enabled integer not null check(enabled in (0,1)))", [])?
+  execute("create table if not exists auth_verify_leases(cache_key text primary key, owner text not null, account_version text not null, claimed_ms integer not null, expires_ms integer not null, outcome integer not null) without rowid", [])?
+  execute("delete from runtime_cache where namespace='dav.v1'", [])
+}
+
+fn missing_table(m: String) -> Bool =
+  str.contains(m, "no such table: runtime_cache") || str.contains(m, "no such table: auth_account_state")
+
+fn account(secret: String, username: String) -> Result[Option[Account], String] !Db = {
+  let rows = query("select u.id,u.password_hash,u.created_at from users u left join auth_account_state s on s.user_id=u.id where u.username=? and coalesce(s.enabled,1)=1", [PStr(username)], [ColInt, ColStr, ColStr])?
+  Ok(match get(rows, 0) {
+    None -> None
+    Some(r) -> Some(Account { id: int_at(r, 0), hash: str_at(r, 1), version: version(secret, int_at(r, 0), username, str_at(r, 1), str_at(r, 2)) })
+  })
+}
+
+## One snapshot checks both the current account and the cached proof; no writes.
+pub fn cached(secret: String, username: String, key: String) -> Result[Bool, String] !Db !Clock = {
+  let rows = match query("select c.payload,c.created_ms,u.id,u.password_hash,u.created_at from runtime_cache c join users u on u.username=? left join auth_account_state s on s.user_id=u.id where c.namespace='dav.auth.v2' and c.cache_key=? and coalesce(s.enabled,1)=1", [PStr(username), PStr(key)], [ColStr, ColInt, ColInt, ColStr, ColStr]) {
+    Ok(r) -> r
+    Err(m) -> if missing_table(m) { return Ok(false) } else { return Err(m) }
+  }
+  Ok(match get(rows, 0) {
+    None -> false
+    Some(r) -> {
+      let age = now_wall_ns() / 1000000 - int_at(r, 1)
+      age >= 0 && age < TTL_MS && eq_const(str_at(r, 0), version(secret, int_at(r, 2), username, str_at(r, 3), str_at(r, 4)))
+    }
+  })
+}
+
+fn claim(secret: String, username: String, key: String, owner: String) -> Result[Claim, String] !Db !Clock !io =
+  with_immediate_tx(() => {
+    ensure_schema()?
+    if cached(secret, username, key)? { return Ok(AuthHit) }
+    let a = match account(secret, username)? { None -> return Ok(AuthDenied)
+      Some(a) -> a }
+    let ms = now_wall_ns() / 1000000
+    let rows = query("select account_version,claimed_ms,expires_ms,outcome from auth_verify_leases where cache_key=?", [PStr(key)], [ColStr, ColInt, ColInt, ColInt])?
+    match get(rows, 0) {
+      Some(r) -> if str_at(r, 0) == a.version && int_at(r, 1) <= ms && ms < int_at(r, 2) {
+        return Ok(if int_at(r, 3) == -1 { AuthDenied } else { AuthWait })
+      }
+      None -> ()
+    }
+    execute("delete from auth_verify_leases where expires_ms<=? or claimed_ms>?", [PInt(ms), PInt(ms)])?
+    execute("delete from auth_verify_leases where cache_key=?", [PStr(key)])?
+    if scalar_int("select count(*) from auth_verify_leases", [])? >= 128 { return Ok(AuthDenied) }
+    execute("insert into auth_verify_leases values(?,?,?,?,?,0)", [PStr(key), PStr(owner), PStr(a.version), PInt(ms), PInt(ms + LEASE_MS)])?
+    Ok(AuthOwner(a))
+  })
+
+## A stale owner cannot publish, release a successor's lease, or accept old auth.
+fn publish(secret: String, username: String, key: String, owner: String, a: Account, valid: Bool) -> Result[Bool, String] !Db !Clock !io =
+  with_immediate_tx(() => {
+    let ms = now_wall_ns() / 1000000
+    let held = scalar_int("select count(*) from auth_verify_leases where cache_key=? and owner=? and account_version=? and claimed_ms<=? and expires_ms>?", [PStr(key), PStr(owner), PStr(a.version), PInt(ms), PInt(ms)])? == 1
+    if not held { return Ok(false) }
+    let current = match account(secret, username)? { Some(u) -> u.version == a.version && u.id == a.id
+      None -> false }
+    if not current {
+      execute("delete from auth_verify_leases where cache_key=? and owner=?", [PStr(key), PStr(owner)])?
+      return Ok(false)
+    }
+    if not valid {
+      execute("update auth_verify_leases set outcome=-1 where cache_key=? and owner=?", [PStr(key), PStr(owner)])?
+      return Ok(false)
+    }
+    execute("delete from runtime_cache where namespace='dav.auth.v2' and (created_ms<=? or created_ms>?)", [PInt(ms - TTL_MS), PInt(ms)])?
+    execute("delete from runtime_cache where namespace='dav.auth.v2' and cache_key in (select cache_key from runtime_cache where namespace='dav.auth.v2' order by created_ms desc,cache_key limit -1 offset 255)", [])?
+    execute("insert into runtime_cache(namespace,cache_key,payload,created_ms) values('dav.auth.v2',?,?,?) on conflict(namespace,cache_key) do update set payload=excluded.payload,created_ms=excluded.created_ms", [PStr(key), PStr(a.version), PInt(ms)])?
+    execute("delete from auth_verify_leases where cache_key=? and owner=?", [PStr(key), PStr(owner)])?
+    Ok(true)
+  })
+
+## The callback is the real bcrypt in production; tests count that exact work.
+pub fn authenticate(secret: String, username: String, password: String, verify: fn(String, String) -> Bool !Db !io) -> Result[Bool, String] !Db !Clock !Random !io = {
+  let key = credential_key(secret, username ++ ":" ++ password)
+  if cached(secret, username, key)? { return Ok(true) }
+  let owner = random_token()
+  let started = now()
+  while elapsed_ns(started, now()) < WAIT_NS {
+    # Recheck outside the write transaction so the waiting hit path is read only.
+    if cached(secret, username, key)? { return Ok(true) }
+    match claim(secret, username, key, owner)? {
+      AuthHit -> return Ok(true)
+      AuthDenied -> return Ok(false)
+      AuthWait -> sleep_ns(25000000)
+      AuthOwner(a) -> {
+        if in_transaction()? { return Err("dav bcrypt inside transaction") }
+        let valid = verify(password, a.hash)
+        return publish(secret, username, key, owner, a, valid)
+      }
+    }
+  }
+  Ok(false)
+}

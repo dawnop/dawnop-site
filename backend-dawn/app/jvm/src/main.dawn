@@ -26,6 +26,7 @@ use svc/drop.{init_schema}
 use site_core/qiniu/creds.{Qiniu}
 use api/webdav.{dav_routes}
 use util/ttl.{new_cell, init_cache}
+use site_core/svc/dav_auth
 use util/http.{new_client}
 
 pub fn main() -> Unit !io = {
@@ -91,12 +92,15 @@ pub fn main() -> Unit !io = {
     vault_public: get_or(cfg, "VAULT_PUBLIC_URL", "https://vault.dawnop.com"),
   }
   # Named SQLite slots: monitor third-party 120s, respack 300s (shared
-  # with fm stats), fm bucket-space 600s, DAV authentication 300s.
+  # with fm stats), fm bucket-space 600s. DAV owns its HMAC cache and leases.
   init_cache(db_path)
+  match with_db(db_path, "", () => with_immediate_tx(dav_auth.ensure_schema)) {
+    Ok(_) -> ()
+    Err(m) -> panic("dav auth schema: ${m}")
+  }
   let mon_cell = new_cell(db_path, "monitor.v1")
   let respack_cell = new_cell(db_path, "respack.v1")
   let space_cell = new_cell(db_path, "space.v1")
-  let dav_cell = new_cell(db_path, "dav.v1")
   # Not a cache: the previous /proc/stat sample, which the monitor's CPU reading
   # differences against instead of sleeping through a window of its own. The
   # slot's age bound is what stops a long gap between visits being reported as a
@@ -116,7 +120,7 @@ pub fn main() -> Unit !io = {
   # static /admin, /reorder, /merge, /cleanup paths win over the {slug} capture
   serve_app_with(ServerConfig {
     host: "127.0.0.1", port: port, max_body: DEFAULT_MAX_BODY, errors: fastapi_errors(),
-  }, api_articles.routes(a) ++ api_settings.routes(a) ++ api_tags.routes(a) ++ api_pages.routes(a) ++ api_viz.routes(a) ++ api_fm.routes(a, space_cell, respack_cell) ++ api_drop.routes(a) ++ api_paste.routes(a) ++ mon_routes(a, moncfg, mon_cell, respack_cell, cpu_cell) ++ api_public.routes(db, a) ++ routes(a) ++ dav_routes(a, dav_cell), [
+  }, api_articles.routes(a) ++ api_settings.routes(a) ++ api_tags.routes(a) ++ api_pages.routes(a) ++ api_viz.routes(a) ++ api_fm.routes(a, space_cell, respack_cell) ++ api_drop.routes(a) ++ api_paste.routes(a) ++ mon_routes(a, moncfg, mon_cell, respack_cell, cpu_cell) ++ api_public.routes(db, a) ++ routes(a) ++ dav_routes(a), [
     with_logging,
     next => with_cors(origin, next),
     next => with_body_limit(2000000, next),
