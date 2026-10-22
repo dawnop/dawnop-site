@@ -81,6 +81,15 @@ python3 backend-dawn/scripts/native-package/stress.py --release <release> --sour
 空闲和 RuntimeMaxSec、kill 后恢复、cleanup 与同库 JVM 撤回。压力测试仅证明运行观察：
 **未复现不证明补丁存在，版本 provenance 是硬条件。**
 
+大体客户端使用字节进度门：每 250 ms 保存暂存文件、客户端/假桶字节与 cgroup
+memory.events、I/O 压力和实际资源参数，连续 10s 无进度或单交换超过 180s 则红。
+磁盘组装期间没有 HTTP 响应字节不等于停滞。SIGSTOP 真 PUT 实例的负控必须红，
+然后在原单元及 CPUQuota=25%、/tmp 设备读写各 32 MB/s 的更紧条件下各跑一次
+512 MiB 双向摘要；96 MiB 内存限制不放宽，并核验约束实际生效、零 OOM 和最大
+无进度间隔。`*-upload.jsonl`、`*-download.jsonl` 及对应 JSON 随 native-units
+evidence 保留，失败也落盘。根因与原超时复现见
+[进度门设计](../../docs/native-package-upload-design.md)。
+
 协调者在 S13 切流前另做生产只读核对：所有 RW/checkpoint 客户端、系统包完整版本、
 JRE 与 JDBC maps、保留的修复 JVM 整包、候选/扩展摘要与依赖、实际服务用户/组、DB
 目录/文件身份与权限、暂存盘、当前单元及 nginx 实际入口。用同一 release 的内存探针

@@ -33,6 +33,7 @@ sys.path.insert(0, str(HERE.parent / "native-entry"))
 entry = module("entry", HERE.parent / "native-entry/run.py")
 package = module("native_package", HERE / "package.py")
 deploy = module("native_install", ROOT / "backend-dawn/deploy/deploy_native.py")
+Progress = module("unit_progress", HERE / "progress.py").Progress
 
 
 def command(argv, *, good=True):
@@ -184,8 +185,10 @@ class Units:
         client.connect(str(self.sock))
         return client
 
-    def exchange(self, data, body=None, output=None):
+    def exchange(self, data, body=None, output=None, progress=None):
         with self.connect() as client:
+            if progress:
+                return progress.exchange(client, data, body, output)
             client.sendall(data)
             if body:
                 with body.open("rb") as stream:
@@ -273,6 +276,7 @@ class Units:
             self.name + ".socket",
             self.name + "-cleanup.timer",
             *self.instances(),
+            self.name + ".slice",
         ]:
             command(["systemctl", "stop", unit], good=False)
         logs = command(
@@ -509,7 +513,41 @@ def cleanup_timers(units):
     )
 
 
-def transfers(units, work):
+def progress_negative(units, work):
+    # Freeze a real PUT after activation. The client can initially fill its
+    # socket buffer; that finite burst must not hide the stopped consumer.
+    units.quiesce()
+    progress = Progress(units, work, "stopped-upload", idle=2, total=15)
+    target = None
+    try:
+        with units.connect() as client:
+            client.sendall(b"PUT /dav/stopped HTTP/1.1\r\nHost: local\r\n")
+            deadline = time.monotonic() + 5
+            while not units.instances():
+                demand(time.monotonic() < deadline, "progress negative activation")
+                threading.Event().wait(0.05)
+            target = units.instances()[0]
+            command(["systemctl", "kill", "--kill-who=all", "--signal=STOP", target])
+            negative(
+                "stopped-upload-progress",
+                lambda: progress.exchange(
+                    client, b"Content-Length: 1048576\r\n\r\n" + b"x" * 1048576
+                ),
+                "transfer stalled",
+            )
+    finally:
+        if target:
+            command(
+                ["systemctl", "kill", "--kill-who=all", "--signal=CONT", target],
+                good=False,
+            )
+            command(["systemctl", "stop", target], good=False)
+        progress.close()
+    units.quiesce()
+    units.health()
+
+
+def transfers(units, work, label="shipped"):
     import hashlib
 
     payload = work / "payload.bin"
@@ -519,48 +557,25 @@ def transfers(units, work):
             stream.write(entry.BLOCK)
             digest.update(entry.BLOCK)
     units.peer.payload = payload
-    curl_pids = set()
-    stop = threading.Event()
-    errors = []
-
-    def sample():
-        while not stop.wait(0.02):
-            for path in Path("/proc").glob("[0-9]*/comm"):
-                try:
-                    if path.read_text().strip() != "curl":
-                        continue
-                    process = path.parent
-                    # Only children of this test's private unit slice.
-                    if units.name not in (process / "cgroup").read_text():
-                        continue
-                    env = (process / "environ").read_bytes()
-                    maps = (process / "maps").read_text()
-                    if (
-                        b"LD_LIBRARY_PATH=" in env
-                        or b"LD_PRELOAD=" in env
-                        or str(units.release) in maps
-                    ):
-                        errors.append(
-                            "curl inherited private loader environment or maps"
-                        )
-                    curl_pids.add(process.name)
-                except (FileNotFoundError, ProcessLookupError):
-                    pass
-
-    sampler = threading.Thread(target=sample)
-    sampler.start()
+    results = {}
+    remote = f"/dav/offline-{label}-512.bin"
     try:
-        upload = units.exchange(
-            entry.request(
-                "PUT",
-                "/dav/offline-512.bin",
-                [
-                    ("Authorization", "Basic " + entry.AUTH),
-                    ("Content-Length", str(payload.stat().st_size)),
-                ],
-            ),
-            payload,
-        )
+        progress = Progress(units, work, label + "-upload")
+        try:
+            upload = units.exchange(
+                entry.request(
+                    "PUT",
+                    remote,
+                    [
+                        ("Authorization", "Basic " + entry.AUTH),
+                        ("Content-Length", str(payload.stat().st_size)),
+                    ],
+                ),
+                payload,
+                progress=progress,
+            )
+        finally:
+            results["upload"] = progress.close()
         demand(
             upload.startswith(b"HTTP/1.1 201"),
             "512 MiB upload status: " + repr(upload[:200]),
@@ -570,30 +585,107 @@ def transfers(units, work):
             "512 MiB upload full digest",
         )
         download = work / "download.wire"
-        units.exchange(
-            entry.request(
-                "GET",
-                "/dav/offline-512.bin",
-                [("Authorization", "Basic " + entry.AUTH)],
-            ),
-            output=download,
-        )
+        progress = Progress(units, work, label + "-download")
+        try:
+            units.exchange(
+                entry.request(
+                    "GET",
+                    remote,
+                    [("Authorization", "Basic " + entry.AUTH)],
+                ),
+                output=download,
+                progress=progress,
+            )
+        finally:
+            results["download"] = progress.close()
         _, size, actual = entry.download_digest(download)
         demand(
             size == 512 * 1024**2 and actual == digest.hexdigest(),
             "512 MiB download full digest",
         )
         download.unlink()
-        demand(curl_pids and not errors, "curl system loader isolation: " + str(errors))
+        for result in results.values():
+            demand(not result["errors"], "transfer sampler errors")
+            demand(result["cgroups"], "real transfer cgroup evidence")
+            demand(
+                result["max_gap_s"] < result["idle_s"], "transfer steady byte progress"
+            )
+            for group in result["cgroups"].values():
+                events = dict(
+                    line.split() for line in group["memory.events"].splitlines()
+                )
+                demand(events["oom"] == events["oom_kill"] == "0", "transfer no OOM")
+                demand(
+                    group["memory.max"].strip() == str(96 * 1024**2),
+                    "shipped MemoryMax=96M",
+                )
+        demand(
+            all(r["curl_pids"] for r in results.values()),
+            "curl system loader isolation sampled",
+        )
+        if label == "constrained":
+            demand(
+                results["upload"]["response_wait_s"] > 10,
+                "reproduces old response timeout",
+            )
+            demand(
+                results["upload"]["assembled"] > 500 * 1024**2,
+                "multipart assembly progress observed",
+            )
+            demand(
+                results["upload"]["upstream"] >= size,
+                "upstream upload progress observed",
+            )
+            for result in results.values():
+                for group in result["cgroups"].values():
+                    quota, period = map(int, group["cpu.max"].split())
+                    demand(quota / period == 0.25, "constrained CPUQuota applied")
+                    demand(
+                        "rbps=32000000 wbps=32000000" in group["io.max"],
+                        "constrained IO limits applied",
+                    )
+                    counters = {"rbytes": 0, "wbytes": 0}
+                    for line in group["io.stat"].splitlines():
+                        fields = dict(item.split("=") for item in line.split()[1:])
+                        for key in counters:
+                            counters[key] += int(fields.get(key, 0))
+                    demand(
+                        min(counters.values()) >= size // 2,
+                        "real constrained device IO observed",
+                    )
+                    full = next(
+                        line
+                        for line in group["io.pressure"].splitlines()
+                        if line.startswith("full ")
+                    )
+                    demand(
+                        int(full.split("total=")[1]) > 0,
+                        "constrained IO pressure observed",
+                    )
+        print(
+            f"PASS {label} real units 512 MiB upload/download full digest, clean curl loader; "
+            f"response_wait_s={results['upload']['response_wait_s']} "
+            f"max_gap_s={max(r['max_gap_s'] for r in results.values())}",
+            flush=True,
+        )
+        return {"bytes": size, "sha256": actual, "progress": results}
     finally:
-        stop.set()
-        sampler.join(timeout=5)
         payload.unlink()
-    print(
-        f"PASS real units 512 MiB upload/download full digest; {len(curl_pids)} curl processes have clean loader environment and maps",
-        flush=True,
+
+
+def constrained_transfers(units, work):
+    # v249 resolves the backing block device for an ordinary directory. Fail
+    # if io.max/actual IO evidence cannot prove that the restriction took effect.
+    text = units.original[units.template.name]
+    constrained = text.replace("CPUQuota=100%", "CPUQuota=25%") + (
+        "\nIOReadBandwidthMax=/tmp 32M\nIOWriteBandwidthMax=/tmp 32M\n"
     )
-    return {"bytes": size, "sha256": actual, "curl_processes": len(curl_pids)}
+    demand(constrained != text, "constrained CPU anchor")
+    units.rewrite(units.template, text, constrained)
+    try:
+        return transfers(units, work, "constrained")
+    finally:
+        units.rewrite(units.template)
 
 
 def rollback(units, work):
@@ -704,7 +796,9 @@ def main():
         unit_controls(units)
         units.concurrent()
         timeout_kill(units)
+        progress_negative(units, args.work)
         result = transfers(units, args.work)
+        result["constrained"] = constrained_transfers(units, args.work)
         units.quiesce()
         command(["systemctl", "start", units.name + "-cleanup.service"])
         print("PASS same native binary cleanup oneshot", flush=True)
