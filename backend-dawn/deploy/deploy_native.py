@@ -7,16 +7,83 @@ import json
 import os
 import re
 import shutil
+import socket
 import stat
 import subprocess
 import sys
 import tempfile
-import urllib.request
+import time
 import zipfile
 from pathlib import Path
 
 APP = Path("/opt/dawnop-dawn/native")
 REPO = "dawnop/dawnop-site"
+PROXY_KEYS = "http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY".split()
+
+
+def download_proxy():
+    # Match deploy.sh without publishing the host's private endpoint.
+    proxy_file = APP.parent / ".deploy-proxy"
+    proxy = os.environ.get("DEPLOY_PROXY")
+    if proxy is None:
+        proxy = proxy_file.read_text() if proxy_file.exists() else ""
+    proxy = re.sub(r"[ \t\n\r]", "", proxy)
+    if not proxy:
+        print(
+            "no proxy configured; direct GitHub downloads may be slow", file=sys.stderr
+        )
+        return ""
+    try:
+        host, port = proxy.rsplit(":", 1)
+        with socket.create_connection((host, int(port)), timeout=2):
+            return proxy
+    except (OSError, ValueError):
+        print("proxy unreachable; direct GitHub downloads may be slow", file=sys.stderr)
+        return ""
+
+
+def download(url, destination, token, proxy, *, max_time=60):
+    # curl's own deadline covers each transfer, including redirects and body reads.
+    # The subprocess deadline is a backstop, not the old 120s artifact truncation.
+    argv = [
+        "curl",
+        "-qfsSL",
+        "--proxy",
+        proxy,
+        "--noproxy",
+        "",
+        "--connect-timeout",
+        "10",
+        "--max-time",
+        str(max_time),
+        "-H",
+        f"Authorization: Bearer {token}",
+        "-H",
+        "Accept: application/vnd.github+json",
+    ]
+    if max_time == 600:
+        argv += ["--speed-limit", "1024", "--speed-time", "60"]
+    for attempt in range(1, 4):
+        try:
+            result = subprocess.run(
+                [*argv, url, "-o", str(destination)],
+                timeout=max_time + 10,
+            )
+        except subprocess.TimeoutExpired:
+            destination.unlink(missing_ok=True)
+            print("GitHub download subprocess deadline exceeded", file=sys.stderr)
+            raise SystemExit(124) from None
+        if result.returncode == 0:
+            return
+        print(
+            f"GitHub download attempt {attempt}/3: curl exit {result.returncode}",
+            file=sys.stderr,
+        )
+        if attempt < 3:
+            time.sleep(attempt)
+    destination.unlink(missing_ok=True)
+    # Do not include authenticated argv in an exception or traceback.
+    raise SystemExit(result.returncode)
 
 
 def command(argv):
@@ -216,6 +283,8 @@ def install(release, sha):
 
 
 def main():
+    for key in PROXY_KEYS:
+        os.environ.pop(key, None)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", required=True)
     parser.add_argument("--undo", action="store_true")
@@ -241,18 +310,16 @@ def main():
         sha = json.loads((release / "manifest.json").read_text())["commit"]
         install(release, sha)
         return
-    token = Path("/opt/dawnop-dawn/.github-token").read_text().strip()
+    token = (APP.parent / ".github-token").read_text().strip()
+    proxy = download_proxy()
 
     def api(path):
-        request = urllib.request.Request(
-            f"https://api.github.com/repos/{REPO}/{path}",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-            },
-        )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            return json.load(response)
+        with tempfile.TemporaryDirectory(prefix="native-api-") as temp:
+            response = Path(temp) / "response.json"
+            download(
+                f"https://api.github.com/repos/{REPO}/{path}", response, token, proxy
+            )
+            return json.loads(response.read_text())
 
     runs = api(
         f"actions/workflows/ci.yml/runs?head_sha={args.sha}&event=push&per_page=100"
@@ -274,29 +341,7 @@ def main():
     )
     with tempfile.TemporaryDirectory(prefix="native-deploy-") as temp:
         archive = Path(temp) / "artifact.zip"
-        proxy_file = Path("/opt/dawnop-dawn/.deploy-proxy")
-        download = [
-            "curl",
-            "-qfsSL",
-            "--max-time",
-            "600",
-            "--speed-limit",
-            "1024",
-            "--speed-time",
-            "60",
-        ]
-        if proxy_file.exists():
-            download += ["--proxy", proxy_file.read_text().strip()]
-        command(
-            [
-                *download,
-                "-H",
-                f"Authorization: Bearer {token}",
-                artifact["archive_download_url"],
-                "-o",
-                archive,
-            ]
-        )
+        download(artifact["archive_download_url"], archive, token, proxy, max_time=600)
         check_zip(archive, artifact.get("digest"))
         release = Path(temp) / "release"
         extract(archive, release)
