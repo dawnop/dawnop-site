@@ -153,6 +153,7 @@ def test_the_backup_pieces_installed_by_263_are_in_the_manifest():
         ("unit:dawnop-backup", "dawnop-backup.service", "deploy/dawnop-backup.service"),
         ("unit:dawnop-backup", "dawnop-backup.timer", "deploy/dawnop-backup.timer"),
         ("opt-scripts", "backup-db.sh", "deploy/backup-db.sh"),
+        ("backup-engine", "backup-engine.conf", "deploy/backup-engine.conf"),
     ):
         assert name in expected[group], f"{group} 里没有 {name}"
         assert expected[group][name] == drift.sha256_of(REPO / repo_rel), repo_rel
@@ -205,3 +206,34 @@ def test_unit_files_compared_are_the_ones_the_rollback_chain_reads():
     src = SCRIPT.read_text(encoding="utf-8")
     assert re.search(r'"deploy"\s*/\s*"dawnop-backend\.service"', src)
     assert re.search(r'"backend-dawn"\s*/\s*"deploy"\s*/\s*"dawnop-dawn\.service"', src)
+
+
+def test_backup_service_uses_the_tracked_engine_config():
+    service = (REPO / "deploy/dawnop-backup.service").read_text()
+    assert "EnvironmentFile=/opt/dawnop/backup-engine.conf" in service
+    assert "User=dawnop" in service and "Group=dawnop" in service
+    assert "ReadWritePaths=/opt/dawnop/data /opt/dawnop/backups" in service
+    timer = (REPO / "deploy/dawnop-backup.timer").read_text()
+    assert "OnCalendar=*-*-* 00:20:00" in timer
+    assert "RandomizedDelaySec=300" in timer
+
+
+def test_backup_config_matches_packaged_entry_and_cleanup_schedule():
+    config = dict(
+        line.split("=", 1)
+        for line in (REPO / "deploy/backup-engine.conf").read_text().splitlines()
+        if line and not line.startswith("#")
+    )
+    native_cleanup = (
+        REPO / "backend-dawn/deploy/dawnop-native-cleanup.service"
+    ).read_text()
+    assert (
+        "ExecStart=" + config["BACKUP_NATIVE"] + " --cleanup-pastes" in native_cleanup
+    )
+    assert config["BACKUP_ENGINE"] == "jvm"
+    assert config["BACKUP_JAR"] == "/opt/dawnop-dawn/backend-dawn.jar"
+    assert config["PATH"].split(":")[0] == config["JAVA_HOME"] + "/bin"
+    for name in ["dawnop-paste-cleanup.timer", "dawnop-native-cleanup.timer"]:
+        timer = (REPO / "backend-dawn/deploy" / name).read_text()
+        assert "OnCalendar=hourly" in timer
+        assert "RandomizedDelaySec=60" in timer

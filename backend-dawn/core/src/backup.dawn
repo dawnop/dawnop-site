@@ -1,0 +1,42 @@
+# A maintenance-only snapshot and verification on the same gated connection.
+use std/str
+use std/fmt.{parse_int}
+use db/sql.{Db, query, execute, busy_timeout, PStr, ColStr, VStr, str_at}
+
+pub fn safe_version(version: String) -> Bool = match map(str.split(version, "."), part => parse_int(part)) {
+  [Some(major), Some(minor), Some(patch)] ->
+    major > 3 || (major == 3 && (minor > 51 || (minor == 51 && patch >= 3)))
+  _ -> false
+}
+
+pub fn require_engine() -> Result[Unit, String] !Db = {
+  let info = query("select sqlite_version(), sqlite_source_id()", [], [ColStr, ColStr])?
+  match info {
+    [[VStr(version), VStr(source)]] -> {
+      if not safe_version(version) { return Err("SQLite ${version} refused: requires >= 3.51.3; source_id=${source}") }
+      busy_timeout(5000)
+    }
+    _ -> Err("SQLite backup engine identity query returned unexpected rows")
+  }
+}
+
+# The caller loads its configured tokenizer only after require_engine succeeds.
+pub fn snapshot(dest: String) -> Result[Unit, String] !Db = {
+  execute("VACUUM main INTO ?", [PStr(dest)])?
+  execute("attach database ? as backup_copy", [PStr(dest)])?
+  let checked = verify_copy()
+  let detached = execute("detach database backup_copy", [])
+  checked?
+  detached
+}
+
+fn verify_copy() -> Result[Unit, String] !Db = {
+  let rows = query("PRAGMA backup_copy.integrity_check", [], [ColStr])?
+  if rows != [[VStr("ok")]] { return Err("backup integrity_check failed: ${to_string(rows)}") }
+  let tables = query("select name from backup_copy.sqlite_schema where type='table' and lower(sql) like '%using%fts5%' order by name", [], [ColStr])?
+  for row in tables {
+    let name = str.replace(str_at(row, 0), "\"", "\"\"")
+    execute("insert into backup_copy.\"${name}\"(\"${name}\",rank) values('integrity-check',1)", [])?
+  }
+  Ok(())
+}

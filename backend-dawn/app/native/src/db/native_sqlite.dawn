@@ -1,6 +1,7 @@
 # Native connection owner. The portable core never imports this module.
 use site_core/db/runtime.{DbConfig, DbOps}
 use sqlite/sqlite
+use site_core/backup
 use site_core/util/ferr.{fe_text}
 use site_core/db/sql.{Db, SqlV, PInt, PFloat, PStr, PNull, Col, ColInt, ColFloat, ColStr, Cell, VInt, VFloat, VStr, VNull, QueryResult}
 
@@ -61,6 +62,26 @@ fn load_simple(c: sqlite.Db, ext: String) -> Result[Unit, ForeignError] !io = {
   if ext != "" { sqlite.load_extension(c, ext, Some("sqlite3_simple_init"))? }
   Ok(())
 }
+
+# Backups accept existing DELETE or WAL databases without changing their mode.
+pub fn backup_database(path: String, ext: String, dest: String) -> Result[Unit, String] !io = {
+  # Refuse an old loader before it can even open the source database.
+  result(sqlite.with_db(":memory:", check_backup_engine))?
+  result(sqlite.with_db(path, c => {
+    check_backup_engine(c)?
+    load_simple(c, ext)?
+    match with_sqlite(c, () => backup.snapshot(dest)) {
+      Ok(_) -> Ok(())
+      Err(m) -> Err(ForeignError { kind: "site.backup.copy", message: m, cause: None })
+    }
+  }))
+}
+
+fn check_backup_engine(c: sqlite.Db) -> Result[Unit, ForeignError] !io =
+  match with_sqlite(c, () => backup.require_engine()) {
+    Ok(_) -> Ok(())
+    Err(m) -> Err(ForeignError { kind: "site.backup.engine", message: m, cause: None })
+  }
 
 ## Initialize each connection before running body; all errors reach the caller.
 ## Pass an empty ext only for work units that do not use the simple tokenizer.

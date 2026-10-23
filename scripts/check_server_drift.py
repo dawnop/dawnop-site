@@ -39,7 +39,8 @@ REPO = Path(__file__).resolve().parents[1]
 GROUPS = {
     "unit:dawnop-backend": "FastAPI 单元（回滚目标）",
     "unit:dawnop-dawn": "Dawn 单元（生产）",
-    "unit:dawnop-backup": "库备份的 service + timer（#263）",
+    "unit:dawnop-backup": "版本门备份的 service + timer",
+    "backup-engine": "库备份的公开引擎配置",
     "fastapi-app": "FastAPI 应用代码（回滚目标跑的就是它）",
     "opt-scripts": "/opt/dawnop 下装机的脚本（正本在 deploy/）",
     "stale-scripts": "/opt/dawnop-dawn 下不该有任何 .sh",
@@ -52,6 +53,7 @@ GROUPS = {
 FROM_DEPLOY_DIR = {
     "unit:dawnop-backup": ["dawnop-backup.service", "dawnop-backup.timer"],
     "opt-scripts": ["backup-db.sh"],
+    "backup-engine": ["backup-engine.conf"],
 }
 
 # 服务器侧只做一件事：把「有什么、各自的 sha256 是多少」打出来。判断全在本地做，
@@ -69,11 +71,14 @@ for u in dawnop-backend dawnop-dawn; do
   [ -f "$f" ] && emit "unit:$u" "$u.service" "$(sha "$f")"
 done
 
-# 备份是一个 service 加一个 timer，两个都要盯：只装了 service 而 timer 没 enable，
+# 备份是一个 service 加一个 timer，两个都要盯：只装了 service 而漏装 timer，
 # 备份就永远不会自己跑，而这正是「看起来装好了」的那种失败。
 for f in /etc/systemd/system/dawnop-backup.service /etc/systemd/system/dawnop-backup.timer; do
   [ -f "$f" ] && emit unit:dawnop-backup "${f#/etc/systemd/system/}" "$(sha "$f")"
 done
+
+f=/opt/dawnop/backup-engine.conf
+[ -f "$f" ] && emit backup-engine backup-engine.conf "$(sha "$f")"
 
 for f in /opt/dawnop/*.sh; do
   [ -e "$f" ] || continue

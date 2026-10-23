@@ -1,0 +1,44 @@
+use db/sql.{QueryResult, Cell}
+
+fn fake_backup(version: String, check: Result[List[List[Cell]], String], fts_ok: Bool) -> Result[Unit, String] !io = {
+  with handle Db {
+    db_query(q, _ps, _cols) => {
+      if q == "select sqlite_version(), sqlite_source_id()" { Ok(QueryResult { names: ["version", "source"], rows: [[VStr(version), VStr("fixture")]] }) }
+      else if q == "PRAGMA backup_copy.integrity_check" { match check { Ok(rows) -> Ok(QueryResult { names: ["integrity_check"], rows: rows })
+        Err(m) -> Err(m) } }
+      else { Ok(QueryResult { names: ["name"], rows: [[VStr("article_fts")], [VStr("paste_fts")]] }) }
+    }
+    execute(q, _ps) => if str.starts_with(q, "insert into backup_copy.") && not fts_ok { Err("FTS corrupt") } else { Ok(()) }
+    execute_changes(_q, _ps) => Err("backup must not change source rows")
+    last_id() => Ok(0)
+    busy_timeout(_ms) => Ok(())
+    in_transaction() => Ok(false)
+  }
+  require_engine()?
+  snapshot("/fixture/copy")
+}
+
+test "backup refuses low and malformed engine versions" {
+  for v in ["3.36.0", "3.51.2", "3.9.99", "", "3.51", "3.51.3.0", "unknown"] {
+    assert not safe_version(v)
+    assert match fake_backup(v, Ok([[VStr("ok")]]), true) { Err(_) -> true
+      Ok(_) -> false }
+  }
+  for v in ["3.51.3", "3.53.4", "3.54.1", "4.0.0"] { assert safe_version(v) }
+}
+
+test "backup propagates copy integrity SQL errors" {
+  assert fake_backup("3.54.1", Err("copy unreadable"), true) == Err("copy unreadable")
+}
+
+test "backup requires the complete integrity result to be exactly ok" {
+  for rows in [[], [[VStr("bad page")]], [[VStr("ok")], [VStr("bad page")]]] {
+    assert match fake_backup("3.54.1", Ok(rows), true) { Err(_) -> true
+      Ok(_) -> false }
+  }
+}
+
+test "backup checks FTS external content before success" {
+  assert fake_backup("3.54.1", Ok([[VStr("ok")]]), false) == Err("FTS corrupt")
+  assert fake_backup("3.54.1", Ok([[VStr("ok")]]), true) == Ok(())
+}

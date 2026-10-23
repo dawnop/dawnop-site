@@ -10,9 +10,12 @@
 
 import gzip
 import hashlib
+import importlib.util
 import os
 import re
+import selectors
 import shutil
+import signal
 import sqlite3
 import stat
 import subprocess
@@ -21,7 +24,28 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-SCRIPT = REPO / "deploy" / "backup-db.sh"
+SCRIPT = Path(os.environ.get("BACKUP_TEST_SCRIPT", REPO / "deploy/backup-db.sh"))
+
+
+@pytest.fixture(scope="module", params=["jvm", "native"], autouse=True)
+def backup_runtime(request, tmp_path_factory):
+    """同一组判词驱动两种真正的维护入口，不借系统 CLI。"""
+    spec = importlib.util.spec_from_file_location(
+        "backup_runtime", REPO / "backend-dawn/scripts/backup-engine/runtime.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    # module fixture 的两个参数共用一次编译产物。
+    if not hasattr(backup_runtime, "built"):
+        backup_runtime.built = module.configured(
+            tmp_path_factory.mktemp("backup-engine")
+        )
+    with pytest.MonkeyPatch.context() as patch:
+        for key, value in backup_runtime.built.items():
+            patch.setenv(key, value)
+        patch.setenv("BACKUP_ENGINE", request.param)
+        yield request.param
+
 
 # 判词自己认产物用的是**完整锚定**的正则，不是宽 glob。否则 `dawnop-manual.db.gz`
 # 这种「长得像」的外来文件会被算进产物里，测试的账就跟着脚本一起错。
@@ -37,7 +61,12 @@ def run_backup(db: Path, dest: Path, keep: int = 14) -> subprocess.CompletedProc
     """把脚本当外部命令跑，路径全走环境变量（脚本可覆盖默认值就是为了这个）。"""
     env = {**os.environ, "DB": str(db), "DEST": str(dest), "KEEP": str(keep)}
     return subprocess.run(
-        [str(SCRIPT)], env=env, capture_output=True, text=True, cwd=str(REPO)
+        [str(SCRIPT)],
+        env=env,
+        capture_output=True,
+        text=True,
+        cwd=str(REPO),
+        timeout=30,
     )
 
 
@@ -71,15 +100,15 @@ def open_product(dest: Path, tmp_path: Path) -> sqlite3.Connection:
 
 
 def corrupt_db_bytes(tmp_path: Path, want: str) -> bytes:
-    """造一个「打得开、`.backup` 也退 0，但副本是坏的」的库，返回它的字节。
+    """造一个在线按页复制成功、但完整性检查失败的库，返回它的字节。
 
     `want` 说的是坏消息以什么形式出现，脚本对这两种各有一道判断：
-      - `pragma-errors`  ：`sqlite3 副本 'PRAGMA integrity_check;'` 自己退非零
-      - `pragma-reports` ：命令退 0，损坏只写在标准输出里
+      - `pragma-errors`  ：副本 integrity 查询抛 DatabaseError
+      - `pragma-reports` ：查询成功，结果行报告损坏
 
     具体哪一页、哪一段字节能造出哪一种，取决于 sqlite 的版本和页面布局，写死了
     换台机器就可能失效。所以这里是**试出来**的：逐个候选配方跑一遍脚本要跑的
-    那两条命令，第一个满足前置条件的就用它，一个都没有就直接失败（不 skip，
+    在线按页复制及 integrity 查询，第一个满足前置条件的就用它，一个都没有就直接失败（不 skip，
     静默跳过的判词等于没有判词）。
     """
     src = tmp_path / "_corrupt_base.db"
@@ -104,20 +133,15 @@ def corrupt_db_bytes(tmp_path: Path, want: str) -> bytes:
                 raw[page * page_size + i] = fill
             probe.write_bytes(raw)
             snap.unlink(missing_ok=True)
-            made = subprocess.run(
-                ["sqlite3", str(probe), f".backup '{snap}'"],
-                capture_output=True,
-                text=True,
-            )
-            if made.returncode != 0:
-                continue
-            checked = subprocess.run(
-                ["sqlite3", str(snap), "PRAGMA integrity_check;"],
-                capture_output=True,
-                text=True,
-            )
-            errored = checked.returncode != 0
-            reported = checked.returncode == 0 and checked.stdout.strip() != "ok"
+            try:
+                with sqlite3.connect(probe) as source, sqlite3.connect(snap) as target:
+                    source.backup(target)
+                with sqlite3.connect(snap) as copy:
+                    checked = copy.execute("PRAGMA integrity_check").fetchall()
+                errored = False
+                reported = checked != [("ok",)]
+            except sqlite3.DatabaseError:
+                errored, reported = True, False
             if (want == "pragma-errors" and errored) or (
                 want == "pragma-reports" and reported
             ):
@@ -168,10 +192,10 @@ def test_product_restores_to_the_same_database(tmp_path):
 def test_snapshot_is_consistent_while_a_writer_holds_an_open_transaction(tmp_path):
     """源库有活写者时，快照仍然自洽：已提交的行一条不少，未提交的一条不多。
 
-    这条是选 `sqlite3 .backup` 而不是 `cp` 的全部理由，所以它必须被测到，而不是
+    这条是选一致性快照 的全部理由，所以它必须被测到，而不是
     写在注释里。造场景的办法：WAL 模式 + 连接不关，于是**已提交**的数据还只在
     -wal 里、主库文件里没有；同时开着一个未提交的写事务。`cp` 主库文件在这里
-    连表都拷不到，`.backup` 走在线备份 API 才拿得到一致的那一份。
+    连表都拷不到，VACUUM INTO 才拿得到一致的那一份。
     """
     db = tmp_path / "live.db"
     con = sqlite3.connect(db, isolation_level=None)
@@ -310,7 +334,7 @@ def test_missing_source_database_fails(tmp_path):
 def test_corrupt_source_fails_and_leaves_no_debris(tmp_path):
     """源库是一堆垃圾字节 → 非零退出，且备份目录里一个文件都不剩。
 
-    「不剩」包括临时文件：sqlite3 在这条路径上会留下一个 0 字节的目标文件，
+    「不剩」包括 mktemp 建出的 0 字节目标文件，
     没人清的话它就一天攒一个。
     """
     db = tmp_path / "src.db"
@@ -342,8 +366,8 @@ def test_snapshot_that_cannot_be_integrity_checked_is_not_kept(tmp_path):
 def test_snapshot_that_reports_corruption_is_not_kept(tmp_path):
     """`PRAGMA integrity_check` 退 0、但结果不是 `ok` → 不留产物。
 
-    与上一条是两件事，不是同一件的两种写法：这类损坏下 sqlite3 命令本身**成功**，
-    坏消息只在它的输出里。只看退出码的写法会把这份备份收下。
+    与上一条是两件事，不是同一件的两种写法：这类损坏下 integrity 查询本身**成功**，
+    坏消息只在结果行里。只看退出码的写法会把这份备份收下。
     """
     db = tmp_path / "src.db"
     db.write_bytes(corrupt_db_bytes(tmp_path, "pragma-reports"))
@@ -369,3 +393,187 @@ def test_bad_keep_is_rejected_before_anything_is_deleted(tmp_path, keep):
     proc = run_backup(db, dest, keep=keep)
     assert proc.returncode != 0
     assert products(dest) == existing
+
+
+def test_system_sqlite_is_never_invoked(tmp_path, monkeypatch):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    cli = tools / "sqlite3"
+    cli.write_text("#!/bin/sh\necho forbidden-system-sqlite >&2\nexit 91\n")
+    cli.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tools) + os.pathsep + os.environ["PATH"])
+    db = tmp_path / "source.db"
+    make_db(db)
+    proc = run_backup(db, tmp_path / "bk")
+    assert proc.returncode == 0, proc.stderr
+    assert "database backup verified" in proc.stderr
+
+
+@pytest.mark.parametrize("mode", ["delete", "wal"])
+def test_backup_does_not_migrate_or_change_the_source(tmp_path, mode):
+    db = tmp_path / "source.db"
+    make_db(db)
+    with sqlite3.connect(db) as con:
+        con.execute("pragma journal_mode=" + mode)
+    before = db.read_bytes()
+    proc = run_backup(db, tmp_path / "bk")
+    assert proc.returncode == 0, proc.stderr
+    assert db.read_bytes() == before
+    with sqlite3.connect(db) as con:
+        assert con.execute("pragma journal_mode").fetchone()[0] == mode
+        assert con.execute(
+            "select name from sqlite_schema where type='table'"
+        ).fetchall() == [("article",)]
+
+
+def test_paths_with_quotes_are_bound_as_values(tmp_path):
+    db = tmp_path / "source ' quoted.db"
+    make_db(db)
+    dest = tmp_path / "bk ' quoted"
+    proc = run_backup(db, dest)
+    assert proc.returncode == 0, proc.stderr
+    assert (
+        open_product(dest, tmp_path)
+        .execute("select count(*) from article")
+        .fetchone()[0]
+        == 50
+    )
+
+
+@pytest.mark.parametrize(
+    "table,tokenizer", [("article_fts", "simple"), ("paste_fts", "trigram")]
+)
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_fts_integrity_checks_external_content(
+    tmp_path, monkeypatch, table, tokenizer, corrupt
+):
+    db = tmp_path / "fts.db"
+    ext = os.environ["BACKUP_SIMPLE_FIXTURE"]
+    monkeypatch.setenv("DAWN_SIMPLE_EXT", ext)
+    with sqlite3.connect(db) as con:
+        con.enable_load_extension(True)
+        con.load_extension(ext)
+        con.execute("create table content(id integer primary key, body text)")
+        con.execute(
+            f"create virtual table {table} using\nfts5(body,content='content',content_rowid='id',tokenize='{tokenizer}')"
+        )
+        con.execute("insert into content values(1,'中文 backup snapshot')")
+        con.execute(f"insert into {table}({table}) values('rebuild')")
+        if corrupt:
+            con.execute("update content set body='changed without updating FTS'")
+    before = db.read_bytes()
+    dest = tmp_path / "bk"
+    proc = run_backup(db, dest)
+    assert (proc.returncode != 0) == corrupt, proc.stderr
+    assert bool(products(dest)) != corrupt
+    assert db.read_bytes() == before
+    if corrupt:
+        assert list(dest.iterdir()) == []
+
+
+def test_wal_commit_after_snapshot_is_not_in_the_copy(tmp_path, monkeypatch):
+    # gzip 是快照/校验完成到发布之间的同步屏障，不靠 sleep 或库大小猜时序。
+    db = tmp_path / "live.db"
+    con = sqlite3.connect(db, isolation_level=None)
+    con.execute("pragma journal_mode=wal")
+    con.execute("create table t(v text)")
+    con.execute("insert into t values('before')")
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    ready = tmp_path / "ready"
+    release = tmp_path / "release"
+    os.mkfifo(ready)
+    os.mkfifo(release)
+    gzip_exe = shutil.which("gzip")
+    wrapper = tools / "gzip"
+    wrapper.write_text(
+        '#!/bin/sh\nif [ ! -e "$BACKUP_ONCE" ]; then\n  touch "$BACKUP_ONCE"\n  printf ready >"$BACKUP_READY"\n  read -r go <"$BACKUP_RELEASE"\nfi\nexec "$BACKUP_GZIP" "$@"\n'
+    )
+    wrapper.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": str(tools) + os.pathsep + os.environ["PATH"],
+        "BACKUP_READY": str(ready),
+        "BACKUP_RELEASE": str(release),
+        "BACKUP_ONCE": str(tmp_path / "once"),
+        "BACKUP_GZIP": gzip_exe,
+        "DB": str(db),
+        "DEST": str(tmp_path / "bk"),
+    }
+    fd = os.open(ready, os.O_RDONLY | os.O_NONBLOCK)
+    proc = subprocess.Popen(
+        [str(SCRIPT)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(fd, selectors.EVENT_READ)
+            assert selector.select(30), "snapshot did not reach compression"
+            assert os.read(fd, 20) == b"ready"
+        con.execute("insert into t values('after')")
+        assert con.execute("select count(*) from t").fetchone()[0] == 2
+        with open(release, "w") as release_signal:
+            release_signal.write("go\n")
+        out, err = proc.communicate(timeout=30)
+        assert proc.returncode == 0, out + err
+        copy = open_product(tmp_path / "bk", tmp_path)
+        assert copy.execute("select v from t").fetchall() == [("before",)]
+        copy.close()
+    finally:
+        os.close(fd)
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.communicate(timeout=5)
+        con.close()
+
+
+def test_low_engine_is_refused(tmp_path, monkeypatch, backup_runtime):
+    db = tmp_path / "source.db"
+    make_db(db)
+    if backup_runtime == "jvm":
+        monkeypatch.setenv("BACKUP_JAR", os.environ["BACKUP_OLD_JAR"])
+        version = "3.36.0"
+    else:
+        monkeypatch.setenv("LD_LIBRARY_PATH", os.environ["BACKUP_OLD_NATIVE_LIBRARY"])
+        version = "3.35.5"
+    dest = tmp_path / "bk"
+    proc = run_backup(db, dest)
+    assert proc.returncode != 0, "unsafe low engine accepted"
+    assert f"SQLite {version} refused: requires >= 3.51.3" in proc.stderr
+    assert products(dest) == []
+
+
+def test_missing_tokenizer_is_fatal(tmp_path, monkeypatch):
+    db = tmp_path / "source.db"
+    make_db(db)
+    monkeypatch.setenv("DAWN_SIMPLE_EXT", str(tmp_path / "missing.so"))
+    dest = tmp_path / "bk"
+    proc = run_backup(db, dest)
+    assert proc.returncode != 0
+    assert products(dest) == []
+    assert list(dest.iterdir()) == []
+
+
+@pytest.mark.parametrize("args", [[], ["dest", "extra"]])
+def test_backup_command_requires_exactly_one_destination(
+    tmp_path, backup_runtime, args
+):
+    db = tmp_path / "source.db"
+    make_db(db)
+    command = (
+        [os.environ.get("JAVA", "java"), "-jar", os.environ["BACKUP_JAR"]]
+        if backup_runtime == "jvm"
+        else [os.environ["BACKUP_NATIVE"]]
+    )
+    proc = subprocess.run(
+        [*command, "--backup", *args],
+        env={**os.environ, "DAWNOP_ENV": "/dev/null", "DAWN_DB_PATH": str(db)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode != 0
+    assert "usage: --backup <dest>" in proc.stderr

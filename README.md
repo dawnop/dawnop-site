@@ -35,7 +35,7 @@
 
 ```
 backend-dawn/   Dawn 后端。core/src 共享全部路由、业务与可移植 Db/Upstream 接口（零 Java）
-                app/jvm/src 保存 JVM listener/JDBC/JDK HTTP；app/native/src/main.dawn 是 stdin/stdout 单交换入口
+                app/jvm/src 保存 JVM listener/JDBC/JDK HTTP；app/native/src/main.dawn 是 stdin/stdout 单交换入口；core/backup.dawn 是双臂备份维护逻辑
                 native 的 SQLite/curl 与有界 fd teardown 独立；test/ 和 scripts/native-entry 验证字节、状态与资源
                 scripts/native-package 与 deploy/native-package.md 提供私有 SQLite 包、真单元验收和 0% 候选安装
 backend/        FastAPI 实现：回滚目标 + 契约参照

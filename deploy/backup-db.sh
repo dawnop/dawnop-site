@@ -7,14 +7,10 @@
 #   DB=/tmp/x.db DEST=/tmp/bk KEEP=3 deploy/backup-db.sh
 #   deploy/backup-db.sh --db /tmp/x.db --dest /tmp/bk --keep 3
 #
-# 为什么是 `sqlite3 .backup` 而不是 `cp`：后端是活的，随时可能正在写。`cp` 读到的是
-# 一个横跨若干次写入的字节混合体，压根不是任何一个时刻的库；WAL 模式下还会漏掉
-# 只存在于 -wal 里的已提交事务。`.backup` 走 SQLite 的在线备份 API，拿到的是一个
-# 一致的快照，未提交的事务不会出现在里面。实测（delete 与 wal 两种日志模式）：
-# 源库开着未提交的写事务时，快照 integrity_check 为 ok 且只含已提交的行。
-#
-# 依赖：sqlite3、gzip、sha256sum。sqlite3 不是 Ubuntu 的默认包，服务器上要
-# `apt-get install sqlite3`（见 deploy/README.md 的「五、库备份」）。
+# 快照与校验由站点自己的 --backup 维护命令完成，版本门要求 SQLite >= 3.51.3。
+# JVM 默认使用正式 jar 与同目录 lib/；S13 验收后可配置 BACKUP_ENGINE=native。
+# 不使用系统 SQLite CLI，也不加载后端密钥；扩展路径须显式配置。
+# 依赖：JVM 模式需要 Java，native 模式需要已验收的 ELF；两者均需 gzip、sha256sum。
 #
 # 这个方案只防误删/误改，不防机器丢失：备份和库在同一块盘上。异地副本是待办。
 
@@ -24,6 +20,10 @@ shopt -s nullglob
 DB=${DB:-/opt/dawnop/data/dawnop.db}
 DEST=${DEST:-/opt/dawnop/backups}
 KEEP=${KEEP:-14}
+BACKUP_ENGINE=${BACKUP_ENGINE:-jvm}
+BACKUP_JAR=${BACKUP_JAR:-/opt/dawnop-dawn/backend-dawn.jar}
+BACKUP_NATIVE=${BACKUP_NATIVE:-/opt/dawnop-dawn/native/current/dawnop-native}
+JAVA=${JAVA:-${JAVA_HOME:+$JAVA_HOME/bin/}java}
 
 while (($# > 0)); do
   case "$1" in
@@ -31,7 +31,7 @@ while (($# > 0)); do
     --dest) DEST=${2:?--dest 要跟路径}; shift 2 ;;
     --keep) KEEP=${2:?--keep 要跟数字}; shift 2 ;;
     -h | --help)
-      sed -n '2,20p' "$0"
+      sed -n '2,/^$/p' "$0"
       exit 0
       ;;
     *)
@@ -48,8 +48,8 @@ die() {
 
 # ---- 前置检查（全在动手之前做完，尤其是 KEEP：它决定删几个）----
 
-for tool in sqlite3 gzip sha256sum; do
-  command -v "$tool" >/dev/null 2>&1 || die "找不到 $tool，装上再跑（sqlite3 需 apt-get install sqlite3）"
+for tool in gzip sha256sum; do
+  command -v "$tool" >/dev/null 2>&1 || die "找不到 $tool，装上再跑"
 done
 
 [[ -f $DB ]] || die "源库不存在或不是普通文件：$DB"
@@ -59,9 +59,20 @@ done
 # KEEP=0 会把刚写出来的这份也删掉，那不是备份是删除。
 ((KEEP >= 1)) || die "KEEP 至少是 1，收到：$KEEP"
 
-# 临时文件名要交给 sqlite3 的 `.backup` 点命令，那是一层自己的引号解析。
-# 目录名里带单引号会把它解析歪，直接挡掉，不去猜转义规则。
-[[ $DEST != *"'"* ]] || die "备份目录路径不能含单引号：$DEST"
+# 参数各占一个 argv，不使用 eval 或一整串命令配置。
+engine=()
+case "$BACKUP_ENGINE" in
+  jvm)
+    command -v "$JAVA" >/dev/null 2>&1 || die "找不到 Java：$JAVA"
+    [[ -f $BACKUP_JAR && -r $BACKUP_JAR ]] || die "读不了站点 jar：$BACKUP_JAR"
+    engine=("$JAVA" -Xmx256m -jar "$BACKUP_JAR")
+    ;;
+  native)
+    [[ -f $BACKUP_NATIVE && -x $BACKUP_NATIVE ]] || die "不能执行 native：$BACKUP_NATIVE"
+    engine=("$BACKUP_NATIVE")
+    ;;
+  *) die "BACKUP_ENGINE 必须是 jvm 或 native：$BACKUP_ENGINE" ;;
+esac
 
 mkdir -p -- "$DEST"
 # 700/600：备份里有管理员的 bcrypt 口令哈希和全部文章正文（含草稿）。
@@ -76,17 +87,13 @@ final="$DEST/$name"
 # 落在 DEST 里，跟成品同一个文件系统，最后一步的 mv 才是同盘改名（不是复制）。
 # 点开头 + 固定前缀，与轮转的 dawnop-*.db.gz 模式不重叠，半成品永远不会被当成备份。
 tmp=$(mktemp "$DEST/.backup-db.XXXXXXXX")
-cleanup() { rm -f -- "$tmp" "$tmp.gz"; }
+cleanup() { rm -f -- "$tmp" "$tmp.gz" "$tmp-wal" "$tmp-shm" "$tmp-journal"; }
 trap cleanup EXIT
 
-# 源库坏到打不开时，sqlite3 在这里就退 1（并留下一个 0 字节的目标文件，靠 trap 清掉）。
-sqlite3 "$DB" ".backup '$tmp'" || die "取快照失败（源库可能已损坏）：$DB"
-
-# 校验的是**副本**，不是源库。源库能打开不代表页面都是好的，而 .backup 是按页
-# 原样搬运，坏页会一起搬过来。实测：改坏第二页的头部，.backup 照样退 0，
-# 只有副本上的 integrity_check 会说话。
-check=$(sqlite3 "$tmp" 'PRAGMA integrity_check;' 2>&1) || die "快照校验跑不起来：$check"
-[[ $check == ok ]] || die "快照没通过 integrity_check，不保留：${check%%$'\n'*}"
+# 独立维护进程不读业务 .env，不迁移，不改源库日志模式。配置的 tokenizer
+# 由同一引擎严格加载；任何快照、副本完整性或 FTS 校验失败都不压缩、不轮转。
+DAWNOP_ENV=/dev/null DAWN_DB_PATH="$DB" "${engine[@]}" --backup "$tmp" \
+  || die "取快照或校验失败：$DB"
 
 gzip -c -- "$tmp" >"$tmp.gz"
 chmod 600 -- "$tmp.gz"
