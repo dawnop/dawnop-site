@@ -53,6 +53,9 @@ http {{
   }}
   client_body_temp_path {quoted(root / "client-temp")};
   proxy_temp_path {quoted(root / "proxy-temp")};
+  fastcgi_temp_path {quoted(root / "fastcgi-temp")};
+  uwsgi_temp_path {quoted(root / "uwsgi-temp")};
+  scgi_temp_path {quoted(root / "scgi-temp")};
   limit_conn_zone $server_name zone=downloads:1m;
   upstream download_object {{ server {connect}; }}
   server {{

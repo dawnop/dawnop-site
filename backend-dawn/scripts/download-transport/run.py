@@ -85,9 +85,9 @@ def nginx(root, config):
     root.mkdir(exist_ok=True)
     cfg = root / "nginx.conf"
     cfg.write_text(config)
-    command(["nginx", "-t", "-p", str(root) + "/", "-c", cfg])
+    command(["nginx", "-e", "/dev/null", "-t", "-p", str(root) + "/", "-c", cfg])
     p = subprocess.Popen(
-        ["nginx", "-p", str(root) + "/", "-c", str(cfg)],
+        ["nginx", "-e", "/dev/null", "-p", str(root) + "/", "-c", str(cfg)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -1102,7 +1102,16 @@ def main():
         invalid = runtime / "invalid.conf"
         invalid.write_text(config.replace("error_page 504", "error_page 612"))
         rejected = subprocess.run(
-            ["nginx", "-t", "-p", str(positive) + "/", "-c", str(invalid)],
+            [
+                "nginx",
+                "-e",
+                "/dev/null",
+                "-t",
+                "-p",
+                str(positive) + "/",
+                "-c",
+                str(invalid),
+            ],
             capture_output=True,
         )
         check(
