@@ -169,15 +169,23 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Range", f"bytes */{size}")
         if status == 401:
             self.send_header("WWW-Authenticate", 'Basic realm="object"')
+            self.send_header("WWW-Authenticate", 'Bearer realm="object"')
         if 300 <= status < 400 and status != 304:
             self.send_header("Location", "https://redirect.invalid/private")
         if mode == "cacheable":
             self.send_header("Cache-Control", "public, max-age=60")
-        if mode == "controls":
+        if error or mode == "controls":
             self.send_header("X-Accel-Redirect", "/should-never-run")
+            self.send_header("X-Accel-Expires", "60")
+            self.send_header("X-Accel-Charset", "wrong")
             self.send_header("X-Accel-Buffering", "yes")
             self.send_header("X-Accel-Limit-Rate", "1")
             self.send_header("Set-Cookie", "upstream=private")
+            self.send_header(
+                "Content-Disposition", 'attachment; filename="private.txt"'
+            )
+            self.send_header("Cache-Control", "public, max-age=60")
+            self.send_header("Expires", FUTURE)
             self.send_header("Access-Control-Allow-Origin", "https://wrong.invalid")
         self.end_headers()
         self.wfile.flush()

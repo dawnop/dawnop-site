@@ -1,4 +1,4 @@
-# Native FM download handoff, knife 1
+# Native FM download handoff, K1b
 
 Status: default off, isolated prototype. No production cutover is authorized by
 this change. The October 23 coordinator ruling accepts object representation
@@ -70,13 +70,50 @@ Only explicitly listed Range and conditional headers reach the object. Other
 request headers, application Authorization, cookies, query token and request body
 do not. Original client query parameters are never used in the object proxy URL.
 The signed target is passed as a variable without URI decode/re-encode. TLS
-verification, CA, SNI and Host are explicit. There are no retries, connection pool,
-redirect following, cache, store or response temporary files. Buffering is off,
+verification, CA, SNI and Host are explicit. Both data-plane hops disable retries,
+connection pools,
+redirect following, cache, store and response temporary files. Buffering is off,
 `proxy_max_temp_file_size` is zero, and object X-Accel controls are ignored and
 hidden. The prototype limits active object transfers to four.
 
-Connect, upstream read idle, upstream send idle and downstream write idle budgets
-are explicit. The harness uses one-second idle budgets to make failure tests
+The public internal location proxies the signed target unchanged over a Unix
+socket to a second HTTP request in the **same nginx master and workers**. Only
+that private server connects to the fixed TLS object authority. The application
+handoff protocol has no new fields. No helper service or scripting module runs.
+
+The harness creates its runtime and socket parent with mode 0700, before nginx
+starts. The socket is reachable only through this restricted ancestry, even if
+nginx creates a more permissive socket inode. Do not bind the inner server to
+TCP or move its socket to a shared directory. `internal` cannot authenticate this
+second request: it would also reject the legitimate Unix socket request. nginx
+owns the socket lifetime; the harness terminates and waits for that instance
+before reusing the path, then removes the private tree on success or failure.
+A future operations adaptation must create a service-owned restricted directory,
+allow only the intended worker identity, and handle startup, drain and removal.
+
+The inner response header filter evaluates `map $upstream_status` with an
+explicit allowlist and a default failure route. It emits
+`X-Accel-Redirect $object_error_route always` only for failure. The outer proxy
+consumes this trusted header and dispatches to fixed local JSON locations.
+Never read/cache this map in rewrite: the current object response does not yet
+exist. `always` is necessary for all final response statuses. The inner proxy
+both ignores and hides every origin X-Accel header, so the object cannot choose
+an internal route, buffering, charset or rate. The outer alone consumes the
+generated route. Retries and inner error interception remain off, so the inner
+status variable describes one object attempt.
+
+X-Accel has a special header-copy path that bypasses ordinary outer hide rules.
+The inner suppresses Set-Cookie and challenges and conditionally restores
+Cache-Control, Expires, Content-Disposition and Accept-Ranges only on allowed
+entity responses. The outer dispatch first generates a local special response
+to clear a copied Content-Type, then emits a single JSON MIME and local length.
+ETag, Last-Modified, Content-Range and origin body bytes cannot enter that JSON
+response. Application CORS, credentials, Vary and nosniff are restored locally.
+
+Both hops have explicit connect, read idle, send idle and downstream write idle
+budgets. The outer read/send budget is the inner idle budget plus two seconds,
+allowing a classified inner timeout to arrive before the outer timer expires.
+The harness uses one-second idle budgets to make failure tests
 bounded, and a two-second progress case exceeds a one-second former total budget.
 There is no fixed total timer for a progressing download. Client cancellation
 must close the source connection, including after native has exited.
@@ -98,7 +135,9 @@ must close the source connection, including after native has exited.
 | Matching If-None-Match or date | FM ignores condition | Entity 304 |
 | Failed If-Match or If-Unmodified-Since | FM ignores condition | Entity 412 |
 | If-Range mismatch or weak tag | FM ignores condition | Full representation 200 |
-| Object redirects or ordinary errors | Application 502 | Narrow static JSON 502; source 504 maps 504 |
+| File response | Staged 200 | Only 200 and 206 are file success |
+| Unexpected 2xx, redirects, 401/408/444/499/612/999 and other final errors | Application 502 | Narrow local JSON 502, no object challenge or body |
+| Object 504 | Application 502/504 | Narrow local JSON 504 |
 | Connect/TLS/header timeout | Application 502/504 | Narrow JSON 502/504 |
 | Short body or stall after final head | Stage can reject before serving | Incomplete transfer, no second head or appended error JSON |
 
@@ -106,19 +145,22 @@ The narrow JSON body is `{"detail":"object download failed"}` or
 `{"detail":"object download timed out"}`; it intentionally omits the previous
 curl exception text and raw source status. Error MIME must be JSON. HEAD errors
 have no body. Source Location and ordinary source authentication fields must not
-escape. The acceptance summary records concrete stock nginx gaps separately;
-passing the expected-gap assertions never grants production acceptance.
+escape. An origin 408 is a received object response and maps to 502; it is
+separate from an actual upstream connect/response-header timeout, which maps to
+504. 304/412/416 retain their object entity semantics and conditional body MIME.
+Other unexpected 2xx, including 201 and 204, are failures. The guarantee covers
+final statuses before client headers commit. A short body or stalled stream
+following a committed 200/206 terminates that transfer, without JSON, another
+response, retry or replay.
 
-Stock `error_page` permits 300..599 except reserved 499, so it cannot express the
-required mapping of source 612, other nonstandard statuses outside that interval,
-or reserved 499. Listing all representable errors does not solve those cases.
-The real `nginx -t` rejection and actual 612 response are retained as counts and
-status evidence. The isolated matrix also finds that nginx copies an object 401
-WWW-Authenticate challenge into its error response even when that header is
-hidden on the normal proxy path, and treats source 408 as a pre-response
-connection close. These are additional concrete failures of the narrow error
-contract. Conditional 412/416 preserve the source body MIME; successful file MIME
-continues to come only from the application. No njs, Lua, headers-more or helper is introduced to hide this.
+K1's single-hop interception leaked 401 challenges, disconnected on 408 and
+passed 612 through because `error_page` cannot match it. K1b keeps that parser
+boundary check as evidence and enforces the contract through the response map.
+No source status needs to appear in an `error_page` list. Application 401,
+external internal-location 404 and local concurrency-limit 503 remain separate.
+The summary derives the error-contract gate from the measured GET/HEAD matrix,
+and derives production blockers from individual gate outcomes. Passing the
+isolated matrix does not complete DAV integration or authorize production.
 
 ## DAV follow-up
 
@@ -148,7 +190,11 @@ compatibility mechanism.
 ## Reproduce and release gates
 
 Run `backend-dawn/scripts/download-transport/run.sh --work <empty-directory>` for
-protocol, genuine configuration mutations, cancellation and TLS proof. Add
+protocol, genuine configuration mutations, cancellation and TLS proof. Use
+`--nginx <absolute-binary>` to replicate it with another stock build. Acceptance
+covers stock nginx 1.24.0 and 1.31.3; CI runs full measurement on the extracted
+Ubuntu binary and protocol/negative controls on checksum-pinned 1.31.3 built in
+a private prefix. Add
 `--full` after building the JVM jar for ten interleaved rounds per arm in each
 cold and warm group, and
 256/512 MiB digests with one and four slow clients. `--binary` can reuse an
@@ -164,19 +210,40 @@ Performance gates are fixed in `GATES` before execution: candidate body TTFB p95
 at most max(250 ms, JVM p95 + 100 ms), at most stage p95 / 4, temporary disk at most
 1 MiB per request with no body staging, and 256 to 512 MiB transport memory growth
 at most 16 MiB per request. Source generation memory is listed separately; nginx
-baseline and its workers are included. Shared host kernel counters are context,
+baseline and its workers are included. Both HTTP hops, their socket descriptors
+and both Unix socket endpoints are counted in that same process tree. The Unix
+endpoint-count assertion must see both endpoints per active request. Temporary
+file scans include unlinked open descriptors. Socket fd counts do not measure
+kernel buffer memory; shared sockstat/cgroup counters remain context only,
 not isolated cgroup evidence. S8 upload memory and budget gates remain unchanged.
 
 Every negative control modifies real code or a full nginx configuration copy:
 stage restoration, internal removal, credential forwarding, actual buffered disk
 writes, lost Range, mixed validators, object 401 served as a successful file, and
 ignored client cancellation. Each must trip its corresponding semantic gate.
+Four further real configuration controls remove the generated header's `always`,
+ignore the trusted route at the outer hop, trust origin X-Accel at the inner hop,
+and evaluate the response map prematurely in rewrite. The first two must break
+401/408/612 normalization, the latter two must break valid object downloads.
 Restored configuration then runs the positive matrix. Existing repository gates,
 355 dual-arm contracts and named skips remain required.
 
-The feature remains off pending the concrete error gaps, complete DAV metadata
-integration and a separately authorized S13b cutover. Production download is not
-released by this prototype.
+The feature remains off pending complete DAV metadata integration, real origin
+validator/backfill evidence, real clients, deployment resource limits and a
+separately authorized S13b cutover. The extra HTTP parsing, socket buffers and
+body copy are measured costs; K1 timing/resource results cannot stand in for K1b.
+Production download is not released by this prototype.
+
+Recorded local acceptance is available as the sanitized
+[nginx 1.31.3 full summary](evidence/download-k1b-nginx-1.31.3-full.json) and
+[nginx 1.24.0 protocol summary](evidence/download-k1b-nginx-1.24.0-protocol.json).
+Both have 93 passing protocol cases, including 54 error GET/HEAD cases, and all
+12 required negative controls. The full run measured candidate cold/warm body
+TTFB p95 at 108.56/114.02 ms. Single-client PSS growth was -770 KiB and four-client
+growth was 574.5 KiB per request; negative growth is sampling/shared-page noise.
+All four resource groups wrote zero temporary body bytes. Both Unix endpoints
+per transfer were observed. The error, performance and resource gates pass;
+production remains `BLOCKED` by the separately listed pending gates.
 
 Mechanism references: [nginx proxy module](https://nginx.org/en/docs/http/ngx_http_proxy_module.html),
 [internal locations](https://nginx.org/en/docs/http/ngx_http_core_module.html#internal),
