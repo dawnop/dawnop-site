@@ -57,6 +57,27 @@ artifact 上传成功本身不构成部署许可。PR merge SHA 的包仅供验�
 ssh <user>@<server> 'sudo bash -s' < backend-dawn/deploy/deploy-native.sh <full-sha>
 ```
 
+下载沿用 JVM 部署的 `/opt/dawnop-dawn/.deploy-proxy`（一行 `host:port`），
+支持相同的 `DEPLOY_PROXY` 显式覆盖并去掉空白。helper、GitHub API 查询及 artifact ZIP
+都只在各次 curl 参数中传 `--proxy`；不导出代理变量，且入口与离线 helper 会清除
+继承的大小写 http/https/all_proxy。文件缺失、为空或端口不可达时警告并直连，
+与 JVM 安装器一致；代理探测成功后传输失败仍重试该代理，不静默切换。
+本地健康检查、engine-info、systemd 命令不带代理；无需额外配置 NO_PROXY。
+
+每个下载最多三次，失败后分别退避 1、2 秒，原样保留 curl 错误并打印每次退出码；
+第三次仍失败时以原退出码结束。每次连接上限 10 秒，helper/API 总传输上限 60 秒，
+ZIP 上限 600 秒并保留 60 秒低于 1 KiB/s 的截止。Python 等待留 10 秒余量，
+不再用原 120 秒命令等待提前截断 ZIP；三次传输含退避分别最多约 183/1803 秒，
+另有 Python 进程监督余量与一次 2 秒代理端口探测。
+
+helper 仍以完整提交 SHA 寻址，执行前由入口内固定 Git blob SHA 校验字节。
+预期摘要来自本地受信任的入口，不经代理另取；代理即使改写下载内容也无法同时改 pin。
+必须使用目标提交中的入口，helper 更新须同批更新 blob pin；不匹配直接拒绝，
+不会加载或执行下载的 Python。后续 ZIP SHA-256、manifest 完整集合与逐项摘要检查保持生效。
+测试命令为 `python3 backend/tests/test_native_deploy_proxy.py`，只访问本地假服务，
+同一测试由既有 Python 3.10 CI job 收集，含全局代理与取消摘要检查的源码负控。
+设计与边界见 [下载代理设计](../../docs/native-deploy-proxy-design.md)。
+
 安装在 `/opt/dawnop-dawn/native/releases/<sha>`，root 只读；`current` 原子链接切换，
 `.prev` 保留上一 native release，和 JVM 的 `.prev` 完全独立。换包前停止 socket 接收，
 再确认无实例；已有连接时拒绝换包，不杀请求。失败恢复原链接和单元文件。
