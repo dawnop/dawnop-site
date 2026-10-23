@@ -450,6 +450,7 @@ fn wire_timeout() -> ForeignError =
 ## must fail loudly rather than hand back a plausible blank.
 fn with_text_answer[T](r: Result[HttpResp, ForeignError], body: fn() -> T !Upstream) -> T = {
   with handle Upstream {
+    exchange_head(req) => Err(ForeignError { kind = "test.unexpected_head", message = "unexpected metadata request", cause = None })
     exchange(req) => r
     exchange_bytes(req) => Err(no_answer("exchange_bytes"))
     exchange_stream(req) => Err(no_answer("exchange_stream"))
@@ -563,6 +564,7 @@ test "the arm reads the request it was given, not a constant" {
   # assertion above. Echoing the request back is what tells them apart.
   let echo = () => {
     with handle Upstream {
+    exchange_head(req) => Err(ForeignError { kind = "test.unexpected_head", message = "unexpected metadata request", cause = None })
       exchange(req) => Ok(HttpResp {
         status = 200,
         body = "${req.method} ${req.url} ${to_string(len(req.headers))} ${body_tag(req.body)}",
@@ -606,6 +608,7 @@ test "every call shape asks for the budget its deadline was chosen for" {
   let published = must(file_body(bytes.utf8("h"), src, bytes.utf8("t")))
 
   with handle Upstream {
+    exchange_head(req) => Err(ForeignError { kind = "test.unexpected_head", message = "unexpected metadata request", cause = None })
     exchange(req) => {
       log_add(seen, "${req.method}/${body_tag(req.body)}=${to_string(req.budget_s)}")
       Ok(HttpResp { status = 200, body = "" })
@@ -648,6 +651,7 @@ test "a stream can be answered without a socket" {
   # handler.
   let served = {
     with handle Upstream {
+    exchange_head(req) => Err(ForeignError { kind = "test.unexpected_head", message = "unexpected metadata request", cause = None })
       exchange(req) => Err(no_answer("exchange"))
       exchange_bytes(req) => Err(no_answer("exchange_bytes"))
       exchange_stream(req) => Ok(StreamResp { status = 206, stream = bytes_stream(bytes.utf8("partial")) })
@@ -675,6 +679,7 @@ test "an answered start delivers through await_resp, and its failure is reworded
   let seen = log_new()
   let started = {
     with handle Upstream {
+    exchange_head(req) => Err(ForeignError { kind = "test.unexpected_head", message = "unexpected metadata request", cause = None })
       exchange(req) => Err(no_answer("exchange"))
       exchange_bytes(req) => Err(no_answer("exchange_bytes"))
       exchange_stream(req) => Err(no_answer("exchange_stream"))

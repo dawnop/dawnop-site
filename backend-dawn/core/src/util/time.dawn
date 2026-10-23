@@ -106,6 +106,25 @@ pub fn http_date(t: Int) -> String = {
   "${WEEKDAYS[c.weekday]}, ${p2(c.day)} ${MONTHS[c.month - 1]} ${p4(c.year)} ${p2(c.hour)}:${p2(c.minute)}:${p2(c.second)} GMT"
 }
 
+## Strict IMF-fixdate for persisted representation metadata. Round-tripping
+## rejects impossible dates, wrong weekdays and non-canonical spellings.
+pub fn parse_http_date(s: String) -> Option[Int] = {
+  if len(s) != 29 || str.slice(s, 3, 5) != ", " || str.slice(s, 7, 8) != " " ||
+    str.slice(s, 11, 12) != " " || str.slice(s, 16, 17) != " " ||
+    str.slice(s, 19, 20) != ":" || str.slice(s, 22, 23) != ":" ||
+    str.slice(s, 25, 29) != " GMT" { return None }
+  var mo = 0
+  for i in range(0, 12) { if MONTHS[i] == str.slice(s, 8, 11) { mo = i + 1 } }
+  match (digits(s, 12, 16), digits(s, 5, 7), digits(s, 17, 19), digits(s, 20, 22), digits(s, 23, 25)) {
+    (Some(y), Some(d), Some(h), Some(mi), Some(sec)) -> {
+      if y < 1970 || mo == 0 || d < 1 || d > days_in_month(y, mo) || h > 23 || mi > 59 || sec > 59 { return None }
+      let t = civil_to_epoch(y, mo, d, h, mi, sec)
+      if http_date(t) == s { Some(t) } else { None }
+    }
+    _ -> None
+  }
+}
+
 ## ISO 8601 UTC timestamp, "1994-11-06T08:49:37Z".
 pub fn iso_date(t: Int) -> String = utc_datetime(t) ++ "Z"
 

@@ -117,7 +117,7 @@ pub fn delete_obj(q: Qiniu, key: String) -> Result[Unit, String] !Upstream !io =
 pub fn copy_obj(q: Qiniu, src_key: String, dst_key: String) -> Result[Unit, String] !Upstream !io = {
   let src = entry_uri(q, src_key)
   let dst = entry_uri(q, dst_key)
-  let path = "/copy/${src}/${dst}/force/true"
+  let path = "/copy/${src}/${dst}/force/false"
   let auth = management_token(q, "${path}\n")
   let r = post("${q.rs_host}${path}", [("Authorization", auth)], "")?
   ok_status(r, "copy")

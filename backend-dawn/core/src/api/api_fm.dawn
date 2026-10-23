@@ -3,6 +3,7 @@
 # qiniu-mutating endpoints (upload/delete/copy/save) are added separately.
 use util/download_handoff.{handoff}
 use util/http_runtime.{HttpCell, with_upstream}
+use util/representation
 use std/str
 use std/bytes
 use std/map
@@ -519,9 +520,10 @@ fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint:
   # reported values, then a name-based guess, exactly like FastAPI's
   #   size = fsize or payload.size or 0
   #   mime = mimeType or content_type or _guess_mime(basename)
-  let size = reg_size(stat_body, size_hint)
+  let size = reg_size(stat_body, size_hint)?
   let mime = reg_mime(stat_body, ct_hint, rel)
-  let finalized = with_db(a.db, () => finalize_register(rel, key, mime, size))?
+  let published = representation.collect(a.qiniu, key, size)?
+  let finalized = with_db(a.db, () => finalize_register(rel, key, mime, size, published))?
   let (row, outcome) = finalized
   let _gc = gc_unreferenced(a, outcome.superseded_key)
   Ok(entry_json(row))
@@ -535,12 +537,8 @@ fn register_stat_failure(status: Int) -> HttpError =
   }
 
 # fsize of 0 (absent or genuinely empty) falls through to the client hint, then 0
-fn reg_size(stat_body: String, hint: Option[Int]) -> Int !io = {
-  let fs = stat_int(stat_body, "fsize")
-  if fs != 0 { fs } else {
-    match hint { Some(n) -> n, None -> 0 }
-  }
-}
+fn reg_size(stat_body: String, hint: Option[Int]) -> Result[Int, String] !io =
+  representation.stat_size(stat_body, hint)
 
 fn reg_mime(stat_body: String, ct_hint: String, rel: String) -> String !io = {
   let mt = stat_str(stat_body, "mimeType")

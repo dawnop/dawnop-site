@@ -3,7 +3,7 @@ use std/io
 use std/bytes
 use std/str
 use std/fmt.{parse_int}
-use site_core/util/http.{Upstream, OutReq, OutBody, NoBody, TextBody, RawBody, FileBody, HttpResp, BytesResp, StreamResp, pending, request_parts, response_stream}
+use site_core/util/http.{HeadResp, Upstream, OutReq, OutBody, NoBody, TextBody, RawBody, FileBody, HttpResp, BytesResp, StreamResp, pending, request_parts, response_stream}
 use site_core/util/http_batch.{UpstreamBatch, BatchReq, BatchReply, unique_ids, batch_fault, failed}
 use web/types.{BodySource}
 use web/source.{file_source}
@@ -37,6 +37,7 @@ fn exit_error(code: Int) -> ForeignError =
 pub fn with_upstream[T](cfg: CurlConfig, body: fn() -> T !Upstream !UpstreamBatch !io) -> T !io = {
   with handle UpstreamBatch { exchange_batch(requests) => batch_reply(cfg, requests) }
   with handle Upstream {
+    exchange_head(req) => head_reply(cfg, req)
     exchange(req) => text_reply(cfg, req)
     exchange_bytes(req) => bytes_reply(cfg, req)
     exchange_stream(req) => stream_reply(cfg, req)
@@ -46,6 +47,47 @@ pub fn with_upstream[T](cfg: CurlConfig, body: fn() -> T !Upstream !UpstreamBatc
     }
   }
   body()
+}
+
+fn head_reply(cfg: CurlConfig, req: OutReq) -> Result[HeadResp, ForeignError] !io =
+  io.with_fs_real(() => io.with_proc_real(() => io.with_clock_real(() => {
+    let start = io.now()
+    let dir = io.temp_dir(cfg.temp_parent, "site-head-")?
+    bracket(dir, cleanup, d => {
+      let attempted: Result[Result[Result[HeadResp, ForeignError], ForeignError], ForeignError] = catch_panic(() => catch_fault(() => {
+        let status = perform(d, req, true, start)?
+        let raw = io.read_file(d ++ "/response-headers")?
+        let headers = final_head_headers(raw)?
+        Ok(HeadResp { status = status, headers = headers })
+      }))
+      match attempted {
+        Ok(Ok(r)) -> r
+        _ -> Err(fault("HostError", "metadata collection failed"))
+      }
+    })
+  })))
+
+# curl has already framed the exchange. Select its final response block and
+# retain duplicates; never join validators or inspect a response body.
+fn final_head_headers(raw: String) -> Result[List[(String, String)], ForeignError] = {
+  var headers: List[(String, String)] = []
+  var in_block = false
+  for raw_line in str.split(raw, "\n") {
+    let line = if str.ends_with(raw_line, "\r") { str.slice(raw_line, 0, len(raw_line) - 1) } else { raw_line }
+    if str.starts_with(line, "HTTP/") { headers = []
+      in_block = true
+    } else if line == "" { in_block = false
+    } else if in_block {
+      match str.split_once(line, ":") {
+        None -> return Err(fault("ResponseError", "invalid metadata header"))
+        Some((name, value)) -> {
+          if not valid_token(name) || not safe_value(value) { return Err(fault("ResponseError", "invalid metadata header")) }
+          headers = headers ++ [(str.to_lower(name), str.trim(value))]
+        }
+      }
+    }
+  }
+  Ok(headers)
 }
 
 fn text_reply(cfg: CurlConfig, req: OutReq) -> Result[HttpResp, ForeignError] !io = {
@@ -364,4 +406,10 @@ fn batch_item(item: BatchStaged, metadata: String) -> BatchReply !io.Fs = {
 fn bounded_text(path: String, limit: Int) -> Result[String, ForeignError] !io.Fs = {
   if io.file_size(path)? > limit { return Err(fault("ResponseError", "outbound text exceeds limit")) }
   Ok(bytes.decode_utf8_lossy(io.read_bytes(path)?))
+}
+
+test "metadata selects the final block and retains duplicate fields" {
+  let raw = "HTTP/1.1 103 Early Hints\r\nETag: \"hint\"\r\n\r\nHTTP/1.1 200 OK\r\nETag: W/\"final\"\r\nETag: \"duplicate\"\r\nContent-Length: 9\r\n\r\n"
+  assert final_head_headers(raw) == Ok([("etag", "W/\"final\""), ("etag", "\"duplicate\""), ("content-length", "9")])
+  assert final_head_headers("HTTP/1.1 200 OK\r\n folded: value\r\n\r\n") != Ok([])
 }

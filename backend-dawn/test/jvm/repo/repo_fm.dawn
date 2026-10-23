@@ -1,11 +1,32 @@
+use rep_support
 use db/jdbc.{DbConn, open, with_jdbc}
 use db/sql.{scalar_int}
 use site_core/util/errkind.{KConflict, KPrecondition, split_kind}
 fn fm_test_db() -> DbConn !io = {
   let c = open("jdbc:sqlite::memory:")
-  let _t = with_jdbc(c, () => exec("create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null)", []))
+  let _t = with_jdbc(c, () => exec("create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null, representation_kind text, representation_key text, representation_profile text, representation_etag text, representation_last_modified_s integer)", []))
   let _p = with_jdbc(c, () => exec("create table pending_uploads (key text primary key, path text not null, created_at text not null)", []))
   c
+}
+
+test "representation migration is additive and idempotent" {
+  let c = open("jdbc:sqlite::memory:")
+  assert with_jdbc(c, () => exec("create table files (id integer primary key,path text unique,is_dir integer,key text,content_type text,size integer,created_at text,updated_at text)", [])) == Ok(0)
+  let _ = with_jdbc(c, () => exec("insert into files values (1,'legacy',0,'legacy-key','text/plain',7,'created','updated')", []))
+  assert with_jdbc(c, () => check_representation_schema()) != Ok(())
+  assert with_jdbc(c, () => with_immediate_tx(ensure_representation_schema)) == Ok(())
+  assert with_jdbc(c, () => with_immediate_tx(ensure_representation_schema)) == Ok(())
+  assert with_jdbc(c, () => check_representation_schema()) == Ok(())
+  assert with_jdbc(c, () => scalar_int("select count(*) from files where size=7 and path='legacy' and key='legacy-key' and created_at='created' and updated_at='updated' and representation_kind is null", [])) == Ok(1)
+}
+
+test "representation mismatch rolls the file write back before publication" {
+  let c = fm_test_db()
+  assert with_jdbc(c, () => insert_file("a.txt", "old", "text/plain", 3, rep_support.publication("old", 3))) == Ok(1)
+  assert with_jdbc(c, () => insert_file("a.txt", "new", "text/plain", 4, rep_support.publication("other", 4))) != Ok(1)
+  assert with_jdbc(c, () => scalar_int("select count(*) from files where key='old' and size=3 and representation_key='old'", [])) == Ok(1)
+  assert with_jdbc(c, () => insert_file("a.txt", "new", "text/plain", 4, rep_support.publication("new", 5))) != Ok(1)
+  assert with_jdbc(c, () => scalar_int("select count(*) from files where key='old' and size=3 and representation_key='old'", [])) == Ok(1)
 }
 
 fn copied_test_tree(tree: CopyTree, prefix: String) -> CopyTree =
@@ -15,6 +36,7 @@ fn copied_test_tree(tree: CopyTree, prefix: String) -> CopyTree =
     rows = map(tree.rows, row => CopiedRow {
       source = row.source,
       copied_key = if row.source.is_dir { None } else { Some(prefix ++ "-" ++ row.source.path) },
+      representation = if row.source.is_dir { None } else { Some(rep_support.publication(prefix ++ "-" ++ row.source.path, row.source.size)) },
     }),
   }
 
@@ -32,7 +54,7 @@ test "insert_file_strict checks ancestors above an existing parent row" {
   let c = fm_test_db()
   let _f = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('blocked', 0, 'old-key', 'text/plain', 3, datetime('now'), datetime('now'))", []))
   let _d = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('blocked/legacy-dir', 1, null, '', 0, datetime('now'), datetime('now'))", []))
-  match with_jdbc(c, () => insert_file_strict("blocked/legacy-dir/child.txt", "new-key", "text/plain", 1)) {
+  match with_jdbc(c, () => insert_file_strict("blocked/legacy-dir/child.txt", "new-key", "text/plain", 1, rep_support.publication("new-key", 1))) {
     Ok(_) -> { assert false }
     Err(_) -> { assert true }
   }
@@ -42,7 +64,7 @@ test "insert_file_strict checks ancestors above an existing parent row" {
 test "insert_file rejects an existing directory target" {
   let c = fm_test_db()
   let _d = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('target-dir', 1, null, '', 0, datetime('now'), datetime('now'))", []))
-  match with_jdbc(c, () => insert_file("target-dir", "new-key", "text/plain", 3)) {
+  match with_jdbc(c, () => insert_file("target-dir", "new-key", "text/plain", 3, rep_support.publication("new-key", 3))) {
     Ok(_) -> { assert false }
     Err(_) -> { assert true }
   }
@@ -59,7 +81,7 @@ test "insert_file rejects an existing directory target" {
 test "replace_file returns the key superseded inside its transaction" {
   let c = fm_test_db()
   let _f = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('target.txt', 0, 'current-key', 'text/plain', 1, datetime('now'), datetime('now'))", []))
-  match with_jdbc(c, () => replace_file("target.txt", "new-key", "text/plain", 2)) {
+  match with_jdbc(c, () => replace_file("target.txt", "new-key", "text/plain", 2, rep_support.publication("new-key", 2))) {
     Ok(outcome) -> {
       assert outcome.target_existed
       assert outcome.superseded_key == Some("current-key")
@@ -73,7 +95,7 @@ test "replace_file returns the key superseded inside its transaction" {
 
   let _s = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('stale.txt', 0, 'moved-key', 'text/plain', 3, datetime('now'), datetime('now'))", []))
   let _m = with_jdbc(c, () => exec("update files set path = 'moved.txt' where path = 'stale.txt'", []))
-  match with_jdbc(c, () => replace_file("stale.txt", "replacement-key", "text/plain", 4)) {
+  match with_jdbc(c, () => replace_file("stale.txt", "replacement-key", "text/plain", 4, rep_support.publication("replacement-key", 4))) {
     Ok(outcome) -> {
       assert not outcome.target_existed
       assert outcome.superseded_key == None
@@ -96,7 +118,7 @@ test "replace_file returns the key superseded inside its transaction" {
 test "the upload receipt is read inside the transaction that wrote it" {
   let c = fm_test_db()
   let _f = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('receipt.txt', 0, 'old-key', 'text/plain', 1, datetime('now'), datetime('now'))", []))
-  match with_jdbc(c, () => replace_file_receipt("receipt.txt", "receipt-key", "image/png", 42)) {
+  match with_jdbc(c, () => replace_file_receipt("receipt.txt", "receipt-key", "image/png", 42, rep_support.publication("receipt-key", 42))) {
     Ok(written) -> {
       let (row, outcome) = written
       assert row.path == "receipt.txt"
@@ -111,7 +133,7 @@ test "the upload receipt is read inside the transaction that wrote it" {
   }
   # ancestors are backfilled by the same transaction, and the receipt is the
   # file's own row rather than anything the backfill created
-  match with_jdbc(c, () => replace_file_receipt("deep/dir/new.bin", "deep-key", "application/octet-stream", 7)) {
+  match with_jdbc(c, () => replace_file_receipt("deep/dir/new.bin", "deep-key", "application/octet-stream", 7, rep_support.publication("deep-key", 7))) {
     Ok(written) -> {
       let (row, outcome) = written
       assert row.path == "deep/dir/new.bin"
@@ -138,7 +160,7 @@ test "replace_file_strict returns its actual superseded key" {
   let c = fm_test_db()
   let _d = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('parent', 1, null, '', 0, datetime('now'), datetime('now'))", []))
   let _f = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('parent/file.txt', 0, 'strict-old-key', 'text/plain', 1, datetime('now'), datetime('now'))", []))
-  match with_jdbc(c, () => replace_file_strict("parent/file.txt", "strict-new-key", "text/plain", 2)) {
+  match with_jdbc(c, () => replace_file_strict("parent/file.txt", "strict-new-key", "text/plain", 2, rep_support.publication("strict-new-key", 2))) {
     Ok(outcome) -> {
       assert outcome.target_existed
       assert outcome.superseded_key == Some("strict-old-key")
@@ -149,7 +171,7 @@ test "replace_file_strict returns its actual superseded key" {
     Ok(Some(o)) -> { assert o.key == Some("strict-new-key") }
     _ -> { assert false }
   }
-  match with_jdbc(c, () => replace_file_strict("parent/new.txt", "strict-created-key", "text/plain", 3)) {
+  match with_jdbc(c, () => replace_file_strict("parent/new.txt", "strict-created-key", "text/plain", 3, rep_support.publication("strict-created-key", 3))) {
     Ok(outcome) -> {
       assert not outcome.target_existed
       assert outcome.superseded_key == None
@@ -162,7 +184,7 @@ test "key_referenced preserves legacy shared objects" {
   let c = fm_test_db()
   let _a = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('a.txt', 0, 'shared-key', 'text/plain', 1, datetime('now'), datetime('now'))", []))
   let _b = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('b.txt', 0, 'shared-key', 'text/plain', 1, datetime('now'), datetime('now'))", []))
-  match with_jdbc(c, () => replace_file("a.txt", "fresh-key", "text/plain", 2)) {
+  match with_jdbc(c, () => replace_file("a.txt", "fresh-key", "text/plain", 2, rep_support.publication("fresh-key", 2))) {
     Ok(outcome) -> { assert outcome.superseded_key == Some("shared-key") }
     Err(_) -> { assert false }
   }
@@ -173,7 +195,7 @@ test "key_referenced preserves legacy shared objects" {
 test "create_file_once never overwrites a concurrent file" {
   let c = fm_test_db()
   let _f = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('race.txt', 0, 'saved-key', 'text/plain', 7, datetime('now'), datetime('now'))", []))
-  match with_jdbc(c, () => create_file_once("race.txt", "empty-key", "text/plain", 0)) {
+  match with_jdbc(c, () => create_file_once("race.txt", "empty-key", "text/plain", 0, rep_support.publication("empty-key", 0))) {
     Ok(_) -> { assert false }
     Err(_) -> { assert true }
   }
@@ -190,7 +212,7 @@ test "finalize_register atomically validates and consumes its ledger claim" {
   let c = fm_test_db()
   let _o = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('target.txt', 0, 'old-key', 'text/plain', 1, datetime('now'), datetime('now'))", []))
   let _l = with_jdbc(c, () => ledger_insert("registered-key", "qiniu://target.txt"))
-  match with_jdbc(c, () => finalize_register("target.txt", "registered-key", "text/plain", 9)) {
+  match with_jdbc(c, () => finalize_register("target.txt", "registered-key", "text/plain", 9, rep_support.publication("registered-key", 9))) {
     Ok(result) -> {
       let (row, outcome) = result
       assert row.key == Some("registered-key")
@@ -201,7 +223,7 @@ test "finalize_register atomically validates and consumes its ledger claim" {
     Err(_) -> { assert false }
   }
   assert with_jdbc(c, () => scalar_int("select count(*) from pending_uploads", [])) == Ok(0)
-  match with_jdbc(c, () => finalize_register("target.txt", "registered-key", "text/plain", 9)) {
+  match with_jdbc(c, () => finalize_register("target.txt", "registered-key", "text/plain", 9, rep_support.publication("registered-key", 9))) {
     Ok(_) -> { assert false }
     Err(_) -> { assert true }
   }
@@ -214,7 +236,7 @@ test "finalize_register atomically validates and consumes its ledger claim" {
 test "finalize_register rejects path mismatch and duplicate key ownership" {
   let c = fm_test_db()
   let _m = with_jdbc(c, () => ledger_insert("mismatch-key", "qiniu://expected.txt"))
-  match with_jdbc(c, () => finalize_register("other.txt", "mismatch-key", "text/plain", 1)) {
+  match with_jdbc(c, () => finalize_register("other.txt", "mismatch-key", "text/plain", 1, rep_support.publication("mismatch-key", 1))) {
     Ok(_) -> { assert false }
     Err(_) -> { assert true }
   }
@@ -223,7 +245,7 @@ test "finalize_register rejects path mismatch and duplicate key ownership" {
 
   let _f = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('owner.txt', 0, 'shared-key', 'text/plain', 1, datetime('now'), datetime('now'))", []))
   let _l = with_jdbc(c, () => ledger_insert("shared-key", "qiniu://second.txt"))
-  match with_jdbc(c, () => finalize_register("second.txt", "shared-key", "text/plain", 1)) {
+  match with_jdbc(c, () => finalize_register("second.txt", "shared-key", "text/plain", 1, rep_support.publication("shared-key", 1))) {
     Ok(_) -> { assert false }
     Err(_) -> { assert true }
   }
@@ -317,7 +339,7 @@ test "FM delete skips an absent root without deleting its descendants" {
 
 test "FM inserts atomically create missing ancestors" {
   let c = fm_test_db()
-  assert with_jdbc(c, () => insert_file("one/two/file.txt", "new-key", "text/plain", 1)) == Ok(1)
+  assert with_jdbc(c, () => insert_file("one/two/file.txt", "new-key", "text/plain", 1, rep_support.publication("new-key", 1))) == Ok(1)
   assert with_jdbc(c, () => insert_folder("three/four/folder")) == Ok(1)
   assert with_jdbc(c, () => scalar_int("select count(*) from files where is_dir = 1", [])) == Ok(5)
   assert with_jdbc(c, () => scalar_int("select count(*) from files where is_dir = 0", [])) == Ok(1)
@@ -327,7 +349,7 @@ test "FM inserts roll back auto-created ancestors when the final write fails" {
   let c = fm_test_db()
   let _tf = with_jdbc(c, () => exec("create trigger reject_file before insert on files when new.path = 'file/a/final.txt' begin select raise(abort, 'reject file'); end", []))
   let _td = with_jdbc(c, () => exec("create trigger reject_folder before insert on files when new.path = 'folder/a/final' begin select raise(abort, 'reject folder'); end", []))
-  match with_jdbc(c, () => insert_file("file/a/final.txt", "new-key", "text/plain", 1)) {
+  match with_jdbc(c, () => insert_file("file/a/final.txt", "new-key", "text/plain", 1, rep_support.publication("new-key", 1))) {
     Ok(_) -> { assert false }
     Err(_) -> { assert true }
   }
@@ -340,7 +362,7 @@ test "FM inserts roll back auto-created ancestors when the final write fails" {
 
 test "WebDAV strict inserts reject missing ancestors without backfill" {
   let c = fm_test_db()
-  match with_jdbc(c, () => insert_file_strict("missing/child.txt", "new-key", "text/plain", 1)) {
+  match with_jdbc(c, () => insert_file_strict("missing/child.txt", "new-key", "text/plain", 1, rep_support.publication("new-key", 1))) {
     Ok(_) -> { assert false }
     Err(_) -> { assert true }
   }
@@ -479,7 +501,7 @@ test "insert_file fails closed when an ignored upsert removes its target" {
   let c = fm_test_db()
   let _f = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('vanish.txt', 0, 'old-key', 'text/plain', 1, datetime('now'), datetime('now'))", []))
   let _t = with_jdbc(c, () => exec("create trigger vanish_target before update on files when old.path = 'vanish.txt' begin delete from files where path = old.path; select raise(ignore); end", []))
-  match with_jdbc(c, () => insert_file("vanish.txt", "new-key", "text/plain", 2)) {
+  match with_jdbc(c, () => insert_file("vanish.txt", "new-key", "text/plain", 2, rep_support.publication("new-key", 2))) {
     Ok(_) -> { assert false }
     Err(_) -> { assert true }
   }
@@ -510,7 +532,7 @@ test "copy commits reject a vanished source snapshot" {
       let copied = CopyTree {
         source_root = plan.source_root,
         destination_root = plan.destination_root,
-        rows = map(plan.rows, row => CopiedRow { source = row.source, copied_key = Some("fm-copy-key") }),
+        rows = map(plan.rows, row => CopiedRow { source = row.source, copied_key = Some("fm-copy-key"), representation = Some(rep_support.publication("fm-copy-key", row.source.size)) }),
       }
       let _d = with_jdbc(c, () => delete_row("fm-source.txt"))
       match with_jdbc(c, () => commit_fm_copies([copied])) {
@@ -529,7 +551,7 @@ test "copy commits reject a vanished source snapshot" {
       let copied = CopyTree {
         source_root = plan.source_root,
         destination_root = plan.destination_root,
-        rows = map(plan.rows, row => CopiedRow { source = row.source, copied_key = Some("dav-copy-key") }),
+        rows = map(plan.rows, row => CopiedRow { source = row.source, copied_key = Some("dav-copy-key"), representation = Some(rep_support.publication("dav-copy-key", row.source.size)) }),
       }
       let _d = with_jdbc(c, () => delete_row("dav-source.txt"))
       match with_jdbc(c, () => commit_webdav_copy(copied, false)) {
@@ -550,7 +572,7 @@ test "copy commits revalidate every mapped target" {
       let copied = CopyTree {
         source_root = plan.source_root,
         destination_root = plan.destination_root,
-        rows = map(plan.rows, row => CopiedRow { source = row.source, copied_key = Some("fm-copy-key") }),
+        rows = map(plan.rows, row => CopiedRow { source = row.source, copied_key = Some("fm-copy-key"), representation = Some(rep_support.publication("fm-copy-key", row.source.size)) }),
       }
       let _t = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('fm-target.txt', 0, 'fm-collision-key', 'text/plain', 2, datetime('now'), datetime('now'))", []))
       match with_jdbc(c, () => commit_fm_copies([copied])) {
@@ -572,7 +594,7 @@ test "copy commits revalidate every mapped target" {
       let copied = CopyTree {
         source_root = plan.source_root,
         destination_root = plan.destination_root,
-        rows = map(plan.rows, row => CopiedRow { source = row.source, copied_key = Some("dav-copy-key") }),
+        rows = map(plan.rows, row => CopiedRow { source = row.source, copied_key = Some("dav-copy-key"), representation = Some(rep_support.publication("dav-copy-key", row.source.size)) }),
       }
       let _t = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-parent/target.txt', 0, 'dav-collision-key', 'text/plain', 2, datetime('now'), datetime('now'))", []))
       match with_jdbc(c, () => commit_webdav_copy(copied, false)) {
@@ -837,7 +859,7 @@ test "copy commits reject malformed source object rows" {
       let plan = CopyTree {
         source_root = "keyless.txt",
         destination_root = "keyless-copy.txt",
-        rows = [CopiedRow { source = source, copied_key = None }],
+        rows = [CopiedRow { source = source, copied_key = None, representation = None }],
       }
       match with_jdbc(c, () => commit_fm_copies([plan])) {
         Ok(_) -> { assert false }
@@ -854,7 +876,7 @@ test "copy commits reject malformed source object rows" {
       let plan = CopyTree {
         source_root = "blank-key.txt",
         destination_root = "blank-key-copy.txt",
-        rows = [CopiedRow { source = source, copied_key = Some("blank-final-copy-key") }],
+        rows = [CopiedRow { source = source, copied_key = Some("blank-final-copy-key"), representation = Some(rep_support.publication("blank-final-copy-key", source.size)) }],
       }
       match with_jdbc(c, () => commit_fm_copies([plan])) {
         Ok(_) -> { assert false }
@@ -872,7 +894,7 @@ test "copy commits reject malformed source object rows" {
       let plan = CopyTree {
         source_root = "keyed-dir",
         destination_root = "dav-parent/keyed-dir",
-        rows = [CopiedRow { source = source, copied_key = None }],
+        rows = [CopiedRow { source = source, copied_key = None, representation = None }],
       }
       match with_jdbc(c, () => commit_webdav_copy(plan, false)) {
         Ok(_) -> { assert false }
@@ -924,7 +946,7 @@ test "copy, move, and rename commits reject unmapped destination descendants" {
       let plan = CopyTree {
         source_root = "fm-copy-source.txt",
         destination_root = "fm-copy-target",
-        rows = [CopiedRow { source = source, copied_key = Some("fm-copied-key") }],
+        rows = [CopiedRow { source = source, copied_key = Some("fm-copied-key"), representation = Some(rep_support.publication("fm-copied-key", source.size)) }],
       }
       match with_jdbc(fm_copy, () => commit_fm_copies([plan])) {
         Ok(_) -> { assert false }
@@ -944,7 +966,7 @@ test "copy, move, and rename commits reject unmapped destination descendants" {
       let plan = CopyTree {
         source_root = "dav-copy-source.txt",
         destination_root = "dav-copy-parent/target",
-        rows = [CopiedRow { source = source, copied_key = Some("dav-copied-key") }],
+        rows = [CopiedRow { source = source, copied_key = Some("dav-copied-key"), representation = Some(rep_support.publication("dav-copied-key", source.size)) }],
       }
       match with_jdbc(dav_copy, () => commit_webdav_copy(plan, false)) {
         Ok(_) -> { assert false }
@@ -1022,7 +1044,7 @@ test "overwriting a file's bytes still advances updated_at" {
   # read as a fix for the three assertions above.
   let c = fm_test_db()
   let _f = stale_file(c, "a.txt", "overwrite-stamp-old-key")
-  match with_jdbc(c, () => replace_file_strict("a.txt", "overwrite-stamp-new-key", "text/plain", 9)) {
+  match with_jdbc(c, () => replace_file_strict("a.txt", "overwrite-stamp-new-key", "text/plain", 9, rep_support.publication("overwrite-stamp-new-key", 9))) {
     Ok(outcome) -> { assert outcome.target_existed }
     Err(e) -> panic(e)
   }

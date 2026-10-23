@@ -1,0 +1,58 @@
+use util/time.{http_date}
+
+fn example_head(size: String, tag: String, date: String) -> HeadResp = HeadResp { status = 200,
+  headers = [("etag", tag), ("last-modified", date), ("content-length", size)] }
+
+test "download metadata is exact, bounded and independent of stat" {
+  let date = "Thu, 01 Jan 2026 00:00:00 GMT"
+  let h = example_head("9", "W/\"entity<&>\"", date)
+  match from_head(h, "opaque-key", 9, "profile", 1800000000) {
+    Ok(v) -> {
+      assert fields(v).etag == "W/\"entity<&>\""
+      assert http_date(fields(v).last_modified_s) == date
+      assert fields(v).size == 9
+      assert validate(v, "other", 9) != Ok(())
+      assert validate(v, "opaque-key", 8) != Ok(())
+    }
+    Err(_) -> { assert false }
+  }
+  for bad in ["", "-1", "1.0", "9223372036854775808", " 9", "9, 9"] {
+    assert from_head(example_head(bad, "\"entity\"", date), "key", 9, "profile", 1800000000) != from_head(h, "key", 9, "profile", 1800000000)
+  }
+  assert from_head(h, "key", 8, "profile", 1800000000) != from_head(h, "key", 9, "profile", 1800000000)
+  for headers in [h.headers ++ [("ETag", "\"second\"")],
+      h.headers ++ [("content-encoding", "gzip")],
+      h.headers ++ [("content-length", "9")],
+      h.headers ++ [("last-modified", date)]] {
+    match from_head(HeadResp { status = 200, headers = headers }, "key", 9, "profile", 1800000000) {
+      Err(_) -> { assert true }
+      Ok(_) -> { assert false }
+    }
+  }
+  for status in [103, 204, 206, 302, 401, 504] {
+    match from_head(HeadResp { status = status, headers = h.headers }, "key", 9, "profile", 1800000000) {
+      Err(_) -> { assert true }
+      Ok(_) -> { assert false }
+    }
+  }
+}
+
+test "only authoritative zero publishes the local empty representation" {
+  let h = example_head("0", "\"remote-empty\"", "Thu, 01 Jan 2026 00:00:00 GMT")
+  match from_head(h, "key", 0, "profile", 1800000000) {
+    Ok(v) -> {
+      assert fields(v).kind == "local-empty-v1"
+      assert fields(v).etag == EMPTY_ETAG
+      assert fields(v).last_modified_s == 1800000000
+      assert parse(stored(v), Some("key"), 0, "profile") == LocalEmpty(v)
+      assert parse(stored(v), Some("key"), -1, "profile") == Missing
+      assert parse(stored(v), Some("key"), 0, "other") == Missing
+    }
+    Err(_) -> { assert false }
+  }
+  assert stat_size("{\"fsize\":0}", None) == Ok(0)
+  for body in ["{}", "{\"fsize\":-1}", "{\"fsize\":0.5}", "{\"fsize\":\"0\"}"] {
+    match stat_size(body, None) { Err(_) -> { assert true }
+      Ok(_) -> { assert false } }
+  }
+}

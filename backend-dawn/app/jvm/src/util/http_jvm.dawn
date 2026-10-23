@@ -1,5 +1,5 @@
 # JVM owner of the process HTTP client, publishers, futures and raw streams.
-use site_core/util/http.{HttpResp, BytesResp, StreamResp, OutReq, OutBody, NoBody, TextBody, RawBody, FileBody, RequestBody, Upstream, Pending, pending, response_stream, request_parts}
+use site_core/util/http.{HeadResp, HttpResp, BytesResp, StreamResp, OutReq, OutBody, NoBody, TextBody, RawBody, FileBody, RequestBody, Upstream, Pending, pending, response_stream, request_parts}
 use site_core/util/http_batch.{UpstreamBatch, BatchReq, BatchReply, unique_ids, failed, batch_fault}
 use std/io
 use site_core/util/clock.{system_now}
@@ -59,6 +59,7 @@ fn client_of(cell: HttpCell) -> HttpClient = cell
 pub fn with_upstream[T](cl: HttpCell, body: fn() -> T !Upstream !UpstreamBatch !io) -> T !io = {
   with handle UpstreamBatch { exchange_batch(requests) => wire_batch(cl, requests) }
   with handle Upstream {
+    exchange_head(req) => wire_head(cl, req)
     exchange(req) => wire_exchange(cl, req)
     exchange_bytes(req) => wire_exchange_bytes(cl, req)
     exchange_stream(req) => wire_exchange_stream(cl, req)
@@ -66,6 +67,24 @@ pub fn with_upstream[T](cl: HttpCell, body: fn() -> T !Upstream !UpstreamBatch !
   }
   body()
 }
+
+fn wire_head(cl: HttpCell, req: OutReq) -> Result[HeadResp, ForeignError] !io =
+  flatten_fault(catch_fault(() => {
+    let built = request_for(req)?
+    let resp = client_of(cl).send(built, BodyHandlers.discarding()!)!
+    var headers: List[(String, String)] = []
+    var total = 0
+    for name in ["etag", "last-modified", "content-length", "content-encoding", "transfer-encoding", "vary"] {
+      let values = resp.headers()!.allValues(name)!
+      for i in range(0, values.size()) {
+        let value = String.valueOf(values.get(i)!)!
+        total = total + len(name) + len(value)
+        if total > 262144 { return Err(ForeignError { kind = "site.head.Invalid", message = "metadata headers exceed limit", cause = None }) }
+        headers = headers ++ [(name, value)]
+      }
+    }
+    Ok(HeadResp { status = resp.statusCode(), headers = headers })
+  }))
 
 # ---- the arms that do reach a peer ----
 

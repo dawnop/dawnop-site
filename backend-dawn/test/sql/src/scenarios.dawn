@@ -14,6 +14,8 @@ use site_core/repo/repo_write.{NewArticle, ArticlePatch}
 use site_core/repo/repo_fm
 use site_core/repo/repo_drop
 use site_core/repo/repo_paste
+use site_core/util/representation as representation
+use site_core/util/http.{HeadResp}
 use site_core/svc/export
 
 pub fn demand[T](r: Result[T, String]) -> T = match r { Ok(v) -> v
@@ -147,8 +149,9 @@ fn business_suite() -> Result[Unit, String] !Db !io = {
   check(not repo_write.article_exists(aid)?, "article-delete")
   check(repo_settings.put_one("upload_concurrency", 3)?, "settings-upsert")
   emit("upsert", to_string(repo_settings.setting_int("upload_concurrency", 0)?))
+  repo_fm.ensure_representation_schema()?
   let _ = repo_fm.insert_folder_strict("s4-folder")?
-  let _ = repo_fm.insert_file_strict("s4-folder/a.txt", "s4-key", "text/plain", 12)?
+  let _ = repo_fm.insert_file_strict("s4-folder/a.txt", "s4-key", "text/plain", 12, representation.from_head(HeadResp { status = 200, headers = [("etag", "\"s4-entity\""), ("last-modified", "Thu, 01 Jan 2026 00:00:00 GMT"), ("content-length", "12")] }, "s4-key", 12, "fixture-profile", 1800000000)?)?
   check(repo_fm.taken("s4-folder/a.txt")?, "file-insert")
   check(repo_fm.key_referenced("s4-key")?, "file-key")
   emit("file-stats", to_string(repo_fm.stats_db()?))

@@ -51,15 +51,23 @@ Standalone (the harness starts it in-process instead):
 """
 
 import argparse
+import atexit
 import base64
+import functools
 import hashlib
 import hmac
 import json
+import os
 import re
+import socket
+import ssl
+import subprocess
+import tempfile
 import threading
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import contract_fixture
 
@@ -72,6 +80,64 @@ FAKE_BUCKET = "contract-fake-bucket"
 
 # The multipart boundary qiniu_rs.dawn frames its upload bodies with.
 BOUNDARY = "----DawnFmBoundary7MA4YWxkTrZu0gW"
+
+
+@functools.lru_cache(maxsize=1)
+def tls_material():
+    work = tempfile.TemporaryDirectory(prefix="site-fake-tls-")
+    atexit.register(work.cleanup)
+    root = Path(work.name)
+    cert, key, trust = root / "cert.pem", root / "key.pem", root / "truststore"
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=localhost",
+            "-addext",
+            "subjectAltName=IP:127.0.0.1,DNS:localhost",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    os.chmod(key, 0o600)
+    subprocess.run(
+        [
+            "keytool",
+            "-importcert",
+            "-noprompt",
+            "-alias",
+            "isolated",
+            "-file",
+            str(cert),
+            "-keystore",
+            str(trust),
+            "-storepass",
+            "changeit",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return cert, key, trust
+
+
+def tls_environment():
+    cert, _, trust = tls_material()
+    return {
+        "CURL_CA_BUNDLE": str(cert),
+        "SSL_CERT_FILE": str(cert),
+        "JAVA_TOOL_OPTIONS": f"-Djavax.net.ssl.trustStore={trust} -Djavax.net.ssl.trustStorePassword=changeit",
+    }
 
 
 def _sign(payload: str) -> str:
@@ -249,7 +315,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._upload(body)
         if segs[0] == "delete" and len(segs) == 2:
             return self._delete(segs[1])
-        if segs[0] == "copy" and len(segs) == 5 and segs[3:] == ["force", "true"]:
+        if segs[0] == "copy" and len(segs) == 5 and segs[3:] == ["force", "false"]:
             return self._copy(segs[1], segs[2])
         return self._qiniu_error(404, "no such route")
 
@@ -271,7 +337,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(
             200,
             {
-                "fsize": len(obj["content"]),
+                "fsize": obj.get("stat_size", len(obj["content"])),
                 "hash": hashlib.sha1(obj["content"]).hexdigest(),
                 "mimeType": obj["mime"],
                 "putTime": 17600000000000000,
@@ -293,7 +359,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, b"")
 
     def _copy(self, src_enc: str, dst_enc: str):
-        if not self._check_qbox(f"/copy/{src_enc}/{dst_enc}/force/true\n"):
+        if not self._check_qbox(f"/copy/{src_enc}/{dst_enc}/force/false\n"):
             return self._qiniu_error(401, "bad token")
         _sb, src = _entry(src_enc)
         _db, dst = _entry(dst_enc)
@@ -303,7 +369,10 @@ class Handler(BaseHTTPRequestHandler):
         self.bucket.log(op="copy", src=src, dst=dst, found=obj is not None)
         if obj is None:
             return self._qiniu_error(612, "no such file or directory")
+        if dst in self.bucket.objects:
+            return self._qiniu_error(614, "file exists")
         self.bucket.objects[dst] = dict(obj)
+        self.bucket.objects[dst]["last_modified"] = "Thu, 01 Jan 2026 00:00:01 GMT"
         return self._send(200, b"")
 
     # -- qiniu: upload --------------------------------------------------------
@@ -347,7 +416,7 @@ class Handler(BaseHTTPRequestHandler):
         # The signed string is the whole URL up to and including ?e=<deadline>,
         # which is why the fake has to know the base the backend was configured
         # with: a mismatch here means the download URL was assembled wrong.
-        signed = f"{self.bucket.public_base}/{key}?e={deadline}"
+        signed = f"{self.bucket.public_base}{self.path.partition('?')[0]}?e={deadline}"
         if token != f"{FAKE_AK}:{_sign(signed)}":
             self.bucket.log(op="download", key=key, outcome="bad-signature")
             return self._qiniu_error(401, "bad token")
@@ -356,17 +425,33 @@ class Handler(BaseHTTPRequestHandler):
             self.bucket.log(op="download", key=key, outcome="missing")
             return self._qiniu_error(612, "no such file or directory")
         content = obj["content"]
+        metadata = {
+            "ETag": obj.get(
+                "etag", '"download-' + hashlib.sha256(content).hexdigest() + '"'
+            ),
+            "Last-Modified": obj.get("last_modified", "Thu, 01 Jan 2026 00:00:00 GMT"),
+        }
+        if self.command == "HEAD":
+            self.bucket.log(op="head", key=key, outcome="full")
+            self.bucket.stall_if_armed("head")
+            if self._refused("head", key=key):
+                return None
+            return self._send(
+                200, content, obj["mime"] or "application/octet-stream", metadata
+            )
         rng = _range(self.headers.get("Range", ""), len(content))
         if rng is None:
             self.bucket.log(op="download", key=key, outcome="full")
-            return self._send(200, content, obj["mime"] or "application/octet-stream")
+            return self._send(
+                200, content, obj["mime"] or "application/octet-stream", metadata
+            )
         start, end = rng
         self.bucket.log(op="download", key=key, outcome=f"range {start}-{end}")
         return self._send(
             206,
             content[start : end + 1],
             obj["mime"] or "application/octet-stream",
-            {"Content-Range": f"bytes {start}-{end}/{len(content)}"},
+            {**metadata, "Content-Range": f"bytes {start}-{end}/{len(content)}"},
         )
 
     # -- control plane --------------------------------------------------------
@@ -497,9 +582,21 @@ def _range(header: str, total: int):
 
 def serve(port: int) -> ThreadingHTTPServer:
     """Start the fake on `port` in a daemon thread; returns the server."""
-    base = f"http://127.0.0.1:{port}"
+    base = f"https://127.0.0.1:{port}"
     handler = type("BoundHandler", (Handler,), {"bucket": Bucket(base)})
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    cert, key, _ = tls_material()
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+
+    class IsolatedServer(ThreadingHTTPServer):
+        def get_request(self):
+            connection, address = super().get_request()
+            connection.settimeout(15)
+            if connection.recv(1, socket.MSG_PEEK) == b"\x16":
+                connection = context.wrap_socket(connection, server_side=True)
+            return connection, address
+
+    httpd = IsolatedServer(("127.0.0.1", port), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd
 

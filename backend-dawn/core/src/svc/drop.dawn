@@ -34,6 +34,7 @@ use db/sql.{Db, with_immediate_tx}
 use db/runtime.{with_db}
 use svc/auth.{Auth}
 use svc/files.{gc_unreferenced}
+use util/representation.{Published, collect, stat_size}
 use repo/repo_drop.{DropRow, DropPending, insert_drop, drop_by_hash, drop_by_id, list_drops, revoke_drop, delete_drop, dir_present, rel_free, reserve_key, pending_for, release_key, insert_drop_file, charge}
 use repo/repo_fm.{key_referenced}
 use util/paths.{fm_join, basename, ext, key_ext_ok, guess_mime, safe_persisted_mime, name_verdict, NameAccepted, NameAllBlank, NameEdgeBlank, NameDotSegment}
@@ -414,7 +415,7 @@ pub fn register_direct(a: Auth, token: String, key: String) -> Result[(String, I
       } else if r.status != 200 {
         Err(Failed(upstream("七牛 stat 返回 ${to_string(r.status)}")))
       } else {
-        let size = stat_int(r.body, "fsize")
+        let size = db(stat_size(r.body, None))?
         let mime = safe_persisted_mime(nonblank_or(stat_str(r.body, "mimeType"), guess_mime(p.rel)))
         commit(a, d.id, basename(p.rel), key, Some(p), mime, size)
       }
@@ -505,7 +506,14 @@ pub fn put_file(a: Auth, token: String, name: String, declared: Option[Int], bod
 # unreserved one is collected.
 fn commit(a: Auth, drop_id: Int, name: String, key: String, reserved: Option[DropPending], mime: String, size: Int) -> Result[(String, Int), DropErr] !io.Clock !Upstream !io = {
   let now = now_s()
-  let out = with_db(a.db, () => settle(with_immediate_tx(() => commit_tx(drop_id, name, key, reserved, mime, size, now))))
+  let representation = match collect(a.qiniu, key, size) {
+    Ok(v) -> v
+    Err(m) -> {
+      if reserved == None { gc_unreferenced(a, Some(key)) }
+      return Err(Failed(m))
+    }
+  }
+  let out = with_db(a.db, () => settle(with_immediate_tx(() => commit_tx(drop_id, name, key, reserved, mime, size, now, representation))))
   match out {
     Ok(v) -> Ok(v)
     Err(Refused(r)) -> {
@@ -526,7 +534,7 @@ fn commit(a: Auth, drop_id: Int, name: String, key: String, reserved: Option[Dro
 ## quota with the real size, pick a free name, insert the row, consume the
 ## reservation, charge the quota. Every check comes before the first write, so a
 ## refusal commits an empty transaction.
-fn commit_tx(drop_id: Int, name: String, key: String, reserved: Option[DropPending], mime: String, size: Int, now: Int) -> Result[Result[(String, Int), Refusal], String] !Db !io =
+fn commit_tx(drop_id: Int, name: String, key: String, reserved: Option[DropPending], mime: String, size: Int, now: Int, representation: Published) -> Result[Result[(String, Int), Refusal], String] !Db !io =
   match drop_by_id(drop_id)? {
     None -> Ok(Err(Gone("上传链接已被删除")))
     Some(d) -> {
@@ -554,7 +562,7 @@ fn commit_tx(drop_id: Int, name: String, key: String, reserved: Option[DropPendi
                   Err(r) -> Ok(Err(r))
                   Ok(pair) -> {
                     let (rel, chosen) = pair
-                    let _i = insert_drop_file(rel, key, mime, size)?
+                    let _i = insert_drop_file(rel, key, mime, size, representation)?
                     let _r = consume(key, d.id, reserved)?
                     let _q = charge(d.id, size)?
                     Ok(Ok((chosen, size)))

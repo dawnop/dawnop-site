@@ -120,7 +120,7 @@ fn writer_free(probe: DbConn) -> Bool !io =
   }
 
 fn gc_tables(c: DbConn) -> Unit !io = {
-  let _f = with_jdbc(c, () => exec("create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null)", []))
+  let _f = with_jdbc(c, () => exec("create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null, representation_kind text, representation_key text, representation_profile text, representation_etag text, representation_last_modified_s integer)", []))
   let _p = with_jdbc(c, () => exec("create table pending_uploads (key text primary key, path text not null, created_at text not null)", []))
   ()
 }
@@ -136,6 +136,7 @@ test "gc's write transaction spans one outbound call, on the management budget" 
   let t0 = system_now()
   let outcome = {
     with handle Upstream {
+    exchange_head(req) => Err(ForeignError { kind = "test.unexpected_head", message = "unexpected metadata request", cause = None })
       exchange(req) => {
         # what a hung rs endpoint looks like from inside the transaction
         gc_log_add(seen, "${req.method} budget=${to_string(req.budget_s)}")
@@ -178,6 +179,7 @@ test "a delete that times out leaves the writer free, it does not wedge the site
   let t0 = system_now()
   let outcome = {
     with handle Upstream {
+    exchange_head(req) => Err(ForeignError { kind = "test.unexpected_head", message = "unexpected metadata request", cause = None })
       exchange(req) => Err(ForeignError {
         kind = "java.net.http.HttpTimeoutException",
         message = "request timed out",

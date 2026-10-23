@@ -26,6 +26,7 @@ test "native outbound bodies contain bytes and file positions without JVM values
 
 test "native callers use the same effect budgets and Pending thunk" {
   with handle Upstream {
+    exchange_head(req) => Err(ForeignError { kind = "test.unexpected_head", message = "unexpected metadata request", cause = None })
     exchange(req) => {
       let budget = match req.body { TextBody(_) -> 10
         NoBody -> 10

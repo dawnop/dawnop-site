@@ -89,11 +89,12 @@ def env_file(
         "STORAGE_QUOTA_GB=10",
     ]
     if fake_qiniu:
+        os.environ.update(contract_qiniu_fake.tls_environment())
         lines += [
             f"QINIU_ACCESS_KEY={contract_qiniu_fake.FAKE_AK}",
             f"QINIU_SECRET_KEY={contract_qiniu_fake.FAKE_SK}",
             f"QINIU_BUCKET={contract_qiniu_fake.FAKE_BUCKET}",
-            f"QINIU_DOMAIN={fake_qiniu}",
+            f"QINIU_DOMAIN={fake_qiniu.replace('http://', 'https://')}",
             f"QINIU_RS_HOST={fake_qiniu}",
             f"QINIU_UP_HOST={fake_qiniu}",
         ]

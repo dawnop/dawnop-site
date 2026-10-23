@@ -41,18 +41,27 @@ fn valid_access_key(key: String) -> Bool = {
 # literal key bytes, never instructions for a second URI decoder.
 pub fn handoff(q: Qiniu, origin: String, method: String, key: String, mime: String) -> Result[Response, HttpError] !io = {
   if method != "GET" && method != "HEAD" { return Err(http_error(405, "method not allowed")) }
-  if not valid_origin(origin) || strip_trailing_slash(q.domain) != strip_trailing_slash(origin) ||
-    not valid_access_key(q.ak) || q.sk == "" || not valid_key(key) {
-    return Err(http_error(502, "download handoff configuration or key invalid"))
+  let signed = match download_url(q, origin, key) {
+    Ok(url) -> url
+    Err(_) -> return Err(http_error(502, "download handoff configuration or key invalid"))
   }
-  let path = "/" ++ join(map(str.split(key, "/"), pct_encode), "/")
   let base = strip_trailing_slash(origin)
-  let signed = private_url(q, base ++ path, now_s() + q.expires)
   let target = str.slice(signed, len(base), len(signed))
   # No body and no application length/validator. The final entity owns those.
   Ok(with_header(with_header(with_header(raw(200, "", ""),
     "X-Accel-Redirect", "/_dawn_object"),
     "X-Dawn-Download-Target", target), "X-Dawn-Download-Type", safe_persisted_mime(mime)))
+}
+
+## Shared unconditional metadata and handoff target construction.
+pub fn download_url(q: Qiniu, origin: String, key: String) -> Result[String, String] !io = {
+  if not valid_origin(origin) || strip_trailing_slash(q.domain) != strip_trailing_slash(origin) ||
+    not valid_access_key(q.ak) || q.sk == "" || not valid_key(key) {
+    return Err("download configuration invalid")
+  }
+  let path = "/" ++ join(map(str.split(key, "/"), pct_encode), "/")
+  let base = strip_trailing_slash(origin)
+  Ok(private_url(q, base ++ path, now_s() + q.expires))
 }
 
 test "origin and key admission is closed" {

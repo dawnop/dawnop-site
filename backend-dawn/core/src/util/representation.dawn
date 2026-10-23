@@ -1,0 +1,120 @@
+# Persisted download representation. Only validated publications cross writers.
+use std/str
+use std/char
+use std/fmt.{parse_int}
+use qiniu/creds.{Qiniu}
+use util/http.{Upstream, HeadResp, fetch_head}
+use util/download_handoff.{download_url}
+use util/paths.{strip_trailing_slash}
+use util/time.{parse_http_date}
+use util/runtime_ttl.{now_s}
+use util/crypto.{sha256_hex}
+use util/errkind.{upstream}
+use std/map
+use json/parser as json_parser
+use json/value.{JObj, JInt}
+
+pub const EMPTY_ETAG: String = "\"dawn-empty-v1\""
+pub type Stored = { kind: Option[String], key: Option[String], profile: Option[String], etag: Option[String], last_modified_s: Option[Int] }
+pub type Fields = { kind: String, key: String, profile: String, etag: String, last_modified_s: Int, size: Int }
+pub opaque type Published = Fields
+pub type Representation = Missing | ObjectIdentity(value: Published) | LocalEmpty(value: Published)
+
+pub fn missing() -> Stored = Stored { kind = None, key = None, profile = None, etag = None, last_modified_s = None }
+pub fn fields(value: Published) -> Fields = value
+pub fn stored(value: Published) -> Stored = {
+  let v = fields(value)
+  Stored { kind = Some(v.kind), key = Some(v.key), profile = Some(v.profile), etag = Some(v.etag), last_modified_s = Some(v.last_modified_s) }
+}
+pub fn profile(origin: String) -> String !io = "identity-v1:" ++ sha256_hex(strip_trailing_slash(origin))
+
+pub fn valid_etag(s: String) -> Bool = {
+  let t = if str.starts_with(s, "W/") { str.slice(s, 2, len(s)) } else { s }
+  if len(t) < 2 || len(t) > 4096 || not str.starts_with(t, "\"") || not str.ends_with(t, "\"") { return false }
+  for c in code_points(str.slice(t, 1, len(t) - 1)) {
+    let n = char.code(c)
+    if n < 33 || n == 34 || n == 127 || n > 255 { return false }
+  }
+  true
+}
+
+pub fn decimal(s: String) -> Option[Int] = {
+  if s == "" { return None }
+  for c in code_points(s) { if c < '0' || c > '9' { return None } }
+  match parse_int(s) { Some(n) -> if n >= 0 { Some(n) } else { None }
+    None -> None }
+}
+
+pub fn stat_size(body: String, hint: Option[Int]) -> Result[Int, String] !io = {
+  let bad = upstream("representation length invalid")
+  let size = match json_parser.parse(body) {
+    Ok(JObj(m)) -> match map.get(m, "fsize") { Some(JInt(n)) -> n
+      _ -> return Err(bad) }
+    _ -> return Err(bad)
+  }
+  if size < 0 { return Err(bad) }
+  match hint { Some(n) -> if n < 0 || n != size { return Err(bad) }
+    None -> () }
+  Ok(size)
+}
+
+fn one(h: HeadResp, name: String) -> Option[String] = {
+  let vs = filter(h.headers, kv => { let (k, _) = kv
+    str.to_lower(k) == name })
+  if len(vs) == 1 { let (_, v) = vs[0]
+    Some(v) } else { None }
+}
+
+pub fn from_head(h: HeadResp, key: String, expected: Int, p: String, published_s: Int) -> Result[Published, String] = {
+  let bad = upstream("representation metadata invalid")
+  if h.status != 200 || expected < 0 || key == "" || p == "" { return Err(bad) }
+  let encodings = filter(h.headers, kv => { let (name, _) = kv
+    str.to_lower(name) == "content-encoding" })
+  if len(encodings) > 1 { return Err(bad) }
+  for (name, value) in h.headers {
+    let k = str.to_lower(name)
+    if (k == "content-encoding" && value != "identity") || k == "transfer-encoding" ||
+      (k == "vary" && str.contains(str.to_lower(value), "accept-encoding")) { return Err(bad) }
+  }
+  let etag = match one(h, "etag") { Some(v) -> v
+    None -> return Err(bad) }
+  let date = match one(h, "last-modified") { Some(v) -> v
+    None -> return Err(bad) }
+  let size = match one(h, "content-length") { Some(v) -> match decimal(v) { Some(n) -> n
+      None -> return Err(bad) }
+    None -> return Err(bad) }
+  let lm = match parse_http_date(date) { Some(n) -> n
+    None -> return Err(bad) }
+  if not valid_etag(etag) || size != expected || lm > published_s || published_s < 0 { return Err(bad) }
+  Ok(Fields { kind = if size == 0 { "local-empty-v1" } else { "object-identity-v1" }, key = key,
+    profile = p, etag = if size == 0 { EMPTY_ETAG } else { etag },
+    last_modified_s = if size == 0 { published_s } else { lm }, size = size })
+}
+
+pub fn collect(q: Qiniu, key: String, expected: Int) -> Result[Published, String] !Upstream !io = {
+  let url = match download_url(q, q.domain, key) { Ok(v) -> v
+    Err(_) -> return Err(upstream("representation configuration invalid")) }
+  let head = fetch_head(url)?
+  from_head(head, key, expected, profile(q.domain), now_s())
+}
+
+pub fn parse(s: Stored, key: Option[String], size: Int, p: String) -> Representation =
+  match (s.kind, s.key, s.profile, s.etag, s.last_modified_s, key) {
+    (Some(kind), Some(k), Some(pr), Some(etag), Some(lm), Some(current)) -> {
+      if k != current || k == "" || pr != p || size < 0 || lm < 0 || not valid_etag(etag) { return Missing }
+      let v = Fields { kind = kind, key = k, profile = pr, etag = etag, last_modified_s = lm, size = size }
+      if kind == "object-identity-v1" && size > 0 { ObjectIdentity(v) }
+      else if kind == "local-empty-v1" && size == 0 && etag == EMPTY_ETAG { LocalEmpty(v) }
+      else { Missing }
+    }
+    _ -> Missing
+  }
+
+pub fn validate(value: Published, key: String, size: Int) -> Result[Unit, String] = {
+  let v = fields(value)
+  if v.size != size { return Err("publication length does not match file") }
+  match parse(stored(value), Some(key), size, v.profile) {
+    Missing -> Err("publication does not match file")
+    _ -> Ok(())
+  }
+}

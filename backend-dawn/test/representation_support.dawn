@@ -1,0 +1,11 @@
+# Synthetic metadata for repository tests only.
+use util/representation as representation
+use util/http.{HeadResp}
+
+pub fn publication(key: String, size: Int) -> representation.Published =
+  match representation.from_head(HeadResp { status = 200, headers = [
+    ("etag", "\"fixture-entity\""), ("last-modified", "Thu, 01 Jan 2026 00:00:00 GMT"), ("content-length", to_string(size))] }, key, size, "fixture-profile", 1800000000) {
+    Ok(v) -> v
+    Err(m) -> panic(m)
+  }
+

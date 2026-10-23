@@ -3,7 +3,7 @@ use db/jdbc.{DbConn, open, with_jdbc}
 
 fn drop_test_db() -> DbConn !io = {
   let c = open("jdbc:sqlite::memory:")
-  let _t = with_jdbc(c, () => exec("create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null)", []))
+  let _t = with_jdbc(c, () => exec("create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null, representation_kind text, representation_key text, representation_profile text, representation_etag text, representation_last_modified_s integer)", []))
   let _p = with_jdbc(c, () => exec("create table pending_uploads (key text primary key, path text not null, created_at text not null)", []))
   let _s = with_jdbc(c, () => ensure_schema())
   c
@@ -21,7 +21,7 @@ test "upgrading hash-only links discards capabilities but preserves files and or
   let _link = with_jdbc(c, () => exec("insert into upload_drops (id, token_hash, dir, created_at, expires_at, max_files, max_file_bytes, max_total_bytes) values (1, 'old-hash', '', '2026-10-01', 9999999999, 10, 100, 1000)", []))
   let _pending = with_jdbc(c, () => exec("insert into drop_pending values ('old-key', 1, 'old.txt', 100, '2026-10-01')", []))
   let _ledger = with_jdbc(c, () => exec("insert into pending_uploads values ('old-key', 'qiniu://old.txt', '2026-10-01')", []))
-  let _file = with_jdbc(c, () => exec("insert into files values (1, 'saved.txt', 0, 'saved-key', 'text/plain', 5, '2026-10-01', '2026-10-01')", []))
+  let _file = with_jdbc(c, () => exec("insert into files (id,path,is_dir,key,content_type,size,created_at,updated_at) values (1, 'saved.txt', 0, 'saved-key', 'text/plain', 5, '2026-10-01', '2026-10-01')", []))
   assert with_jdbc(c, () => ensure_schema()) == Ok(())
   assert with_jdbc(c, () => scalar_int("select count(*) from upload_drops", [])) == Ok(0)
   assert with_jdbc(c, () => scalar_int("select count(*) from drop_pending", [])) == Ok(0)
