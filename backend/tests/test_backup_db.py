@@ -577,3 +577,58 @@ def test_backup_command_requires_exactly_one_destination(
     )
     assert proc.returncode != 0
     assert "usage: --backup <dest>" in proc.stderr
+
+
+def test_production_paste_rowids_survive_snapshot(
+    tmp_path, monkeypatch, backup_runtime
+):
+    """生产 Paste 使用 TEXT 主键及隐含 rowid，必须验证 VACUUM 的实际行为。"""
+    spec = importlib.util.spec_from_file_location(
+        "backup_contract_fixture", REPO / "backend-dawn/scripts/contract_fixture.py"
+    )
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    db = tmp_path / "source.db"
+    fixture.build(str(db))
+    ext = os.environ["BACKUP_SIMPLE_FIXTURE"]
+    monkeypatch.setenv("DAWN_SIMPLE_EXT", ext)
+    command = (
+        [os.environ.get("JAVA", "java"), "-jar", os.environ["BACKUP_JAR"]]
+        if backup_runtime == "jvm"
+        else [os.environ["BACKUP_NATIVE"]]
+    )
+    migrated = subprocess.run(
+        [*command, "--migrate"],
+        env={**os.environ, "DAWNOP_ENV": "/dev/null", "DAWN_DB_PATH": str(db)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert migrated.returncode == 0, migrated.stdout + migrated.stderr
+    with sqlite3.connect(db) as con:
+        con.enable_load_extension(True)
+        con.load_extension(ext)
+        con.execute(
+            "insert into pastes(rowid,id,title,content,created_at,size_bytes) values(11,'first','first title','before snapshot',1,15)"
+        )
+        con.execute(
+            "insert into pastes(rowid,id,title,content,created_at,size_bytes) values(55,'second','second title','another snapshot',2,16)"
+        )
+    dest = tmp_path / "bk"
+    proc = run_backup(db, dest)
+    assert proc.returncode == 0, proc.stderr
+    restored = open_product(dest, tmp_path)
+    try:
+        restored.enable_load_extension(True)
+        restored.load_extension(ext)
+        assert restored.execute(
+            "select rowid,id from pastes order by rowid"
+        ).fetchall() == [(11, "first"), (55, "second")]
+        assert restored.execute(
+            "select rowid from paste_fts where paste_fts match 'another'"
+        ).fetchall() == [(55,)]
+        restored.execute(
+            "insert into paste_fts(paste_fts,rank) values('integrity-check',1)"
+        )
+    finally:
+        restored.close()

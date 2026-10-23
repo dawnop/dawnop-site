@@ -1,0 +1,9 @@
+{
+  "baseline": {
+    "name": "sqlite-test-baseline",
+    "version": "3.35.5",
+    "url": "https://sqlite.org/2021/sqlite-amalgamation-3350500.zip",
+    "sha256": "b49409ef123e193e719e2536f9b795482a69e61a9cc728933739b9024f035061",
+    "source_sha256": "ae3f047cbf30795f0b3cd20f035cd083be075142e69a9c081777ce2aa98c1d0d"
+  }
+}
