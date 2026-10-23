@@ -39,7 +39,7 @@ REPO = Path(__file__).resolve().parents[1]
 GROUPS = {
     "unit:dawnop-backend": "FastAPI 单元（回滚目标）",
     "unit:dawnop-dawn": "Dawn 单元（生产）",
-    "unit:dawnop-backup": "版本门备份的 service + timer",
+    "unit:dawnop-backup": "库备份的 service + timer（#263）",
     "backup-engine": "库备份的公开引擎配置",
     "fastapi-app": "FastAPI 应用代码（回滚目标跑的就是它）",
     "opt-scripts": "/opt/dawnop 下装机的脚本（正本在 deploy/）",

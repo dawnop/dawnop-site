@@ -79,10 +79,10 @@ def prepare(work):
             library,
         ]
     )
-    # The compiler package is itself pinned by the application's dependency hash.
-    pin = json.loads(
-        (fixture.ARCHIVE / "scripts/sqlite-contract/fixtures.lock.json").read_text()
-    )["baseline"]
+    # Read a tracked pin before resolving compiler packages: CI starts with no cache.
+    pin = json.loads(Path(__file__).with_name("fixtures.lock.json").read_text())[
+        "baseline"
+    ]
     archive = work / "baseline.zip"
     run(["curl", "-fLsS", "--retry", "3", pin["url"], "-o", archive])
     assert hashlib.sha256(archive.read_bytes()).hexdigest() == pin["sha256"]
