@@ -27,7 +27,7 @@ test "a config integer that is not a number refuses to start" {
 
 test "parse env: comments, quotes, spacing, embedded =" {
   let c = Config {
-    values: parse_env("# comment\nA=1\n B = two words \nURL=\"jdbc:sqlite:/x?y=1\"\nEMPTY=\n"),
+    values = parse_env("# comment\nA=1\n B = two words \nURL=\"jdbc:sqlite:/x?y=1\"\nEMPTY=\n"),
   }
   assert map.get(c.values, "A") == Some("1")
   assert map.get(c.values, "B") == Some("two words")
@@ -36,7 +36,7 @@ test "parse env: comments, quotes, spacing, embedded =" {
 }
 
 test "get_or falls back" {
-  let c = Config { values: map.from([("X", "set")]) }
+  let c = Config { values = map.from([("X", "set")]) }
   assert get_or(c, "X", "def") == "set"
   assert get_or(c, "Y", "def") == "def"
 }

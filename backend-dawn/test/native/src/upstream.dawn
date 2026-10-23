@@ -17,7 +17,7 @@ fn source_of(s: ResponseStream) -> BodySource =
   }
 
 test "native outbound bodies contain bytes and file positions without JVM values" {
-  let span = FileSpan { path: "/unopened", offset: 17, length: 123 }
+  let span = FileSpan { path = "/unopened", offset = 17, length = 123 }
   let parts = request_parts(request_body(bytes.utf8("h\u{0}"), span, bytes.utf8("t")))
   assert parts.file == span
   assert parts.head == bytes.utf8("h\u{0}")
@@ -31,26 +31,26 @@ test "native callers use the same effect budgets and Pending thunk" {
         NoBody -> 10
         _ -> 3600 }
       assert req.budget_s == budget
-      Ok(HttpResp { status: 201, body: req.url })
+      Ok(HttpResp { status = 201, body = req.url })
     }
     exchange_bytes(req) => {
       assert req.budget_s == 3600
-      Ok(BytesResp { status: 206, bytes: bytes.utf8("\u{0}data") })
+      Ok(BytesResp { status = 206, bytes = bytes.utf8("\u{0}data") })
     }
     exchange_stream(req) => {
       assert req.budget_s == 3600
-      Ok(StreamResp { status: 206, stream: response_stream(bytes_source(bytes.utf8("abcdef"))) })
+      Ok(StreamResp { status = 206, stream = response_stream(bytes_source(bytes.utf8("abcdef"))) })
     }
     exchange_start(req) => {
       assert req.budget_s == 10
       let url = req.url
-      Ok(pending(req.budget_s, () => Ok(HttpResp { status: 202, body: url })))
+      Ok(pending(req.budget_s, () => Ok(HttpResp { status = 202, body = url })))
     }
   }
-  assert fetch("get", []) == Ok(HttpResp { status: 201, body: "get" })
-  assert post("post", [], "text") == Ok(HttpResp { status: 201, body: "post" })
-  assert post_bytes("binary", [], bytes.utf8("\u{0}")) == Ok(HttpResp { status: 201, body: "binary" })
-  assert fetch_bytes("bytes", []) == Ok(BytesResp { status: 206, bytes: bytes.utf8("\u{0}data") })
+  assert fetch("get", []) == Ok(HttpResp { status = 201, body = "get" })
+  assert post("post", [], "text") == Ok(HttpResp { status = 201, body = "post" })
+  assert post_bytes("binary", [], bytes.utf8("\u{0}")) == Ok(HttpResp { status = 201, body = "binary" })
+  assert fetch_bytes("bytes", []) == Ok(BytesResp { status = 206, bytes = bytes.utf8("\u{0}data") })
   let stream = match fetch_stream("stream", []) { Ok(r) -> r.stream
     Err(m) -> panic(m) }
   let source = source_of(stream)
@@ -61,12 +61,12 @@ test "native callers use the same effect budgets and Pending thunk" {
   close_stream(stream)
   let started = match fetch_start("started", []) { Ok(p) -> p
     Err(m) -> panic(m) }
-  assert await_resp(started) == Ok(HttpResp { status: 202, body: "started" })
+  assert await_resp(started) == Ok(HttpResp { status = 202, body = "started" })
 }
 
 test "native Pending failures retain their budget and timeout classification" {
   let p = pending(10, () => Err(ForeignError {
-    kind: "transport.TimeoutException", message: "deadline", cause: None,
+    kind = "transport.TimeoutException", message = "deadline", cause = None,
   }))
   match as_outbound(await_resp(p)) {
     Ok(_) -> { assert false }
@@ -85,8 +85,8 @@ test "native missing file sources preserve read errors and close on consumption"
   }
   let original = file_source(path ++ ".absent")
   let stream = response_stream(BodySource {
-    read: original.read,
-    close: () => io.with_fs_real(() => {
+    read = original.read,
+    close = () => io.with_fs_real(() => {
       let _ = io.write_file(path, "closed")
       ()
     }),

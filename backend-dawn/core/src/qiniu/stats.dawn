@@ -40,23 +40,23 @@ pub type PreparedQ = { req: OutReq, fail: String }
 pub fn stat_request(q: Qiniu, path_query: String) -> PreparedQ !io = {
   let ct = "application/x-www-form-urlencoded"
   let auth = qiniu_mac(q, "GET", path_query, STAT_HOST, ct, "")
-  PreparedQ { req: OutReq { method: "GET", url: "http://${STAT_HOST}${path_query}",
-    headers: [("Authorization", auth), ("Content-Type", ct)], body: NoBody,
-    budget_s: MANAGEMENT_TIMEOUT_S }, fail: "七牛统计失败 ${path_query}" }
+  PreparedQ { req = OutReq { method = "GET", url = "http://${STAT_HOST}${path_query}",
+    headers = [("Authorization", auth), ("Content-Type", ct)], body = NoBody,
+    budget_s = MANAGEMENT_TIMEOUT_S }, fail = "七牛统计失败 ${path_query}" }
 }
 
 pub fn mac_request(q: Qiniu, method: String, host: String, path_query: String, body: String) -> PreparedQ !io = {
   let ct = "application/json"
   let auth = qiniu_mac(q, method, path_query, host, ct, body)
-  PreparedQ { req: OutReq { method: method, url: "http://${host}${path_query}",
-    headers: [("Authorization", auth), ("Content-Type", ct)],
-    body: if method == "POST" { TextBody(body) } else { NoBody },
-    budget_s: MANAGEMENT_TIMEOUT_S }, fail: "七牛 CDN 接口失败 ${path_query}" }
+  PreparedQ { req = OutReq { method = method, url = "http://${host}${path_query}",
+    headers = [("Authorization", auth), ("Content-Type", ct)],
+    body = if method == "POST" { TextBody(body) } else { NoBody },
+    budget_s = MANAGEMENT_TIMEOUT_S }, fail = "七牛 CDN 接口失败 ${path_query}" }
 }
 
 fn begin(q: PreparedQ) -> Result[PendingQ, String] !Upstream =
   match exchange_start(q.req) {
-    Ok(p) -> Ok(PendingQ { p: p, fail: q.fail })
+    Ok(p) -> Ok(PendingQ { p = p, fail = q.fail })
     Err(e) -> Err(deadline_text(q.req.budget_s, e))
   }
 
@@ -223,7 +223,7 @@ pub type PendingRespack = { listing: PendingQ, overview: PendingQ }
 pub fn respack_start(q: Qiniu) -> Result[PendingRespack, String] !Upstream !io = {
   let listing = mac_json_start(q, "GET", API_HOST, "/billing-api/v1/respack/list", "")?
   let overview = mac_json_start(q, "GET", API_HOST, "/billing-api/v1/respack/month-overview", "")?
-  Ok(PendingRespack { listing: listing, overview: overview })
+  Ok(PendingRespack { listing = listing, overview = overview })
 }
 
 ## Read both billing replies into the summary shape.

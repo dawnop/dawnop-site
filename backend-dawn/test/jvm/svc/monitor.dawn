@@ -193,8 +193,8 @@ fn with_routes[T](routes: List[(String, String)], body: fn() -> T !Upstream !io)
         "http://fixture.invalid${path}" == req.url })
       Ok(pending(req.budget_s, () => Ok(match hit {
         Some(r) -> { let (_, text) = r
-          HttpResp { status: 200, body: text } }
-        None -> HttpResp { status: 500, body: "{\"error\":\"no such stub route\"}" }
+          HttpResp { status = 200, body = text } }
+        None -> HttpResp { status = 500, body = "{\"error\":\"no such stub route\"}" }
       })))
     }
   }
@@ -203,30 +203,30 @@ fn with_routes[T](routes: List[(String, String)], body: fn() -> T !Upstream !io)
 
 fn stub_q(port: Int, path: String, fail: String) -> PendingQ !Upstream !io =
   match fetch_start("http://fixture.invalid${path}", []) {
-    Ok(p) -> PendingQ { p: p, fail: fail }
+    Ok(p) -> PendingQ { p = p, fail = fail }
     Err(m) -> panic("stub start failed: ${m}")
   }
 
 fn stub_tc(port: Int, path: String, action: String) -> Result[PendingTc, String] !Upstream !io =
   match fetch_start("http://fixture.invalid${path}", []) {
-    Ok(p) -> Ok(PendingTc { p: p, action: action })
+    Ok(p) -> Ok(PendingTc { p = p, action = action })
     Err(m) -> panic("stub start failed: ${m}")
   }
 
 fn test_auth_with(ak: String) -> Auth =
   Auth {
-    db: db_config("", ""),
-    secret: "test",
-    expire_min: 1,
-    storage_quota: 10,
-    qiniu: Qiniu {
-      ak: ak,
-      sk: "test-sk",
-      bucket: "test-bucket",
-      domain: "",
-      expires: 3600,
-      rs_host: "",
-      up_host: "",
+    db = db_config("", ""),
+    secret = "test",
+    expire_min = 1,
+    storage_quota = 10,
+    qiniu = Qiniu {
+      ak = ak,
+      sk = "test-sk",
+      bucket = "test-bucket",
+      domain = "",
+      expires = 3600,
+      rs_host = "",
+      up_host = "",
     },
   }
 
@@ -260,16 +260,16 @@ test "a failing qiniu sub-fetch reports itself and leaves the other groups whole
   # one of the four kodo requests points at a path the stub refuses
   let j = with_routes(cl, () => {
     let started = QiniuPending {
-      kodo: Ok(KodoPending {
-        space: stub_q(port, "/series", "七牛统计失败 /v6/space"),
-        count: stub_q(port, "/missing", "七牛统计失败 /v6/count"),
-        flow: stub_q(port, "/flow", "七牛统计失败 /v6/blob_io"),
-        hits: stub_q(port, "/flow", "七牛统计失败 /v6/blob_io"),
+      kodo = Ok(KodoPending {
+        space = stub_q(port, "/series", "七牛统计失败 /v6/space"),
+        count = stub_q(port, "/missing", "七牛统计失败 /v6/count"),
+        flow = stub_q(port, "/flow", "七牛统计失败 /v6/blob_io"),
+        hits = stub_q(port, "/flow", "七牛统计失败 /v6/blob_io"),
       }),
-      domains: Ok(stub_q(port, "/domains", "七牛 CDN 接口失败 /domain")),
-      respack: Some(Ok(PendingRespack {
-        listing: stub_q(port, "/respack-list", "七牛 CDN 接口失败 /billing-api/v1/respack/list"),
-        overview: stub_q(port, "/respack-overview", "七牛 CDN 接口失败 /billing-api/v1/respack/month-overview"),
+      domains = Ok(stub_q(port, "/domains", "七牛 CDN 接口失败 /domain")),
+      respack = Some(Ok(PendingRespack {
+        listing = stub_q(port, "/respack-list", "七牛 CDN 接口失败 /billing-api/v1/respack/list"),
+        overview = stub_q(port, "/respack-overview", "七牛 CDN 接口失败 /billing-api/v1/respack/month-overview"),
       })),
     }
     qiniu_collect(a, cell, Some(started))
@@ -312,17 +312,17 @@ test "each qiniu group fails alone, whichever one it is" {
   let cell = test_cell()
   let j = with_routes(cl, () => {
     let started = QiniuPending {
-      kodo: Ok(KodoPending {
-        space: stub_q(port, "/series", "七牛统计失败 /v6/space"),
-        count: stub_q(port, "/series", "七牛统计失败 /v6/count"),
-        flow: stub_q(port, "/flow", "七牛统计失败 /v6/blob_io"),
-        hits: stub_q(port, "/flow", "七牛统计失败 /v6/blob_io"),
+      kodo = Ok(KodoPending {
+        space = stub_q(port, "/series", "七牛统计失败 /v6/space"),
+        count = stub_q(port, "/series", "七牛统计失败 /v6/count"),
+        flow = stub_q(port, "/flow", "七牛统计失败 /v6/blob_io"),
+        hits = stub_q(port, "/flow", "七牛统计失败 /v6/blob_io"),
       }),
-      domains: Ok(stub_q(port, "/domains", "七牛 CDN 接口失败 /domain")),
+      domains = Ok(stub_q(port, "/domains", "七牛 CDN 接口失败 /domain")),
       # this time it is respack that cannot be reached
-      respack: Some(Ok(PendingRespack {
-        listing: stub_q(port, "/missing", "七牛 CDN 接口失败 /billing-api/v1/respack/list"),
-        overview: stub_q(port, "/missing", "七牛 CDN 接口失败 /billing-api/v1/respack/month-overview"),
+      respack = Some(Ok(PendingRespack {
+        listing = stub_q(port, "/missing", "七牛 CDN 接口失败 /billing-api/v1/respack/list"),
+        overview = stub_q(port, "/missing", "七牛 CDN 接口失败 /billing-api/v1/respack/month-overview"),
       })),
     }
     qiniu_collect(a, cell, Some(started))
@@ -355,9 +355,9 @@ test "a lighthouse call that fails to start is isolated like one that fails in f
   let cl = routes
   let started = with_routes(cl, () => Some(LighthousePending {
     # never started at all
-    traffic: Err("流量包请求未发出"),
-    instance: stub_tc(port, "/instances", "DescribeInstances"),
-    trend: stub_tc(port, "/trend", "GetMonitorData"),
+    traffic = Err("流量包请求未发出"),
+    instance = stub_tc(port, "/instances", "DescribeInstances"),
+    trend = stub_tc(port, "/trend", "GetMonitorData"),
   }))
   let j = lighthouse_collect(started)
 
@@ -386,9 +386,9 @@ test "an API-level Error is still one call's failure, not the block's" {
   ]
   let cl = routes
   let j = lighthouse_collect(with_routes(cl, () => Some(LighthousePending {
-    traffic: stub_tc(port, "/denied", "DescribeInstancesTrafficPackages"),
-    instance: stub_tc(port, "/instances", "DescribeInstances"),
-    trend: stub_tc(port, "/trend", "GetMonitorData"),
+    traffic = stub_tc(port, "/denied", "DescribeInstancesTrafficPackages"),
+    instance = stub_tc(port, "/instances", "DescribeInstances"),
+    trend = stub_tc(port, "/trend", "GetMonitorData"),
   })))
 
   assert field(j, "traffic_error") == JStr("DescribeInstancesTrafficPackages 失败: AuthFailure 签名过期")
@@ -470,7 +470,7 @@ test "the three lighthouse calls all go out before any reply is read" {
         log_add(seen, "start ${action}")
         Ok(pending(req.budget_s, () => {
           log_add(seen, "await ${action}")
-          Ok(HttpResp { status: 200, body: tc_canned(action) })
+          Ok(HttpResp { status = 200, body = tc_canned(action) })
         }))
       }
     }
@@ -518,11 +518,11 @@ test "vault latency ignores a backwards wall clock" {
       exchange(_req) => {
         sleep_ms(37)
         fake_clock.rewind_wall(clock, 2000000000)
-        Ok(HttpResp { status: 200, body: "alive" })
+        Ok(HttpResp { status = 200, body = "alive" })
       }
       exchange_bytes(_req) => Err(no_answer("exchange_bytes"))
       exchange_stream(_req) => Err(no_answer("exchange_stream"))
-      exchange_start(req) => Ok(pending(req.budget_s, () => Ok(HttpResp { status: 200, body: "{}" })))
+      exchange_start(req) => Ok(pending(req.budget_s, () => Ok(HttpResp { status = 200, body = "{}" })))
     }
     let block = vault_measured("http://fixture.invalid/alive", "fixture")
     assert field(block, "latency_ms") == jint(37)

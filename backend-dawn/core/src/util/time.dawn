@@ -74,13 +74,13 @@ pub fn epoch_to_civil(t: Int) -> Civil = {
   let rem = t - days * DAY_S
   let (y, m, d) = civil_from_days(days)
   Civil {
-    year: y,
-    month: m,
-    day: d,
-    hour: rem / 3600,
-    minute: (rem % 3600) / 60,
-    second: rem % 60,
-    weekday: floor_mod(days + 4, 7),
+    year = y,
+    month = m,
+    day = d,
+    hour = rem / 3600,
+    minute = (rem % 3600) / 60,
+    second = rem % 60,
+    weekday = floor_mod(days + 4, 7),
   }
 }
 

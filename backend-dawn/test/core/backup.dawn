@@ -3,10 +3,10 @@ use db/sql.{QueryResult, Cell}
 fn fake_backup(version: String, check: Result[List[List[Cell]], String], fts_ok: Bool) -> Result[Unit, String] !io = {
   with handle Db {
     db_query(q, _ps, _cols) => {
-      if q == "select sqlite_version(), sqlite_source_id()" { Ok(QueryResult { names: ["version", "source"], rows: [[VStr(version), VStr("fixture")]] }) }
-      else if q == "PRAGMA backup_copy.integrity_check" { match check { Ok(rows) -> Ok(QueryResult { names: ["integrity_check"], rows: rows })
+      if q == "select sqlite_version(), sqlite_source_id()" { Ok(QueryResult { names = ["version", "source"], rows = [[VStr(version), VStr("fixture")]] }) }
+      else if q == "PRAGMA backup_copy.integrity_check" { match check { Ok(rows) -> Ok(QueryResult { names = ["integrity_check"], rows = rows })
         Err(m) -> Err(m) } }
-      else { Ok(QueryResult { names: ["name"], rows: [[VStr("article_fts")], [VStr("paste_fts")]] }) }
+      else { Ok(QueryResult { names = ["name"], rows = [[VStr("article_fts")], [VStr("paste_fts")]] }) }
     }
     execute(q, _ps) => if str.starts_with(q, "insert into backup_copy.") && not fts_ok { Err("FTS corrupt") } else { Ok(()) }
     execute_changes(_q, _ps) => Err("backup must not change source rows")

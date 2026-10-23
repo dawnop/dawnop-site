@@ -3,7 +3,7 @@ use std/bytes
 use web/source.{bytes_source}
 
 pub fn no_answer(op: String) -> ForeignError =
-  ForeignError { kind: "dawnop.UpstreamNotAnswered", message: op, cause: None }
+  ForeignError { kind = "dawnop.UpstreamNotAnswered", message = op, cause = None }
 
 pub fn bytes_stream(b: Bytes) -> ResponseStream = response_stream(bytes_source(b))
 
@@ -30,11 +30,11 @@ use web/types as source_types
 test "a response source keeps its error until consumption and closes after failure" {
   let seen = source_log_new()
   let source = BodySource {
-    read: (pos, n) => {
+    read = (pos, n) => {
       source_log_add(seen, "read/${pos}/${n}")
       panic("retained upstream read error")
     },
-    close: () => source_log_add(seen, "close"),
+    close = () => source_log_add(seen, "close"),
   }
   let wrapped = response_stream(source)
   let response = stream_response(200, "application/octet-stream", wrapped)
@@ -52,11 +52,11 @@ test "a response source keeps its error until consumption and closes after failu
 
 fn tracked_source(seen: String) -> ResponseStream =
   response_stream(BodySource {
-    read: (pos, n) => {
+    read = (pos, n) => {
       source_log_add(seen, "read/${pos}")
       bytes.utf8("x")
     },
-    close: () => source_log_add(seen, "close"),
+    close = () => source_log_add(seen, "close"),
   })
 
 test "source ownership closes successful rejected HEAD and disconnected responses" {
@@ -69,7 +69,7 @@ test "source ownership closes successful rejected HEAD and disconnected response
   drop_body(source_types.response_body(empty))
   assert source_log_read(seen) == "close;close;"
   # A non-2xx rejection releases the source without reading its error body.
-  let rejected = StreamResp { status: 403, stream: tracked_source(seen) }
+  let rejected = StreamResp { status = 403, stream = tracked_source(seen) }
   assert not ok_stream(rejected)
   close_stream(rejected.stream)
   assert source_log_read(seen) == "close;close;close;"
@@ -87,7 +87,7 @@ test "source ownership closes successful rejected HEAD and disconnected response
 test "a request body is multipart bytes and an explicit stable file description" {
   let head = bytes.utf8("h\u{0}")
   let tail = bytes.utf8("t")
-  let file = FileSpan { path: "/unused", offset: 13, length: 41 }
+  let file = FileSpan { path = "/unused", offset = 13, length = 41 }
   let parts = request_parts(request_body(head, file, tail))
   assert parts.head == head
   assert parts.file == file

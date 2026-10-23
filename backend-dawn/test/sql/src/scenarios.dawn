@@ -130,15 +130,15 @@ fn business_suite() -> Result[Unit, String] !Db !io = {
   emit("export", to_string(export.export_markdown(1)?))
   emit("settings", to_string(repo_settings.read_all(10)?))
   let article = NewArticle {
-    title: "S4 article", slug_hint: "s4-article", summary: "summary", content: "content",
-    published: true, auto_title: false, page_id: Some(3), tags: ["s4-tag"],
-    created_at: Some("2026-01-02T00:00:00Z")
+    title = "S4 article", slug_hint = "s4-article", summary = "summary", content = "content",
+    published = true, auto_title = false, page_id = Some(3), tags = ["s4-tag"],
+    created_at = Some("2026-01-02T00:00:00Z")
   }
   let aid = with_immediate_tx(() => repo_write.create_article(article))?
   let _ = exec("update articles set updated_at='2000-01-01 00:00:00' where id=?", [PInt(aid)])?
   let patch = ArticlePatch {
-    title: Some("S4 article"), slug: None, summary: Some("summary"), content: None,
-    published: None, auto_title: None, page_id: None, tags: None, created_at: None
+    title = Some("S4 article"), slug = None, summary = Some("summary"), content = None,
+    published = None, auto_title = None, page_id = None, tags = None, created_at = None
   }
   check(with_immediate_tx(() => repo_write.update_article(aid, patch))?, "article-noop-update")
   check(scalar_int("select count(*) from articles where id=? and updated_at='2000-01-01 00:00:00'", [PInt(aid)])? == 1, "article-noop-timestamp")
@@ -167,7 +167,7 @@ fn business_suite() -> Result[Unit, String] !Db !io = {
   check(repo_drop.revoke_drop(drop.id)?, "drop-revoke")
   repo_paste.ensure_schema()?
   emit("paste-empty", to_string(repo_paste.stats(1800000000)?))
-  let viz = repo_viz.create_viz(NewViz { slug: "s4-viz", name: "s4", source: "source", compiled: "compiled", style: "style" })?
+  let viz = repo_viz.create_viz(NewViz { slug = "s4-viz", name = "s4", source = "source", compiled = "compiled", style = "style" })?
   let sig = repo_viz.viz_sig(viz)?
   let _ = repo_viz.set_viz_str(viz, "name", "s4")?
   check(repo_viz.viz_sig(viz)? == sig, "viz-noop")

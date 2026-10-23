@@ -21,7 +21,7 @@ pub type CurlConfig = { temp_parent: String }
 type Staged = { dir: String, status: Int }
 
 fn fault(kind: String, message: String) -> ForeignError =
-  ForeignError { kind: "site.curl." ++ kind, message: message, cause: None }
+  ForeignError { kind = "site.curl." ++ kind, message = message, cause = None }
 
 # Never include curl stderr, the URL, config content or header values in errors.
 fn exit_error(code: Int) -> ForeignError =
@@ -52,7 +52,7 @@ fn text_reply(cfg: CurlConfig, req: OutReq) -> Result[HttpResp, ForeignError] !i
   let staged = stage(cfg, req, true)?
   bracket(staged, s => cleanup(s.dir), s => io.with_fs_real(() => {
     let raw = io.read_bytes(s.dir ++ "/body")?
-    Ok(HttpResp { status: s.status, body: bytes.decode_utf8_lossy(raw) })
+    Ok(HttpResp { status = s.status, body = bytes.decode_utf8_lossy(raw) })
   }))
 }
 
@@ -60,7 +60,7 @@ fn bytes_reply(cfg: CurlConfig, req: OutReq) -> Result[BytesResp, ForeignError] 
   let staged = stage(cfg, req, false)?
   bracket(staged, s => cleanup(s.dir), s => io.with_fs_real(() => {
     let raw = io.read_bytes(s.dir ++ "/body")?
-    Ok(BytesResp { status: s.status, bytes: raw })
+    Ok(BytesResp { status = s.status, bytes = raw })
   }))
 }
 
@@ -68,10 +68,10 @@ fn stream_reply(cfg: CurlConfig, req: OutReq) -> Result[StreamResp, ForeignError
   let staged = stage(cfg, req, false)?
   let source = file_source(staged.dir ++ "/body")
   Ok(StreamResp {
-    status: staged.status,
-    stream: response_stream(BodySource {
-      read: source.read,
-      close: () => cleanup(staged.dir),
+    status = staged.status,
+    stream = response_stream(BodySource {
+      read = source.read,
+      close = () => cleanup(staged.dir),
     }),
   })
 }
@@ -95,7 +95,7 @@ fn stage(cfg: CurlConfig, req: OutReq, small: Bool) -> Result[Staged, ForeignErr
         match remove_aux(dir) {
           Err(e) -> { cleanup(dir)
             Err(e) }
-          Ok(_) -> Ok(Staged { dir: dir, status: status })
+          Ok(_) -> Ok(Staged { dir = dir, status = status })
         }
       }
     }
@@ -295,7 +295,7 @@ fn batch_reply(cfg: CurlConfig, requests: List[BatchReq]) -> List[BatchReply] !i
       for i in range(0, len(requests)) {
         let item = requests[i]
         match io.temp_dir(dir, "item-") {
-          Err(e) -> { staged = staged ++ [BatchStaged { id: item.id, dir: "", req: item.req, index: i, error: Some(e) }] }
+          Err(e) -> { staged = staged ++ [BatchStaged { id = item.id, dir = "", req = item.req, index = i, error = Some(e) }] }
           Ok(child) -> {
             # Each deadline starts at its own preparation, independently.
             let tried = catch_panic(() => catch_fault(() => prepare(child, item.req, true, io.now(),
@@ -309,7 +309,7 @@ fn batch_reply(cfg: CurlConfig, requests: List[BatchReq]) -> List[BatchReply] !i
               if len(argv) > 7 { argv = argv ++ ["--next"] }
               argv = argv ++ policy_args() ++ ["--config", child ++ "/config"]
             }
-            staged = staged ++ [BatchStaged { id: item.id, dir: child, req: item.req, index: i, error: error }]
+            staged = staged ++ [BatchStaged { id = item.id, dir = child, req = item.req, index = i, error = error }]
           }
         }
       }
@@ -357,8 +357,8 @@ fn batch_item(item: BatchStaged, metadata: String) -> BatchReply !io.Fs = {
     Err(e) -> { if error == None { error = Some(e) }
       "" }
   }
-  BatchReply { id: item.id, exit_code: code, status: status, headers: headers, body: body,
-    elapsed_ms: duration, error: error }
+  BatchReply { id = item.id, exit_code = code, status = status, headers = headers, body = body,
+    elapsed_ms = duration, error = error }
 }
 
 fn bounded_text(path: String, limit: Int) -> Result[String, ForeignError] !io.Fs = {

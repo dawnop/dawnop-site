@@ -65,18 +65,18 @@ fn drop_cols() -> List[Col] = [ColInt, ColStr, ColStr, ColStr, ColInt, ColInt, C
 
 fn drop_of(r: List[Cell]) -> DropRow =
   DropRow {
-    id: int_at(r, 0),
-    token: str_at(r, 11),
-    label: str_at(r, 1),
-    dir: str_at(r, 2),
-    created_at: str_at(r, 3),
-    expires_at: int_at(r, 4),
-    revoked: bool_at(r, 5),
-    max_files: int_at(r, 6),
-    max_file_bytes: int_at(r, 7),
-    max_total_bytes: int_at(r, 8),
-    used_files: int_at(r, 9),
-    used_bytes: int_at(r, 10),
+    id = int_at(r, 0),
+    token = str_at(r, 11),
+    label = str_at(r, 1),
+    dir = str_at(r, 2),
+    created_at = str_at(r, 3),
+    expires_at = int_at(r, 4),
+    revoked = bool_at(r, 5),
+    max_files = int_at(r, 6),
+    max_file_bytes = int_at(r, 7),
+    max_total_bytes = int_at(r, 8),
+    used_files = int_at(r, 9),
+    used_bytes = int_at(r, 10),
   }
 
 ## Insert a link and read it back. The caller holds the immediate transaction,
@@ -166,7 +166,7 @@ pub fn reserve_key(key: String, drop_id: Int, rel: String, size_limit: Int) -> R
 ## drop signed, a key the admin signed, and a key nobody signed all answer None.
 pub fn pending_for(key: String, drop_id: Int) -> Result[Option[DropPending], String] !Db !io = {
   let rows = query("select key, drop_id, rel, size_limit from drop_pending where key = ? and drop_id = ?", [PStr(key), PInt(drop_id)], [ColStr, ColInt, ColStr, ColInt])?
-  Ok(first_map(rows, r => DropPending { key: str_at(r, 0), drop_id: int_at(r, 1), rel: str_at(r, 2), size_limit: int_at(r, 3) }))
+  Ok(first_map(rows, r => DropPending { key = str_at(r, 0), drop_id = int_at(r, 1), rel = str_at(r, 2), size_limit = int_at(r, 3) }))
 }
 
 ## Remove a key's reservation and its orphan-ledger row. Returns how many

@@ -53,10 +53,10 @@ pub fn get_monitor(a: Auth, cl: HttpCell, cfg: MonCfg, cell: TtlCell, respack_ce
     with_upstream(cl, () => {
       let cached: Option[Json] = if refresh { None } else { cached_json(cell, 120) }
       let packs = cached_json(respack_cell, 300)
-      let result = collect_monitor(MonitorConfig { qiniu: a.qiniu,
-        tencent_id: cfg.tencent_id, tencent_key: cfg.tencent_key,
-        region: cfg.region, instance: cfg.instance,
-        vault_alive: cfg.vault_alive, vault_public: cfg.vault_public }, cached, packs)
+      let result = collect_monitor(MonitorConfig { qiniu = a.qiniu,
+        tencent_id = cfg.tencent_id, tencent_key = cfg.tencent_key,
+        region = cfg.region, instance = cfg.instance,
+        vault_alive = cfg.vault_alive, vault_public = cfg.vault_public }, cached, packs)
       let vault = result.vault
       let server = io.with_fs_real(() => server_block(cpu_cell))
       let third = result.third

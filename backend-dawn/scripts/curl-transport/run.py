@@ -54,7 +54,7 @@ use transport_scenarios/scenarios.{response, serve}
 pub fn main() -> Unit !io = {
   let argv = args()
   let started = io.with_clock_real(() => io.now())
-  let reply = with_upstream(CurlConfig { temp_parent: argv[5] }, () => response(argv))
+  let reply = with_upstream(CurlConfig { temp_parent = argv[5] }, () => response(argv))
   serve(reply, started)
 }
 """
@@ -716,8 +716,8 @@ def controls(work, base, env):
         ),
         (
             "binary-at-nul",
-            "bytes: raw",
-            'bytes: bytes.slice(raw, 0, unwrap_or(bytes.index_of(raw, bytes.utf8("\\u{0}")), len(raw)))',
+            "bytes = raw",
+            'bytes = bytes.slice(raw, 0, unwrap_or(bytes.index_of(raw, bytes.utf8("\\u{0}")), len(raw)))',
             "bytes",
             "/binary",
             200,
@@ -743,8 +743,8 @@ def controls(work, base, env):
         ),
         (
             "leak-temp",
-            "close: () => cleanup(staged.dir)",
-            "close: () => ()",
+            "close = () => cleanup(staged.dir)",
+            "close = () => ()",
             "stream",
             "/binary",
             200,

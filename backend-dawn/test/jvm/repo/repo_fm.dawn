@@ -10,11 +10,11 @@ fn fm_test_db() -> DbConn !io = {
 
 fn copied_test_tree(tree: CopyTree, prefix: String) -> CopyTree =
   CopyTree {
-    source_root: tree.source_root,
-    destination_root: tree.destination_root,
-    rows: map(tree.rows, row => CopiedRow {
-      source: row.source,
-      copied_key: if row.source.is_dir { None } else { Some(prefix ++ "-" ++ row.source.path) },
+    source_root = tree.source_root,
+    destination_root = tree.destination_root,
+    rows = map(tree.rows, row => CopiedRow {
+      source = row.source,
+      copied_key = if row.source.is_dir { None } else { Some(prefix ++ "-" ++ row.source.path) },
     }),
   }
 
@@ -508,9 +508,9 @@ test "copy commits reject a vanished source snapshot" {
     Err(_) -> { assert false }
     Ok(plan) -> {
       let copied = CopyTree {
-        source_root: plan.source_root,
-        destination_root: plan.destination_root,
-        rows: map(plan.rows, row => CopiedRow { source: row.source, copied_key: Some("fm-copy-key") }),
+        source_root = plan.source_root,
+        destination_root = plan.destination_root,
+        rows = map(plan.rows, row => CopiedRow { source = row.source, copied_key = Some("fm-copy-key") }),
       }
       let _d = with_jdbc(c, () => delete_row("fm-source.txt"))
       match with_jdbc(c, () => commit_fm_copies([copied])) {
@@ -527,9 +527,9 @@ test "copy commits reject a vanished source snapshot" {
     Err(_) -> { assert false }
     Ok(plan) -> {
       let copied = CopyTree {
-        source_root: plan.source_root,
-        destination_root: plan.destination_root,
-        rows: map(plan.rows, row => CopiedRow { source: row.source, copied_key: Some("dav-copy-key") }),
+        source_root = plan.source_root,
+        destination_root = plan.destination_root,
+        rows = map(plan.rows, row => CopiedRow { source = row.source, copied_key = Some("dav-copy-key") }),
       }
       let _d = with_jdbc(c, () => delete_row("dav-source.txt"))
       match with_jdbc(c, () => commit_webdav_copy(copied, false)) {
@@ -548,9 +548,9 @@ test "copy commits revalidate every mapped target" {
     Err(_) -> { assert false }
     Ok(plan) -> {
       let copied = CopyTree {
-        source_root: plan.source_root,
-        destination_root: plan.destination_root,
-        rows: map(plan.rows, row => CopiedRow { source: row.source, copied_key: Some("fm-copy-key") }),
+        source_root = plan.source_root,
+        destination_root = plan.destination_root,
+        rows = map(plan.rows, row => CopiedRow { source = row.source, copied_key = Some("fm-copy-key") }),
       }
       let _t = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('fm-target.txt', 0, 'fm-collision-key', 'text/plain', 2, datetime('now'), datetime('now'))", []))
       match with_jdbc(c, () => commit_fm_copies([copied])) {
@@ -570,9 +570,9 @@ test "copy commits revalidate every mapped target" {
     Err(_) -> { assert false }
     Ok(plan) -> {
       let copied = CopyTree {
-        source_root: plan.source_root,
-        destination_root: plan.destination_root,
-        rows: map(plan.rows, row => CopiedRow { source: row.source, copied_key: Some("dav-copy-key") }),
+        source_root = plan.source_root,
+        destination_root = plan.destination_root,
+        rows = map(plan.rows, row => CopiedRow { source = row.source, copied_key = Some("dav-copy-key") }),
       }
       let _t = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('dav-parent/target.txt', 0, 'dav-collision-key', 'text/plain', 2, datetime('now'), datetime('now'))", []))
       match with_jdbc(c, () => commit_webdav_copy(copied, false)) {
@@ -812,9 +812,9 @@ test "WebDAV MOVE and COPY reject overlapping subtrees at final commit" {
     Ok(plan) -> {
       let copied = copied_test_tree(plan, "fresh-overlap")
       let overlapping = CopyTree {
-        source_root: copied.source_root,
-        destination_root: "overlap/source/nested",
-        rows: copied.rows,
+        source_root = copied.source_root,
+        destination_root = "overlap/source/nested",
+        rows = copied.rows,
       }
       match with_jdbc(c, () => commit_webdav_copy(overlapping, true)) {
         Ok(_) -> { assert false }
@@ -835,9 +835,9 @@ test "copy commits reject malformed source object rows" {
   match with_jdbc(c, () => get_row("keyless.txt")) {
     Ok(Some(source)) -> {
       let plan = CopyTree {
-        source_root: "keyless.txt",
-        destination_root: "keyless-copy.txt",
-        rows: [CopiedRow { source: source, copied_key: None }],
+        source_root = "keyless.txt",
+        destination_root = "keyless-copy.txt",
+        rows = [CopiedRow { source = source, copied_key = None }],
       }
       match with_jdbc(c, () => commit_fm_copies([plan])) {
         Ok(_) -> { assert false }
@@ -852,9 +852,9 @@ test "copy commits reject malformed source object rows" {
   match with_jdbc(c, () => get_row("blank-key.txt")) {
     Ok(Some(source)) -> {
       let plan = CopyTree {
-        source_root: "blank-key.txt",
-        destination_root: "blank-key-copy.txt",
-        rows: [CopiedRow { source: source, copied_key: Some("blank-final-copy-key") }],
+        source_root = "blank-key.txt",
+        destination_root = "blank-key-copy.txt",
+        rows = [CopiedRow { source = source, copied_key = Some("blank-final-copy-key") }],
       }
       match with_jdbc(c, () => commit_fm_copies([plan])) {
         Ok(_) -> { assert false }
@@ -870,9 +870,9 @@ test "copy commits reject malformed source object rows" {
   match with_jdbc(c, () => get_row("keyed-dir")) {
     Ok(Some(source)) -> {
       let plan = CopyTree {
-        source_root: "keyed-dir",
-        destination_root: "dav-parent/keyed-dir",
-        rows: [CopiedRow { source: source, copied_key: None }],
+        source_root = "keyed-dir",
+        destination_root = "dav-parent/keyed-dir",
+        rows = [CopiedRow { source = source, copied_key = None }],
       }
       match with_jdbc(c, () => commit_webdav_copy(plan, false)) {
         Ok(_) -> { assert false }
@@ -922,9 +922,9 @@ test "copy, move, and rename commits reject unmapped destination descendants" {
   match with_jdbc(fm_copy, () => get_row("fm-copy-source.txt")) {
     Ok(Some(source)) -> {
       let plan = CopyTree {
-        source_root: "fm-copy-source.txt",
-        destination_root: "fm-copy-target",
-        rows: [CopiedRow { source: source, copied_key: Some("fm-copied-key") }],
+        source_root = "fm-copy-source.txt",
+        destination_root = "fm-copy-target",
+        rows = [CopiedRow { source = source, copied_key = Some("fm-copied-key") }],
       }
       match with_jdbc(fm_copy, () => commit_fm_copies([plan])) {
         Ok(_) -> { assert false }
@@ -942,9 +942,9 @@ test "copy, move, and rename commits reject unmapped destination descendants" {
   match with_jdbc(dav_copy, () => get_row("dav-copy-source.txt")) {
     Ok(Some(source)) -> {
       let plan = CopyTree {
-        source_root: "dav-copy-source.txt",
-        destination_root: "dav-copy-parent/target",
-        rows: [CopiedRow { source: source, copied_key: Some("dav-copied-key") }],
+        source_root = "dav-copy-source.txt",
+        destination_root = "dav-copy-parent/target",
+        rows = [CopiedRow { source = source, copied_key = Some("dav-copied-key") }],
       }
       match with_jdbc(dav_copy, () => commit_webdav_copy(plan, false)) {
         Ok(_) -> { assert false }

@@ -73,7 +73,7 @@ fn wire_exchange(cl: HttpCell, req: OutReq) -> Result[HttpResp, ForeignError] !i
   flatten_fault(catch_fault(() => {
     let built = request_for(req)?
     let resp = client_of(cl).send(built, BodyHandlers.ofString()!)!
-    Ok(HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! })
+    Ok(HttpResp { status = resp.statusCode(), body = String.valueOf(resp.body()!)! })
   }))
 
 # resp.body() is an erased-generic Object that is a byte[] at runtime — cast
@@ -85,7 +85,7 @@ fn wire_exchange_bytes(cl: HttpCell, req: OutReq) -> Result[BytesResp, ForeignEr
     let resp = client_of(cl).send(built, BodyHandlers.ofByteArray()!)!
     let got: Result[Bytes, ForeignError] = cast(resp.body()!)
     match got {
-      Ok(b) -> Ok(BytesResp { status: resp.statusCode(), bytes: b })
+      Ok(b) -> Ok(BytesResp { status = resp.statusCode(), bytes = b })
       Err(e) -> Err(e)
     }
   }))
@@ -99,7 +99,7 @@ fn wire_exchange_stream(cl: HttpCell, req: OutReq) -> Result[StreamResp, Foreign
     let resp = client_of(cl).send(built, BodyHandlers.ofInputStream()!)!
     let got: Result[InputStream, ForeignError] = cast(resp.body()!)
     match got {
-      Ok(s) -> Ok(StreamResp { status: resp.statusCode(), stream: response_stream(input_source(s)) })
+      Ok(s) -> Ok(StreamResp { status = resp.statusCode(), stream = response_stream(input_source(s)) })
       Err(e) -> Err(e)
     }
   }))
@@ -115,7 +115,7 @@ fn future_reply(f: CompletableFuture) -> Result[HttpResp, ForeignError] !io =
   flatten_fault(catch_fault(() => {
     let got: Result[HttpResponse, ForeignError] = cast(f.get()!)
     match got {
-      Ok(resp) -> Ok(HttpResp { status: resp.statusCode(), body: String.valueOf(resp.body()!)! })
+      Ok(resp) -> Ok(HttpResp { status = resp.statusCode(), body = String.valueOf(resp.body()!)! })
       Err(e) -> Err(e)
     }
   }))
@@ -155,8 +155,8 @@ fn raw_body_publisher(body: RequestBody) -> Result[BodyPublisher, ForeignError] 
   # slices rather than silently uploading the whole file under a partial claim.
   if file.offset != 0 || file.length != io.with_fs_real(() => io.file_size(file.path))? {
     return Err(ForeignError {
-      kind: "site.upstream.unsupported_file_range",
-      message: "JVM outbound file description must cover the complete stable file", cause: None,
+      kind = "site.upstream.unsupported_file_range",
+      message = "JVM outbound file description must cover the complete stable file", cause = None,
     })
   }
   let h = BodyPublishers.ofByteArray(parts.head)!
@@ -190,7 +190,7 @@ fn wire_batch(cl: HttpCell, requests: List[BatchReq]) -> List[BatchReply] !io = 
     let future = batch_start(cl, item.req, start, stop)
     match future { Err(_) -> stop.set(io.elapsed_ns(start, system_now()))
       Ok(_) -> () }
-    BatchFuture { item: item, start: start, stop: stop, future: future }
+    BatchFuture { item = item, start = start, stop = stop, future = future }
   })
   map(started, batch_join)
 }
@@ -206,7 +206,7 @@ fn batch_start(cl: HttpCell, req: OutReq, start: io.Instant, stop: AtomicLong) -
       stop.set(io.elapsed_ns(start, system_now()))
       error
     })!
-    Ok(BatchStarted { response: future, completion: completed })
+    Ok(BatchStarted { response = future, completion = completed })
   }))
 
 fn batch_join(started: BatchFuture) -> BatchReply !io = {
@@ -225,14 +225,14 @@ fn batch_join(started: BatchFuture) -> BatchReply !io = {
       let real = match e.cause {
         None -> e
         Some(c) -> match str.split_once(c, ": ") {
-          None -> ForeignError { kind: c, message: "", cause: None }
-          Some((kind, message)) -> ForeignError { kind: kind, message: message, cause: None }
+          None -> ForeignError { kind = c, message = "", cause = None }
+          Some((kind, message)) -> ForeignError { kind = kind, message = message, cause = None }
         }
       }
-      BatchReply { id: item.id, exit_code: if str.ends_with(real.kind, "TimeoutException") { 28 } else { 1 },
-        status: 0, headers: "", body: "", elapsed_ms: elapsed, error: Some(real) }
+      BatchReply { id = item.id, exit_code = if str.ends_with(real.kind, "TimeoutException") { 28 } else { 1 },
+        status = 0, headers = "", body = "", elapsed_ms = elapsed, error = Some(real) }
     }
-    Ok(resp) -> BatchReply { id: item.id, exit_code: 0, status: resp.statusCode(),
-      headers: String.valueOf(resp.headers()!.map()!)!, body: String.valueOf(resp.body()!)!, elapsed_ms: elapsed, error: None }
+    Ok(resp) -> BatchReply { id = item.id, exit_code = 0, status = resp.statusCode(),
+      headers = String.valueOf(resp.headers()!.map()!)!, body = String.valueOf(resp.body()!)!, elapsed_ms = elapsed, error = None }
   }
 }

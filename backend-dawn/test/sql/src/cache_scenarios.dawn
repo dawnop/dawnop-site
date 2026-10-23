@@ -51,7 +51,7 @@ fn namespaces() -> Result[Unit, String] !Db !io = {
   let slots = ["monitor.v1", "respack.v1", "space.v1", "dav.v1", "cpu.v1"]
   for ns in slots { put(ns, 1000123, ns)? }
   for ns in slots { check(read(ns, 1000124, 120)? == Some(ns), "namespace-isolation") }
-  let other = CacheSlot { namespace: "monitor.v1", key: "other" }
+  let other = CacheSlot { namespace = "monitor.v1", key = "other" }
   at(1000123, () => cache.cache_put(other, "another key"))?
   check(read("monitor.v1", 1000124, 120)? == Some("monitor.v1"), "key-isolation")
   check(read("unknown.v1", 1000124, 120)? == None, "unknown-namespace")

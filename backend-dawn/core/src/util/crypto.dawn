@@ -22,19 +22,19 @@ pub fn hmac_sha256_hex(key: String, msg: String) -> String =
 
 ## HMAC-SHA256, URL-safe base64 without padding (JWT HS256 signatures).
 pub fn hmac_sha256_b64url_nopad(key: String, msg: String) -> String =
-  bytes.to_base64(hmac.mac_sha256(bytes.utf8(key), bytes.utf8(msg)), enc: bytes.UrlRaw)
+  bytes.to_base64(hmac.mac_sha256(bytes.utf8(key), bytes.utf8(msg)), enc = bytes.UrlRaw)
 
 ## HMAC-SHA1, URL-safe base64 with padding (qiniu signatures).
 pub fn hmac_sha1_b64url(key: String, msg: String) -> String =
-  pad4(bytes.to_base64(hmac.mac_sha1(bytes.utf8(key), bytes.utf8(msg)), enc: bytes.UrlRaw))
+  pad4(bytes.to_base64(hmac.mac_sha1(bytes.utf8(key), bytes.utf8(msg)), enc = bytes.UrlRaw))
 
 ## URL-safe base64 of a UTF-8 string, with padding (qiniu policy blobs).
 pub fn b64url_encode(s: String) -> String !io =
-  pad4(bytes.to_base64(bytes.utf8(s), enc: bytes.UrlRaw))
+  pad4(bytes.to_base64(bytes.utf8(s), enc = bytes.UrlRaw))
 
 ## URL-safe base64 without padding (JWT segments).
 pub fn b64url_encode_nopad(s: String) -> String !io =
-  bytes.to_base64(bytes.utf8(s), enc: bytes.UrlRaw)
+  bytes.to_base64(bytes.utf8(s), enc = bytes.UrlRaw)
 
 ## Decode URL-safe base64 (padding optional) back to a UTF-8 string. Both bad
 ## base64 and payload bytes that are not UTF-8 refuse: the callers are JWT
@@ -97,4 +97,4 @@ pub fn uuid_hex() -> String !Random = {
 
 ## A bearer secret for a capability link: 32 random bytes (256 bits) as
 ## unpadded base64url, 43 characters, safe in a URL fragment and a header.
-pub fn random_token() -> String !Random = bytes.to_base64(random_bytes(32), enc: bytes.UrlRaw)
+pub fn random_token() -> String !Random = bytes.to_base64(random_bytes(32), enc = bytes.UrlRaw)

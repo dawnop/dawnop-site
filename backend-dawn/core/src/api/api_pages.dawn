@@ -48,18 +48,18 @@ pub fn page_create(a: Auth) -> Handler =
           Err(http_error(422, "type 只能是 content 或 article_list"))
         } else {
           let np = NewPage {
-            title: str.trim(str_or(m, "title", "")),
-            slug_hint: str_or(m, "slug", ""),
-            kind: str_or(m, "type", "content"),
-            description: str_or(m, "description", ""),
-            content: str_or(m, "content", ""),
-            auto_title: bool_or(m, "auto_title", false),
+            title = str.trim(str_or(m, "title", "")),
+            slug_hint = str_or(m, "slug", ""),
+            kind = str_or(m, "type", "content"),
+            description = str_or(m, "description", ""),
+            content = str_or(m, "content", ""),
+            auto_title = bool_or(m, "auto_title", false),
             # FastAPI PageCreate.nav_visible defaults True (a page created without
             # the field shows in the nav bar)
-            nav_visible: bool_or(m, "nav_visible", true),
-            nav_order: match opt_int(m, "nav_order") { Some(n) -> n
+            nav_visible = bool_or(m, "nav_visible", true),
+            nav_order = match opt_int(m, "nav_order") { Some(n) -> n
               None -> 0 },
-            created_at: opt_str(m, "created_at"),
+            created_at = opt_str(m, "created_at"),
           }
           Ok(json_response(201, as_http(with_db(a.db, () => page_create_read(np)), 500)?))
         }

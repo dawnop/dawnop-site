@@ -234,9 +234,9 @@ fn copy_tree_list_objects(q: Qiniu, trees: List[CopyTree], i: Int, acc: List[Cop
 pub fn copy_tree_objects(q: Qiniu, tree: CopyTree) -> Result[CopyTree, String] !Random !Upstream !io = {
   let rows = copy_tree_object_rows(q, tree.rows, 0, [])?
   Ok(CopyTree {
-    source_root: tree.source_root,
-    destination_root: tree.destination_root,
-    rows: rows,
+    source_root = tree.source_root,
+    destination_root = tree.destination_root,
+    rows = rows,
   })
 }
 
@@ -264,7 +264,7 @@ fn copy_tree_object_rows(q: Qiniu, rows: List[CopiedRow], i: Int, acc: List[Copi
     match copied_result {
       Err(m) -> Err(m)
       Ok(copied_key) -> {
-        let copied = CopiedRow { source: row.source, copied_key: copied_key }
+        let copied = CopiedRow { source = row.source, copied_key = copied_key }
         match copy_tree_object_rows(q, rows, i + 1, acc ++ [copied]) {
           Ok(done) -> Ok(done)
           Err(m) -> {

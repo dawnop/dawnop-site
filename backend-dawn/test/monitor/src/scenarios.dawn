@@ -12,8 +12,8 @@ use site_core/util/jsonx.{obj, jint, jstr}
 
 fn check(ok: Bool, name: String) -> Unit = if not ok { panic("assertion: ${name}") }
 fn request(id: String, base: String, path: String, budget: Int) -> BatchReq =
-  BatchReq { id: id, req: OutReq { method: "GET", url: base ++ path,
-    headers: [("X-Fixture", "batch-fixture-secret")], body: NoBody, budget_s: budget } }
+  BatchReq { id = id, req = OutReq { method = "GET", url = base ++ path,
+    headers = [("X-Fixture", "batch-fixture-secret")], body = NoBody, budget_s = budget } }
 fn found(replies: List[BatchReply], id: String) -> BatchReply =
   match reply_for(replies, id) { Ok(r) -> r
     Err(_) -> { check(false, "item-ID")
@@ -38,8 +38,8 @@ pub fn scenario(name: String, base: String) -> Json !UpstreamBatch !io =
       check(len(refused) == 2 && refused[0].error != None && refused[1].error != None, "duplicate-input-ID")
       check(reply_for(refused, "same") == Err("missing or duplicate outbound batch ID"), "duplicate-output-ID")
       check(reply_for([], "missing") == Err("missing or duplicate outbound batch ID"), "missing-output-ID")
-      let invalid = BatchReq { id: "invalid", req: OutReq { method: "GET", url: base ++ "/must-not-contact",
-        headers: [("X-Bad", "one\ntwo")], body: NoBody, budget_s: 10 } }
+      let invalid = BatchReq { id = "invalid", req = OutReq { method = "GET", url = base ++ "/must-not-contact",
+        headers = [("X-Bad", "one\ntwo")], body = NoBody, budget_s = 10 } }
       let got = exchange_batch([invalid, request("valid", base, "/item/valid/20", 10), request("utf8", base, "/utf8", 10)])
       check(found(got, "invalid").error != None, "invalid-item-isolated")
       check(successful(got, "valid").body == "valid", "invalid-neighbor-survives")
@@ -99,9 +99,9 @@ pub fn scenario(name: String, base: String) -> Json !UpstreamBatch !io =
   })
 
 fn config() -> MonitorConfig = MonitorConfig {
-  qiniu: Qiniu { ak: "test-ak", sk: "test-sk", bucket: "test-bucket", domain: "", expires: 3600, rs_host: "", up_host: "" },
-  tencent_id: "id", tencent_key: "key", region: "region", instance: "instance",
-  vault_alive: "http://invalid.example/alive", vault_public: "public",
+  qiniu = Qiniu { ak = "test-ak", sk = "test-sk", bucket = "test-bucket", domain = "", expires = 3600, rs_host = "", up_host = "" },
+  tencent_id = "id", tencent_key = "key", region = "region", instance = "instance",
+  vault_alive = "http://invalid.example/alive", vault_public = "public",
 }
 
 # Rewrite only the destination after signing, keeping IDs, bodies and headers.
@@ -109,9 +109,9 @@ fn config() -> MonitorConfig = MonitorConfig {
 fn local_plan(plan: List[MonitorRequest], base: String, mode: String) -> List[MonitorRequest] =
   map(plan, p => {
     let req = p.item.req
-    MonitorRequest { fail: p.fail, item: BatchReq { id: p.item.id,
-      req: OutReq { method: req.method, url: base ++ "/monitor/" ++ mode ++ "/" ++ p.item.id,
-        headers: req.headers, body: req.body, budget_s: if mode == "timeout" && p.item.id == "tc.traffic" { 1 } else { req.budget_s } } } }
+    MonitorRequest { fail = p.fail, item = BatchReq { id = p.item.id,
+      req = OutReq { method = req.method, url = base ++ "/monitor/" ++ mode ++ "/" ++ p.item.id,
+        headers = req.headers, body = req.body, budget_s = if mode == "timeout" && p.item.id == "tc.traffic" { 1 } else { req.budget_s } } } }
   })
 
 pub fn monitor_scenario(base: String, mode: String) -> Json !UpstreamBatch !io = {

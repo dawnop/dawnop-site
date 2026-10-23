@@ -28,7 +28,7 @@ pub type PendingTc = { p: Pending, action: String }
 pub fn call_start(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> Result[PendingTc, String] !io.Clock !Upstream !io = {
   let req = call_request(secret_id, secret_key, service, action, version, region, payload)
   match exchange_start(req) {
-    Ok(p) -> Ok(PendingTc { p: p, action: action })
+    Ok(p) -> Ok(PendingTc { p = p, action = action })
     Err(e) -> Err(deadline_text(req.budget_s, e))
   }
 }
@@ -37,8 +37,8 @@ pub fn call_start(secret_id: String, secret_key: String, service: String, action
 pub fn call_request(secret_id: String, secret_key: String, service: String, action: String, version: String, region: String, payload: String) -> OutReq !io.Clock !io = {
   let host = tc_host(service)
   let headers = tc3_headers(secret_id, secret_key, service, action, version, region, payload)
-  OutReq { method: "POST", url: "https://${host}", headers: headers,
-    body: TextBody(payload), budget_s: MANAGEMENT_TIMEOUT_S }
+  OutReq { method = "POST", url = "https://${host}", headers = headers,
+    body = TextBody(payload), budget_s = MANAGEMENT_TIMEOUT_S }
 }
 
 ## The host a service's v3 endpoint lives on. It is also the `host` the

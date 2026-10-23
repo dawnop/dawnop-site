@@ -195,8 +195,8 @@ def main() -> int:
             "    let existing = get_row(rel)?\n"
             "    let _i = insert_file_row(rel, key, content_type, size)?\n"
             "    Ok(ReplaceOutcome {\n"
-            "      target_existed: existing != None,\n"
-            "      superseded_key: superseded_file_key(existing, key),\n"
+            "      target_existed = existing != None,\n"
+            "      superseded_key = superseded_file_key(existing, key),\n"
             "    })\n"
             "  })\n",
         )
@@ -566,10 +566,10 @@ def main() -> int:
             repo,
             "pub fn prepare_fm_move(old_rel: String, new_rel: String) -> Result[MovePlan, String] !Db !io = {\n"
             "  let _v = validate_subtree_destination(old_rel, new_rel)?\n"
-            "  Ok(MovePlan { source_root: old_rel, destination_root: new_rel })\n"
+            "  Ok(MovePlan { source_root = old_rel, destination_root = new_rel })\n"
             "}\n",
             "pub fn prepare_fm_move(old_rel: String, new_rel: String) -> Result[MovePlan, String] !Db !io =\n"
-            "  Ok(MovePlan { source_root: old_rel, destination_root: new_rel })\n",
+            "  Ok(MovePlan { source_root = old_rel, destination_root = new_rel })\n",
         )
         replace_once(
             repo,
@@ -676,8 +676,8 @@ def main() -> int:
         )
         replace_once(
             repo,
-            "      written: moved,\n    })\n  })\n\nfn validate_disjoint_subtrees",
-            "      written: moved,\n"
+            "      written = moved,\n    })\n  })\n\nfn validate_disjoint_subtrees",
+            "      written = moved,\n"
             "    })\n"
             "  })\n"
             "\n"
@@ -690,9 +690,9 @@ def main() -> int:
             "    let replaced: List[FileRow] = if destination_existed { delete_subtree_tx(new_rel)? } else { [] }\n"
             "    let moved = reparent_loop(paths, old_rel, new_rel, 0)?\n"
             "    Ok(SubtreeWriteOutcome {\n"
-            "      destination_existed: destination_existed,\n"
-            "      replaced_rows: replaced,\n"
-            "      written: moved,\n"
+            "      destination_existed = destination_existed,\n"
+            "      replaced_rows = replaced,\n"
+            "      written = moved,\n"
             "    })\n"
             "  })\n"
             "\n"

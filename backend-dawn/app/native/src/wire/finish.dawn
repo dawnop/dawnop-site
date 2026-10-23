@@ -1,7 +1,7 @@
 # Stdout has already been flushed by stdio_transport.
 fn finish_native() -> Result[Int, ForeignError] !io =
   extern c "site_finish_exchange" else Err(ForeignError {
-    kind: "site.wire.backend", message: "accepted fd teardown requires native Linux", cause: None
+    kind = "site.wire.backend", message = "accepted fd teardown requires native Linux", cause = None
   })
 
 pub fn finish_exchange() -> Result[Int, ForeignError] !io = finish_native()

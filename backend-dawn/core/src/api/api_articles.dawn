@@ -35,8 +35,8 @@ fn opt_query_int(req: Request, name: String) -> Result[Option[Int], HttpError] =
 pub fn list_admin(a: Auth) -> Handler =
   req =>
   guarded(a, req, () => {
-    let page = query_int_bounded(req, "page", 1, 1, -1, fmt: fastapi_errors())?
-    let size = query_int_bounded(req, "size", 10, 1, 100, fmt: fastapi_errors())?
+    let page = query_int_bounded(req, "page", 1, 1, -1, fmt = fastapi_errors())?
+    let size = query_int_bounded(req, "size", 10, 1, 100, fmt = fastapi_errors())?
     let pub_filter: Option[Bool] = match query(req, "published") {
       Some("true") -> Some(true)
       Some("false") -> Some(false)
@@ -79,15 +79,15 @@ pub fn create(a: Auth) -> Handler =
           Err(http_error(422, "标题或 slug 长度超出 255"))
         } else {
           let na = NewArticle {
-            title: str.trim(str_or(m, "title", "")),
-            slug_hint: str_or(m, "slug", ""),
-            summary: str_or(m, "summary", ""),
-            content: str_or(m, "content", ""),
-            published: bool_or(m, "published", false),
-            auto_title: bool_or(m, "auto_title", false),
-            page_id: opt_int(m, "page_id"),
-            tags: str_list(m, "tags"),
-            created_at: opt_str(m, "created_at"),
+            title = str.trim(str_or(m, "title", "")),
+            slug_hint = str_or(m, "slug", ""),
+            summary = str_or(m, "summary", ""),
+            content = str_or(m, "content", ""),
+            published = bool_or(m, "published", false),
+            auto_title = bool_or(m, "auto_title", false),
+            page_id = opt_int(m, "page_id"),
+            tags = str_list(m, "tags"),
+            created_at = opt_str(m, "created_at"),
           }
           Ok(json_response(201, as_http_with(with_db(a.db, () => create_then_read(na)), classify)?))
         }
@@ -138,15 +138,15 @@ fn present[T](m: Map[String, Json], key: String, v: T) -> Option[T] =
 
 fn patch_of(m: Map[String, Json]) -> ArticlePatch =
   ArticlePatch {
-    title: present(m, "title", str.trim(str_or(m, "title", ""))),
-    slug: present(m, "slug", str_or(m, "slug", "")),
-    summary: present(m, "summary", str_or(m, "summary", "")),
-    content: present(m, "content", str_or(m, "content", "")),
-    published: present(m, "published", bool_or(m, "published", false)),
-    auto_title: present(m, "auto_title", bool_or(m, "auto_title", false)),
-    page_id: present(m, "page_id", opt_int(m, "page_id")),
-    tags: present(m, "tags", str_list(m, "tags")),
-    created_at: opt_str(m, "created_at"),
+    title = present(m, "title", str.trim(str_or(m, "title", ""))),
+    slug = present(m, "slug", str_or(m, "slug", "")),
+    summary = present(m, "summary", str_or(m, "summary", "")),
+    content = present(m, "content", str_or(m, "content", "")),
+    published = present(m, "published", bool_or(m, "published", false)),
+    auto_title = present(m, "auto_title", bool_or(m, "auto_title", false)),
+    page_id = present(m, "page_id", opt_int(m, "page_id")),
+    tags = present(m, "tags", str_list(m, "tags")),
+    created_at = opt_str(m, "created_at"),
   }
 
 fn update_then_read(id: Int, p: ArticlePatch) -> Result[Option[Json], String] !Db !io = {

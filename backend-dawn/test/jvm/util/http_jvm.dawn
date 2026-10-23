@@ -176,27 +176,27 @@ test "the two deadlines say what they are for" {
 
 test "only a timeout is reworded; every other fault keeps its text" {
   let timed_out = ForeignError {
-    kind: "java.net.http.HttpTimeoutException",
-    message: "request timed out",
-    cause: None
+    kind = "java.net.http.HttpTimeoutException",
+    message = "request timed out",
+    cause = None
   }
   assert test_deadline_text(10, timed_out) ==
     "outbound HTTP timed out after 10s: java.net.http.HttpTimeoutException: request timed out"
 
   # the connect variant is a different class and must be recognised too
   let connect_timed_out = ForeignError {
-    kind: "java.net.http.HttpConnectTimeoutException",
-    message: "HTTP connect timed out",
-    cause: None
+    kind = "java.net.http.HttpConnectTimeoutException",
+    message = "HTTP connect timed out",
+    cause = None
   }
   assert str.contains(test_deadline_text(10, connect_timed_out), "outbound HTTP timed out after 10s")
 
   # a refusal is not a timeout: its text stays byte for byte what it was, which
   # is what callers' error surfaces and the contract goldens were recorded on
   let refused = ForeignError {
-    kind: "java.net.ConnectException",
-    message: "Connection refused",
-    cause: None
+    kind = "java.net.ConnectException",
+    message = "Connection refused",
+    cause = None
   }
   assert test_deadline_text(10, refused) == "java.net.ConnectException: Connection refused"
   assert test_deadline_text(10, refused) == fe_text(refused)
@@ -237,9 +237,9 @@ test "one cell is one connection; a client built per call is not" {
 
 test "a timeout is classified apart from a refusal, and keeps its wire text" {
   let timed: Result[Unit, String] = Err(test_deadline_text(10, ForeignError {
-    kind: "java.net.http.HttpTimeoutException",
-    message: "request timed out",
-    cause: None
+    kind = "java.net.http.HttpTimeoutException",
+    message = "request timed out",
+    cause = None
   }))
   match as_outbound(timed) {
     Ok(_) -> { assert false }
@@ -292,15 +292,15 @@ test "the timeout text and the timeout tag are one judgement, not two" {
   # thought about. The connect variant is exactly such a class: it is a timeout
   # whose exception is NOT called HttpTimeoutException.
   let request_timeout = ForeignError {
-    kind: "java.net.http.HttpTimeoutException", message: "request timed out", cause: None
+    kind = "java.net.http.HttpTimeoutException", message = "request timed out", cause = None
   }
   let connect_timeout = ForeignError {
-    kind: "java.net.http.HttpConnectTimeoutException", message: "HTTP connect timed out", cause: None
+    kind = "java.net.http.HttpConnectTimeoutException", message = "HTTP connect timed out", cause = None
   }
   let refused = ForeignError {
-    kind: "java.net.ConnectException", message: "Connection refused", cause: None
+    kind = "java.net.ConnectException", message = "Connection refused", cause = None
   }
-  let eof = ForeignError { kind: "java.io.EOFException", message: "", cause: None }
+  let eof = ForeignError { kind = "java.io.EOFException", message = "", cause = None }
   assert text_and_tag_agree(request_timeout)
   assert text_and_tag_agree(connect_timeout)
   assert text_and_tag_agree(refused)
@@ -398,31 +398,31 @@ test "an async timeout reads exactly like a blocking one" {
 test "unwrap_execution recovers the fault the blocking path would have seen" {
   # cause is fe_text-shaped, so the rebuild must render back to it byte for byte
   let wrapped = ForeignError {
-    kind: "java.util.concurrent.ExecutionException",
-    message: "java.net.ConnectException: Connection refused",
-    cause: Some("java.net.ConnectException: Connection refused"),
+    kind = "java.util.concurrent.ExecutionException",
+    message = "java.net.ConnectException: Connection refused",
+    cause = Some("java.net.ConnectException: Connection refused"),
   }
   assert fe_text(test_unwrap_execution(wrapped)) == "java.net.ConnectException: Connection refused"
   assert test_deadline_text(10, test_unwrap_execution(wrapped)) == "java.net.ConnectException: Connection refused"
 
   # a cause with no message of its own is all class name
   let bare = ForeignError {
-    kind: "java.util.concurrent.ExecutionException",
-    message: "java.io.EOFException",
-    cause: Some("java.io.EOFException"),
+    kind = "java.util.concurrent.ExecutionException",
+    message = "java.io.EOFException",
+    cause = Some("java.io.EOFException"),
   }
   assert fe_text(test_unwrap_execution(bare)) == "java.io.EOFException"
 
   # a message containing ": " keeps every colon after the first
   let chatty = ForeignError {
-    kind: "java.util.concurrent.ExecutionException",
-    message: "x",
-    cause: Some("java.io.IOException: read: connection reset"),
+    kind = "java.util.concurrent.ExecutionException",
+    message = "x",
+    cause = Some("java.io.IOException: read: connection reset"),
   }
   assert fe_text(test_unwrap_execution(chatty)) == "java.io.IOException: read: connection reset"
 
   # nothing to unwrap (an interrupt, say) leaves the fault alone
-  let direct = ForeignError { kind: "java.lang.InterruptedException", message: "", cause: None }
+  let direct = ForeignError { kind = "java.lang.InterruptedException", message = "", cause = None }
   assert fe_text(test_unwrap_execution(direct)) == "java.lang.InterruptedException"
 }
 
@@ -440,9 +440,9 @@ fn log_add(r: String, s: String) -> Unit !io = test_support.log_add(r, s)
 ## with it is answering exactly what the socket would have.
 fn wire_timeout() -> ForeignError =
   ForeignError {
-    kind: "java.net.http.HttpTimeoutException",
-    message: "request timed out",
-    cause: None,
+    kind = "java.net.http.HttpTimeoutException",
+    message = "request timed out",
+    cause = None,
   }
 
 ## A handler that answers every text exchange with `r` and refuses the rest.
@@ -493,9 +493,9 @@ test "an injected deadline is the production deadline, in microseconds" {
 
 test "the connect-timeout class is a timeout here too, and a refusal is not" {
   let connect = ForeignError {
-    kind: "java.net.http.HttpConnectTimeoutException",
-    message: "HTTP connect timed out",
-    cause: None,
+    kind = "java.net.http.HttpConnectTimeoutException",
+    message = "HTTP connect timed out",
+    cause = None,
   }
   match with_text_answer(Err(connect), () => fetch("http://127.0.0.1:1/", [])) {
     Ok(_) -> { assert false }
@@ -513,7 +513,7 @@ test "the connect-timeout class is a timeout here too, and a refusal is not" {
   }
 
   let refused = ForeignError {
-    kind: "java.net.ConnectException", message: "Connection refused", cause: None,
+    kind = "java.net.ConnectException", message = "Connection refused", cause = None,
   }
   match with_text_answer(Err(refused), () => fetch("http://127.0.0.1:1/", [])) {
     Ok(_) -> { assert false }
@@ -538,14 +538,14 @@ test "the installed handler is what the callers see, and the machine is not" {
   # nothing on this host listens there, and no HttpCell is built anywhere in
   # this block: if any of these answers came from the network the test could
   # not pass at all.
-  let answered = with_text_answer(Ok(HttpResp { status: 418, body: "from the arm" }), () => {
+  let answered = with_text_answer(Ok(HttpResp { status = 418, body = "from the arm" }), () => {
     let a = fetch("http://127.0.0.1:1/never", [])
     let b = post("http://127.0.0.1:1/never", [], "body")
     let c = post_bytes("http://127.0.0.1:1/never", [], bytes.utf8("raw"))
     (a, b, c)
   })
   let (a, b, c) = answered
-  assert a == Ok(HttpResp { status: 418, body: "from the arm" })
+  assert a == Ok(HttpResp { status = 418, body = "from the arm" })
   assert a == b
   assert b == c
 
@@ -564,8 +564,8 @@ test "the arm reads the request it was given, not a constant" {
   let echo = () => {
     with handle Upstream {
       exchange(req) => Ok(HttpResp {
-        status: 200,
-        body: "${req.method} ${req.url} ${to_string(len(req.headers))} ${body_tag(req.body)}",
+        status = 200,
+        body = "${req.method} ${req.url} ${to_string(len(req.headers))} ${body_tag(req.body)}",
       })
       exchange_bytes(req) => Err(no_answer("exchange_bytes"))
       exchange_stream(req) => Err(no_answer("exchange_stream"))
@@ -578,9 +578,9 @@ test "the arm reads the request it was given, not a constant" {
     )
   }
   let (a, b, c) = echo()
-  assert a == Ok(HttpResp { status: 200, body: "GET http://a/ 0 none" })
-  assert b == Ok(HttpResp { status: 200, body: "GET http://b/ 1 none" })
-  assert c == Ok(HttpResp { status: 200, body: "POST http://a/ 0 text:payload" })
+  assert a == Ok(HttpResp { status = 200, body = "GET http://a/ 0 none" })
+  assert b == Ok(HttpResp { status = 200, body = "GET http://b/ 1 none" })
+  assert c == Ok(HttpResp { status = 200, body = "POST http://a/ 0 text:payload" })
   # three calls, three different answers: the arm cannot be a constant
   assert a != b
   assert b != c
@@ -608,11 +608,11 @@ test "every call shape asks for the budget its deadline was chosen for" {
   with handle Upstream {
     exchange(req) => {
       log_add(seen, "${req.method}/${body_tag(req.body)}=${to_string(req.budget_s)}")
-      Ok(HttpResp { status: 200, body: "" })
+      Ok(HttpResp { status = 200, body = "" })
     }
     exchange_bytes(req) => {
       log_add(seen, "bytes=${to_string(req.budget_s)}")
-      Ok(BytesResp { status: 200, bytes: bytes.utf8("") })
+      Ok(BytesResp { status = 200, bytes = bytes.utf8("") })
     }
     exchange_stream(req) => {
       log_add(seen, "stream=${to_string(req.budget_s)}")
@@ -650,7 +650,7 @@ test "a stream can be answered without a socket" {
     with handle Upstream {
       exchange(req) => Err(no_answer("exchange"))
       exchange_bytes(req) => Err(no_answer("exchange_bytes"))
-      exchange_stream(req) => Ok(StreamResp { status: 206, stream: bytes_stream(bytes.utf8("partial")) })
+      exchange_stream(req) => Ok(StreamResp { status = 206, stream = bytes_stream(bytes.utf8("partial")) })
       exchange_start(req) => Err(no_answer("exchange_start"))
     }
     fetch_stream("http://127.0.0.1:1/", [])
@@ -685,12 +685,12 @@ test "an answered start delivers through await_resp, and its failure is reworded
           log_add(seen, "await ${url}")
           if str.ends_with(url, "/slow") {
             Err(ForeignError {
-              kind: "java.util.concurrent.ExecutionException",
-              message: "java.net.http.HttpTimeoutException: request timed out",
-              cause: Some("java.net.http.HttpTimeoutException: request timed out"),
+              kind = "java.util.concurrent.ExecutionException",
+              message = "java.net.http.HttpTimeoutException: request timed out",
+              cause = Some("java.net.http.HttpTimeoutException: request timed out"),
             })
           } else {
-            Ok(HttpResp { status: 200, body: url })
+            Ok(HttpResp { status = 200, body = url })
           }
         }))
       }
@@ -701,7 +701,7 @@ test "an answered start delivers through await_resp, and its failure is reworded
   # both starts happened before either await: the thunks have not run yet
   assert log_read(seen) == "start http://x/ok;start http://x/slow;"
 
-  assert await_resp(ok_one) == Ok(HttpResp { status: 200, body: "http://x/ok" })
+  assert await_resp(ok_one) == Ok(HttpResp { status = 200, body = "http://x/ok" })
   match await_resp(slow_one) {
     Ok(_) -> { assert false }
     Err(m) -> {
@@ -724,7 +724,7 @@ fn read_from(source: BodySource, pos: Int, acc: Bytes) -> Bytes !io = {
 test "an unsupported JVM file slice is an outbound error before send" {
   let file = test_support.file(bytes.utf8(""))
   let body = request_body(bytes.utf8(""), FileSpan {
-    path: file, offset: 1, length: 0,
+    path = file, offset = 1, length = 0,
   }, bytes.utf8(""))
   let outcome = with_upstream(new_client(), () => post_body("http://127.0.0.1:1/", [], body))
   test_support.remove(file)

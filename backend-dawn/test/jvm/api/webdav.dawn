@@ -19,14 +19,14 @@ test "dav_rel joins the tail segments and refuses one holding a slash" {
 # The same bare request, carrying the Destination header MOVE/COPY read.
 fn dest_req_at(dest: String, host: String, prefix: String) -> Request =
   Request {
-    method: "MOVE", path: "/dav", raw_path: "/dav",
-    params: map.from([("rest", ["x"])]),
-    query: map.empty(), headers: map.from([
+    method = "MOVE", path = "/dav", raw_path = "/dav",
+    params = map.from([("rest", ["x"])]),
+    query = map.empty(), headers = map.from([
       ("destination", [dest]),
       ("host", [host]),
       ("x-dav-prefix", [prefix]),
     ]),
-    body: bytes.utf8(""), body_file: None, route: None,
+    body = bytes.utf8(""), body_file = None, route = None,
   }
 
 fn dest_req(dest: String) -> Request = dest_req_at(dest, "dav.example", "/dav")
@@ -35,23 +35,23 @@ fn dest_req(dest: String) -> Request = dest_req_at(dest, "dav.example", "/dav")
 # expressible through dest_req_at, which carries exactly one value.
 fn dest_req_hosts(dest: String, hosts: List[String]) -> Request =
   Request {
-    method: "MOVE", path: "/dav", raw_path: "/dav",
-    params: map.from([("rest", ["x"])]),
-    query: map.empty(), headers: map.from([
+    method = "MOVE", path = "/dav", raw_path = "/dav",
+    params = map.from([("rest", ["x"])]),
+    query = map.empty(), headers = map.from([
       ("destination", [dest]),
       ("host", hosts),
       ("x-dav-prefix", ["/dav"]),
     ]),
-    body: bytes.utf8(""), body_file: None, route: None,
+    body = bytes.utf8(""), body_file = None, route = None,
   }
 
 fn protocol_req(method: String, header_name: String, header_value: String, body: String) -> Request =
   Request {
-    method: method, path: "/dav/source", raw_path: "/dav/source",
-    params: map.from([("rest", ["source"])]),
-    query: map.empty(),
-    headers: if header_name == "" { map.empty() } else { map.from([(header_name, [header_value])]) },
-    body: bytes.utf8(body), body_file: None, route: None,
+    method = method, path = "/dav/source", raw_path = "/dav/source",
+    params = map.from([("rest", ["source"])]),
+    query = map.empty(),
+    headers = if header_name == "" { map.empty() } else { map.from([(header_name, [header_value])]) },
+    body = bytes.utf8(body), body_file = None, route = None,
   }
 
 fn dest_error(r: Result[Option[String], HttpError], message: String) -> Bool =
@@ -263,11 +263,11 @@ test "a WebDAV client is told to retry a timeout, not to check its credentials" 
 # PROPFIND with the given Depth values, none at all for an empty list.
 fn depth_req(values: List[String]) -> Request =
   Request {
-    method: "PROPFIND", path: "/dav/source", raw_path: "/dav/source",
-    params: map.from([("rest", ["source"])]),
-    query: map.empty(),
-    headers: if len(values) == 0 { map.empty() } else { map.from([("depth", values)]) },
-    body: bytes.utf8(""), body_file: None, route: None,
+    method = "PROPFIND", path = "/dav/source", raw_path = "/dav/source",
+    params = map.from([("rest", ["source"])]),
+    query = map.empty(),
+    headers = if len(values) == 0 { map.empty() } else { map.from([("depth", values)]) },
+    body = bytes.utf8(""), body_file = None, route = None,
   }
 
 fn depth_error_status(r: Result[String, HttpError], status: Int) -> Bool =
@@ -362,12 +362,12 @@ test "dest_rel accepts names that merely contain dots" {
 
 fn parent_row(path: String, is_dir: Bool) -> FileRow =
   FileRow {
-    path: path,
-    is_dir: is_dir,
-    key: None,
-    content_type: "",
-    size: 0,
-    updated_at: "2026-01-01 00:00:00",
+    path = path,
+    is_dir = is_dir,
+    key = None,
+    content_type = "",
+    size = 0,
+    updated_at = "2026-01-01 00:00:00",
   }
 
 test "parent check accepts root and directories but rejects missing rows" {

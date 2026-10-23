@@ -30,7 +30,7 @@ fn head(raw: Bytes) -> Bytes !io = {
 pub fn application_transport() -> Transport = {
   let wire = stdio_transport()
   Transport {
-    read: wire.read,
-    write: raw => wire.write(if first_write() == 1 { head(raw) } else { raw }),
+    read = wire.read,
+    write = raw => wire.write(if first_write() == 1 { head(raw) } else { raw }),
   }
 }
