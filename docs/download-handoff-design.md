@@ -42,7 +42,10 @@ object transfer; its systemd deadline does not govern the nginx data plane.
 
 `backend-dawn/scripts/download-transport/nginx_config.py` generates an entire
 isolated stock nginx configuration. It does not include or reload system nginx
-configuration. Its fixed TLS upstream, CA, signing Host and SNI are supplied by
+configuration. All five nginx temporary path classes and the bootstrap error
+log are explicit, including the unused FastCGI/uWSGI/SCGI module defaults. Rootless
+protocol acceptance also runs against the extracted Ubuntu nginx 1.24.0 binary.
+Its fixed TLS upstream, CA, signing Host and SNI are supplied by
 the local harness. The generator intentionally accepts only a loopback connect
 endpoint; this is reviewable protocol evidence, not an installer for production.
 The operations configuration owner must adapt the template in a later task.
