@@ -1,0 +1,65 @@
+# Site-only control-plane protocol. No network probe or Upstream operation.
+use std/str
+use std/char
+use qiniu/creds.{Qiniu}
+use qiniu/sign.{private_url}
+use svc/export.{pct_encode}
+use util/uri.{parse}
+use util/runtime_ttl.{now_s}
+use util/paths.{safe_persisted_mime, strip_trailing_slash}
+use web/types.{Response, HttpError, http_error, raw, with_header}
+
+fn valid_origin(origin: String) -> Bool = match parse(origin) {
+  Err(_) -> false
+  Ok(u) -> u.scheme == Some("https") && u.host != None && u.user_info == None &&
+    u.query == None && u.fragment == None && (u.path == Some("") || u.path == Some("/")) &&
+    u.port <= 65535 && u.port != 0
+}
+
+fn valid_key(key: String) -> Bool = {
+  if key == "" || len(key) > 1024 || str.contains(key, "\\") { return false }
+  for c in code_points(key) {
+    let n = char.code(c)
+    if n < 32 || (n >= 127 && n <= 159) { return false }
+  }
+  for segment in str.split(key, "/") {
+    if segment == "" || segment == "." || segment == ".." { return false }
+  }
+  true
+}
+
+fn valid_access_key(key: String) -> Bool = {
+  if key == "" || len(key) > 256 { return false }
+  for c in code_points(key) {
+    if not ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') || c == '-' || c == '_') { return false }
+  }
+  true
+}
+
+# Encode the opaque DB key once, before signing. Literal percent bytes remain
+# literal key bytes, never instructions for a second URI decoder.
+pub fn handoff(q: Qiniu, origin: String, method: String, key: String, mime: String) -> Result[Response, HttpError] !io = {
+  if method != "GET" && method != "HEAD" { return Err(http_error(405, "method not allowed")) }
+  if not valid_origin(origin) || strip_trailing_slash(q.domain) != strip_trailing_slash(origin) ||
+    not valid_access_key(q.ak) || q.sk == "" || not valid_key(key) {
+    return Err(http_error(502, "download handoff configuration or key invalid"))
+  }
+  let path = "/" ++ join(map(str.split(key, "/"), pct_encode), "/")
+  let base = strip_trailing_slash(origin)
+  let signed = private_url(q, base ++ path, now_s() + q.expires)
+  let target = str.slice(signed, len(base), len(signed))
+  # No body and no application length/validator. The final entity owns those.
+  Ok(with_header(with_header(with_header(raw(200, "", ""),
+    "X-Accel-Redirect", "/_dawn_object"),
+    "X-Dawn-Download-Target", target), "X-Dawn-Download-Type", safe_persisted_mime(mime)))
+}
+
+test "origin and key admission is closed" {
+  assert valid_origin("https://objects.invalid")
+  for origin in ["", "http://objects.invalid", "https://user@objects.invalid", "https://objects.invalid/path", "https://objects.invalid?x", "https://objects.invalid/#x", "https://objects.invalid:0"] {
+    assert not valid_origin(origin)
+  }
+  for key in ["", "../x", "a/../b", "/x", "x/", "a//b", "a\\b", "x\r\ny"] { assert not valid_key(key) }
+  assert valid_key("中文 space%ZZ.txt")
+}

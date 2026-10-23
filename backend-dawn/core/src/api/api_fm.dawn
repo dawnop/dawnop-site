@@ -1,6 +1,7 @@
 # File-manager handlers (M6 knife 11), pure-metadata subset: list, create-folder,
 # rename, move. These never touch qiniu (rename/move only rewrite paths); the
 # qiniu-mutating endpoints (upload/delete/copy/save) are added separately.
+use util/download_handoff.{handoff}
 use util/http_runtime.{HttpCell, with_upstream}
 use std/str
 use std/bytes
@@ -221,7 +222,9 @@ fn quota_bytes(a: Auth, respack_cell: TtlCell) -> Int !Upstream !io = {
 
 ## GET /api/fm/content?path= — proxy the object bytes through the backend (the
 ## fallback when a cross-origin 302 to qiniu is CORS-blocked). Binary body (G6).
-pub fn content(a: Auth, cl: HttpCell) -> Handler =
+pub fn content(a: Auth, cl: HttpCell) -> Handler = content_with_download(a, cl, None)
+
+fn content_with_download(a: Auth, cl: HttpCell, download_origin: Option[String]) -> Handler =
   req =>
   guarded_out(a, cl, req, () => {
     let rel = fm_split(qparam(req, "path"))
@@ -229,6 +232,10 @@ pub fn content(a: Auth, cl: HttpCell) -> Handler =
       Some(o) ->
         match o.key {
           Some(k) -> {
+            match download_origin {
+              Some(origin) -> return handoff(a.qiniu, origin, req.method, k, o.content_type)
+              None -> ()
+            }
             let url = signed_url(a.qiniu, k, "")
             let r = as_http_with(as_outbound(fetch_stream(url, [])), mutation_failure)?
             # a non-2xx body is qiniu's error, not the file — serving it would
@@ -629,12 +636,15 @@ fn do_upload(a: Auth, path_field: String, fp: Part) -> Result[Response, HttpErro
 }
 
 pub fn routes(a: Auth, cl: HttpCell, space_cell: TtlCell, respack_cell: TtlCell) -> List[Route] =
+  routes_with_download(a, cl, space_cell, respack_cell, None)
+
+pub fn routes_with_download(a: Auth, cl: HttpCell, space_cell: TtlCell, respack_cell: TtlCell, download_origin: Option[String]) -> List[Route] =
   [
     route_get("/api/fm", fm_list(a)),
     route_get("/api/fm/sign", sign(a)),
     route_get("/api/fm/preview", preview(a)),
     route_get("/api/fm/download", download(a)),
-    route_get("/api/fm/content", content(a, cl)),
+    route_get("/api/fm/content", content_with_download(a, cl, download_origin)),
     route_get("/api/fm/stats", stats(a, cl, space_cell, respack_cell)),
     route_get("/api/fm/search", fm_search(a)),
     route_post("/api/fm/create-folder", create_folder(a)),
