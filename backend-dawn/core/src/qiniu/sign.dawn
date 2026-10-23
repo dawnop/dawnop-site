@@ -35,7 +35,7 @@ pub fn qiniu_mac(q: Qiniu, method: String, path_query: String, host: String, con
 pub fn upload_token(q: Qiniu, key: String, deadline: Int) -> String !io = {
   # compact JSON, no spaces — matches the qiniu SDK's json.dumps output so the
   # base64 and therefore the signature match byte-for-byte
-  let policy = "{\"scope\":\"${q.bucket}:${key}\",\"deadline\":${deadline}}"
+  let policy = "{\"scope\":\"${q.bucket}:${key}\",\"deadline\":${deadline},\"insertOnly\":1}"
   let encoded_policy = b64url_encode(policy)
   let sign = hmac_sha1_b64url(q.sk, encoded_policy)
   "${q.ak}:${sign}:${encoded_policy}"

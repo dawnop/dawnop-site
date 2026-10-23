@@ -31,6 +31,7 @@ use util/http.{Upstream, as_outbound}
 use util/jsonx.{obj, jstr}
 use util/runtime_ttl.{now_s}
 use json/value.{Json, JArr, JObj, JStr}
+use util/representation.{Published, collect}
 
 # ---- object-store primitives (shared with webdav.dawn) ----
 
@@ -264,7 +265,15 @@ fn copy_tree_object_rows(q: Qiniu, rows: List[CopiedRow], i: Int, acc: List[Copi
     match copied_result {
       Err(m) -> Err(m)
       Ok(copied_key) -> {
-        let copied = CopiedRow { source = row.source, copied_key = copied_key }
+        let representation: Option[Published] = match copied_key {
+          None -> None
+          Some(key) -> match collect(q, key, row.source.size) {
+            Ok(v) -> Some(v)
+            Err(m) -> { cleanup_fresh_key(q, Some(key))
+              return Err(m) }
+          }
+        }
+        let copied = CopiedRow { source = row.source, copied_key = copied_key, representation = representation }
         match copy_tree_object_rows(q, rows, i + 1, acc ++ [copied]) {
           Ok(done) -> Ok(done)
           Err(m) -> {
@@ -382,7 +391,8 @@ pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json],
     let mime = guess_mime(rel)
     let key = uuid_hex()
     let _up = as_outbound(upload_text(a.qiniu, key, "", mime, now_s() + a.qiniu.expires))?
-    match with_db(a.db, () => create_file_db(rel, key, mime, cur)) {
+    let representation = collect_fresh(a, key, 0)?
+    match with_db(a.db, () => create_file_db(rel, key, mime, cur, representation)) {
       Ok(d) -> Ok(Some(d))
       Err(m) -> {
         let _gc = gc_unreferenced(a, Some(key))
@@ -392,8 +402,8 @@ pub fn do_create_file(a: Auth, rel: String, cur: String) -> Result[Option[Json],
   }
 }
 
-fn create_file_db(rel: String, key: String, mime: String, cur: String) -> Result[Json, String] !Db !io = {
-  let _i = create_file_once(rel, key, mime, 0)?
+fn create_file_db(rel: String, key: String, mime: String, cur: String, representation: Published) -> Result[Json, String] !Db !io = {
+  let _i = create_file_once(rel, key, mime, 0, representation)?
   fs_data(cur)
 }
 
@@ -408,7 +418,8 @@ pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !R
   let mime = save_mime(existing, rel)
   let new_key = save_key(rel)
   let _up = as_outbound(upload_text(a.qiniu, new_key, content, mime, now_s() + a.qiniu.expires))?
-  match with_db(a.db, () => save_db(rel, new_key, mime, text_byte_size(content))) {
+  let representation = collect_fresh(a, new_key, text_byte_size(content))?
+  match with_db(a.db, () => save_db(rel, new_key, mime, text_byte_size(content), representation)) {
     Ok(outcome) -> {
       let _gc = gc_unreferenced(a, outcome.superseded_key)
       Ok(obj([("path", jstr(full(rel)))]))
@@ -420,8 +431,8 @@ pub fn do_save(a: Auth, rel: String, content: String) -> Result[Json, String] !R
   }
 }
 
-fn save_db(rel: String, key: String, mime: String, size: Int) -> Result[ReplaceOutcome, String] !Db !io = {
-  replace_file(rel, key, mime, size)
+fn save_db(rel: String, key: String, mime: String, size: Int, representation: Published) -> Result[ReplaceOutcome, String] !Db !io = {
+  replace_file(rel, key, mime, size, representation)
 }
 
 fn text_byte_size(content: String) -> Int !io =
@@ -456,7 +467,8 @@ pub fn run_upload(a: Auth, rel: String, content: Bytes, mime: String, size: Int)
   let _v = checked?
   let key = upload_key()
   let _up = as_outbound(upload_bytes(a.qiniu, key, content, mime, now_s() + a.qiniu.expires))?
-  match with_db(a.db, () => replace_upload(rel, key, mime, size)) {
+  let representation = collect_fresh(a, key, size)?
+  match with_db(a.db, () => replace_upload(rel, key, mime, size, representation)) {
     Ok(result) -> {
       let (uploaded, outcome) = result
       let _gc = gc_unreferenced(a, outcome.superseded_key)
@@ -486,11 +498,19 @@ fn upload_key() -> String !Random = uuid_hex()
 # The receipt is the row this upload wrote, so it is read inside the transaction
 # that wrote it (repo_fm.replace_file_receipt) rather than by a get_row after the
 # commit. /register has always read its receipt inside its own transaction.
-fn replace_upload(rel: String, key: String, mime: String, size: Int) -> Result[(Json, ReplaceOutcome), String] !Db !io = {
-  let written = replace_file_receipt(rel, key, mime, size)?
+fn replace_upload(rel: String, key: String, mime: String, size: Int, representation: Published) -> Result[(Json, ReplaceOutcome), String] !Db !io = {
+  let written = replace_file_receipt(rel, key, mime, size, representation)?
   let (row, outcome) = written
   Ok((entry_json(row), outcome))
 }
+
+## This key belongs to the application, unlike a direct-upload reservation.
+pub fn collect_fresh(a: Auth, key: String, size: Int) -> Result[Published, String] !Upstream !io =
+  match collect(a.qiniu, key, size) {
+    Ok(v) -> Ok(v)
+    Err(m) -> { gc_unreferenced(a, Some(key))
+      Err(m) }
+  }
 
 # ---- upload-token path shaping ----
 

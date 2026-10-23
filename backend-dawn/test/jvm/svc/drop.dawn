@@ -1,3 +1,4 @@
+use rep_support
 use site_core/repo/repo_drop.{ensure_schema}
 use db/jdbc.{DbConn, open, with_jdbc}
 # ---- tests ----
@@ -108,7 +109,7 @@ test "link parameters are held to their ranges" {
 
 fn commit_test_db() -> DbConn !io = {
   let c = open("jdbc:sqlite::memory:")
-  let _t = with_jdbc(c, () => exec("create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null)", []))
+  let _t = with_jdbc(c, () => exec("create table files (id integer primary key, path text not null unique, is_dir integer not null, key text, content_type text not null, size integer not null, created_at text not null, updated_at text not null, representation_kind text, representation_key text, representation_profile text, representation_etag text, representation_last_modified_s integer)", []))
   let _p = with_jdbc(c, () => exec("create table pending_uploads (key text primary key, path text not null, created_at text not null)", []))
   let _s = with_jdbc(c, () => ensure_schema())
   let _d = with_jdbc(c, () => exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values ('in', 1, null, '', 0, 'now', 'now')", []))
@@ -128,7 +129,7 @@ fn committed(r: Result[Result[(String, Int), Refusal], String]) -> Option[String
 
 test "the final write never overwrites: a taken name gets the next counter" {
   let c = commit_test_db()
-  let r = with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => commit_tx(1, "a.txt", "k1", None, "text/plain", 10, 0))))
+  let r = with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => commit_tx(1, "a.txt", "k1", None, "text/plain", 10, 0, rep_support.publication("k1", 10)))))
   assert committed(r) == Some("a (1).txt")
   # the original row is untouched
   assert with_jdbc(c, () => scalar_int("select count(*) from files where path = 'in/a.txt' and key = 'old-key' and size = 3", [])) == Ok(1)
@@ -139,7 +140,7 @@ test "the final write never overwrites: a taken name gets the next counter" {
 test "the final write re-checks quota with the real size and writes nothing on refusal" {
   let c = commit_test_db()
   let _u = with_jdbc(c, () => exec("update upload_drops set used_files = 2, used_bytes = 200 where id = 1", []))
-  let r = with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => commit_tx(1, "b.txt", "k2", None, "text/plain", 51, 0))))
+  let r = with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => commit_tx(1, "b.txt", "k2", None, "text/plain", 51, 0, rep_support.publication("k2", 51)))))
   assert r == Ok(Err(TooLarge("超出上传链接的总额度（剩余 50 字节）")))
   assert with_jdbc(c, () => scalar_int("select count(*) from files where key = 'k2'", [])) == Ok(0)
   assert with_jdbc(c, () => scalar_int("select used_files * 1000 + used_bytes from upload_drops where id = 1", [])) == Ok(2200)
@@ -149,20 +150,20 @@ test "the final write consumes a reservation once and refuses its replay" {
   let c = commit_test_db()
   let p = DropPending { key = "k3", drop_id = 1, rel = "in/c.txt", size_limit = 100 }
   let _r = with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => reserve_key("k3", 1, "in/c.txt", 100))))
-  let first = with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => commit_tx(1, "c.txt", "k3", Some(p), "text/plain", 5, 0))))
+  let first = with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => commit_tx(1, "c.txt", "k3", Some(p), "text/plain", 5, 0, rep_support.publication("k3", 5)))))
   assert committed(first) == Some("c.txt")
   assert with_jdbc(c, () => scalar_int("select count(*) from drop_pending", [])) == Ok(0)
   assert with_jdbc(c, () => scalar_int("select count(*) from pending_uploads", [])) == Ok(0)
-  let replay = with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => commit_tx(1, "c.txt", "k3", Some(p), "text/plain", 5, 0))))
+  let replay = with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => commit_tx(1, "c.txt", "k3", Some(p), "text/plain", 5, 0, rep_support.publication("k3", 5)))))
   assert replay == Ok(Err(NotFound("上传凭证不存在或已登记")))
   assert with_jdbc(c, () => scalar_int("select count(*) from files where key = 'k3'", [])) == Ok(1)
 }
 
 test "the final write refuses an expired or revoked link" {
   let c = commit_test_db()
-  assert with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => commit_tx(1, "d.txt", "k4", None, "text/plain", 1, 1000)))) == Ok(Err(Gone("上传链接已过期")))
+  assert with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => commit_tx(1, "d.txt", "k4", None, "text/plain", 1, 1000, rep_support.publication("k4", 1))))) == Ok(Err(Gone("上传链接已过期")))
   let _v = with_jdbc(c, () => exec("update upload_drops set revoked = 1 where id = 1", []))
-  assert with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => commit_tx(1, "d.txt", "k4", None, "text/plain", 1, 0)))) == Ok(Err(Gone("上传链接已被吊销")))
+  assert with_jdbc(c, () => with_immediate_tx(() => with_jdbc(c, () => commit_tx(1, "d.txt", "k4", None, "text/plain", 1, 0, rep_support.publication("k4", 1))))) == Ok(Err(Gone("上传链接已被吊销")))
   assert with_jdbc(c, () => scalar_int("select count(*) from files where key = 'k4'", [])) == Ok(0)
 }
 

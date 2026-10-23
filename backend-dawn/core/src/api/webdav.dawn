@@ -31,7 +31,7 @@ use web/types.{Request, Response, HttpError, Handler, Guard, http_error, as_http
 use web/router.{Route, route_method_of, tagged, body_limit, guarded}
 use db/runtime.{with_db, without_extension}
 use svc/auth.{Auth, scheme_param}
-use svc/files.{signed_url, gc_unreferenced, gc_rows_unreferenced, gc_copy_tree_unreferenced, copy_tree_objects}
+use svc/files.{collect_fresh, signed_url, gc_unreferenced, gc_rows_unreferenced, gc_copy_tree_unreferenced, copy_tree_objects}
 use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}
 use util/paths.{basename, parent_rel, ext, ts, guess_mime, safe_persisted_mime, require_admissible_names}
 use qiniu/rs.{upload_file}
@@ -473,8 +473,9 @@ fn put_do(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !Ra
     }
   }
 
-fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int) -> Result[Response, HttpError] !Upstream !io =
-  match with_db(a.db, () => replace_file_strict(rel, key, mime, size)) {
+fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int) -> Result[Response, HttpError] !Upstream !io = {
+  let representation = as_http_with(collect_fresh(a, key, size), mutation_error)?
+  match with_db(a.db, () => replace_file_strict(rel, key, mime, size, representation)) {
     Ok(outcome) -> {
       let _gc = gc_unreferenced(a, outcome.superseded_key)
       Ok(text(if outcome.target_existed { 204 } else { 201 }, ""))
@@ -484,6 +485,7 @@ fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int) -> Res
       Err(mutation_error(m))
     }
   }
+}
 
 # ---- DELETE ----
 

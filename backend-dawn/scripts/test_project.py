@@ -79,6 +79,10 @@ def stage_project(destination: Path, backend: Path = BACKEND) -> None:
         + support
     )
     (destination / "src/test_support.dawn").write_text(support)
+    shutil.copy2(
+        backend / "test/representation_support.dawn",
+        destination / "src/rep_support.dawn",
+    )
     cache_cases = (backend / "test/sql/src/cache_scenarios.dawn").read_text()
     cache_cases = cache_cases.replace("use site_core/", "use ").replace(
         "use scenarios.{check}",

@@ -3,13 +3,16 @@ use site_core/util/errkind.{conflict, upstream, timeout}
 # Where an upload lands: the target directory joined with the sanitized name.
 # The endpoint calls this — the test below drives the same function rather than a
 # copy of the same expression, which is how the copy drifted last time.
-test "register size/mime fall back like FastAPI (stat -> client hint -> guess)" {
+test "register requires authoritative size and rejects conflicting hints" {
   # qiniu stat is authoritative when present
-  assert reg_size("{\"fsize\":123}", Some(9)) == 123
+  assert reg_size("{\"fsize\":123}", Some(123)) == Ok(123)
   assert reg_mime("{\"mimeType\":\"image/png\"}", "text/plain", "a/b.md") == "image/png"
   # missing/zero fsize -> client hint -> 0
-  assert reg_size("{}", Some(9)) == 9
-  assert reg_size("{}", None) == 0
+  assert reg_size("{}", Some(9)) != Ok(9)
+  assert reg_size("{}", None) != Ok(0)
+  assert reg_size("{\"fsize\":0}", None) == Ok(0)
+  assert reg_size("{\"fsize\":0}", Some(9)) != Ok(9)
+  assert reg_size("{\"fsize\":-1}", None) != Ok(-1)
   # missing mimeType -> client content_type -> name-based guess
   assert reg_mime("{}", "text/plain", "a/b.md") == "text/plain"
   assert reg_mime("{}", "", "a/b.md") == "text/markdown"

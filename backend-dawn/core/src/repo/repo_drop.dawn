@@ -8,7 +8,8 @@
 # to FastAPI simply ignores them (its routes do not exist there, so /api/drop
 # answers 404), which is the accepted cost.
 use db/sql.{Db, PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, execute, with_immediate_tx, require_tx, scalar_int, int_at, str_at, bool_at, first_map, first_bool_or}
-use repo/repo_fm.{get_row, subtree_rows, ledger_insert}
+use repo/repo_fm.{get_row, subtree_rows, ledger_insert, representation_params}
+use util/representation.{Published}
 use util/paths.{full}
 
 ## One upload link as stored. Only admin responses include the plaintext token.
@@ -182,10 +183,10 @@ pub fn release_key(key: String, drop_id: Int) -> Result[Int, String] !Db !io = {
 ## insert, never an upsert: a drop can only add files, and the unique index on
 ## files.path turns any race the caller's checks missed into an error instead of
 ## an overwrite.
-pub fn insert_drop_file(rel: String, key: String, content_type: String, size: Int) -> Result[Unit, String] !Db !io = {
+pub fn insert_drop_file(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[Unit, String] !Db !io = {
   let _t = require_tx("drop file insert ${full(rel)}")?
-  let n = exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, ?, ?, datetime('now'), datetime('now'))",
-    [PStr(rel), PStr(key), PStr(content_type), PInt(size)])?
+  let n = exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at,representation_kind,representation_key,representation_profile,representation_etag,representation_last_modified_s) values (?, 0, ?, ?, ?, datetime('now'), datetime('now'),?,?,?,?,?)",
+    [PStr(rel), PStr(key), PStr(content_type), PInt(size)] ++ representation_params(representation, key, size)?)?
   if n == 1 { Ok(()) } else { Err("drop file insert count changed: ${full(rel)}") }
 }
 

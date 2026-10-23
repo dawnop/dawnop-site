@@ -43,6 +43,9 @@ const TRANSFER_TIMEOUT_S: Int = 3600
 
 pub type HttpResp = { status: Int, body: String }
 
+## Bounded management HEAD. Preserve every occurrence for semantic validation.
+pub type HeadResp = { status: Int, headers: List[(String, String)] }
+
 ## A stable file region. Current JVM uploads describe the whole file; another
 ## transport can consume the same path, offset and length with bounded reads.
 pub type FileSpan = { path: String, offset: Int, length: Int }
@@ -124,11 +127,22 @@ pub type OutReq = {
 ## above this line. No operation declares effects of its own (spec §6.5): what
 ## an arm does is charged where the handler is installed.
 pub effect Upstream {
+  fn exchange_head(req: OutReq) -> Result[HeadResp, ForeignError]
   fn exchange(req: OutReq) -> Result[HttpResp, ForeignError]
   fn exchange_bytes(req: OutReq) -> Result[BytesResp, ForeignError]
   fn exchange_stream(req: OutReq) -> Result[StreamResp, ForeignError]
   fn exchange_start(req: OutReq) -> Result[Pending, ForeignError]
 }
+
+pub fn fetch_head(url: String) -> Result[HeadResp, String] !Upstream =
+  match exchange_head(OutReq { method = "HEAD", url = url,
+    headers = [("Accept-Encoding", "identity"), ("Cache-Control", "no-transform")],
+    body = NoBody, budget_s = MANAGEMENT_TIMEOUT_S }) {
+    Ok(r) -> Ok(r)
+    Err(e) -> Err(if str.ends_with(e.kind, "TimeoutException") {
+      timeout("representation metadata timed out")
+    } else { upstream("representation metadata unavailable") })
+  }
 
 ## An exchange the handler has already set in motion. `await_resp` is where the
 ## calling thread joins it; one that is never awaited still completes and is

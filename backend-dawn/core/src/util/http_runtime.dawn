@@ -1,7 +1,8 @@
 # IO callbacks keep transport resources out of the shared application.
-use util/http.{Upstream, OutReq, HttpResp, BytesResp, StreamResp, Pending}
+use util/http.{Upstream, OutReq, HttpResp, HeadResp, BytesResp, StreamResp, Pending}
 use util/http_batch.{UpstreamBatch, BatchReq, BatchReply}
 pub type HttpCell = {
+  head: fn(OutReq) -> Result[HeadResp, ForeignError] !io,
   text: fn(OutReq) -> Result[HttpResp, ForeignError] !io,
   bytes: fn(OutReq) -> Result[BytesResp, ForeignError] !io,
   stream: fn(OutReq) -> Result[StreamResp, ForeignError] !io,
@@ -11,6 +12,7 @@ pub type HttpCell = {
 pub fn with_upstream[T](cl: HttpCell, body: fn() -> T !Upstream !UpstreamBatch !io) -> T !io = {
   with handle UpstreamBatch { exchange_batch(requests) => cl.batch(requests) }
   with handle Upstream {
+    exchange_head(req) => cl.head(req)
     exchange(req) => cl.text(req)
     exchange_bytes(req) => cl.bytes(req)
     exchange_stream(req) => cl.stream(req)

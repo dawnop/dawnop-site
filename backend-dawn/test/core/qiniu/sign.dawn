@@ -10,7 +10,7 @@ test "signatures match the qiniu SDK byte-for-byte" {
     up_host = "",
   }
   assert upload_token(q, "path/to/key.jpg", 1783976183) ==
-    "AKtest:LdlhAwhBCGjF3a-wmS6FRzyLyik=:eyJzY29wZSI6Im15YnVja2V0OnBhdGgvdG8va2V5LmpwZyIsImRlYWRsaW5lIjoxNzgzOTc2MTgzfQ=="
+    "AKtest:KLG8cbqVk0uxt7p5j2DX07Vyna8=:eyJzY29wZSI6Im15YnVja2V0OnBhdGgvdG8va2V5LmpwZyIsImRlYWRsaW5lIjoxNzgzOTc2MTgzLCJpbnNlcnRPbmx5IjoxfQ=="
   assert private_url(q, "https://cdn.example.com/a.jpg", 1783976183) ==
     "https://cdn.example.com/a.jpg?e=1783976183&token=AKtest:qds6pILEK2BxpimglNVjrgvF1nU="
   assert management_token(q, "/stat/abc\n") == "QBox AKtest:uq4LtkfJVo-ZNXoftWh9gv1-zVs="
@@ -44,7 +44,7 @@ test "a limited upload token carries insertOnly and fsizeLimit after scope and d
   }
   assert upload_token_limited(q, "path/to/key.jpg", 1783976183, 1048576) ==
     "AKtest:6zGYQhyncrYVUlKVvSiVDuIgP0Q=:eyJzY29wZSI6Im15YnVja2V0OnBhdGgvdG8va2V5LmpwZyIsImRlYWRsaW5lIjoxNzgzOTc2MTgzLCJpbnNlcnRPbmx5IjoxLCJmc2l6ZUxpbWl0IjoxMDQ4NTc2fQ=="
-  # the admin token is untouched by the new function: same policy as before
+  # ordinary uploads also forbid overwriting a published object
   assert upload_token(q, "path/to/key.jpg", 1783976183) ==
-    "AKtest:LdlhAwhBCGjF3a-wmS6FRzyLyik=:eyJzY29wZSI6Im15YnVja2V0OnBhdGgvdG8va2V5LmpwZyIsImRlYWRsaW5lIjoxNzgzOTc2MTgzfQ=="
+    "AKtest:KLG8cbqVk0uxt7p5j2DX07Vyna8=:eyJzY29wZSI6Im15YnVja2V0OnBhdGgvdG8va2V5LmpwZyIsImRlYWRsaW5lIjoxNzgzOTc2MTgzLCJpbnNlcnRPbmx5IjoxfQ=="
 }

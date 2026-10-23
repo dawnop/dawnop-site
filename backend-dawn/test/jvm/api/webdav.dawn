@@ -1,3 +1,4 @@
+use site_core/util/representation as test_representation
 use web/types.{response_headers}
 use site_core/util/errkind.{precondition, upstream, timeout}
 test "dav_rel joins the tail segments and refuses one holding a slash" {
@@ -368,6 +369,7 @@ fn parent_row(path: String, is_dir: Bool) -> FileRow =
     content_type = "",
     size = 0,
     updated_at = "2026-01-01 00:00:00",
+    representation = test_representation.missing(),
   }
 
 test "parent check accepts root and directories but rejects missing rows" {

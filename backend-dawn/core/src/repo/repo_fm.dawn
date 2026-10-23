@@ -2,13 +2,14 @@
 # FsData serialization, ancestor-dir backfill, and reparent — all pure metadata
 # on the `files` table (rename/move only rewrite paths, never touch qiniu).
 use std/str
-use db/sql.{Db, PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, with_immediate_tx, require_tx, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
+use db/sql.{execute, scalar_int, opt_int_at, SqlV, Db, PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, with_immediate_tx, require_tx, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
 use json/value.{Json, JNull, JInt, JStr, JArr}
 use util/jsonx.{obj, jstr, jbool}
 use util/paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts, safe_persisted_mime}
 use util/errkind.{conflict, precondition}
+use util/representation.{Stored, Published, fields, validate}
 
-pub type FileRow = { path: String, is_dir: Bool, key: Option[String], content_type: String, size: Int, updated_at: String }
+pub type FileRow = { path: String, is_dir: Bool, key: Option[String], content_type: String, size: Int, updated_at: String, representation: Stored }
 
 pub type ReplaceOutcome = { target_existed: Bool, superseded_key: Option[String] }
 
@@ -16,7 +17,7 @@ pub type SubtreeWriteOutcome = { destination_existed: Bool, replaced_rows: List[
 
 pub type MovePlan = { source_root: String, destination_root: String }
 
-pub type CopiedRow = { source: FileRow, copied_key: Option[String] }
+pub type CopiedRow = { source: FileRow, copied_key: Option[String], representation: Option[Published] }
 
 pub type CopyTree = { source_root: String, destination_root: String, rows: List[CopiedRow] }
 
@@ -24,9 +25,10 @@ type CopyPolicy =
   | FillMissingCopyAncestors
   | RequireExistingCopyAncestors
 
-const COLS: String = "path, is_dir, key, content_type, size, updated_at"
+const REP_COLS: String = "representation_kind,representation_key,representation_profile,representation_etag,representation_last_modified_s"
+const COLS: String = "path, is_dir, key, content_type, size, updated_at," ++ REP_COLS
 
-fn col_types() -> List[Col] = [ColStr, ColInt, ColStr, ColStr, ColInt, ColStr]
+fn col_types() -> List[Col] = [ColStr, ColInt, ColStr, ColStr, ColInt, ColStr, ColStr, ColStr, ColStr, ColStr, ColInt]
 
 fn row_of(r: List[Cell]) -> FileRow =
   FileRow {
@@ -36,7 +38,28 @@ fn row_of(r: List[Cell]) -> FileRow =
     content_type = opt_or_blank(r, 3),
     size = int_at(r, 4),
     updated_at = str_at(r, 5),
+    representation = Stored { kind = opt_str_at(r, 6), key = opt_str_at(r, 7), profile = opt_str_at(r, 8), etag = opt_str_at(r, 9), last_modified_s = opt_int_at(r, 10) },
   }
+
+pub fn ensure_representation_schema() -> Result[Unit, String] !Db !io = {
+  for (name, typ) in [("representation_kind", "text"), ("representation_key", "text"), ("representation_profile", "text"), ("representation_etag", "text"), ("representation_last_modified_s", "integer")] {
+    if scalar_int("select count(*) from pragma_table_info('files') where name = ?", [PStr(name)])? == 0 {
+      execute("alter table files add column ${name} ${typ}", [])?
+    }
+  }
+  Ok(())
+}
+
+pub fn check_representation_schema() -> Result[Unit, String] !Db !io = {
+  let _ = query("select ${COLS} from files limit 0", [], col_types())?
+  Ok(())
+}
+
+pub fn representation_params(value: Published, key: String, size: Int) -> Result[List[SqlV], String] = {
+  validate(value, key, size)?
+  let v = fields(value)
+  Ok([PStr(v.kind), PStr(v.key), PStr(v.profile), PStr(v.etag), PInt(v.last_modified_s)])
+}
 
 fn opt_or_blank(r: List[Cell], i: Int) -> String =
   match opt_str_at(r, i) {
@@ -296,8 +319,8 @@ fn delete_subtree_tx(rel: String) -> Result[List[FileRow], String] !Db !io =
     }
   }
 
-pub fn replace_file(rel: String, key: String, content_type: String, size: Int) -> Result[ReplaceOutcome, String] !Db !io =
-  with_immediate_tx(() => replace_file_tx(rel, key, content_type, size, AllowMissingAncestors))
+pub fn replace_file(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[ReplaceOutcome, String] !Db !io =
+  with_immediate_tx(() => replace_file_tx(rel, key, content_type, size, representation, AllowMissingAncestors))
 
 ## Proxy upload's final write: replace the row and answer with the row that was
 ## written. The read shares the write's transaction, which is the whole point of
@@ -305,9 +328,9 @@ pub fn replace_file(rel: String, key: String, content_type: String, size: Int) -
 ## after the commit answers with whatever row is there by then, so a second
 ## writer on the same path gets to describe this response, and a delete gets to
 ## turn an already-committed write into a failure.
-pub fn replace_file_receipt(rel: String, key: String, content_type: String, size: Int) -> Result[(FileRow, ReplaceOutcome), String] !Db !io =
+pub fn replace_file_receipt(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[(FileRow, ReplaceOutcome), String] !Db !io =
   with_immediate_tx(() => {
-    let outcome = replace_file_tx(rel, key, content_type, size, AllowMissingAncestors)?
+    let outcome = replace_file_tx(rel, key, content_type, size, representation, AllowMissingAncestors)?
     match receipt_row(rel)? {
       Some(o) -> Ok((o, outcome))
       None -> Err("uploaded file vanished: ${full(rel)}")
@@ -334,17 +357,17 @@ fn receipt_row(rel: String) -> Result[Option[FileRow], String] !Db !io = {
   get_row(rel)
 }
 
-pub fn replace_file_strict(rel: String, key: String, content_type: String, size: Int) -> Result[ReplaceOutcome, String] !Db !io =
-  with_immediate_tx(() => replace_file_tx(rel, key, content_type, size, RequireExistingAncestors))
+pub fn replace_file_strict(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[ReplaceOutcome, String] !Db !io =
+  with_immediate_tx(() => replace_file_tx(rel, key, content_type, size, representation, RequireExistingAncestors))
 
-fn replace_file_tx(rel: String, key: String, content_type: String, size: Int, policy: AncestorPolicy) -> Result[ReplaceOutcome, String] !Db !io = {
+fn replace_file_tx(rel: String, key: String, content_type: String, size: Int, representation: Published, policy: AncestorPolicy) -> Result[ReplaceOutcome, String] !Db !io = {
   let _v = validate_ancestors(rel, policy)?
   let _a = match policy {
     AllowMissingAncestors -> ensure_loop(ancestor_paths(rel), 0)
     RequireExistingAncestors -> Ok(0)
   }?
   let existing = get_row(rel)?
-  let _i = insert_file_row(rel, key, content_type, size)?
+  let _i = insert_file_row(rel, key, content_type, size, representation)?
   Ok(ReplaceOutcome {
     target_existed = existing != None,
     superseded_key = superseded_file_key(existing, key),
@@ -361,24 +384,34 @@ fn superseded_file_key(existing: Option[FileRow], new_key: String) -> Option[Str
     None -> None
   }
 
-pub fn insert_file(rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !Db !io =
-  match replace_file(rel, key, content_type, size) {
+pub fn insert_file(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[Int, String] !Db !io =
+  match replace_file(rel, key, content_type, size, representation) {
     Ok(_) -> Ok(1)
     Err(m) -> Err(m)
   }
 
 ## WebDAV final file write: strict parent-chain validation and the upsert share
 ## one immediate transaction. Missing parents are never synthesized here.
-pub fn insert_file_strict(rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !Db !io =
-  match replace_file_strict(rel, key, content_type, size) {
+pub fn insert_file_strict(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[Int, String] !Db !io =
+  match replace_file_strict(rel, key, content_type, size, representation) {
     Ok(_) -> Ok(1)
     Err(m) -> Err(m)
   }
 
-fn insert_file_row(rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !Db !io = {
+fn insert_file_row(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[Int, String] !Db !io = {
   let _t = validate_insert_file_target(rel)?
-  let n = exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, ?, ?, datetime('now'), datetime('now')) on conflict(path) do update set key = excluded.key, content_type = excluded.content_type, size = excluded.size, updated_at = datetime('now') where files.is_dir = 0",
-    [PStr(rel), PStr(key), PStr(content_type), PInt(size)])?
+  let v = fields(representation)
+  if v.kind == "local-empty-v1" {
+    match get_row(rel)? {
+      Some(old) -> match old.representation.last_modified_s {
+        Some(lm) -> if old.size > 0 && lm >= v.last_modified_s { return Err("empty publication requires a later modification second") }
+        None -> ()
+      }
+      None -> ()
+    }
+  }
+  let n = exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at,${REP_COLS}) values (?, 0, ?, ?, ?, datetime('now'), datetime('now'),?,?,?,?,?) on conflict(path) do update set key = excluded.key, content_type = excluded.content_type, size = excluded.size, updated_at = datetime('now'), representation_kind=excluded.representation_kind, representation_key=excluded.representation_key, representation_profile=excluded.representation_profile, representation_etag=excluded.representation_etag, representation_last_modified_s=excluded.representation_last_modified_s where files.is_dir = 0",
+    [PStr(rel), PStr(key), PStr(content_type), PInt(size)] ++ representation_params(representation, key, size)?)?
   if n == 0 {
     match get_row(rel)? {
       Some(o) -> if o.is_dir { Err(conflict("目标是目录：${full(rel)}")) } else { Err("file upsert affected no row: ${full(rel)}") }
@@ -423,13 +456,13 @@ fn reject_directory_target(rel: String) -> Result[Unit, String] !Db !io =
     None -> Ok(())
   }
 
-pub fn create_file_once(rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !Db !io =
+pub fn create_file_once(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[Int, String] !Db !io =
   with_immediate_tx(() => {
     let _v = validate_fm_ancestors(rel)?
     let _a = ensure_loop(ancestor_paths(rel), 0)?
     let _t = validate_create_file_target(rel)?
-    let n = exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at) values (?, 0, ?, ?, ?, datetime('now'), datetime('now'))",
-      [PStr(rel), PStr(key), PStr(content_type), PInt(size)])?
+    let n = exec("insert into files (path, is_dir, key, content_type, size, created_at, updated_at,${REP_COLS}) values (?, 0, ?, ?, ?, datetime('now'), datetime('now'),?,?,?,?,?)",
+      [PStr(rel), PStr(key), PStr(content_type), PInt(size)] ++ representation_params(representation, key, size)?)?
     if n == 1 { Ok(n) } else { Err("create-file insert count changed: ${full(rel)}") }
   })
 
@@ -461,7 +494,7 @@ pub fn validate_register_preflight(rel: String, key: String) -> Result[Unit, Str
   }
 }
 
-pub fn finalize_register(rel: String, key: String, content_type: String, size: Int) -> Result[(FileRow, ReplaceOutcome), String] !Db !io =
+pub fn finalize_register(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[(FileRow, ReplaceOutcome), String] !Db !io =
   with_immediate_tx(() => {
     let pending = pending_upload_matches(key, full(rel))?
     if not pending {
@@ -469,7 +502,7 @@ pub fn finalize_register(rel: String, key: String, content_type: String, size: I
     } else if key_referenced(key)? {
       Err(conflict("对象 key 已被文件引用：${key}"))
     } else {
-      let outcome = replace_file_tx(rel, key, content_type, size, AllowMissingAncestors)?
+      let outcome = replace_file_tx(rel, key, content_type, size, representation, AllowMissingAncestors)?
       let consumed = exec("delete from pending_uploads where key = ? and path = ?", [PStr(key), PStr(full(rel))])?
       if consumed != 1 {
         Err("register ledger consume count changed: ${key}")
@@ -721,7 +754,7 @@ fn prepare_copy_tree(old_rel: String, new_rel: String) -> Result[CopyTree, Strin
   Ok(CopyTree {
     source_root = old_rel,
     destination_root = new_rel,
-    rows = map(rows, o => CopiedRow { source = o, copied_key = None }),
+    rows = map(rows, o => CopiedRow { source = o, copied_key = None, representation = None }),
   })
 }
 
@@ -873,7 +906,7 @@ fn validate_copy_snapshot_rows(current: List[FileRow], planned: List[CopiedRow],
 
 fn same_file_row(a: FileRow, b: FileRow) -> Bool =
   a.path == b.path && a.is_dir == b.is_dir && a.key == b.key &&
-  a.content_type == b.content_type && a.size == b.size && a.updated_at == b.updated_at
+  a.content_type == b.content_type && a.size == b.size && a.updated_at == b.updated_at && a.representation == b.representation
 
 fn validate_copy_destination_roots(trees: List[CopyTree], policy: CopyPolicy, i: Int) -> Result[Unit, String] !Db !io =
   if i >= len(trees) {
@@ -896,10 +929,11 @@ fn validate_copied_keys(trees: List[CopyTree], tree_i: Int, row_i: Int) -> Resul
     let row = trees[tree_i].rows[row_i]
     let _s = validate_copy_source_row(row.source)?
     let valid = if row.source.is_dir {
-      row.copied_key == None
+      row.copied_key == None && row.representation == None
     } else {
       match row.copied_key {
-        Some(key) -> str.trim(key) != ""
+        Some(key) -> str.trim(key) != "" && match row.representation { Some(v) -> validate(v, key, row.source.size) == Ok(())
+          None -> false }
         None -> false
       }
     }
@@ -944,7 +978,8 @@ fn insert_copy_rows(tree: CopyTree, i: Int) -> Result[Int, String] !Db !io =
         # row, so an unshippable legacy value would be duplicated rather than
         # retired. It goes through the outbound boundary on the way in, the same
         # way svc/files save_mime does, and the copy lands clean.
-        Some(key) -> insert_file_row(destination, key, safe_persisted_mime(row.source.content_type), row.source.size)
+        Some(key) -> match row.representation { Some(v) -> insert_file_row(destination, key, safe_persisted_mime(row.source.content_type), row.source.size, v)
+          None -> Err("copy representation missing") }
         None -> Err("copy insertion has no object result: ${full(row.source.path)}")
       }
     }

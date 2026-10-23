@@ -7,6 +7,7 @@ use site_core/util/http_batch as batch
 pub fn new_client() -> HttpCell = {
   let cfg = CurlConfig { temp_parent = "" }
   HttpCell {
+    head = req => curl.with_upstream(cfg, () => http.exchange_head(req)),
     text = req => curl.with_upstream(cfg, () => http.exchange(req)),
     bytes = req => curl.with_upstream(cfg, () => http.exchange_bytes(req)),
     stream = req => curl.with_upstream(cfg, () => http.exchange_stream(req)),
