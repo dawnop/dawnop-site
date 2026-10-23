@@ -191,6 +191,7 @@ class Bucket:
             self.pauses = {}
             self.pause_entered = {}
             self.stalls = {}
+            self.uploads = {}
 
     def log(self, **kw):
         with self.lock:
@@ -313,12 +314,70 @@ class Handler(BaseHTTPRequestHandler):
         body = self._read_body()
         if segs[:1] == ["__fake"]:
             return self._control_post(segs, body)
+        if segs[:1] == ["buckets"]:
+            return self._resumable(segs, body)
         if not segs:
             return self._upload(body)
         if segs[0] == "delete" and len(segs) == 2:
             return self._delete(segs[1])
         if segs[0] == "copy" and len(segs) == 5 and segs[3:] == ["force", "false"]:
             return self._copy(segs[1], segs[2])
+        return self._qiniu_error(404, "no such route")
+
+    def do_PUT(self):  # noqa: N802
+        return self._resumable(
+            [s for s in self.path.split("?")[0].split("/") if s], self._read_body()
+        )
+
+    def _resumable(self, segs, body):
+        # Qiniu multipart v2 initialization, part and completion shapes:
+        # https://developer.qiniu.com/kodo/6364/multipartupload-interface
+        if (
+            len(segs) not in {5, 6, 7}
+            or segs[0] != "buckets"
+            or segs[1] != FAKE_BUCKET
+            or segs[2] != "objects"
+            or segs[4] != "uploads"
+        ):
+            return self._qiniu_error(404, "no such route")
+        key = base64.urlsafe_b64decode(segs[3] + "=" * (-len(segs[3]) % 4)).decode()
+        token = self.headers.get("Authorization", "").removeprefix("UpToken ")
+        policy = _upload_policy(token, key)
+        if policy is None:
+            return self._qiniu_error(401, "bad token")
+        if len(segs) == 5 and self.command == "POST":
+            upload = str(len(self.bucket.uploads) + 1)
+            self.bucket.uploads[upload] = {"key": key, "parts": {}}
+            return self._json(
+                200, {"uploadId": upload, "expireAt": int(time.time()) + 3600}
+            )
+        session = self.bucket.uploads.get(segs[5])
+        if session is None or session["key"] != key:
+            return self._qiniu_error(404, "unknown upload")
+        if len(segs) == 7 and self.command == "PUT":
+            number = int(segs[6])
+            if not 1 <= number <= 10000:
+                return self._qiniu_error(400, "invalid part")
+            etag = hashlib.md5(body).hexdigest()
+            session["parts"][number] = (etag, body)
+            return self._json(200, {"etag": etag, "md5": etag})
+        if len(segs) == 6 and self.command == "POST":
+            supplied = json.loads(body)["parts"]
+            numbers = [part["partNumber"] for part in supplied]
+            if numbers != sorted(set(numbers)) or not numbers:
+                return self._qiniu_error(400, "invalid part order")
+            parts = [session["parts"][number] for number in numbers]
+            if any(
+                part["etag"] != actual[0]
+                for part, actual in zip(supplied, parts, strict=True)
+            ) or any(len(part[1]) < 1048576 for part in parts[:-1]):
+                return self._qiniu_error(400, "invalid parts")
+            return self._store_upload(
+                key,
+                b"".join(part[1] for part in parts),
+                "application/octet-stream",
+                policy,
+            )
         return self._qiniu_error(404, "no such route")
 
     # -- qiniu: bucket manager ------------------------------------------------
@@ -389,6 +448,9 @@ class Handler(BaseHTTPRequestHandler):
         policy = _upload_policy(token, key)
         if policy is None:
             return self._qiniu_error(401, "bad token")
+        return self._store_upload(key, content, mime, policy)
+
+    def _store_upload(self, key, content, mime, policy):
         self.bucket.wait_if_paused("upload")
         if self._refused("upload", key=key):
             return None
@@ -478,8 +540,21 @@ class Handler(BaseHTTPRequestHandler):
             )
         if self.command == "HEAD":
             self.bucket.log(op="head", key=key, outcome="full")
+            self.bucket.wait_if_paused("head")
             self.bucket.stall_if_armed("head")
             if self._refused("head", key=key):
+                return None
+            if "head_headers" in obj:
+                if obj.get("informational"):
+                    self.wfile.write(
+                        b'HTTP/1.1 103 Early Hints\r\nETag: "hint"\r\n\r\n'
+                    )
+                self.send_response(obj.get("head_status", 200))
+                self.send_header("Connection", "close")
+                for name, value in obj["head_headers"]:
+                    self.send_header(name, value)
+                self.end_headers()
+                self.close_connection = True
                 return None
             return self._send(
                 200, content, obj["mime"] or "application/octet-stream", metadata
@@ -565,6 +640,16 @@ class Handler(BaseHTTPRequestHandler):
                 "content": payload.get("content", "").encode(),
                 "mime": payload.get("mime", "application/octet-stream"),
             }
+            for name in (
+                "stat_size",
+                "etag",
+                "last_modified",
+                "head_headers",
+                "head_status",
+                "informational",
+            ):
+                if name in payload:
+                    self.bucket.objects[payload["key"]][name] = payload[name]
             return self._json(200, {"ok": True})
         if segs[1:] == ["stall"]:
             self.bucket.arm_stall(payload["op"], float(payload.get("seconds", 0)))
@@ -656,6 +741,11 @@ def serve(port: int) -> ThreadingHTTPServer:
     context.load_cert_chain(cert, key)
 
     class IsolatedServer(ThreadingHTTPServer):
+        def handle_error(self, request, client_address):
+            # Cancellation is an expected fixture input. Never print request
+            # state or unbounded foreign diagnostics from a worker thread.
+            pass
+
         def get_request(self):
             connection, address = super().get_request()
             connection.settimeout(15)

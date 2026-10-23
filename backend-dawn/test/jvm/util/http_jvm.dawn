@@ -564,7 +564,7 @@ test "the arm reads the request it was given, not a constant" {
   # assertion above. Echoing the request back is what tells them apart.
   let echo = () => {
     with handle Upstream {
-    exchange_head(req) => Err(ForeignError { kind = "test.unexpected_head", message = "unexpected metadata request", cause = None })
+      exchange_head(req) => Err(ForeignError { kind = "test.unexpected_head", message = "unexpected metadata request", cause = None })
       exchange(req) => Ok(HttpResp {
         status = 200,
         body = "${req.method} ${req.url} ${to_string(len(req.headers))} ${body_tag(req.body)}",
@@ -651,7 +651,7 @@ test "a stream can be answered without a socket" {
   # handler.
   let served = {
     with handle Upstream {
-    exchange_head(req) => Err(ForeignError { kind = "test.unexpected_head", message = "unexpected metadata request", cause = None })
+      exchange_head(req) => Err(ForeignError { kind = "test.unexpected_head", message = "unexpected metadata request", cause = None })
       exchange(req) => Err(no_answer("exchange"))
       exchange_bytes(req) => Err(no_answer("exchange_bytes"))
       exchange_stream(req) => Ok(StreamResp { status = 206, stream = bytes_stream(bytes.utf8("partial")) })
@@ -679,7 +679,7 @@ test "an answered start delivers through await_resp, and its failure is reworded
   let seen = log_new()
   let started = {
     with handle Upstream {
-    exchange_head(req) => Err(ForeignError { kind = "test.unexpected_head", message = "unexpected metadata request", cause = None })
+      exchange_head(req) => Err(ForeignError { kind = "test.unexpected_head", message = "unexpected metadata request", cause = None })
       exchange(req) => Err(no_answer("exchange"))
       exchange_bytes(req) => Err(no_answer("exchange_bytes"))
       exchange_stream(req) => Err(no_answer("exchange_stream"))

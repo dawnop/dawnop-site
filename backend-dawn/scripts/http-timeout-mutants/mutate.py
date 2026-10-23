@@ -74,13 +74,8 @@ def main() -> int:
             "  if timed_out(m) { timeout(m) } else { upstream(m) }\n",
             "  upstream(m)\n",
         )
-        # The classifier now lives in core, apart from Builder.timeout. Remove
-        # the import this mutation stops using so the mutant remains live code.
-        replace_once(
-            http,
-            "use util/errkind.{upstream, timeout}\n",
-            "use util/errkind.{upstream}\n",
-        )
+        # The bounded metadata HEAD owner still uses timeout independently.
+        # Keep that import so this remains a compiling classifier mutation.
     elif args.mutant == "timeout-tag-second-opinion":
         # The classifier stops reading deadline_text's verdict and forms its
         # own, off the exception class name -- which is exactly the plausible

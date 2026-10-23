@@ -257,6 +257,7 @@ def expected_digest(size):
 
 def seed(db, keys, origin):
     import contract_download
+
     contract_download.prepare_rows(db, origin)
     with sqlite3.connect(db) as c:
         for key in keys:
@@ -272,7 +273,14 @@ def seed(db, keys, origin):
                     contract_fixture.T0,
                 ),
             )
-            c.execute("update files set representation_kind='object-identity-v1',representation_key=key,representation_profile=?,representation_etag=?,representation_last_modified_s=1445412480 where path=?", ("identity-v1:" + hashlib.sha256(origin.encode()).hexdigest(), ETAG, key))
+            c.execute(
+                "update files set representation_kind='object-identity-v1',representation_key=key,representation_profile=?,representation_etag=?,representation_last_modified_s=1445412480 where path=?",
+                (
+                    "identity-v1:" + hashlib.sha256(origin.encode()).hexdigest(),
+                    ETAG,
+                    key,
+                ),
+            )
 
 
 def login(number):
@@ -1154,7 +1162,9 @@ def main():
         env = {
             k: v
             for k, v in os.environ.items()
-            if not k.startswith(("DAWN_", "QINIU_", "TENCENT_"))
+            if not k.startswith(
+                ("DAWN_", "QINIU_", "TENCENT_", "VAULT_", "LIGHTHOUSE_")
+            )
             and k not in {"SECRET_KEY", "DAWNOP_ENV", "LIGHTHOUSE_INSTANCE_ID"}
         }
         env.update(
@@ -1205,7 +1215,9 @@ def main():
         for name, app_port in (("stage", stage.port), ("jvm", jvm_port)):
             front_locations += f"location = /_{name}_content {{ proxy_pass http://127.0.0.1:{app_port}/api/fm/content; proxy_http_version 1.1; proxy_set_header Connection close; proxy_buffering off; proxy_next_upstream off; }}\n"
         config = config.replace(
-            "location / { return 404; }", front_locations + "location / { return 404; }"
+            "    location = /api/fm/content {",
+            front_locations + "    location = /api/fm/content {",
+            1,
         )
         # Prove the nonstandard status limit using the actual nginx validator.
         invalid = runtime / "invalid.conf"

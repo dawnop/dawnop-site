@@ -1,17 +1,19 @@
-# Native FM download handoff, K1b
+# Native download handoff, K1b transport with K2 DAV integration
 
 Status: default off, isolated prototype. No production cutover is authorized by
 this change. The October 23 coordinator ruling accepts object representation
 validators, 206/304/412/416, an actual object HEAD, and progress timeouts in place
-of a fixed total download deadline. DAV business routes remain on their existing
-implementation. Upload and management curl budgets are unchanged.
+of a fixed total download deadline. K2 now integrates DAV business routes in both
+application arms. Upload and management curl budgets are unchanged. See
+[the K2 representation design](download-k2-design.md), [golden review](download-k2-golden-review.md)
+and [maintenance runbook](download-k2-maintenance.md).
 
 ## Control plane
 
-Only the native entry reads `DAWN_DOWNLOAD_HANDOFF` (`off` by default, exactly
+Both application entries read `DAWN_DOWNLOAD_HANDOFF` (`off` by default, exactly
 `on` or `off`) and `DAWN_DOWNLOAD_ORIGIN` (empty by default). These are trusted
-deployment settings, never request headers or query parameters. The JVM entry
-and existing handler entry points keep the old behavior. The switch requires a
+deployment settings, never request headers or query parameters. DAV GET/HEAD/PROPFIND
+form one capability group and return authenticated 503 when disabled. The switch requires a
 matching, fixed HTTPS `QINIU_DOMAIN`, credentials, and a valid DB key. Missing or
 inconsistent configuration returns application JSON 502 without object IO.
 
@@ -21,8 +23,9 @@ encoded URL with the existing Qiniu signing function and expiry. There is no
 HEAD, GET, stat or curl preflight. Dot segments, empty segments, backslash,
 control characters and oversized keys are rejected. A literal percent is encoded
 as `%25`, including a key containing literal `%ZZ`. It is never interpreted as
-an incoming escape. Existing preview, download, sign, DAV and upload routes are
-unchanged. The feature being off keeps the 355-case golden contract unchanged.
+an incoming escape. K2 also requires a validated persisted representation before
+serving the configured FM content and DAV paths. Preview/download/sign retain
+their separate business contracts; all file writers persist HEAD metadata.
 
 The normal `Response` and `with_header` interface emits an empty control response:
 
@@ -164,19 +167,18 @@ isolated matrix does not complete DAV integration or authorize production.
 
 ## DAV follow-up
 
-The entity tests exercise the next DAV contract, not a migrated DAV business
-route or a real Finder/Windows client. The fixture deliberately stores DB size 7,
-a logical key and DB time that disagree with actual object size, ETag and date.
-Candidate GET/HEAD must use actual object metadata. Current DAV HEAD and PROPFIND
-continue to use the old logical metadata until knife 2.
+K2 adds real write -> persisted representation -> PROPFIND -> GET/HEAD closure
+through the same isolated nginx in both arms. PROPFIND is DB-only. Nonempty GET
+and HEAD each issue exactly one corresponding object request. Missing or
+mismatched metadata and a disabled capability return authenticated 503 with zero
+object requests. Local-empty responses use one shared Dawn owner and ignore
+Range/If-Range, returning 200 with length 0 unless a precondition yields 304/412.
 
-Knife 2 must add representation ETag and Last-Modified fields on registration,
-write and copy, backfill old rows, and switch GET/HEAD/PROPFIND together. Additive
-fields must be ignored by old applications. PROPFIND must read persisted entity
-metadata without a per-child HEAD. Real Qiniu stat hash/putTime equivalence with
-the configured download representation remains unverified; a fake cannot prove
-it. No production scan or metadata migration is performed here. The local empty
-DAV branch must keep GET/HEAD/PROPFIND consistent.
+The transport-only oracle deliberately retains DB size 7 versus actual object
+length to prove final field ownership. The K2 business fixture separately
+checks DB/XML/final wire agreement. All 366 golden cases and the original seven
+skips remain required. Real origin HEAD/GET equivalence, in-server full replica,
+clients, resource limits and coordinated S13 cutover remain pending.
 
 The harness also exercises the rejected legacy workaround in both uncacheable
 and explicitly cacheable configuration copies. With cache disabled nginx skips
@@ -226,7 +228,7 @@ ignore the trusted route at the outer hop, trust origin X-Accel at the inner hop
 and evaluate the response map prematurely in rewrite. The first two must break
 401/408/612 normalization, the latter two must break valid object downloads.
 Restored configuration then runs the positive matrix. Existing repository gates,
-355 dual-arm contracts and named skips remain required.
+366 dual-arm contracts and named skips remain required.
 
 The feature remains off pending complete DAV metadata integration, real origin
 validator/backfill evidence, real clients, deployment resource limits and a

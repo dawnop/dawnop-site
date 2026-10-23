@@ -8,4 +8,3 @@ pub fn publication(key: String, size: Int) -> representation.Published =
     Ok(v) -> v
     Err(m) -> panic(m)
   }
-

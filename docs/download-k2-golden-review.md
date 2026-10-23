@@ -94,3 +94,10 @@ read 与 edge 无差异，不重录。webdav 无对象配置，三方法能力�
 - `webdav:copy.file`：COPY of a file duplicates the object ,  covered in contract_qiniu.py (fake bucket); unconfigured here
 - `webdav:delete.file`：DELETE of a file removes the object ,  covered in contract_qiniu.py (fake bucket); unconfigured here
 - `qiniu:fm.stats`：bucket usage comes from the qiniu billing/space APIs (qiniu_stats.dawn), which this fake does not model ,  needs QINIU_* credentials
+
+后续新增（再次重录前固定）：`k2.copy-move-and-writer-coverage` 核对 COPY 目标日期、MOVE/rename 无外联及 drop/代理写入表示；`k2.metadata-header-validation` 验缺失/重复/非法头、弱标签、1xx 最终块与非法 stat；`k2.resumable-token-replay` 实际发送 v2 初始化、两片与完成重放；`k2.propfind-scale` 对 0/1/100/1000 项逐 href 校核完整与零外联，独立保留计时证据。空读取跨秒后仍核对持久 LM。
+
+S10 原直接 DAV stage 大体测量迁至 capability off 的 FM content stage：DAV off 已决定为 503，继续通过旧 DAV 行为测 stage 将违反裁决。保留原 256/512 MiB 摘要、RSS 阈值、上传和断连门；新 DAV 数据面的大体证据仍由同一两跳 nginx 下载矩阵提供。直接应用 wire 继续核对 off HEAD 与 local-empty GET/HEAD 的唯一长度。
+S12 的实际离线 systemd 资源门同样把默认 off 的512MiB下载改由 FM content 的既有 stage 路径，
+上传仍为 DAV PUT，摘要/内存/进展/限额/loader 检查不变。真实 JVM 回退读同库的断言通过鉴权 FM
+列表读取 native 创建的目录；新包 off 的 DAV 三读方法按 D3 返回503。隔离测试 unit 显式信任本机假 CA。

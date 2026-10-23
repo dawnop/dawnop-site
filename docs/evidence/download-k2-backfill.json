@@ -1,0 +1,22 @@
+{
+  "implementation": "LOCAL_PASS",
+  "cases": 8,
+  "passed": [
+    "default_dry_run_zero_database_writes",
+    "apply_verify_idempotence_replica_receipt",
+    "aliases_permissions_and_missing_receipt_refused_before_io",
+    "resume_rescans_new_low_id",
+    "budget_interruption_and_resume",
+    "process_termination_cleanup_and_resume",
+    "network_outside_transaction_and_cas_race",
+    "all_child_channels_are_sanitized"
+  ],
+  "gate_outcomes": {
+    "synthetic_replica": "LOCAL_PASS",
+    "server_replica": "PRODUCTION_PENDING",
+    "real_origin": "PRODUCTION_PENDING",
+    "clients": "PRODUCTION_PENDING",
+    "s13": "PRODUCTION_PENDING"
+  },
+  "production_gate": "BLOCKED"
+}

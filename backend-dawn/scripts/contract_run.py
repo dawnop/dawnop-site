@@ -285,6 +285,9 @@ def run_arm(args, arm, work):
                 senv["FAKE_QINIU"] = fake_base
                 senv["CONTRACT_QINIU_CONFIGURED"] = "1"
                 senv["CONTRACT_DB_PATH"] = str(db)
+                senv["CONTRACT_REPRESENTATION_EVIDENCE"] = str(
+                    work / "representation.json"
+                )
                 senv["CONTRACT_APPLICATION_BASE"] = (
                     f"http://127.0.0.1:{servers[tag][2]}"
                 )
@@ -338,7 +341,14 @@ def run_arm(args, arm, work):
         if rc:
             print(f"\nbackend logs in {work} (work dir kept for inspection)")
 
-    return rc, {"suites": reports, "no_jvm": proof}
+    representation = work / "representation.json"
+    return rc, {
+        "suites": reports,
+        "no_jvm": proof,
+        "representation": json.loads(representation.read_text())
+        if representation.exists()
+        else None,
+    }
 
 
 def main():

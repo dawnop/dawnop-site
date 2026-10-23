@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import pathlib
@@ -22,6 +23,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 SCRIPTS = HERE.parent
 sys.path.insert(0, str(SCRIPTS))
 
+import contract_download  # noqa: E402
 import contract_fixture  # noqa: E402
 import contract_qiniu_fake  # noqa: E402
 import contract_run  # noqa: E402
@@ -116,10 +118,11 @@ def add_file(
     is_dir,
     key=None,
     content_type="text/plain",
-    size=1,
+    size=None,
     content="ancestor fixture",
     plant=True,
 ):
+    size = len(content.encode()) if size is None else size
     with sqlite3.connect(ctx.db) as connection:
         connection.execute(
             'INSERT INTO files (path, is_dir, "key", content_type, size, created_at, updated_at) '
@@ -134,6 +137,30 @@ def add_file(
         )
     if key and plant:
         ctx.fake.plant(key, content, content_type)
+        if not is_dir:
+            seed_representation(ctx, path, key, content)
+    elif key and not is_dir:
+        existing = ctx.fake.state().get(key)
+        if existing:
+            seed_representation(
+                ctx, path, key, base64.b64decode(existing["content"]).decode()
+            )
+
+
+def seed_representation(ctx, path, key, content):
+    origin = ctx.fake.base.replace("http://127.0.0.1", "https://localhost")
+    tag = '"download-' + hashlib.sha256(content.encode()).hexdigest() + '"'
+    with sqlite3.connect(ctx.db) as connection:
+        connection.execute(
+            "update files set representation_kind=?,representation_key=?,representation_profile=?,representation_etag=?,representation_last_modified_s=1767225600 where path=?",
+            (
+                "object-identity-v1" if content else "local-empty-v1",
+                key,
+                "identity-v1:" + hashlib.sha256(origin.encode()).hexdigest(),
+                tag if content else '"dawn-empty-v1"',
+                path,
+            ),
+        )
 
 
 def add_ledger(ctx, key, path):
@@ -240,7 +267,7 @@ def assert_uploaded_object_collected(checks, before_state, after_state, calls, l
     checks.equal(len(deletes), 1, f"{label} cleanup delete count")
     checks.equal(
         [call.get("op") for call in calls],
-        ["upload", "delete"],
+        ["upload", "head", "delete"],
         f"{label} object operation order",
     )
     if uploads and deletes:
@@ -264,7 +291,7 @@ def assert_copied_objects_collected(checks, before_state, after_state, calls, la
     checks.equal(sorted(deleted), sorted(copied), f"{label} cleanup key set")
     operations = [call.get("op") for call in calls]
     checks.true(
-        all(op in ("copy", "delete") for op in operations),
+        all(op in ("copy", "head", "delete") for op in operations),
         f"{label} performed an unrelated object operation: {operations}",
     )
     if "delete" in operations:
@@ -1182,7 +1209,7 @@ def assert_webdav_overwrite_gc_after_switch(ctx, checks):
     checks.equal(len(delete_calls), 2, "postcommit GC delete count")
     checks.equal(
         [call.get("op") for call in calls],
-        ["copy", "upload", "delete", "delete"],
+        ["copy", "head", "upload", "head", "delete", "delete"],
         "postcommit GC and concurrent PUT object operation order",
     )
     if copy_calls and upload_calls:
@@ -1250,6 +1277,7 @@ def assert_webdav_put_actual_superseded_key(ctx, checks):
                 size=len("raced replacement"),
             )
             ctx.fake.plant(raced_key, "raced replacement", "text/plain")
+            seed_representation(ctx, target, raced_key, "raced replacement")
     finally:
         ctx.fake.release("upload")
     finished = finish_background(thread, done)
@@ -1263,7 +1291,7 @@ def assert_webdav_put_actual_superseded_key(ctx, checks):
     deletes = [call for call in calls if call.get("op") == "delete"]
     checks.equal(
         [call.get("op") for call in calls],
-        ["upload", "delete"],
+        ["upload", "head", "delete"],
         "raced PUT object operation order",
     )
     checks.equal(len(uploads), 1, "raced PUT upload count")
@@ -1289,7 +1317,7 @@ def assert_webdav_put_actual_superseded_key(ctx, checks):
     checks.equal(create_status, 201, "ordinary PUT create status")
     checks.equal(
         [call.get("op") for call in create_calls],
-        ["upload"],
+        ["upload", "head"],
         "ordinary PUT create object operations",
     )
     checks.true(first_row is not None, "ordinary PUT create metadata")
@@ -1301,7 +1329,7 @@ def assert_webdav_put_actual_superseded_key(ctx, checks):
     checks.equal(overwrite_status, 204, "ordinary PUT overwrite status")
     checks.equal(
         [call.get("op") for call in overwrite_calls],
-        ["upload", "delete"],
+        ["upload", "head", "delete"],
         "ordinary PUT overwrite object operations",
     )
     if first_row is not None and second_row is not None:
@@ -1349,7 +1377,7 @@ def assert_object_gc_live_key_reference(ctx, checks):
     checks.equal(shared_status, 204, "shared-key PUT status")
     checks.equal(
         [call.get("op") for call in shared_calls],
-        ["upload"],
+        ["upload", "head"],
         "shared-key GC reached object delete",
     )
     checks.equal(file_row(ctx, second), second_before, "shared-key peer metadata")
@@ -1377,7 +1405,7 @@ def assert_object_gc_live_key_reference(ctx, checks):
     checks.equal(solo_status, 204, "unshared-key PUT status")
     checks.equal(
         [call.get("op") for call in solo_calls],
-        ["upload", "delete"],
+        ["upload", "head", "delete"],
         "unshared-key GC object operation order",
     )
     checks.true(solo_key not in ctx.fake.keys(), "unshared superseded key survived")
@@ -1748,7 +1776,7 @@ def assert_webdav_overwrite_metadata_switch_atomic(ctx, checks):
     )
     checks.equal(
         [call.get("op") for call in copy_control_calls],
-        ["copy", "delete"],
+        ["copy", "head", "delete"],
         "COPY metadata-switch control object operations",
     )
 
@@ -3575,9 +3603,24 @@ def main():
     base = f"http://127.0.0.1:{args.port}"
     contract_fixture.build(str(db))
     contract_run.env_file(env_path, db, args.port, fake_base)
+    origin = fake_base.replace("http://127.0.0.1", "https://localhost")
+    with env_path.open("a") as configured:
+        configured.write(f"DAWN_DOWNLOAD_HANDOFF=on\nDAWN_DOWNLOAD_ORIGIN={origin}\n")
+    contract_download.prepare_rows(db, origin)
     fake_server = contract_qiniu_fake.serve(args.port + 1)
     java = shutil.which("java") or "java"
-    child_env = dict(os.environ)
+    child_env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("DAWN_", "QINIU_", "TENCENT_", "VAULT_", "LIGHTHOUSE_"))
+        and key
+        not in {
+            "SECRET_KEY",
+            "DAWNOP_ENV",
+            "ACCESS_TOKEN_EXPIRE_MINUTES",
+            "STORAGE_QUOTA_GB",
+        }
+    }
     child_env.update(
         {
             "DAWNOP_ENV": str(env_path),
@@ -3608,6 +3651,8 @@ def main():
         failures = None
         try:
             contract_run.wait_health(base, process)
+            proxy = contract_download.Proxy(work / "nginx", args.port, fake_base)
+            base = f"http://127.0.0.1:{proxy.port}"
             token = contract_run.login(base)
             with sqlite3.connect(db) as source:
                 with sqlite3.connect(db.with_suffix(".prepared")) as snapshot:
@@ -3621,6 +3666,8 @@ def main():
             )
             failures = run_assertions(ctx)
         finally:
+            if "proxy" in locals():
+                proxy.close()
             process.terminate()
             try:
                 process.wait(timeout=15)

@@ -9,7 +9,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 与 `POST /api/fm/upload`（multipart 代理上传，`core/src/util/multipart.dawn`）**也已落地**。
 
 契约由 `scripts/golden/*.json` 钉住（`scripts/contract_run.py`，CI 每次 push 都跑）：
-播种固定 fixture → 起后端 → 每臂 355 条响应比对（read 58 / edge 102 / webdav 104 / qiniu 91）。
+播种固定 fixture → 起后端 → 每臂 366 条响应比对（read 58 / edge 102 / webdav 104 / qiniu 102）。
 `backend-dawn/scripts/dual-arm/run.sh` 构建 native，先跑四个负控，再跑独立 JVM/native
 两臂与另计的真实 simple FTS 路由。`contract_run.py` 默认仍为 JVM；`--arm both
 --native-binary /path/to/ELF` 使用同四套脚本、归一化与七个 skip。native 测试 listener
@@ -95,7 +95,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - Native FM download prototype (K1b, same-instance private Unix socket response adaptation): `scripts/download-transport/run.sh --work <empty-directory>`;
   add `--full` for three-arm timing and 256/512 MiB resource gates. Default off via
   `DAWN_DOWNLOAD_HANDOFF=off`; protocol and production blockers are documented in
-  [`../docs/download-handoff-design.md`](../docs/download-handoff-design.md). DAV routes are unchanged.
+  [`../docs/download-handoff-design.md`](../docs/download-handoff-design.md). K2 migrates DAV GET/HEAD/PROPFIND as one capability group; see [`../docs/download-k2-design.md`](../docs/download-k2-design.md).
 
 - native 入口：仓库根运行 `backend-dawn/scripts/native-entry/run.sh`，实际 check/build/test app/native，
   检查完整依赖图零 Java，并先证明应用手写重复响应长度、启动 println、吞 guard 拒绝、立即关闭 socket 和请求期重跑迁移五个负控会红。
@@ -106,7 +106,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   先用已有业务 schema 的隔离库和同一 DAWNOP_ENV 执行 --migrate，再喂请求到 stdin；此处无部署授权。
   fd teardown 在 flush 后半关闭写端，最多排空 8 MiB / 300 ms，随后退出，不会循环服务第二个交换。
   S10 在已有 backend CI job 执行，原 native-acceptance 仍跑 S2/S4/S5/S6/S8/S9，job 数与 timeout 不变。
-  S8 的完整暂存 TTFB 限制继续适用；S11 的 355 双臂已接入 backend CI。
+  S8 的完整暂存 TTFB 限制继续适用；S11 的 366 双臂已接入 backend CI。
   S12 私有引擎 artifact、systemd 单元、0% 安装/撤回与离线验收命令见
   [`deploy/native-package.md`](deploy/native-package.md)；CI native-package 固定 Ubuntu 22.04。
   artifact 的 `--engine-info` 报实际私有 dlopen 路径、SQL 版本/source id，不打开业务库。
@@ -117,6 +117,19 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   java-deps、web_jvm 与回指 app/test 的本地依赖。CI 先证明 Java 导入与 app 导入负控会红。
 - 运行：`java -jar backend-dawn.jar`（读 `DAWNOP_ENV` 指定的 .env，默认 `backend/.env`；
   绑定 `127.0.0.1:$DAWN_PORT`，默认 8001）。
+
+## K2 下载表示与维护
+
+`core/src/util/representation.dawn` 集中校验五列表示与唯一完整长度；所有 FM/DAV/drop
+writer 在事务外采集实际下载 HEAD 后原子发布，普通 token insertOnly、COPY 不强覆盖。
+`core/src/util/local_empty.dawn` 为 DAV/FM 共用纯 Dawn 空表示条件 owner。
+GET/HEAD/PROPFIND 同组关闭即鉴权后503，PROPFIND 零外联。
+`app/native/src/util/backfill_cli.dawn` 在 dotenv 前处理显式一次性维护输入，
+`core/src/representation_backfill.dawn` 共用 Db/Upstream 做分页/CAS/重扫；Python 编排默认 dry-run，
+只有摘要输出，replica-first 收据绑定实际包/profile/schema/引擎。
+[设计](../docs/download-k2-design.md)、[逐项 golden review](../docs/download-k2-golden-review.md)、
+[维护 runbook 与服务器/S13 清单](../docs/download-k2-maintenance.md)。
+新 download-metadata CI job 保留其余26 job及19变异分片，增加实际24变异、合成副本恢复和同代预检。
 
 ## 关键环境变量
 

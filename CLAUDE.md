@@ -69,7 +69,7 @@ dawnop-site/
 │   ├── build.sh                # 临时镜像跑测试 → 直接 build app/jvm
 │   ├── scripts/test_project.py # 生成同模块白盒测试镜像，不扩大私有 API
 │   ├── scripts/check_core.py   # native check 与源码依赖闭包门禁，含真实负控
-│   ├── scripts/contract_*.py   # 355 golden + 7 具名 skip，本地假七牛
+│   ├── scripts/contract_*.py   # 366 golden + 7 具名 skip，本地假七牛
 │   └── deploy/                # 既有部署与回滚脚本，S1 不改
 │   # backend-dawn.jar 与 lib/ 保持原位置，CI artifact 与部署接口不变
 ├── backend/                    # FastAPI（已 disable，回滚目标 + 契约参照）。逐文件树见 backend/
@@ -326,7 +326,7 @@ python3 scripts/check_config_defaults.py --mutants     # 负控：改真实输�
 
 # ---- 契约 golden（CI 每次 push 都跑，只需 Dawn 后端的 jar）----
 python3 backend-dawn/scripts/contract_run.py            # JVM：播种 fixture→起后端→跑四套
-backend-dawn/scripts/dual-arm/run.sh                    # JVM/native 各355、真实FTS与四负控
+backend-dawn/scripts/dual-arm/run.sh                    # JVM/native 各366、真实FTS与四负控
 python3 backend-dawn/scripts/contract_run.py --record   # 改了行为后重录，diff 进 review
 python3 backend-dawn/scripts/contract_run.py --only read
 backend-dawn/scripts/auth-cache/run.sh                  # 双臂认证、40进程防击穿、崩溃恢复与负控

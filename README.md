@@ -114,6 +114,9 @@ CI 在每次 push 到 main 时构建并测试后端，产出 `backend-dawn.jar` 
 `backend-dawn/deploy/deploy.sh` 拉取该 artifact 部署（自带健康检查与失败自动回滚）。
 前端 `npm run build` 后把 `dist/` 传到服务器。细节见 [`deploy/README.md`](./deploy/README.md)。
 
+下载 K2 的表示合同、离线门及服务器待办见 [设计](docs/download-k2-design.md) 和
+[维护清单](docs/download-k2-maintenance.md)。生产下载门仍为 BLOCKED，本刀不授权部署。
+
 ## 更多
 
 - 开发约定与架构细节：[CLAUDE.md](./CLAUDE.md)

@@ -2,7 +2,7 @@
 # FsData serialization, ancestor-dir backfill, and reparent — all pure metadata
 # on the `files` table (rename/move only rewrite paths, never touch qiniu).
 use std/str
-use db/sql.{execute, scalar_int, opt_int_at, SqlV, Db, PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, with_immediate_tx, require_tx, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
+use db/sql.{execute, scalar_int, opt_int_at, SqlV, PNull, Db, PInt, PStr, Col, ColInt, ColStr, Cell, query, exec, with_immediate_tx, require_tx, int_at, str_at, opt_str_at, bool_at, first_map, first_bool_or, first_int_or}
 use json/value.{Json, JNull, JInt, JStr, JArr}
 use util/jsonx.{obj, jstr, jbool}
 use util/paths.{STORAGE, full, parent_rel, basename, ext, fm_join, ts, safe_persisted_mime}
@@ -60,6 +60,35 @@ pub fn representation_params(value: Published, key: String, size: Int) -> Result
   let v = fields(value)
   Ok([PStr(v.kind), PStr(v.key), PStr(v.profile), PStr(v.etag), PInt(v.last_modified_s)])
 }
+
+pub type RepresentationSnapshot = { id: Int, row: FileRow }
+
+pub fn representation_page(after: Int, limit: Int) -> Result[List[RepresentationSnapshot], String] !Db !io = {
+  let rows = query("select ${COLS},id from files where id>? order by id limit ?", [PInt(after), PInt(limit)], col_types() ++ [ColInt])?
+  Ok(map(rows, cells => RepresentationSnapshot { id = int_at(cells, 11), row = row_of(cells) }))
+}
+
+fn nullable_string(v: Option[String]) -> SqlV = match v { Some(s) -> PStr(s)
+  None -> PNull }
+fn nullable_int(v: Option[Int]) -> SqlV = match v { Some(n) -> PInt(n)
+  None -> PNull }
+
+## All network work precedes this short CAS transaction. A changed path, key,
+## size, logical date or representation invalidates the collected snapshot.
+pub fn representation_cas(snapshot: RepresentationSnapshot, value: Published) -> Result[Bool, String] !Db !io =
+  with_immediate_tx(() => {
+    let old = snapshot.row
+    let key = match old.key { Some(k) -> k
+      None -> return Err("missing object key") }
+    let v = fields(value)
+    let params = representation_params(value, key, v.size)?
+    let s = old.representation
+    let changed = exec("update files set representation_kind=?,representation_key=?,representation_profile=?,representation_etag=?,representation_last_modified_s=?,size=? where id=? and path is ? and is_dir=0 and key is ? and size is ? and updated_at is ? and content_type is ? and representation_kind is ? and representation_key is ? and representation_profile is ? and representation_etag is ? and representation_last_modified_s is ?", params ++ [PInt(v.size), PInt(snapshot.id), PStr(old.path), nullable_string(old.key), PInt(old.size), PStr(old.updated_at), PStr(old.content_type), nullable_string(s.kind), nullable_string(s.key), nullable_string(s.profile), nullable_string(s.etag), nullable_int(s.last_modified_s)])?
+    Ok(changed == 1)
+  })
+
+pub fn representation_duplicate_keys() -> Result[Int, String] !Db !io =
+  scalar_int("select count(*) from (select key from files where is_dir=0 and key is not null group by key having count(*)>1)", [])
 
 fn opt_or_blank(r: List[Cell], i: Int) -> String =
   match opt_str_at(r, i) {
@@ -404,7 +433,7 @@ fn insert_file_row(rel: String, key: String, content_type: String, size: Int, re
   if v.kind == "local-empty-v1" {
     match get_row(rel)? {
       Some(old) -> match old.representation.last_modified_s {
-        Some(lm) -> if old.size > 0 && lm >= v.last_modified_s { return Err("empty publication requires a later modification second") }
+        Some(lm) -> if lm > v.last_modified_s || (old.size > 0 && lm == v.last_modified_s) { return Err("empty publication requires a later modification second") }
         None -> ()
       }
       None -> ()

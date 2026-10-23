@@ -1,7 +1,7 @@
 # File-manager handlers (M6 knife 11), pure-metadata subset: list, create-folder,
 # rename, move. These never touch qiniu (rename/move only rewrite paths); the
 # qiniu-mutating endpoints (upload/delete/copy/save) are added separately.
-use util/download_handoff.{handoff}
+use util/download_handoff.{handoff, configured}
 use util/http_runtime.{HttpCell, with_upstream}
 use util/representation
 use util/local_empty
@@ -16,7 +16,7 @@ use web/router.{Route, route_get, route_post, tagged}
 use util/jsonx.{obj, jstr, jint}
 use db/runtime.{with_db}
 use svc/auth.{Auth, guarded, guarded_flexible}
-use util/jsonread.{body_obj, str_or, str_list, opt_int}
+use util/jsonread.{body_obj, str_or, str_list}
 use util/paths.{fm_split, parent_rel, basename, ext, fm_join, full, guess_mime, safe_persisted_mime, require_admissible_names}
 use repo/repo_fm.{fs_data, get_row, ledger_insert, search_files, entry_json, stats_db, validate_fm_ancestors, validate_fm_file_target, validate_register_preflight, finalize_register}
 use svc/files.{signed_url, gc_unreferenced, mk_folder, do_rename, do_move, do_copy, do_delete,
@@ -235,10 +235,13 @@ fn content_with_download(a: Auth, cl: HttpCell, download_origin: Option[String])
         match o.key {
           Some(k) -> {
             match download_origin {
-              Some(origin) -> match representation.parse(o.representation, o.key, o.size, representation.profile(origin)) {
-                representation.Missing -> return Err(http_error(503, "download representation unavailable"))
-                representation.LocalEmpty(v) -> return util_empty_response(req, v, o.content_type)
-                representation.ObjectIdentity(_) -> return handoff(a.qiniu, origin, req.method, k, o.content_type)
+              Some(origin) -> {
+                if not configured(a.qiniu, origin) { return handoff(a.qiniu, origin, req.method, k, o.content_type) }
+                match representation.parse(o.representation, o.key, o.size, representation.profile(origin)) {
+                  representation.Missing -> return Err(http_error(503, "download representation unavailable"))
+                  representation.LocalEmpty(v) -> return util_empty_response(req, v, o.content_type)
+                  representation.ObjectIdentity(_) -> return handoff(a.qiniu, origin, req.method, k, o.content_type)
+                }
               }
               None -> ()
             }
@@ -511,9 +514,10 @@ pub fn register(a: Auth, cl: HttpCell) -> Handler =
         } else {
           let _n = require_admissible_names(rel)?
           let _preflight = as_http_with(register_preflight(a, rel, key), conflict_or(500))?
+          let size_hint = as_http(register_size_hint(m), 400)?
           let r = as_http_with(as_outbound(stat(a.qiniu, key)), mutation_failure)?
           if r.status == 200 {
-            Ok(json_ok(as_http_with(register_row(a, rel, key, r.body, opt_int(m, "size"), str_or(m, "content_type", "")), mutation_failure)?))
+            Ok(json_ok(as_http_with(register_row(a, rel, key, r.body, size_hint, str_or(m, "content_type", "")), mutation_failure)?))
           } else {
             Err(register_stat_failure(r.status))
           }
@@ -523,11 +527,18 @@ pub fn register(a: Auth, cl: HttpCell) -> Handler =
 fn register_preflight(a: Auth, rel: String, key: String) -> Result[Unit, String] !io =
   with_db(a.db, () => validate_register_preflight(rel, key))
 
+fn register_size_hint(m: Map[String, Json]) -> Result[Option[Int], String] =
+  match map.get(m, "size") {
+    None -> Ok(None)
+    Some(JNull) -> Ok(None)
+    Some(JInt(n)) -> if n >= 0 { Ok(Some(n)) } else { Err("invalid file size") }
+    _ -> Err("invalid file size")
+  }
+
 fn register_row(a: Auth, rel: String, key: String, stat_body: String, size_hint: Option[Int], ct_hint: String) -> Result[Json, String] !Upstream !io = {
-  # qiniu's stat is authoritative for size/mime; fall back to the client's
-  # reported values, then a name-based guess, exactly like FastAPI's
-  #   size = fsize or payload.size or 0
-  #   mime = mimeType or content_type or _guess_mime(basename)
+  # Stat must supply a valid nonnegative length; a client hint must agree.
+  # The actual download HEAD independently validates that length and owns
+  # validators. MIME keeps the existing stat/client/name preference.
   let size = reg_size(stat_body, size_hint)?
   let mime = reg_mime(stat_body, ct_hint, rel)
   let published = representation.collect(a.qiniu, key, size)?
@@ -544,7 +555,7 @@ fn register_stat_failure(status: Int) -> HttpError =
     http_error(502, "七牛 stat 返回 ${status}")
   }
 
-# fsize of 0 (absent or genuinely empty) falls through to the client hint, then 0
+# A genuine zero stays zero; missing or malformed fsize is never an empty file.
 fn reg_size(stat_body: String, hint: Option[Int]) -> Result[Int, String] !io =
   representation.stat_size(stat_body, hint)
 

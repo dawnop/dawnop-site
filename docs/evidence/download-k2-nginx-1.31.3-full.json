@@ -1,0 +1,1071 @@
+{
+  "gates": {
+    "body_p95_ms": 250,
+    "jvm_margin_ms": 100,
+    "stage_ratio": 4,
+    "disk_bytes_per_request": 1048576,
+    "memory_growth_kib_per_request": 16384,
+    "cancel_s": 2,
+    "rounds": 10
+  },
+  "gaps": [],
+  "versions": {
+    "nginx": "nginx version: nginx/1.31.3",
+    "python": "3.14.7",
+    "compiler": "v0.100.0"
+  },
+  "production": "not deployed",
+  "TLS": {
+    "wrong-sni": "502, zero object HTTP requests",
+    "untrusted-certificate": "502, zero object HTTP requests"
+  },
+  "connect_timeout": {
+    "status": 504,
+    "final_head_ms": 1095.5297449836507,
+    "peer_closed": true
+  },
+  "configuration": {
+    "invalid_origins_rejected": 5,
+    "default_off": "old real stage behavior"
+  },
+  "negative_controls": {
+    "remove-internal": "RED",
+    "forward-authorization": "RED",
+    "drop-range": "RED",
+    "mixed-validators": "RED",
+    "401-as-file": "RED",
+    "omit-route-always": "RED",
+    "ignore-inner-route": "RED",
+    "trust-origin-route": "RED",
+    "early-map-evaluation": "RED",
+    "ignore-cancellation": "RED",
+    "buffer_actual_disk_bytes": 8511488,
+    "buffer-to-disk": "RED",
+    "legacy-native-clear-add-header-counterexample": {
+      "expected_if_old_tag_worked": 200,
+      "actual": 200,
+      "cacheable_actual": 412
+    },
+    "restore-whole-stage": "RED"
+  },
+  "protocol_progress": 93,
+  "dav_persisted_fixture": {
+    "persisted_model": "GET/HEAD/PROPFIND agree",
+    "propfind_object_requests": 0,
+    "production_DAV": "unchanged",
+    "stat_equivalence": "not proved by fake metadata"
+  },
+  "error_contract": {
+    "passed": true,
+    "matrix": [
+      {
+        "origin": 201,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 201,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 202,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 202,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 204,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 204,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 205,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 205,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 207,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 207,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 226,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 226,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 300,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 300,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 301,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 301,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 302,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 302,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 307,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 307,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 308,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 308,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 400,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 400,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 401,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 401,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 403,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 403,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 404,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 404,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 405,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 405,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 408,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 408,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 429,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 429,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 444,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 444,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 499,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 499,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 500,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 500,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 502,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 502,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 503,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 503,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 504,
+        "method": "GET",
+        "status": 504,
+        "passed": true
+      },
+      {
+        "origin": 504,
+        "method": "HEAD",
+        "status": 504,
+        "passed": true
+      },
+      {
+        "origin": 599,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 599,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 612,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 612,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 999,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 999,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      }
+    ]
+  },
+  "dav_empty_persisted_fixture": {
+    "persisted_model": "GET/HEAD/PROPFIND agree",
+    "propfind_object_requests": 0,
+    "production_DAV": "unchanged",
+    "stat_equivalence": "not proved by fake metadata"
+  },
+  "protocol": {
+    "passed": 93,
+    "cases": [
+      "anonymous-before-object",
+      "query-token-is-not-auth",
+      "internal-is-private",
+      "forged-internal-cannot-authenticate",
+      "full-object",
+      "head-is-one-object-head",
+      "dirty-MIME-sanitized",
+      "object-control-headers-ignored",
+      "signed-target-byte-preservation",
+      "invalid-key-closed",
+      "invalid-key-closed",
+      "invalid-key-closed",
+      "invalid-key-closed",
+      "invalid-key-closed",
+      "source-error-201-GET",
+      "source-error-201-HEAD",
+      "source-error-202-GET",
+      "source-error-202-HEAD",
+      "source-error-204-GET",
+      "source-error-204-HEAD",
+      "source-error-205-GET",
+      "source-error-205-HEAD",
+      "source-error-207-GET",
+      "source-error-207-HEAD",
+      "source-error-226-GET",
+      "source-error-226-HEAD",
+      "source-error-300-GET",
+      "source-error-300-HEAD",
+      "source-error-301-GET",
+      "source-error-301-HEAD",
+      "source-error-302-GET",
+      "source-error-302-HEAD",
+      "source-error-307-GET",
+      "source-error-307-HEAD",
+      "source-error-308-GET",
+      "source-error-308-HEAD",
+      "source-error-400-GET",
+      "source-error-400-HEAD",
+      "source-error-401-GET",
+      "source-error-401-HEAD",
+      "source-error-403-GET",
+      "source-error-403-HEAD",
+      "source-error-404-GET",
+      "source-error-404-HEAD",
+      "source-error-405-GET",
+      "source-error-405-HEAD",
+      "source-error-408-GET",
+      "source-error-408-HEAD",
+      "source-error-429-GET",
+      "source-error-429-HEAD",
+      "source-error-444-GET",
+      "source-error-444-HEAD",
+      "source-error-499-GET",
+      "source-error-499-HEAD",
+      "source-error-500-GET",
+      "source-error-500-HEAD",
+      "source-error-502-GET",
+      "source-error-502-HEAD",
+      "source-error-503-GET",
+      "source-error-503-HEAD",
+      "source-error-504-GET",
+      "source-error-504-HEAD",
+      "source-error-599-GET",
+      "source-error-599-HEAD",
+      "source-error-612-GET",
+      "source-error-612-HEAD",
+      "source-error-999-GET",
+      "source-error-999-HEAD",
+      "entity-bounded",
+      "entity-open",
+      "entity-suffix",
+      "entity-unsatisfied",
+      "entity-malformed",
+      "entity-multiple",
+      "entity-if-range-match",
+      "entity-if-range-miss",
+      "entity-if-range-weak",
+      "entity-if-range-date",
+      "entity-if-range-old-date",
+      "entity-none-match",
+      "entity-none-match-weak",
+      "entity-none-date-priority",
+      "entity-modified-date",
+      "entity-match-failed",
+      "entity-unmodified-failed",
+      "entity-match-ok",
+      "source-ignores-range",
+      "empty-object",
+      "empty-head",
+      "incomplete-short",
+      "incomplete-stall-body",
+      "header-timeout",
+      "progress-outlives-total-budget"
+    ],
+    "source_612_status": 502
+  },
+  "dav": {
+    "business_routes": "unchanged",
+    "entity_protocol": "shared isolated FM entity proof",
+    "metadata": "DB size=7 and key/time intentionally disagree with object size/ETag/date",
+    "migration": "required before DAV integration",
+    "clients": "Finder and Windows not tested"
+  },
+  "cancellation": {
+    "body": {
+      "source_stop_s": 0.01010844495613128,
+      "extra_bytes": 0,
+      "source_bytes": 65536
+    },
+    "before_headers": {
+      "source_stop_s": 0.0101014559622854,
+      "extra_bytes": 0,
+      "source_bytes": 0
+    }
+  },
+  "downstream_idle_and_limit": {
+    "limit": 4,
+    "fifth_status": 503,
+    "idle_release_s": 0.9177930529695004,
+    "source_bytes": [
+      3014656,
+      2424832,
+      2818048,
+      2555904
+    ]
+  },
+  "performance": {
+    "cold": {
+      "quantiles": {
+        "candidate": {
+          "head_ms": {
+            "p50": 89.55161098856479,
+            "p95": 96.03101806715131
+          },
+          "body_ms": {
+            "p50": 89.80373205849901,
+            "p95": 96.29242704249918
+          },
+          "total_ms": {
+            "p50": 1696.6221010079607,
+            "p95": 1713.7560200644657
+          }
+        },
+        "stage": {
+          "head_ms": {
+            "p50": 1806.0150219826028,
+            "p95": 1828.113779076375
+          },
+          "body_ms": {
+            "p50": 1806.945841468405,
+            "p95": 1828.9823139784858
+          },
+          "total_ms": {
+            "p50": 2654.3255320284516,
+            "p95": 2740.1948450133204
+          }
+        },
+        "jvm": {
+          "head_ms": {
+            "p50": 217.57710399106145,
+            "p95": 245.42057397775352
+          },
+          "body_ms": {
+            "p50": 217.83325355499983,
+            "p95": 245.64215796999633
+          },
+          "total_ms": {
+            "p50": 1795.756988984067,
+            "p95": 1823.3794419793412
+          }
+        }
+      },
+      "rounds": {
+        "candidate": [
+          {
+            "head_ms": 90.1974500156939,
+            "body_ms": 90.46220406889915,
+            "total_ms": 1697.8244420606643
+          },
+          {
+            "head_ms": 96.03101806715131,
+            "body_ms": 96.29242704249918,
+            "total_ms": 1713.7560200644657
+          },
+          {
+            "head_ms": 89.19664495624602,
+            "body_ms": 89.46267003193498,
+            "total_ms": 1695.4396549845114
+          },
+          {
+            "head_ms": 89.89711001049727,
+            "body_ms": 90.14479408506304,
+            "total_ms": 1696.8956839991733
+          },
+          {
+            "head_ms": 89.2061119666323,
+            "body_ms": 89.39943497534841,
+            "total_ms": 1696.3485180167481
+          },
+          {
+            "head_ms": 89.17316503357142,
+            "body_ms": 89.39579897560179,
+            "total_ms": 1695.206662057899
+          },
+          {
+            "head_ms": 90.61518497765064,
+            "body_ms": 90.88621498085558,
+            "total_ms": 1698.1464379932731
+          },
+          {
+            "head_ms": 88.19802501238883,
+            "body_ms": 88.41950900387019,
+            "total_ms": 1695.2365499455482
+          },
+          {
+            "head_ms": 91.22019307687879,
+            "body_ms": 91.55992802698165,
+            "total_ms": 1697.7907430846244
+          },
+          {
+            "head_ms": 88.50258204620332,
+            "body_ms": 88.66412495262921,
+            "total_ms": 1695.0273769907653
+          }
+        ],
+        "stage": [
+          {
+            "head_ms": 1811.8609499651939,
+            "body_ms": 1812.6880340278149,
+            "total_ms": 2654.8194190254435
+          },
+          {
+            "head_ms": 1828.113779076375,
+            "body_ms": 1828.9823139784858,
+            "total_ms": 2718.811596976593
+          },
+          {
+            "head_ms": 1808.2837800029665,
+            "body_ms": 1809.1184389777482,
+            "total_ms": 2740.1948450133204
+          },
+          {
+            "head_ms": 1810.0439549889416,
+            "body_ms": 1810.9448628965765,
+            "total_ms": 2645.807693945244
+          },
+          {
+            "head_ms": 1800.9023469639942,
+            "body_ms": 1801.917503005825,
+            "total_ms": 2684.944031992927
+          },
+          {
+            "head_ms": 1805.4559079464525,
+            "body_ms": 1806.3494709786028,
+            "total_ms": 2640.675414004363
+          },
+          {
+            "head_ms": 1800.5446509923786,
+            "body_ms": 1801.4861579285935,
+            "total_ms": 2685.0365760037675
+          },
+          {
+            "head_ms": 1806.2471270095557,
+            "body_ms": 1807.2298630140722,
+            "total_ms": 2631.212944048457
+          },
+          {
+            "head_ms": 1805.7829169556499,
+            "body_ms": 1806.6618199227378,
+            "total_ms": 2625.4686010070145
+          },
+          {
+            "head_ms": 1804.5020679710433,
+            "body_ms": 1805.4295589681715,
+            "total_ms": 2653.8316450314596
+          }
+        ],
+        "jvm": [
+          {
+            "head_ms": 212.40993810351938,
+            "body_ms": 212.60845102369785,
+            "total_ms": 1791.2753380369395
+          },
+          {
+            "head_ms": 216.99278696905822,
+            "body_ms": 217.24027104210109,
+            "total_ms": 1796.1213079979643
+          },
+          {
+            "head_ms": 245.42057397775352,
+            "body_ms": 245.64215796999633,
+            "total_ms": 1823.3794419793412
+          },
+          {
+            "head_ms": 218.16142101306468,
+            "body_ms": 218.42623606789857,
+            "total_ms": 1795.3926699701697
+          },
+          {
+            "head_ms": 215.9150429069996,
+            "body_ms": 216.13209694623947,
+            "total_ms": 1794.1564519423991
+          },
+          {
+            "head_ms": 237.38640593364835,
+            "body_ms": 237.5805890187621,
+            "total_ms": 1816.7353419121355
+          },
+          {
+            "head_ms": 193.35076003335416,
+            "body_ms": 193.54651297908276,
+            "total_ms": 1774.183377972804
+          },
+          {
+            "head_ms": 225.9307630592957,
+            "body_ms": 226.1327860178426,
+            "total_ms": 1804.6744880266488
+          },
+          {
+            "head_ms": 239.85275195445865,
+            "body_ms": 240.07511604577303,
+            "total_ms": 1817.1930180396885
+          },
+          {
+            "head_ms": 211.7291419999674,
+            "body_ms": 211.9518059771508,
+            "total_ms": 1792.8790879668668
+          }
+        ]
+      },
+      "passed": true
+    },
+    "warm": {
+      "quantiles": {
+        "candidate": {
+          "head_ms": {
+            "p50": 88.77527201548219,
+            "p95": 90.39626899175346
+          },
+          "body_ms": {
+            "p50": 89.03061301680282,
+            "p95": 90.6360000371933
+          },
+          "total_ms": {
+            "p50": 1694.9969330453314,
+            "p95": 1697.2948689945042
+          }
+        },
+        "stage": {
+          "head_ms": {
+            "p50": 1802.1711300243624,
+            "p95": 1807.3988059768453
+          },
+          "body_ms": {
+            "p50": 1803.0183395021595,
+            "p95": 1808.2282210234553
+          },
+          "total_ms": {
+            "p50": 2645.924766547978,
+            "p95": 2694.6698930114508
+          }
+        },
+        "jvm": {
+          "head_ms": {
+            "p50": 10.969910013955086,
+            "p95": 13.010855065658689
+          },
+          "body_ms": {
+            "p50": 11.134443047922105,
+            "p95": 13.22891900781542
+          },
+          "total_ms": {
+            "p50": 1618.3296000235714,
+            "p95": 1621.3980680331588
+          }
+        }
+      },
+      "rounds": {
+        "candidate": [
+          {
+            "head_ms": 88.55039707850665,
+            "body_ms": 88.79539102781564,
+            "total_ms": 1694.7999170515686
+          },
+          {
+            "head_ms": 88.14908796921372,
+            "body_ms": 88.42982398346066,
+            "total_ms": 1694.5231420686468
+          },
+          {
+            "head_ms": 90.06904799025506,
+            "body_ms": 90.237241005525,
+            "total_ms": 1695.8444389747456
+          },
+          {
+            "head_ms": 88.88920000754297,
+            "body_ms": 89.14446400012821,
+            "total_ms": 1695.522372960113
+          },
+          {
+            "head_ms": 88.58549199067056,
+            "body_ms": 88.71573396027088,
+            "total_ms": 1693.8958170358092
+          },
+          {
+            "head_ms": 89.48797103948891,
+            "body_ms": 89.71609501168132,
+            "total_ms": 1695.1939490390942
+          },
+          {
+            "head_ms": 89.25471198745072,
+            "body_ms": 89.4718860508874,
+            "total_ms": 1696.6512689832598
+          },
+          {
+            "head_ms": 88.38053198996931,
+            "body_ms": 88.49545393604785,
+            "total_ms": 1693.9517189748585
+          },
+          {
+            "head_ms": 88.6613440234214,
+            "body_ms": 88.91676203347743,
+            "total_ms": 1693.8669729279354
+          },
+          {
+            "head_ms": 90.39626899175346,
+            "body_ms": 90.6360000371933,
+            "total_ms": 1697.2948689945042
+          }
+        ],
+        "stage": [
+          {
+            "head_ms": 1801.3982709962875,
+            "body_ms": 1802.1664350526407,
+            "total_ms": 2650.6938320817426
+          },
+          {
+            "head_ms": 1802.4096930166706,
+            "body_ms": 1803.2253469573334,
+            "total_ms": 2634.521945961751
+          },
+          {
+            "head_ms": 1800.5029029445723,
+            "body_ms": 1801.3375770533457,
+            "total_ms": 2636.5337719907984
+          },
+          {
+            "head_ms": 1801.932567032054,
+            "body_ms": 1802.8113320469856,
+            "total_ms": 2669.9890580493957
+          },
+          {
+            "head_ms": 1801.1212919373065,
+            "body_ms": 1801.9760369788855,
+            "total_ms": 2619.817050988786
+          },
+          {
+            "head_ms": 1804.4926460133865,
+            "body_ms": 1805.3921830141917,
+            "total_ms": 2669.5472080027685
+          },
+          {
+            "head_ms": 1801.2974730227143,
+            "body_ms": 1802.090532029979,
+            "total_ms": 2694.6698930114508
+          },
+          {
+            "head_ms": 1806.3071600627154,
+            "body_ms": 1807.18505801633,
+            "total_ms": 2682.683438062668
+          },
+          {
+            "head_ms": 1803.8732479326427,
+            "body_ms": 1804.814914939925,
+            "total_ms": 2638.496040017344
+          },
+          {
+            "head_ms": 1807.3988059768453,
+            "body_ms": 1808.2282210234553,
+            "total_ms": 2641.1557010142133
+          }
+        ],
+        "jvm": [
+          {
+            "head_ms": 13.010855065658689,
+            "body_ms": 13.22891900781542,
+            "total_ms": 1619.9554840568453
+          },
+          {
+            "head_ms": 11.172169004566967,
+            "body_ms": 11.438632966019213,
+            "total_ms": 1618.793171015568
+          },
+          {
+            "head_ms": 10.957175050862134,
+            "body_ms": 11.108627077192068,
+            "total_ms": 1618.1008010171354
+          },
+          {
+            "head_ms": 11.1903470242396,
+            "body_ms": 11.341950041241944,
+            "total_ms": 1618.3136920444667
+          },
+          {
+            "head_ms": 10.98264497704804,
+            "body_ms": 11.160259018652141,
+            "total_ms": 1618.4900569496676
+          },
+          {
+            "head_ms": 10.85900398902595,
+            "body_ms": 10.976647026836872,
+            "total_ms": 1618.1030760053545
+          },
+          {
+            "head_ms": 10.43604698497802,
+            "body_ms": 10.56198903825134,
+            "total_ms": 1621.3980680331588
+          },
+          {
+            "head_ms": 9.823531960137188,
+            "body_ms": 10.181967983953655,
+            "total_ms": 1617.524313973263
+          },
+          {
+            "head_ms": 11.709109065122902,
+            "body_ms": 11.853192001581192,
+            "total_ms": 1618.345508002676
+          },
+          {
+            "head_ms": 9.606169071048498,
+            "body_ms": 9.730171062983572,
+            "total_ms": 1615.480432054028
+          }
+        ]
+      },
+      "passed": true
+    },
+    "all_arms": "same client/nginx/TLS fake object, same bytes and source delay",
+    "cold_scope": "new JVM for each cold request; native is new for every request in both groups; nginx stays resident and TLS sessions are not reused; no host page-cache flush"
+  },
+  "resources": {
+    "1": {
+      "baseline_nginx": {
+        "rss_kib": 23384,
+        "pss_kib": 8044,
+        "socket_fds": 7,
+        "unix_socket_fds": 5
+      },
+      "data_plane_hops": 2,
+      "passed": true,
+      "sizes_mib": {
+        "256": {
+          "rss_kib": 33776,
+          "pss_kib": 13746,
+          "socket_fds": 11,
+          "unix_socket_fds": 7,
+          "disk_bytes": 0,
+          "sha256": "486cc817b95d853d3c357ff283b204c0144bd255e73fe2deb1389493b257e3c0",
+          "concurrency": 1
+        },
+        "512": {
+          "rss_kib": 33584,
+          "pss_kib": 13551,
+          "socket_fds": 11,
+          "unix_socket_fds": 7,
+          "disk_bytes": 0,
+          "sha256": "c047731a3c134f3d34286d608e9c173027d50f43ab9d2064f3c360939977e908",
+          "concurrency": 1
+        }
+      },
+      "pss_growth_kib_per_request": -195.0,
+      "source_process": {
+        "rss_kib": 41956,
+        "pss_kib": 30648,
+        "socket_fds": 3,
+        "unix_socket_fds": 0
+      },
+      "kernel_sockstat": [
+        "sockets: used 403",
+        "TCP: inuse 28 orphan 0 tw 165 alloc 29 mem 268",
+        "UDP: inuse 5 mem 1536",
+        "UDPLITE: inuse 0",
+        "RAW: inuse 0",
+        "FRAG: inuse 0 memory 0"
+      ],
+      "cgroup_scope": "shared host cgroup, not isolated per-request accounting",
+      "cgroup_available": {
+        "memory.stat": "anon 1973338112\nfile 11902758912\nkernel 1170313216\nkernel_stack 9650176\npagetables 29229056\nsec_pagetables 0\npercpu 2302056\nsock 0\nvmalloc 770048\nshmem 9822208\nfile_mapped 761982976\nfile_dirty 1118208\nfile_writeback 0\nswapcached 81920\nanon_thp 0\nfile_thp 834666496\nshmem_thp 0\ninactive_anon 1979133952\nactive_anon 3727360\ninactive_file 1163489280\nactive_file 10727497728\nunevictable 2240512\nslab_reclaimable 1109827160\nslab_unreclaimable 15377128\nslab 1125204288\nworkingset_refault_anon 2064561\nworkingset_refault_file 5607108\nworkingset_activate_anon 600509\nworkingset_activate_file 1388341\nworkingset_restore_anon 312\nworkingset_restore_file 194917\nworkingset_nodereclaim 65711\npgdemote_kswapd 0\npgdemote_direct 0\npgdemote_khugepaged 0\npgdemote_proactive 0\npgscan 36461932\npgsteal 18958248\npswpin 1979325\npswpout 2467375\npgscan_kswapd 10590041\npgscan_direct 25871891\npgscan_khugepaged 0\npgscan_proactive 0\npgsteal_kswapd 6717885\npgsteal_direct 12240363\npgsteal_khugepaged 0\npgsteal_proactive 0\npgfault 15829095702\npgmajfault 1399579\npgrefill 6057494\npgactivate 510807579\npgdeactivate 5235104\npglazyfree 796945\npglazyfreed 0\nswpin_zero 85236\nswpout_zero 82199\nthp_fault_alloc 9935\nthp_collapse_alloc 0\nthp_swpout 0\nthp_swpout_fallback 0",
+        "memory.pressure": "some avg10=0.00 avg60=0.00 avg300=0.00 total=8944631\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=8325460",
+        "io.stat": "8:48 rbytes=267459753984 wbytes=388510883840 rios=5384144 wios=4279076 dbytes=2287351681024 dios=1827613\n8:32 rbytes=8109731840 wbytes=10106376192 rios=802785 wios=302344 dbytes=0 dios=0\n8:16 rbytes=69592064 wbytes=0 rios=1158 wios=0 dbytes=0 dios=0\n8:0 rbytes=201147392 wbytes=0 rios=1337 wios=0 dbytes=0 dios=0\n7:7 \n7:6 \n7:5 \n7:4 \n7:3 \n7:2 \n7:1 \n7:0 \n1:15 \n1:14 \n1:13 \n1:12 \n1:11 \n1:10 \n1:9 \n1:8 \n1:7 \n1:6 \n1:5 \n1:4 \n1:3 \n1:2 \n1:1 \n1:0",
+        "io.pressure": "some avg10=0.05 avg60=0.02 avg300=0.00 total=489325809\nfull avg10=0.05 avg60=0.02 avg300=0.00 total=473979086"
+      }
+    },
+    "4": {
+      "baseline_nginx": {
+        "rss_kib": 23384,
+        "pss_kib": 8044,
+        "socket_fds": 7,
+        "unix_socket_fds": 5
+      },
+      "data_plane_hops": 2,
+      "passed": true,
+      "sizes_mib": {
+        "256": {
+          "rss_kib": 64668,
+          "pss_kib": 19348,
+          "socket_fds": 27,
+          "unix_socket_fds": 13,
+          "disk_bytes": 0,
+          "sha256": "486cc817b95d853d3c357ff283b204c0144bd255e73fe2deb1389493b257e3c0",
+          "concurrency": 4
+        },
+        "512": {
+          "rss_kib": 64916,
+          "pss_kib": 19362,
+          "socket_fds": 23,
+          "unix_socket_fds": 13,
+          "disk_bytes": 0,
+          "sha256": "c047731a3c134f3d34286d608e9c173027d50f43ab9d2064f3c360939977e908",
+          "concurrency": 4
+        }
+      },
+      "pss_growth_kib_per_request": 3.5,
+      "source_process": {
+        "rss_kib": 44740,
+        "pss_kib": 33432,
+        "socket_fds": 3,
+        "unix_socket_fds": 0
+      },
+      "kernel_sockstat": [
+        "sockets: used 403",
+        "TCP: inuse 28 orphan 0 tw 155 alloc 29 mem 506",
+        "UDP: inuse 5 mem 1536",
+        "UDPLITE: inuse 0",
+        "RAW: inuse 0",
+        "FRAG: inuse 0 memory 0"
+      ],
+      "cgroup_scope": "shared host cgroup, not isolated per-request accounting",
+      "cgroup_available": {
+        "memory.stat": "anon 1969131520\nfile 11903143936\nkernel 1171009536\nkernel_stack 9781248\npagetables 29331456\nsec_pagetables 0\npercpu 2302056\nsock 0\nvmalloc 770048\nshmem 9822208\nfile_mapped 761982976\nfile_dirty 1060864\nfile_writeback 0\nswapcached 81920\nanon_thp 0\nfile_thp 834666496\nshmem_thp 0\ninactive_anon 1974566912\nactive_anon 3719168\ninactive_file 1163358208\nactive_file 10728005632\nunevictable 2240512\nslab_reclaimable 1110219632\nslab_unreclaimable 15487656\nslab 1125707288\nworkingset_refault_anon 2064561\nworkingset_refault_file 5607108\nworkingset_activate_anon 600509\nworkingset_activate_file 1388341\nworkingset_restore_anon 312\nworkingset_restore_file 194917\nworkingset_nodereclaim 65711\npgdemote_kswapd 0\npgdemote_direct 0\npgdemote_khugepaged 0\npgdemote_proactive 0\npgscan 36461932\npgsteal 18958248\npswpin 1979325\npswpout 2467375\npgscan_kswapd 10590041\npgscan_direct 25871891\npgscan_khugepaged 0\npgscan_proactive 0\npgsteal_kswapd 6717885\npgsteal_direct 12240363\npgsteal_khugepaged 0\npgsteal_proactive 0\npgfault 15829367556\npgmajfault 1399579\npgrefill 6057494\npgactivate 510807712\npgdeactivate 5235104\npglazyfree 796945\npglazyfreed 0\nswpin_zero 85236\nswpout_zero 82199\nthp_fault_alloc 9935\nthp_collapse_alloc 0\nthp_swpout 0\nthp_swpout_fallback 0",
+        "memory.pressure": "some avg10=0.00 avg60=0.00 avg300=0.00 total=8944631\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=8325460",
+        "io.stat": "8:48 rbytes=267459753984 wbytes=388513005568 rios=5384144 wios=4279110 dbytes=2287353180160 dios=1827618\n8:32 rbytes=8109731840 wbytes=10106376192 rios=802785 wios=302344 dbytes=0 dios=0\n8:16 rbytes=69592064 wbytes=0 rios=1158 wios=0 dbytes=0 dios=0\n8:0 rbytes=201147392 wbytes=0 rios=1337 wios=0 dbytes=0 dios=0\n7:7 \n7:6 \n7:5 \n7:4 \n7:3 \n7:2 \n7:1 \n7:0 \n1:15 \n1:14 \n1:13 \n1:12 \n1:11 \n1:10 \n1:9 \n1:8 \n1:7 \n1:6 \n1:5 \n1:4 \n1:3 \n1:2 \n1:1 \n1:0",
+        "io.pressure": "some avg10=0.00 avg60=0.01 avg300=0.00 total=489330577\nfull avg10=0.00 avg60=0.01 avg300=0.00 total=473983546"
+      }
+    }
+  },
+  "gate_outcomes": {
+    "protocol": "PASS",
+    "error_contract": "PASS",
+    "negative_controls": "PASS",
+    "performance": "PASS",
+    "resources": "PASS",
+    "production_dav_integration": "PENDING",
+    "real_origin_metadata_and_backfill": "PENDING",
+    "real_clients": "PENDING",
+    "isolated_deployment_resource_limits": "PENDING",
+    "authorized_cutover": "PENDING"
+  },
+  "production_blockers": [
+    "production_dav_integration",
+    "real_origin_metadata_and_backfill",
+    "real_clients",
+    "isolated_deployment_resource_limits",
+    "authorized_cutover"
+  ],
+  "production_gate": "BLOCKED",
+  "topology": {
+    "data_plane_hops": 2,
+    "private_transport": "Unix socket under 0700 runtime directory",
+    "resource_scope": "same nginx master/workers for both hops plus native descendants; all response temp paths and socket descriptors included",
+    "normalization_boundary": "before final client headers commit"
+  },
+  "source_requests": 190,
+  "candidate_curl_execs": 0,
+  "passed": true
+}

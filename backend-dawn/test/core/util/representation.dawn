@@ -21,9 +21,9 @@ test "download metadata is exact, bounded and independent of stat" {
   }
   assert from_head(h, "key", 8, "profile", 1800000000) != from_head(h, "key", 9, "profile", 1800000000)
   for headers in [h.headers ++ [("ETag", "\"second\"")],
-      h.headers ++ [("content-encoding", "gzip")],
-      h.headers ++ [("content-length", "9")],
-      h.headers ++ [("last-modified", date)]] {
+    h.headers ++ [("content-encoding", "gzip")],
+    h.headers ++ [("content-length", "9")],
+    h.headers ++ [("last-modified", date)]] {
     match from_head(HeadResp { status = 200, headers = headers }, "key", 9, "profile", 1800000000) {
       Err(_) -> { assert true }
       Ok(_) -> { assert false }
