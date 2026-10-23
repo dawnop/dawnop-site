@@ -142,7 +142,13 @@ def normalize(text: str) -> str:
         block = m.group(0)
         href = _HREF.search(block)
         if href and _run_created(href.group(1)):
-            return _STAMP.sub(r"<D:\1>WALL-CLOCK</D:\1>", block)
+            if "<D:collection" in block:
+                return _STAMP.sub(r"<D:\1>WALL-CLOCK</D:\1>", block)
+            return re.sub(
+                r"<D:creationdate>[^<]*</D:creationdate>",
+                "<D:creationdate>WALL-CLOCK</D:creationdate>",
+                block,
+            )
         return block
 
     return _LOCKTOKEN.sub("opaquelocktoken:<uuid>", _RESPONSE.sub(per_response, text))
@@ -461,7 +467,7 @@ def main():
     g.case("propfind.depth.invalid.fail-closed", depth_probe)
 
     print("\n== HEAD (metadata only, no bytes) ==")
-    case("head.file", "HEAD", "/dav/docs/notes.txt")
+    case("head.file.unconfigured", "HEAD", "/dav/docs/notes.txt")
     case("head.dir", "HEAD", "/dav/docs")
     case("head.404", "HEAD", "/dav/zzz-nope.bin")
 

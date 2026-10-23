@@ -46,6 +46,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import contract_download
 import contract_fixture
 import contract_native
 import contract_qiniu_fake
@@ -94,7 +95,7 @@ def env_file(
             f"QINIU_ACCESS_KEY={contract_qiniu_fake.FAKE_AK}",
             f"QINIU_SECRET_KEY={contract_qiniu_fake.FAKE_SK}",
             f"QINIU_BUCKET={contract_qiniu_fake.FAKE_BUCKET}",
-            f"QINIU_DOMAIN={fake_qiniu.replace('http://', 'https://')}",
+            f"QINIU_DOMAIN={fake_qiniu.replace('http://127.0.0.1', 'https://localhost')}",
             f"QINIU_RS_HOST={fake_qiniu}",
             f"QINIU_UP_HOST={fake_qiniu}",
         ]
@@ -170,6 +171,7 @@ def run_arm(args, arm, work):
         )
 
     procs, logs, tokens, bases, natives = {}, {}, {}, {}, {}
+    proxies = []
     reports = {}
     child_environments = {}
     proof = {}
@@ -179,6 +181,13 @@ def run_arm(args, arm, work):
         for tag, (db, envf, port, fake_for) in servers.items():
             env_file(envf, db, port, fake_for)
             contract_fixture.build(str(db))
+            if tag == "qiniu":
+                origin = fake_for.replace("http://127.0.0.1", "https://localhost")
+                with envf.open("a") as target:
+                    target.write(
+                        f"DAWN_DOWNLOAD_HANDOFF=on\nDAWN_DOWNLOAD_ORIGIN={origin}\n"
+                    )
+                contract_download.prepare_rows(db, origin)
             child_env = dict(os.environ)
             child_env.update(
                 {"DAWNOP_ENV": str(envf), "TZ": "UTC", "no_proxy": "*", "NO_PROXY": "*"}
@@ -220,6 +229,10 @@ def run_arm(args, arm, work):
                     stderr=subprocess.STDOUT,
                 )
                 wait_health(bases[tag], procs[tag])
+            if tag == "qiniu":
+                proxy = contract_download.Proxy(work / "nginx", port, fake_for)
+                proxies.append(proxy)
+                bases[tag] = f"http://127.0.0.1:{proxy.port}"
             tokens[tag] = login(bases[tag])
 
         results = {}
@@ -231,6 +244,10 @@ def run_arm(args, arm, work):
             # fresh fixture per script: each golden then describes one backend
             # from one known state, whatever the previous script mutated
             contract_fixture.build(str(db))
+            if tag == "qiniu":
+                contract_download.prepare_rows(
+                    db, fake_base.replace("http://127.0.0.1", "https://localhost")
+                )
             # Resetting the fixture also discards additive schemas. Prepare them
             # explicitly, exactly as deployment prepare must, outside requests.
             if arm == "native":
@@ -268,6 +285,9 @@ def run_arm(args, arm, work):
                 senv["FAKE_QINIU"] = fake_base
                 senv["CONTRACT_QINIU_CONFIGURED"] = "1"
                 senv["CONTRACT_DB_PATH"] = str(db)
+                senv["CONTRACT_APPLICATION_BASE"] = (
+                    f"http://127.0.0.1:{servers[tag][2]}"
+                )
             else:
                 senv.pop("CONTRACT_QINIU_CONFIGURED", None)
             report = work / f"{name}.json"
@@ -298,6 +318,8 @@ def run_arm(args, arm, work):
         rc = 1  # keep the work dir: the backend log is the only clue left
         raise
     finally:
+        for proxy in proxies:
+            proxy.close()
         if fake is not None:
             fake.shutdown()
             fake.server_close()

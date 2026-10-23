@@ -92,6 +92,7 @@ error_log /dev/null crit;
 events {{ worker_connections 128; }}
 http {{
   access_log off;
+  client_max_body_size 0;
   # Evaluated only by the inner response header filter, never in rewrite.
   map $upstream_status $object_error_route {{
     default @download_fail_dispatch;
@@ -190,7 +191,17 @@ http {{
       add_header X-Content-Type-Options nosniff always;
       return 504 '{{"detail":"object download timed out"}}';
     }}
-    location / {{ return 404; }}
+    location / {{
+      proxy_pass http://127.0.0.1:{application_port};
+      proxy_request_buffering off;
+      proxy_http_version 1.1;
+      proxy_set_header Connection close;
+      proxy_set_header X-Dawn-Download-Target "";
+      proxy_set_header X-Dawn-Download-Type "";
+      proxy_set_header X-Accel-Redirect "";
+      proxy_buffering off;
+      proxy_next_upstream off;
+    }}
   }}
   # Same master/workers, separate HTTP request. A 0700 parent isolates the
   # socket; internal would reject legitimate socket requests too.

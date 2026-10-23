@@ -1,0 +1,25 @@
+use std/map
+use std/bytes
+
+fn request(hs: List[(String, String)]) -> Request = Request { method = "GET", path = "/dav/empty", raw_path = "/dav/empty",
+  params = map.empty(), query = map.empty(), headers = map.from(map(hs, kv => { let (k, v) = kv
+    (k, [v]) })), body = bytes.utf8(""), body_file = None, route = None }
+
+test "local empty conditions preserve precedence and ignore ranges" {
+  let lm = 1767225600
+  assert status(request([]), lm) == Ok(200)
+  assert status(request([("range", "bytes=0-0"), ("if-range", "\"old\"")]), lm) == Ok(200)
+  assert status(request([("if-match", "W/" ++ EMPTY_ETAG)]), lm) == Ok(412)
+  assert status(request([("if-match", EMPTY_ETAG), ("if-unmodified-since", "Wed, 31 Dec 2025 23:59:59 GMT")]), lm) == Ok(200)
+  assert status(request([("if-unmodified-since", "Wed, 31 Dec 2025 23:59:59 GMT")]), lm) == Ok(412)
+  assert status(request([("if-none-match", "\"old\", W/" ++ EMPTY_ETAG)]), lm) == Ok(304)
+  assert status(request([("if-none-match", "* ")]), lm) == Ok(304)
+  assert status(request([("if-none-match", "\"old\""), ("if-modified-since", "Thu, 01 Jan 2026 00:00:00 GMT")]), lm) == Ok(200)
+  assert status(request([("if-modified-since", "Thu, 01 Jan 2026 00:00:00 GMT")]), lm) == Ok(304)
+  assert status(request([("if-modified-since", "not a date")]), lm) == Ok(200)
+  assert status(request([("if-none-match", "\"contains,comma\", " ++ EMPTY_ETAG)]), lm) == Ok(304)
+  for bad in ["", "unquoted", "\"x\",", "*, \"x\"", "W/x", "\"x\" \"y\""] {
+    match status(request([("if-match", bad)]), lm) { Err(e) -> { assert e.status == 400 }
+      Ok(_) -> { assert false } }
+  }
+}

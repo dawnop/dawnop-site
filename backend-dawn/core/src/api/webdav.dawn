@@ -27,23 +27,26 @@ use util/uri.{Uri, is_opaque, percent_decode}
 use util/uri
 use db/sql.{Db}
 use util/time.{http_date, iso_date}
-use web/types.{Request, Response, HttpError, Handler, Guard, http_error, as_http, as_http_with, text, raw, binary, redirect, with_header, header, headers_all, param_segs}
+use web/types.{Request, Response, HttpError, Handler, Guard, http_error, as_http, as_http_with, text, raw, with_header, header, headers_all, param_segs}
 use web/router.{Route, route_method_of, tagged, body_limit, guarded}
 use db/runtime.{with_db, without_extension}
 use svc/auth.{Auth, scheme_param}
-use svc/files.{collect_fresh, signed_url, gc_unreferenced, gc_rows_unreferenced, gc_copy_tree_unreferenced, copy_tree_objects}
+use svc/files.{collect_fresh, gc_unreferenced, gc_rows_unreferenced, gc_copy_tree_unreferenced, copy_tree_objects}
 use repo/repo_fm.{FileRow, SubtreeWriteOutcome, get_row, children, replace_file_strict, insert_folder_strict, delete_subtree, commit_webdav_move, validate_fm_file_target, validate_webdav_ancestors, validate_webdav_subtree_destination, validate_webdav_destination_preflight, validate_copy_source_objects, prepare_webdav_copy, commit_webdav_copy}
 use util/paths.{basename, parent_rel, ext, ts, guess_mime, safe_persisted_mime, require_admissible_names}
 use qiniu/rs.{upload_file}
 use std/io.{Random, with_random_real}
 use std/io as io
 use util/crypto.{uuid, uuid_hex}
-use util/http.{Upstream, fetch_stream, ok_stream, stream_response, close_stream, as_outbound, tag_outbound}
+use util/http.{Upstream, tag_outbound}
 use util/runtime_ttl.{now_s}
 use util/errkind.{KConflict, KPrecondition, KUpstream, KTimeout, split_kind}
 use svc/export.{url_encode}
 
 use svc/dav_auth as dav_credentials
+use util/download_handoff.{handoff, configured}
+use util/representation as representation
+use util/local_empty
 
 # Ceiling on one WebDAV PUT body, 512 MiB. It matches the client_max_body_size the
 # production nginx sets on the dav vhost, which was sized from the slowest
@@ -53,7 +56,6 @@ use svc/dav_auth as dav_credentials
 # Content-Length over it is a 413 before the temp file exists, and a body that
 # runs past it unannounced is cut off and its partial file deleted.
 const DAV_PUT_MAX_BYTES: Int = 536870912
-const REDIRECT_CLIENTS: List[String] = ["rclone", "cyberduck", "mountain duck", "raidrive", "webdavlib"]
 
 # ---- small string helpers ----
 
@@ -67,7 +69,6 @@ fn path_segs(rel: String) -> List[String] = filter(str.split(rel, "/"), s => s !
 # segments anyway, so collapsing here is what the rest of the module expects.)
 fn path_join(s: String) -> String = join(path_segs(s), "/")
 
-fn contains_ci(hay: String, needle: String) -> Bool = str.contains(str.to_lower(hay), needle)
 
 # XML text escaping (& < >), matching xml.sax.saxutils.escape; & must go first.
 fn xml_escape(s: String) -> String = {
@@ -159,16 +160,25 @@ fn response_xml(prefix: String, rel: String, name: String, is_dir: Bool, size: I
 
 # A row's <D:response>. FileRow has no created_at column, so creationdate reuses
 # updated_at (a minor, documented divergence from FastAPI's o.created_at).
-fn entry_xml(prefix: String, o: FileRow) -> String !io = {
-  let t = ts(o.updated_at)
-  let etag = if o.is_dir { "" } else { key_etag(o.key) }
-  response_xml(prefix, o.path, basename(o.path), o.is_dir, o.size, o.content_type, t, t, etag)
+const UNAVAILABLE: String = "download representation unavailable"
+
+fn entry_xml(prefix: String, o: FileRow, profile: String) -> Result[String, String] !io = {
+  let logical_time = ts(o.updated_at)
+  if o.is_dir { return Ok(response_xml(prefix, o.path, basename(o.path), true, 0, o.content_type, logical_time, logical_time, "")) }
+  let value = match representation.parse(o.representation, o.key, o.size, profile) {
+    representation.Missing -> return Err(UNAVAILABLE)
+    representation.ObjectIdentity(v) -> v
+    representation.LocalEmpty(v) -> v
+  }
+  let v = representation.fields(value)
+  Ok(response_xml(prefix, o.path, basename(o.path), false, v.size, o.content_type, v.last_modified_s, logical_time, v.etag))
 }
 
-fn key_etag(k: Option[String]) -> String = match k { Some(v) -> "\"${v}\"", None -> "" }
-
-fn kids_xml(prefix: String, rows: List[FileRow]) -> String !io =
-  fold(rows, "", (acc, o) => acc ++ entry_xml(prefix, o))
+fn kids_xml(prefix: String, rows: List[FileRow], profile: String) -> Result[String, String] !io = {
+  var xml = ""
+  for row in rows { xml = xml ++ entry_xml(prefix, row, profile)? }
+  Ok(xml)
+}
 
 # RFC 4918 §9.1 gives PROPFIND three Depth values — 0, 1 and infinity — and this
 # server implements two of them. The header used to be read with a default and
@@ -202,152 +212,45 @@ fn propfind_depth(req: Request) -> Result[String, HttpError] = {
 fn propfind(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !io = {
   let prefix = dav_prefix(req)
   let depth = propfind_depth(req)?
-  match as_http(with_db(a.db, () => propfind_body(prefix, rel, depth)), 500)? {
+  match as_http_with(with_db(a.db, () => propfind_body(prefix, rel, depth, representation.profile(a.qiniu.domain))), m => http_error(if m == UNAVAILABLE { 503 } else { 500 }, m))? {
     Some(body) -> Ok(raw(207, "application/xml; charset=\"utf-8\"", body))
     None -> Err(http_error(404, "资源不存在"))
   }
 }
 
-fn propfind_body(prefix: String, rel: String, depth: String) -> Result[Option[String], String] !Db !io =
+fn propfind_body(prefix: String, rel: String, depth: String, profile: String) -> Result[Option[String], String] !Db !io =
   if rel == "" {
     let now = now_s()
     let self_xml = response_xml(prefix, "", "", true, 0, "", now, now, "")
     let kids: List[FileRow] = if depth != "0" { children("")? } else { [] }
-    Ok(Some(multistatus(self_xml ++ kids_xml(prefix, kids))))
+    Ok(Some(multistatus(self_xml ++ kids_xml(prefix, kids, profile)?)))
   } else {
     match get_row(rel)? {
       None -> Ok(None)
       Some(o) -> {
-        let self_xml = entry_xml(prefix, o)
+        let self_xml = entry_xml(prefix, o, profile)?
         let kids: List[FileRow] = if depth != "0" && o.is_dir { children(rel)? } else { [] }
-        Ok(Some(multistatus(self_xml ++ kids_xml(prefix, kids))))
+        Ok(Some(multistatus(self_xml ++ kids_xml(prefix, kids, profile)?)))
       }
     }
   }
 
 # ---- GET / HEAD ----
 
-fn follows_redirect(req: Request) -> Bool = {
-  let ua = header_or(req, "user-agent", "")
-  fold(REDIRECT_CLIENTS, false, (acc, tag) => acc || contains_ci(ua, tag))
-}
-
-fn get_or_head(a: Auth, req: Request, rel: String, head: Bool) -> Result[Response, HttpError] !Upstream !io =
-  if rel == "" {
-    Err(http_error(405, "不能下载目录"))
-  } else {
-    match as_http(with_db(a.db, () => get_row(rel)), 500)? {
-      None -> Err(http_error(404, "资源不存在"))
-      Some(o) ->
-        if o.is_dir {
-          Err(http_error(405, "不能下载目录"))
-        } else {
-          match o.key {
-            None -> Err(http_error(405, "不能下载目录"))
-            Some(k) -> serve_file(a, req, o, k, head)
-          }
-        }
-    }
-  }
-
-fn serve_file(a: Auth, req: Request, o: FileRow, key: String, head: Bool) -> Result[Response, HttpError] !Upstream !io = {
-  let mime = safe_persisted_mime(o.content_type)
-  let etag = "\"${key}\""
-  let lastmod = http_date(ts(o.updated_at))
-  if head {
-    Ok(with_meta(raw(200, mime, ""), o.size, etag, lastmod))
-  } else if o.size <= 0 {
-    # A 0-byte object has nothing to fetch, and qiniu does not answer a plain GET
-    # on one with 0 bytes — it answers {"error":"invalid range: failed to overlap"},
-    # which fetch_bytes (which does not inspect the status) would hand back as the
-    # file's content. Serve the empty body ourselves, ahead of the redirect branch
-    # so 302-following clients don't hit the same thing at qiniu.
-    Ok(add_headers(binary(200, mime, bytes.utf8("")),
-      [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
-  } else if follows_redirect(req) {
-    # redirect-following clients get 302 direct to qiniu, which serves Range itself
-    Ok(redirect(302, signed_url(a.qiniu, key, "")))
-  } else {
-    # proxy clients (macOS webdavfs / Windows redirector) can't be 302'd reliably:
-    # forward a Range so QuickLook/streaming/resume get 206 + Content-Range, matching
-    # FastAPI. qiniu honors Range on GET; if it returns the wrong length (ignored the
-    # Range) fall back to a plain 200 with whatever came back.
-    match range_of(req, o.size) {
-      Some(pair) -> {
-        let (start, end) = pair
-        {
-          let r = as_http_with(as_outbound(fetch_stream(signed_url(a.qiniu, key, ""), [("Accept-Encoding", "identity"), ("Range", "bytes=${start}-${end}")])), mutation_error)?
-          # a ranged hit is 206, a server that ignored the Range answers 200 —
-          # anything else is an upstream error whose body is not the file. Streaming
-          # can't measure the returned length, so decide 206-vs-200 by the upstream
-          # status (the interval was already validated against the trusted o.size).
-          if not ok_stream(r) {
-            close_stream(r.stream)
-            Err(http_error(502, "qiniu ${r.status}"))
-          } else if r.status == 206 {
-            Ok(add_headers(stream_response(206, mime, r.stream), [("Accept-Ranges", "bytes"), ("Content-Range", "bytes ${start}-${end}/${o.size}"), ("Last-Modified", lastmod), ("ETag", etag)]))
-          } else {
-            Ok(add_headers(stream_response(200, mime, r.stream), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
-          }
-        }
+fn get_or_head(a: Auth, req: Request, rel: String, origin: String) -> Result[Response, HttpError] !io = {
+  if rel == "" { return Err(http_error(405, "不能下载目录")) }
+  match as_http(with_db(a.db, () => get_row(rel)), 500)? {
+    None -> Err(http_error(404, "资源不存在"))
+    Some(o) -> {
+      if o.is_dir { return Err(http_error(405, "不能下载目录")) }
+      match representation.parse(o.representation, o.key, o.size, representation.profile(origin)) {
+        representation.Missing -> Err(http_error(503, UNAVAILABLE))
+        representation.LocalEmpty(v) -> local_empty.respond(req, v, safe_persisted_mime(o.content_type))
+        representation.ObjectIdentity(v) -> handoff(a.qiniu, origin, req.method, representation.fields(v).key, o.content_type)
       }
-      None ->
-        {
-          let r = as_http_with(as_outbound(fetch_stream(signed_url(a.qiniu, key, ""), [("Accept-Encoding", "identity")])), mutation_error)?
-          if not ok_stream(r) {
-            close_stream(r.stream)
-            Err(http_error(502, "qiniu ${r.status}"))
-          } else {
-            Ok(add_headers(stream_response(200, mime, r.stream), [("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)]))
-          }
-        }
     }
   }
 }
-
-# parse a single-range request header against the total size → Some((start,end))
-# inclusive, or None (absent / multi-range / unsatisfiable → serve the whole file).
-# Forms: bytes=start-end, bytes=start-, bytes=-suffix.
-fn range_of(req: Request, total: Int) -> Option[(Int, Int)] =
-  match header(req, "range") {
-    None -> None
-    Some(rng) ->
-      if not str.starts_with(rng, "bytes=") || total <= 0 {
-        None
-      } else {
-        let spec = str.slice(rng, 6, len(rng))
-        if str.contains(spec, ",") {
-          None
-        } else {
-          let parts = str.split(spec, "-")
-          if len(parts) != 2 { None } else { range_pair(parts[0], parts[1], total) }
-        }
-      }
-  }
-
-fn range_pair(a: String, b: String, total: Int) -> Option[(Int, Int)] =
-  if a == "" {
-    # suffix: the last b bytes
-    match parse_int(b) {
-      Some(n) -> if n <= 0 { None } else { Some((if total - n < 0 { 0 } else { total - n }, total - 1)) }
-      None -> None
-    }
-  } else {
-    match parse_int(a) {
-      None -> None
-      Some(s) ->
-        if s >= total || s < 0 {
-          None
-        } else {
-          let e = if b == "" { total - 1 } else { match parse_int(b) { Some(x) -> if x > total - 1 { total - 1 } else { x }, None -> total - 1 } }
-          if e < s { None } else { Some((s, e)) }
-        }
-    }
-  }
-
-fn with_meta(r: Response, size: Int, etag: String, lastmod: String) -> Response =
-  # HEAD has no body to measure; this is the stored GET representation's size.
-  add_headers(r, [("Content-Length", to_string(size)), ("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)])
 
 fn add_headers(r: Response, hs: List[(String, String)]) -> Response =
   fold(hs, r, (acc, kv) => {
@@ -474,8 +377,8 @@ fn put_do(a: Auth, req: Request, rel: String) -> Result[Response, HttpError] !Ra
   }
 
 fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int) -> Result[Response, HttpError] !Upstream !io = {
-  let representation = as_http_with(collect_fresh(a, key, size), mutation_error)?
-  match with_db(a.db, () => replace_file_strict(rel, key, mime, size, representation)) {
+  let published = as_http_with(collect_fresh(a, key, size), mutation_error)?
+  match with_db(a.db, () => replace_file_strict(rel, key, mime, size, published)) {
     Ok(outcome) -> {
       let _gc = gc_unreferenced(a, outcome.superseded_key)
       Ok(text(if outcome.target_existed { 204 } else { 201 }, ""))
@@ -1101,7 +1004,7 @@ fn dav_guard(a: Auth) -> Guard =
 
 # ---- routes ----
 
-fn dav_handler(a: Auth, cl: HttpCell, method: String) -> Handler =
+fn dav_handler(a: Auth, cl: HttpCell, method: String, download_origin: Option[String]) -> Handler =
   req =>
   if method == "OPTIONS" {
     Ok(options_response())
@@ -1110,6 +1013,13 @@ fn dav_handler(a: Auth, cl: HttpCell, method: String) -> Handler =
       Err(e) -> Err(e)
       Ok(_) -> {
         let rel = dav_rel(req)?
+        if method == "PROPFIND" { let _ = propfind_depth(req)? }
+        if method == "GET" || method == "HEAD" || method == "PROPFIND" {
+          match download_origin {
+            Some(origin) -> if not configured(a.qiniu, origin) { return Err(http_error(503, UNAVAILABLE)) }
+            None -> return Err(http_error(503, UNAVAILABLE))
+          }
+        }
         # One installation point for the whole of WebDAV: this dispatcher is
         # the innermost thing that owns a request, and the closure it lives in
         # is a web `Handler`, whose type is closed at `!io` (util/http says
@@ -1117,8 +1027,8 @@ fn dav_handler(a: Auth, cl: HttpCell, method: String) -> Handler =
         with_upstream(cl, () => with_random_real(() =>
             match method {
               "PROPFIND" -> propfind(a, req, rel)
-              "HEAD" -> get_or_head(a, req, rel, true)
-              "GET" -> get_or_head(a, req, rel, false)
+              "HEAD" -> get_or_head(a, req, rel, unwrap_or(download_origin, ""))
+              "GET" -> get_or_head(a, req, rel, unwrap_or(download_origin, ""))
               "PUT" -> put(a, req, rel)
               "DELETE" -> del(a, rel)
               "MKCOL" -> mkcol(a, rel)
@@ -1133,7 +1043,9 @@ fn dav_handler(a: Auth, cl: HttpCell, method: String) -> Handler =
   }
 
 ## All WebDAV routes under /dav/{rest*} (the tail matches /dav and any depth).
-pub fn dav_routes(a: Auth, cl: HttpCell) -> List[Route] = {
+pub fn dav_routes(a: Auth, cl: HttpCell) -> List[Route] = dav_routes_with_download(a, cl, None)
+
+pub fn dav_routes_with_download(a: Auth, cl: HttpCell, download_origin: Option[String]) -> List[Route] = {
   let verbs = DAV_VERBS
   # raw-body: WebDAV PUT carries file bytes (bounded by nginx, not the JSON limit).
   # no-cors: WebDAV is not browser traffic — skip the CORS middleware entirely.
@@ -1147,11 +1059,11 @@ pub fn dav_routes(a: Auth, cl: HttpCell) -> List[Route] = {
   # read, so an anonymous request is a 401 with nothing read and nothing spilled.
   # OPTIONS stays open, as in the handler: it is the capability probe a client
   # sends before it has credentials to offer. PUT also carries its own ceiling.
-  map(verbs, v => dav_route(a, cl, v))
+  map(verbs, v => dav_route(a, cl, v, download_origin))
 }
 
-fn dav_route(a: Auth, cl: HttpCell, v: String) -> Route = {
-  let base = tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, cl, v)),
+fn dav_route(a: Auth, cl: HttpCell, v: String, download_origin: Option[String]) -> Route = {
+  let base = tagged(route_method_of(v, "/dav/{rest*}", dav_handler(a, cl, v, download_origin)),
     if v == "PUT" { ["raw-body", "no-cors", "stream-body"] } else { ["raw-body", "no-cors"] })
   let bounded = if v == "PUT" { body_limit(base, DAV_PUT_MAX_BYTES) } else { base }
   if v == "OPTIONS" { bounded } else { guarded(bounded, dav_guard(a)) }

@@ -255,7 +255,9 @@ def expected_digest(size):
     return h.hexdigest()
 
 
-def seed(db, keys):
+def seed(db, keys, origin):
+    import contract_download
+    contract_download.prepare_rows(db, origin)
     with sqlite3.connect(db) as c:
         for key in keys:
             c.execute(
@@ -270,6 +272,7 @@ def seed(db, keys):
                     contract_fixture.T0,
                 ),
             )
+            c.execute("update files set representation_kind='object-identity-v1',representation_key=key,representation_profile=?,representation_etag=?,representation_last_modified_s=1445412480 where path=?", ("identity-v1:" + hashlib.sha256(origin.encode()).hexdigest(), ETAG, key))
 
 
 def login(number):
@@ -1144,6 +1147,7 @@ def main():
                 "ignore-range",
                 *[f"error-{n}" for n in ERROR_CODES],
             ],
+            tls.origin,
         )
         temp = runtime / "app-temp"
         temp.mkdir()

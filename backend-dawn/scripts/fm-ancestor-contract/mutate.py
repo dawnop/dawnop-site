@@ -178,9 +178,9 @@ def main() -> int:
     elif args.mutant == "repo-immediate-parent-only":
         replace_once(
             repo,
-            "pub fn replace_file_strict(rel: String, key: String, content_type: String, size: Int) -> Result[ReplaceOutcome, String] !Db !io =\n"
-            "  with_immediate_tx(() => replace_file_tx(rel, key, content_type, size, RequireExistingAncestors))\n",
-            "pub fn replace_file_strict(rel: String, key: String, content_type: String, size: Int) -> Result[ReplaceOutcome, String] !Db !io =\n"
+            "pub fn replace_file_strict(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[ReplaceOutcome, String] !Db !io =\n"
+            "  with_immediate_tx(() => replace_file_tx(rel, key, content_type, size, representation, RequireExistingAncestors))\n",
+            "pub fn replace_file_strict(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[ReplaceOutcome, String] !Db !io =\n"
             "  with_immediate_tx(() => {\n"
             "    let parent = parent_rel(rel)\n"
             '    let checked: Result[Unit, String] = if parent == "" {\n'
@@ -193,7 +193,7 @@ def main() -> int:
             "    }\n"
             "    let _v = checked?\n"
             "    let existing = get_row(rel)?\n"
-            "    let _i = insert_file_row(rel, key, content_type, size)?\n"
+            "    let _i = insert_file_row(rel, key, content_type, size, representation)?\n"
             "    Ok(ReplaceOutcome {\n"
             "      target_existed = existing != None,\n"
             "      superseded_key = superseded_file_key(existing, key),\n"
@@ -245,11 +245,11 @@ def main() -> int:
         )
         replace_once(
             repo,
-            "pub fn replace_file(rel: String, key: String, content_type: String, size: Int) -> Result[ReplaceOutcome, String] !Db !io =\n"
-            "  with_immediate_tx(() => replace_file_tx(rel, key, content_type, size, AllowMissingAncestors))\n",
-            "pub fn replace_file(rel: String, key: String, content_type: String, size: Int) -> Result[ReplaceOutcome, String] !Db !io = {\n"
+            "pub fn replace_file(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[ReplaceOutcome, String] !Db !io =\n"
+            "  with_immediate_tx(() => replace_file_tx(rel, key, content_type, size, representation, AllowMissingAncestors))\n",
+            "pub fn replace_file(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[ReplaceOutcome, String] !Db !io = {\n"
             "  let _a = ensure_dirs(rel)?\n"
-            "  with_immediate_tx(() => replace_file_tx(rel, key, content_type, size, AllowMissingAncestors))\n"
+            "  with_immediate_tx(() => replace_file_tx(rel, key, content_type, size, representation, AllowMissingAncestors))\n"
             "}\n",
         )
     elif args.mutant == "repo-webdav-strict-insert-uses-fm":
@@ -265,13 +265,13 @@ def main() -> int:
         )
         replace_once(
             repo,
-            "pub fn insert_file_strict(rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !Db !io =\n"
-            "  match replace_file_strict(rel, key, content_type, size) {\n"
+            "pub fn insert_file_strict(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[Int, String] !Db !io =\n"
+            "  match replace_file_strict(rel, key, content_type, size, representation) {\n"
             "    Ok(_) -> Ok(1)\n"
             "    Err(m) -> Err(m)\n"
             "  }\n",
-            "pub fn insert_file_strict(rel: String, key: String, content_type: String, size: Int) -> Result[Int, String] !Db !io =\n"
-            "  insert_file(rel, key, content_type, size)\n",
+            "pub fn insert_file_strict(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[Int, String] !Db !io =\n"
+            "  insert_file(rel, key, content_type, size, representation)\n",
         )
     elif args.mutant == "repo-rename-fill-missing":
         replace_once(
@@ -378,11 +378,11 @@ def main() -> int:
         replace_once(
             repo,
             "      match row.copied_key {\n"
-            '        Some(key) -> str.trim(key) != ""\n'
+            '        Some(key) -> str.trim(key) != "" && match row.representation { Some(v) -> validate(v, key, row.source.size) == Ok(())\n          None -> false }\n'
             "        None -> false\n"
             "      }\n",
             "      match row.copied_key {\n"
-            '        Some(key) -> str.trim(key) != ""\n'
+            '        Some(key) -> str.trim(key) != "" && match row.representation { Some(v) -> validate(v, key, row.source.size) == Ok(())\n          None -> false }\n'
             "        None -> row.source.key == None\n"
             "      }\n",
         )
@@ -806,8 +806,8 @@ def main() -> int:
         )
         replace_once(
             webdav,
-            "fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int) -> Result[Response, HttpError] !Upstream !io =\n",
-            "fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int, stale_key: Option[String]) -> Result[Response, HttpError] !Upstream !io =\n",
+            "fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int) -> Result[Response, HttpError] !Upstream !io = {\n",
+            "fn put_commit(a: Auth, rel: String, key: String, mime: String, size: Int, stale_key: Option[String]) -> Result[Response, HttpError] !Upstream !io = {\n",
         )
         replace_once(
             webdav,
@@ -1153,8 +1153,8 @@ def main() -> int:
     elif args.mutant == "fm-save-codepoint-size":
         replace_once(
             service,
-            "  match with_db(a.db, () => save_db(rel, new_key, mime, text_byte_size(content))) {\n",
-            "  match with_db(a.db, () => save_db(rel, new_key, mime, len(content))) {\n",
+            "  match with_db(a.db, () => save_db(rel, new_key, mime, text_byte_size(content), representation)) {\n",
+            "  match with_db(a.db, () => save_db(rel, new_key, mime, len(content), representation)) {\n",
         )
     elif args.mutant == "webdav-propfind-depth-singleton-fail-open":
         # the reading before the tightening: whatever the single header said was
@@ -1394,8 +1394,8 @@ def main() -> int:
         # a copy duplicates the source row's stored type into a brand new row
         replace_once(
             repo,
-            "        Some(key) -> insert_file_row(destination, key, safe_persisted_mime(row.source.content_type), row.source.size)\n",
-            "        Some(key) -> insert_file_row(destination, key, row.source.content_type, row.source.size)\n",
+            "        Some(key) -> match row.representation { Some(v) -> insert_file_row(destination, key, safe_persisted_mime(row.source.content_type), row.source.size, v)\n",
+            "        Some(key) -> match row.representation { Some(v) -> insert_file_row(destination, key, row.source.content_type, row.source.size, v)\n",
         )
     elif args.mutant == "receipt-read-after-commit":
         # the shape proxy upload had before: the write commits, and only then is
@@ -1404,16 +1404,16 @@ def main() -> int:
         # stops being guaranteed to be the row this request wrote.
         replace_once(
             repo,
-            "pub fn replace_file_receipt(rel: String, key: String, content_type: String, size: Int) -> Result[(FileRow, ReplaceOutcome), String] !Db !io =\n"
+            "pub fn replace_file_receipt(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[(FileRow, ReplaceOutcome), String] !Db !io =\n"
             "  with_immediate_tx(() => {\n"
-            "    let outcome = replace_file_tx(rel, key, content_type, size, AllowMissingAncestors)?\n"
+            "    let outcome = replace_file_tx(rel, key, content_type, size, representation, AllowMissingAncestors)?\n"
             "    match receipt_row(rel)? {\n"
             "      Some(o) -> Ok((o, outcome))\n"
             '      None -> Err("uploaded file vanished: ${full(rel)}")\n'
             "    }\n"
             "  })\n",
-            "pub fn replace_file_receipt(rel: String, key: String, content_type: String, size: Int) -> Result[(FileRow, ReplaceOutcome), String] !Db !io = {\n"
-            "  let outcome = with_immediate_tx(() => replace_file_tx(rel, key, content_type, size, AllowMissingAncestors))?\n"
+            "pub fn replace_file_receipt(rel: String, key: String, content_type: String, size: Int, representation: Published) -> Result[(FileRow, ReplaceOutcome), String] !Db !io = {\n"
+            "  let outcome = with_immediate_tx(() => replace_file_tx(rel, key, content_type, size, representation, AllowMissingAncestors))?\n"
             "  match receipt_row(rel)? {\n"
             "    Some(o) -> Ok((o, outcome))\n"
             '    None -> Err("uploaded file vanished: ${full(rel)}")\n'
