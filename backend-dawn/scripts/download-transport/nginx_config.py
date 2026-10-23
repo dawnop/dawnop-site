@@ -23,10 +23,11 @@ def render(root, port, application_port, origin, connect, ca, *, idle="1s"):
         or not re.fullmatch(r"[0-9]+(?:ms|s)", idle)
     ):
         raise ValueError("invalid isolated download configuration")
-    # error_page accepts only 300..599. 612 is a measured release blocker.
-    errors = " ".join(
-        str(n) for n in range(300, 600) if n not in {304, 404, 412, 416, 499, 503, 504}
-    )
+    # Allow the inner timer to deliver its classified response before outer expiry.
+    idle_ms = int(re.match(r"[0-9]+", idle)[0]) * (1 if idle.endswith("ms") else 1000)
+    outer_idle = f"{idle_ms + 2000}ms"
+    socket_path = root / "object.sock"
+    quoted(socket_path)  # Validate before embedding it in a variable proxy URL.
     headers = "\n".join(
         f"proxy_set_header {name} $http_{name.lower().replace('-', '_')};"
         for name in (
@@ -38,6 +39,51 @@ def render(root, port, application_port, origin, connect, ca, *, idle="1s"):
             "If-Unmodified-Since",
         )
     )
+    # These policies apply independently to both HTTP request boundaries.
+    streaming = """proxy_http_version 1.1;
+      proxy_set_header Connection close;
+      proxy_pass_request_headers off;
+      proxy_pass_request_body off;
+      proxy_set_header Content-Length "";
+      proxy_ignore_client_abort off;
+      proxy_next_upstream off;
+      proxy_buffering off;
+      proxy_cache off;
+      proxy_store off;
+      proxy_max_temp_file_size 0;
+      proxy_intercept_errors off;
+      proxy_redirect off;"""
+    hidden = "\n".join(
+        f"proxy_hide_header {name};"
+        for name in (
+            "X-Accel-Redirect",
+            "X-Accel-Buffering",
+            "X-Accel-Limit-Rate",
+            "X-Accel-Expires",
+            "X-Accel-Charset",
+            "X-Dawn-Download-Target",
+            "X-Dawn-Download-Type",
+            "Location",
+            "WWW-Authenticate",
+            "Set-Cookie",
+            "Access-Control-Allow-Origin",
+            "Access-Control-Allow-Credentials",
+            "Vary",
+        )
+    )
+    # X-Accel redirect-copy bypasses outer hide rules. Clean the inner envelope
+    # before outer consumes it, preserving these fields only on entity responses.
+    clean_maps, clean_headers = [], []
+    for name in ("Cache-Control", "Expires", "Content-Disposition", "Accept-Ranges"):
+        field = name.lower().replace("-", "_")
+        clean_maps.append(
+            f'map $object_error_route $clean_{field} {{ "" $upstream_http_{field}; default ""; }}'
+        )
+        clean_headers.append(
+            f"proxy_hide_header {name};\n      add_header {name} $clean_{field} always;"
+        )
+    maps = "\n  ".join(clean_maps)
+    cleaned = "\n      ".join(clean_headers)
     return f"""daemon off;
 master_process on;
 worker_processes 1;
@@ -46,8 +92,20 @@ error_log /dev/null crit;
 events {{ worker_connections 128; }}
 http {{
   access_log off;
+  # Evaluated only by the inner response header filter, never in rewrite.
+  map $upstream_status $object_error_route {{
+    default @download_fail_dispatch;
+    200 "";
+    206 "";
+    304 "";
+    412 "";
+    416 "";
+    504 @download_timeout_dispatch;
+  }}
+  {maps}
   map $status $download_response_type {{
-    ~^2[0-9][0-9]$ $download_type;
+    200 $download_type;
+    206 $download_type;
     304 $download_type;
     default $upstream_http_content_type;
   }}
@@ -76,7 +134,7 @@ http {{
     location = /_dawn_object {{
       internal;
       if ($request_method !~ ^(GET|HEAD)$) {{ return 405; }}
-      # Freeze FIRST upstream fields in rewrite phase, before the object proxy.
+      # Freeze FIRST upstream fields before either data-plane hop.
       set $download_target $upstream_http_x_dawn_download_target;
       set $download_type $upstream_http_x_dawn_download_type;
       set $download_origin $upstream_http_access_control_allow_origin;
@@ -85,12 +143,66 @@ http {{
       if ($download_target = "") {{ return 502; }}
       limit_conn downloads 4;
       limit_conn_status 503;
-      proxy_pass https://download_object$download_target;
-      proxy_http_version 1.1;
-      proxy_set_header Connection close;
-      proxy_pass_request_headers off;
-      proxy_pass_request_body off;
-      proxy_set_header Content-Length "";
+      proxy_pass "http://unix:{socket_path}:$download_target";
+      {streaming}
+      proxy_set_header Host local-object.invalid;
+      {headers}
+      proxy_connect_timeout {idle};
+      proxy_read_timeout {outer_idle};
+      proxy_send_timeout {outer_idle};
+      # Only this hop consumes the trusted inner-generated redirect.
+      proxy_ignore_headers X-Accel-Buffering X-Accel-Limit-Rate X-Accel-Expires X-Accel-Charset;
+      {hidden}
+      proxy_hide_header Content-Type;
+      # Only local transport failures use error_page, not object statuses.
+      error_page 502 = @download_failure;
+      error_page 504 = @download_timeout;
+      types {{ }}
+      default_type "";
+      add_header Content-Type $download_response_type always;
+      add_header Access-Control-Allow-Origin $download_origin always;
+      add_header Access-Control-Allow-Credentials $download_credentials always;
+      add_header Vary $download_vary always;
+      add_header X-Content-Type-Options nosniff always;
+    }}
+    location @download_fail_dispatch {{
+      # special_response clears Content-Type copied by X-Accel before JSON.
+      error_page 502 = @download_failure;
+      return 502;
+    }}
+    location @download_timeout_dispatch {{
+      error_page 504 = @download_timeout;
+      return 504;
+    }}
+    location @download_failure {{
+      default_type application/json;
+      add_header Access-Control-Allow-Origin $download_origin always;
+      add_header Access-Control-Allow-Credentials $download_credentials always;
+      add_header Vary $download_vary always;
+      add_header X-Content-Type-Options nosniff always;
+      return 502 '{{"detail":"object download failed"}}';
+    }}
+    location @download_timeout {{
+      default_type application/json;
+      add_header Access-Control-Allow-Origin $download_origin always;
+      add_header Access-Control-Allow-Credentials $download_credentials always;
+      add_header Vary $download_vary always;
+      add_header X-Content-Type-Options nosniff always;
+      return 504 '{{"detail":"object download timed out"}}';
+    }}
+    location / {{ return 404; }}
+  }}
+  # Same master/workers, separate HTTP request. A 0700 parent isolates the
+  # socket; internal would reject legitimate socket requests too.
+  server {{
+    listen {quoted("unix:" + str(socket_path))};
+    server_name local-object.invalid;
+    gzip off;
+    send_timeout {idle};
+    location / {{
+      if ($request_method !~ ^(GET|HEAD)$) {{ return 405; }}
+      proxy_pass https://download_object$request_uri;
+      {streaming}
       proxy_set_header Host {parsed.netloc};
       proxy_set_header Accept-Encoding identity;
       {headers}
@@ -102,70 +214,12 @@ http {{
       proxy_connect_timeout {idle};
       proxy_read_timeout {idle};
       proxy_send_timeout {idle};
-      proxy_ignore_client_abort off;
-      proxy_next_upstream off;
-      proxy_buffering off;
-      proxy_cache off;
-      proxy_store off;
-      proxy_max_temp_file_size 0;
+      # Ignore AND hide origin controls; only the fixed response map may route.
       proxy_ignore_headers X-Accel-Redirect X-Accel-Buffering X-Accel-Limit-Rate X-Accel-Expires X-Accel-Charset;
-      proxy_hide_header X-Accel-Redirect;
-      proxy_hide_header X-Accel-Buffering;
-      proxy_hide_header X-Accel-Limit-Rate;
-      proxy_hide_header X-Accel-Expires;
-      proxy_hide_header X-Accel-Charset;
-      proxy_hide_header X-Dawn-Download-Target;
-      proxy_hide_header X-Dawn-Download-Type;
-      proxy_hide_header Location;
-      proxy_hide_header WWW-Authenticate;
-      proxy_hide_header Set-Cookie;
-      proxy_hide_header Content-Type;
-      proxy_hide_header Access-Control-Allow-Origin;
-      proxy_hide_header Access-Control-Allow-Credentials;
-      proxy_hide_header Vary;
-      proxy_redirect off;
-      proxy_intercept_errors on;
-      error_page {errors} =502 @download_failure;
-      error_page 404 = @download_not_found;
-      error_page 503 = @download_unavailable;
-      error_page 504 =504 @download_timeout;
-      types {{ }}
-      default_type "";
-      add_header Content-Type $download_response_type always;
-      add_header Access-Control-Allow-Origin $download_origin always;
-      add_header Access-Control-Allow-Credentials $download_credentials always;
-      add_header Vary $download_vary always;
-      add_header X-Content-Type-Options nosniff always;
+      {hidden}
+      {cleaned}
+      add_header X-Accel-Redirect $object_error_route always;
     }}
-    location @download_not_found {{
-      # internal's own 404 has no upstream. Do not remap that access refusal.
-      if ($upstream_status = "") {{ return 404; }}
-      default_type application/json;
-      add_header Access-Control-Allow-Origin $download_origin always;
-      add_header Vary $download_vary always;
-      return 502 '{{"detail":"object download failed"}}';
-    }}
-    location @download_unavailable {{
-      # A connection-limit refusal follows only the application's 200 handoff.
-      if ($upstream_status = "200") {{ return 503; }}
-      default_type application/json;
-      add_header Access-Control-Allow-Origin $download_origin always;
-      add_header Vary $download_vary always;
-      return 502 '{{"detail":"object download failed"}}';
-    }}
-    location @download_failure {{
-      default_type application/json;
-      add_header Access-Control-Allow-Origin $download_origin always;
-      add_header Vary $download_vary always;
-      return 502 '{{"detail":"object download failed"}}';
-    }}
-    location @download_timeout {{
-      default_type application/json;
-      add_header Access-Control-Allow-Origin $download_origin always;
-      add_header Vary $download_vary always;
-      return 504 '{{"detail":"object download timed out"}}';
-    }}
-    location / {{ return 404; }}
   }}
 }}
 """

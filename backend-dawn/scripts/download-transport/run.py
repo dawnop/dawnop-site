@@ -35,6 +35,37 @@ from dav_proof import prove  # noqa: E402
 from fake import BLOCK, ETAG, MODIFIED, OLD, Peer  # noqa: E402
 from nginx_config import render  # noqa: E402
 
+NGINX = "nginx"
+ERROR_CODES = (
+    201,
+    202,
+    204,
+    205,
+    207,
+    226,
+    300,
+    301,
+    302,
+    307,
+    308,
+    400,
+    401,
+    403,
+    404,
+    405,
+    408,
+    429,
+    444,
+    499,
+    500,
+    502,
+    503,
+    504,
+    599,
+    612,
+    999,
+)
+
 GATES = {
     "body_p95_ms": 250,
     "jvm_margin_ms": 100,
@@ -82,12 +113,12 @@ def wait_port(number, process):
 
 @contextmanager
 def nginx(root, config):
-    root.mkdir(exist_ok=True)
+    root.mkdir(mode=0o700, exist_ok=True)
     cfg = root / "nginx.conf"
     cfg.write_text(config)
-    command(["nginx", "-e", "/dev/null", "-t", "-p", str(root) + "/", "-c", cfg])
+    command([NGINX, "-e", "/dev/null", "-t", "-p", str(root) + "/", "-c", cfg])
     p = subprocess.Popen(
-        ["nginx", "-e", "/dev/null", "-p", str(root) + "/", "-c", str(cfg)],
+        [NGINX, "-e", "/dev/null", "-p", str(root) + "/", "-c", str(cfg)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -181,6 +212,40 @@ def wire(r):
     check(header(r, "Location") is None, "source redirect leaked")
 
 
+def narrow_error(r, expected, *, method="GET"):
+    wire(r)
+    body = (
+        b'{"detail":"object download timed out"}'
+        if expected == 504
+        else b'{"detail":"object download failed"}'
+    )
+    check(r["status"] == expected and r["complete"], "narrow error status/completeness")
+    check(header(r, "Content-Type") == "application/json", "unique error JSON MIME")
+    check(header(r, "Content-Length") == str(len(body)), "local error length")
+    check(
+        r["bytes"] == (0 if method == "HEAD" else len(body))
+        and (method == "HEAD" or r["preview"] == body),
+        "exact local error body, no origin bytes",
+    )
+    for name in (
+        "WWW-Authenticate",
+        "Set-Cookie",
+        "Content-Disposition",
+        "Cache-Control",
+        "Expires",
+        "Accept-Ranges",
+        "Content-Range",
+        "ETag",
+        "Last-Modified",
+    ):
+        check(header(r, name) is None, "error leaked " + name)
+    check(
+        header(r, "Access-Control-Allow-Origin") == "https://dawnop.com",
+        "error application CORS",
+    )
+    check(header(r, "Vary") == "Origin", "error application Vary")
+
+
 def expected_digest(size):
     h = hashlib.sha256()
     while size:
@@ -259,7 +324,7 @@ def handshake_timeout(root, config, number, token, peer):
         with nginx(root / "connect-timeout", variant) as p:
             wait_port(number, p)
             r = fetch(number, token)
-            check(r["status"] == 504, "TLS connect budget maps to 504 before HTTP")
+            narrow_error(r, 504)
         thread.join(timeout=4)
         check(
             observed.get("hello") and observed.get("closed"),
@@ -360,7 +425,18 @@ def protocol(number, token, peer, db, results):
         == "application/octet-stream",
         "dirty MIME",
     )
-    case("object-control-headers-ignored", key="controls")
+    controls = case("object-control-headers-ignored", key="controls")
+    check(
+        controls["sha256"] == expected_digest(peer.size), "origin controls cannot route"
+    )
+    for name, value in (
+        ("Cache-Control", "public, max-age=60"),
+        ("Expires", "Wed, 21 Oct 2037 07:28:00 GMT"),
+        ("Content-Disposition", 'attachment; filename="private.txt"'),
+        ("Accept-Ranges", "bytes"),
+    ):
+        check(header(controls, name) == value, "entity retains " + name)
+    check(header(controls, "Set-Cookie") is None, "origin cookie hidden")
     check(peer.sni[-1] == "localhost", "signing SNI")
     encoded = "中文 space%ZZ.txt"
     case("signed-target-byte-preservation", key=encoded)
@@ -372,50 +448,31 @@ def protocol(number, token, peer, db, results):
         before = len(peer.seen)
         case("invalid-key-closed", 502, key=key)
         check(len(peer.seen) == before, "invalid key no object")
-    for code in (
-        300,
-        301,
-        302,
-        307,
-        308,
-        400,
-        401,
-        403,
-        404,
-        405,
-        429,
-        500,
-        502,
-        503,
-        504,
-        599,
-    ):
-        r = case(
-            "source-error-" + str(code),
-            504 if code == 504 else 502,
-            key="error-" + str(code),
-        )
-        check(
-            header(r, "Content-Type") == "application/json"
-            and r["preview"].startswith(b'{"detail":'),
-            "narrow error JSON",
-        )
-        if header(r, "WWW-Authenticate"):
-            results["gaps"].append(
-                "object 401 challenge survives nginx error interception"
+    errors = []
+    for code in ERROR_CODES:
+        for method in ("GET", "HEAD"):
+            before = len(peer.seen)
+            expected = 504 if code == 504 else 502
+            r = case(
+                f"source-error-{code}-{method}",
+                expected,
+                key=f"error-{code}",
+                method=method,
             )
-    try:
-        r = case("source-error-408", 502, key="error-408")
-        results["source_408"] = "502"
-    except http.client.RemoteDisconnected:
-        results["source_408"] = "connection closed before response"
-        results["gaps"].append(
-            "stock nginx treats source 408 as an early connection close rather than narrow JSON 502"
-        )
-    r = case("source-612-gap", 612, key="error-612")
-    results["gaps"].append(
-        "stock nginx error_page rejects 612 configuration; upstream 612 and its source error body survive instead of narrow JSON 502"
-    )
+            narrow_error(r, expected, method=method)
+            check(
+                len(peer.seen) == before + 1 and peer.seen[-1]["method"] == method,
+                "one object request, no preflight or retry",
+            )
+            errors.append(
+                {
+                    "origin": code,
+                    "method": method,
+                    "status": r["status"],
+                    "passed": True,
+                }
+            )
+    results["error_contract"] = {"passed": True, "matrix": errors}
     for label, fields, status, length in (
         ("bounded", {"Range": "bytes=5-14"}, 206, 10),
         ("open", {"Range": "bytes=5-"}, 206, peer.size - 5),
@@ -471,6 +528,17 @@ def protocol(number, token, peer, db, results):
                 r["sha256"] == hashlib.sha256(expected_body).hexdigest(),
                 "206 wire bytes agree with range",
             )
+        if status in {304, 412, 416}:
+            check(
+                header(r, "ETag") == ETAG and header(r, "Last-Modified") == MODIFIED,
+                "conditional entity validators",
+            )
+        if status in {412, 416}:
+            check(
+                header(r, "Content-Type") == "application/json"
+                and r["preview"] == b'{"upstream":"rejected"}',
+                "conditional origin body retained",
+            )
         if status == 416:
             check(
                 header(r, "Content-Range") == f"bytes */{peer.size}", "416 object size"
@@ -494,7 +562,7 @@ def protocol(number, token, peer, db, results):
             r["sha256"] == expected_digest(r["bytes"]),
             "no error JSON or second response appended after final head",
         )
-    case("header-timeout", 504, key="stall-head")
+    narrow_error(case("header-timeout", 504, key="stall-head"), 504)
     peer.size = 20
     r = case("progress-outlives-total-budget", key="drip")
     check(
@@ -504,7 +572,7 @@ def protocol(number, token, peer, db, results):
     results["protocol"] = {
         "passed": len(cases),
         "cases": cases,
-        "source_612_status": 612,
+        "source_612_status": 502,
     }
     results["dav"] = {
         "business_routes": "unchanged",
@@ -615,7 +683,12 @@ def snapshot(pids, descendants=True):
                 todo.extend(map(int, task.read_text().split()))
             except OSError:
                 pass
-    totals = {"rss_kib": 0, "pss_kib": 0}
+    unix_inodes = {
+        line.split()[6]
+        for line in Path("/proc/net/unix").read_text().splitlines()[1:]
+        if len(line.split()) >= 7
+    }
+    totals = {"rss_kib": 0, "pss_kib": 0, "socket_fds": 0, "unix_socket_fds": 0}
     for pid in found:
         try:
             for line in Path(f"/proc/{pid}/smaps_rollup").read_text().splitlines():
@@ -625,6 +698,15 @@ def snapshot(pids, descendants=True):
                     totals["pss_kib"] += int(line.split()[1])
         except (OSError, ProcessLookupError):
             pass
+        for descriptor in Path(f"/proc/{pid}/fd").glob("*"):
+            try:
+                target = os.readlink(descriptor)
+                if target.startswith("socket:["):
+                    totals["socket_fds"] += 1
+                    if target[8:-1] in unix_inodes:
+                        totals["unix_socket_fds"] += 1
+            except OSError:
+                pass
     return totals
 
 
@@ -718,6 +800,10 @@ def resources(number, token, peer, nginx_pid, temp, nginx_root, concurrency):
             peak["disk_bytes"] <= GATES["disk_bytes_per_request"] * concurrency,
             "no body staging",
         )
+        check(
+            peak["unix_socket_fds"] >= baseline["unix_socket_fds"] + 2 * concurrency,
+            "both private socket endpoints counted for active transfers",
+        )
         rows[str(mib)] = {
             **peak,
             "sha256": values[0]["sha256"],
@@ -730,6 +816,8 @@ def resources(number, token, peer, nginx_pid, temp, nginx_root, concurrency):
     )
     return {
         "baseline_nginx": baseline,
+        "data_plane_hops": 2,
+        "passed": True,
         "sizes_mib": rows,
         "pss_growth_kib_per_request": growth,
         "source_process": snapshot([os.getpid()], descendants=False),
@@ -770,17 +858,33 @@ def negative_controls(
             "add_header Content-Type $download_response_type always;",
             "add_header Content-Type $download_response_type always;\n      add_header ETag '\"old-key\"' always;",
         ),
-        "401-as-file": config.replace("400 401 402", "400 402")
-        .replace(
-            "error_page 504", "error_page 401 =200 @bad_file;\n      error_page 504"
-        )
-        .replace(
+        "401-as-file": config.replace(
+            '    200 "";', '    401 @bad_file;\n    200 "";', 1
+        ).replace(
             "    location @download_failure",
-            '    location @bad_file { default_type application/octet-stream; return 200 \'{"upstream":"rejected"}\'; }\n    location @download_failure',
+            '    location @bad_file { error_page 502 = @bad_success; return 502; }\n    location @bad_success { default_type application/octet-stream; return 200 \'{"upstream":"rejected"}\'; }\n    location @download_failure',
+        ),
+        "omit-route-always": config.replace(
+            "add_header X-Accel-Redirect $object_error_route always;",
+            "add_header X-Accel-Redirect $object_error_route;",
+        ),
+        "ignore-inner-route": config.replace(
+            "proxy_ignore_headers X-Accel-Buffering",
+            "proxy_ignore_headers X-Accel-Redirect X-Accel-Buffering",
+        ),
+        "trust-origin-route": config.replace(
+            "proxy_ignore_headers X-Accel-Redirect X-Accel-Buffering",
+            "proxy_ignore_headers X-Accel-Buffering",
+        ),
+        "early-map-evaluation": config.replace(
+            "proxy_pass https://download_object$request_uri;",
+            "set $premature_route $object_error_route;\n      proxy_pass https://download_object$request_uri;",
         ),
         "ignore-cancellation": config.replace(
             "proxy_ignore_client_abort off;", "proxy_ignore_client_abort on;"
-        ).replace("proxy_read_timeout 1s;", "proxy_read_timeout 5s;"),
+        )
+        .replace("proxy_read_timeout 1s;", "proxy_read_timeout 5s;")
+        .replace("proxy_read_timeout 3000ms;", "proxy_read_timeout 5s;"),
         "buffer-to-disk": config.replace(
             "proxy_buffering off;", "proxy_buffering on;"
         ).replace(
@@ -828,6 +932,22 @@ def negative_controls(
                     r["status"] == 200
                     and header(r, "Content-Type") != "application/json"
                 )
+            elif name in {"omit-route-always", "ignore-inner-route"}:
+                observations = []
+                for code in (401, 408, 612):
+                    r = fetch(number, token, key=f"error-{code}")
+                    try:
+                        narrow_error(r, 502)
+                        observations.append(False)
+                    except AssertionError:
+                        observations.append(True)
+                red = all(observations)
+            elif name == "trust-origin-route":
+                r = fetch(number, token, key="controls")
+                red = r["status"] != 200 or r["sha256"] != expected_digest(peer.size)
+            elif name == "early-map-evaluation":
+                r = fetch(number, token)
+                red = r["status"] != 200
             elif name == "ignore-cancellation":
                 try:
                     cancel(number, token, peer, before_headers=True)
@@ -926,15 +1046,23 @@ def main():
         action="store_true",
         help="ten alternating rounds and 256/512 MiB, single and four slow clients",
     )
+    parser.add_argument(
+        "--nginx",
+        default=shutil.which("nginx"),
+        help="explicit stock nginx binary for version replication",
+    )
     args = parser.parse_args()
-    work = args.work or Path(tempfile.mkdtemp(prefix="site-download-k1-"))
+    global NGINX
+    check(args.nginx is not None, "stock nginx binary required")
+    NGINX = str(Path(args.nginx).resolve())
+    work = args.work or Path(tempfile.mkdtemp(prefix="site-download-k1b-"))
     work.mkdir(parents=True, exist_ok=True)
     check(not any(work.iterdir()), "empty work directory")
     results = {
         "gates": GATES,
         "gaps": [],
         "versions": {
-            "nginx": command(["nginx", "-v"]).stderr.decode().strip(),
+            "nginx": command([NGINX, "-v"]).stderr.decode().strip(),
             "python": sys.version.split()[0],
             "compiler": (ROOT / ".dawn-version").read_text().strip(),
         },
@@ -1014,30 +1142,7 @@ def main():
                 "cancel-head",
                 "drip",
                 "ignore-range",
-                *[
-                    f"error-{n}"
-                    for n in (
-                        200,
-                        300,
-                        301,
-                        302,
-                        307,
-                        308,
-                        400,
-                        401,
-                        403,
-                        404,
-                        405,
-                        408,
-                        429,
-                        500,
-                        502,
-                        503,
-                        504,
-                        599,
-                        612,
-                    )
-                ],
+                *[f"error-{n}" for n in ERROR_CODES],
             ],
         )
         temp = runtime / "app-temp"
@@ -1083,7 +1188,7 @@ def main():
         number = port()
         jvm_port = port()
         positive = runtime / "positive"
-        positive.mkdir()
+        positive.mkdir(mode=0o700)
         config = render(
             positive,
             number,
@@ -1103,7 +1208,7 @@ def main():
         invalid.write_text(config.replace("error_page 504", "error_page 612"))
         rejected = subprocess.run(
             [
-                "nginx",
+                NGINX,
                 "-e",
                 "/dev/null",
                 "-t",
@@ -1117,7 +1222,7 @@ def main():
         check(
             rejected.returncode != 0
             and b'value "612" must be between 300 and 599' in rejected.stderr,
-            "612 stock configuration gap",
+            "612 error_page parser boundary, handled by response map",
         )
         tls_proofs = {}
         for label, variant in {
@@ -1155,6 +1260,7 @@ def main():
                     r["status"] == 502 and len(tls.seen) == before,
                     label + " fails before object HTTP",
                 )
+                narrow_error(r, 502)
                 tls_proofs[label] = "502, zero object HTTP requests"
         results["TLS"] = tls_proofs
         results["connect_timeout"] = handshake_timeout(
@@ -1206,6 +1312,7 @@ def main():
         negative_controls(
             runtime, config, number, token, tls, stage.port, plain, results
         )
+        positive_start = len(tls.seen)
         with nginx(positive, config) as p:
             wait_port(number, p)
             tls.size = 65536
@@ -1273,14 +1380,22 @@ def main():
                     candidate_p95 = quantile["candidate"]["body_ms"]["p95"]
                     check(
                         candidate_p95
-                        <= max(250, quantile["jvm"]["body_ms"]["p95"] + 100),
+                        <= max(
+                            GATES["body_p95_ms"],
+                            quantile["jvm"]["body_ms"]["p95"] + GATES["jvm_margin_ms"],
+                        ),
                         group + " candidate body TTFB absolute/JVM gate",
                     )
                     check(
-                        candidate_p95 <= quantile["stage"]["body_ms"]["p95"] / 4,
+                        candidate_p95
+                        <= quantile["stage"]["body_ms"]["p95"] / GATES["stage_ratio"],
                         group + " candidate body TTFB 4x stage gate",
                     )
-                    groups[group] = {"quantiles": quantile, "rounds": rows}
+                    groups[group] = {
+                        "quantiles": quantile,
+                        "rounds": rows,
+                        "passed": True,
+                    }
                     print("PASS " + group + " performance gates", flush=True)
                 results["performance"] = {
                     **groups,
@@ -1298,12 +1413,51 @@ def main():
             "candidate must never exec curl",
         )
         check(
-            not any(item.get("bad_signature") for item in tls.seen),
+            not any(item.get("bad_signature") for item in tls.seen[positive_start:]),
             "all candidate signatures verified",
         )
+        results["gate_outcomes"] = {
+            "protocol": "PASS"
+            if results.get("protocol", {}).get("passed")
+            else "NOT_RUN",
+            "error_contract": "PASS"
+            if results.get("error_contract", {}).get("passed")
+            else "NOT_RUN",
+            "negative_controls": "PASS"
+            if results.get("negative_controls")
+            else "NOT_RUN",
+            "performance": "PASS"
+            if all(
+                results.get("performance", {}).get(group, {}).get("passed")
+                for group in ("cold", "warm")
+            )
+            else "NOT_RUN",
+            "resources": "PASS"
+            if all(
+                results.get("resources", {}).get(str(n), {}).get("passed")
+                for n in (1, 4)
+            )
+            else "NOT_RUN",
+            "production_dav_integration": "PENDING",
+            "real_origin_metadata_and_backfill": "PENDING",
+            "real_clients": "PENDING",
+            "isolated_deployment_resource_limits": "PENDING",
+            "authorized_cutover": "PENDING",
+        }
+        results["production_blockers"] = [
+            name
+            for name, outcome in results["gate_outcomes"].items()
+            if outcome != "PASS"
+        ]
         results["production_gate"] = (
-            "BLOCKED: concrete error contract gaps and pending DAV integration"
+            "BLOCKED" if results["production_blockers"] else "PASS"
         )
+        results["topology"] = {
+            "data_plane_hops": 2,
+            "private_transport": "Unix socket under 0700 runtime directory",
+            "resource_scope": "same nginx master/workers for both hops plus native descendants; all response temp paths and socket descriptors included",
+            "normalization_boundary": "before final client headers commit",
+        }
         results["source_requests"] = len(tls.seen)
         results["candidate_curl_execs"] = 0
         results["passed"] = True
@@ -1320,6 +1474,9 @@ def main():
         for peer in peers:
             peer.close()
         shutil.rmtree(runtime)
+        if not results.get("passed") or results.get("cleanup_errors"):
+            results["passed"] = False
+            results["production_gate"] = "BLOCKED"
         (work / "summary.json").write_text(json.dumps(results, indent=2) + "\n")
     check(not results.get("cleanup_errors"), "native exchange audit and cleanup")
     print(

@@ -92,7 +92,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   `docs/curl-transport-design.md`。上传按追加裁决改用 upload-file，显式 method/request-target，固定长度并抑制 Expect；
   原内存阈值不变，退回 data-binary 的真实256/512 MiB负控必须红。
 
-- Native FM download prototype: `scripts/download-transport/run.sh --work <empty-directory>`;
+- Native FM download prototype (K1b, same-instance private Unix socket response adaptation): `scripts/download-transport/run.sh --work <empty-directory>`;
   add `--full` for three-arm timing and 256/512 MiB resource gates. Default off via
   `DAWN_DOWNLOAD_HANDOFF=off`; protocol and production blockers are documented in
   [`../docs/download-handoff-design.md`](../docs/download-handoff-design.md). DAV routes are unchanged.

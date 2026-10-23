@@ -201,12 +201,32 @@ jobs:
       - name: isolated download protocol performance and negative controls
         run: backend-dawn/scripts/download-transport/run.sh --full --work "${RUNNER_TEMP}/download-transport"
 
+      - name: build pinned second stock nginx in a private prefix
+        run: |
+          mkdir -p "${RUNNER_TEMP}/nginx-download-new"
+          cd "${RUNNER_TEMP}/nginx-download-new"
+          curl --fail --location --silent --show-error \
+            https://nginx.org/download/nginx-1.31.3.tar.gz -o nginx.tar.gz
+          echo 'a7657c50811c2d92d9895395e8b873ef60398142c4db21eb647811c38f6dd525  nginx.tar.gz' | sha256sum --check --status
+          tar -xzf nginx.tar.gz
+          cd nginx-1.31.3
+          ./configure --prefix="${RUNNER_TEMP}/nginx-download-new/private" --with-http_ssl_module
+          make -j2
+
+      - name: replicate download protocol and negative controls on nginx 1.31.3
+        run: >-
+          backend-dawn/scripts/download-transport/run.sh
+          --nginx "${RUNNER_TEMP}/nginx-download-new/nginx-1.31.3/objs/nginx"
+          --work "${RUNNER_TEMP}/download-transport-new"
+
       - name: retain sanitized download evidence
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: download-transport-evidence
-          path: ${{ runner.temp }}/download-transport/summary.json
+          path: |
+            ${{ runner.temp }}/download-transport/summary.json
+            ${{ runner.temp }}/download-transport-new/summary.json
           if-no-files-found: error
           retention-days: 7
 

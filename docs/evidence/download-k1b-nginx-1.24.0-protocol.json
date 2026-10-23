@@ -1,0 +1,553 @@
+{
+  "gates": {
+    "body_p95_ms": 250,
+    "jvm_margin_ms": 100,
+    "stage_ratio": 4,
+    "disk_bytes_per_request": 1048576,
+    "memory_growth_kib_per_request": 16384,
+    "cancel_s": 2,
+    "rounds": 10
+  },
+  "gaps": [],
+  "versions": {
+    "nginx": "nginx version: nginx/1.24.0 (Ubuntu)",
+    "python": "3.14.7",
+    "compiler": "v0.100.0"
+  },
+  "production": "not deployed",
+  "TLS": {
+    "wrong-sni": "502, zero object HTTP requests",
+    "untrusted-certificate": "502, zero object HTTP requests"
+  },
+  "connect_timeout": {
+    "status": 504,
+    "final_head_ms": 1102.995544904843,
+    "peer_closed": true
+  },
+  "configuration": {
+    "invalid_origins_rejected": 5,
+    "default_off": "old real stage behavior"
+  },
+  "negative_controls": {
+    "remove-internal": "RED",
+    "forward-authorization": "RED",
+    "drop-range": "RED",
+    "mixed-validators": "RED",
+    "401-as-file": "RED",
+    "omit-route-always": "RED",
+    "ignore-inner-route": "RED",
+    "trust-origin-route": "RED",
+    "early-map-evaluation": "RED",
+    "ignore-cancellation": "RED",
+    "buffer_actual_disk_bytes": 3784704,
+    "buffer-to-disk": "RED",
+    "legacy-native-clear-add-header-counterexample": {
+      "expected_if_old_tag_worked": 200,
+      "actual": 200,
+      "cacheable_actual": 412
+    },
+    "restore-whole-stage": "RED"
+  },
+  "protocol_progress": 93,
+  "dav_persisted_fixture": {
+    "persisted_model": "GET/HEAD/PROPFIND agree",
+    "propfind_object_requests": 0,
+    "production_DAV": "unchanged",
+    "stat_equivalence": "not proved by fake metadata"
+  },
+  "error_contract": {
+    "passed": true,
+    "matrix": [
+      {
+        "origin": 201,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 201,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 202,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 202,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 204,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 204,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 205,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 205,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 207,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 207,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 226,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 226,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 300,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 300,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 301,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 301,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 302,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 302,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 307,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 307,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 308,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 308,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 400,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 400,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 401,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 401,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 403,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 403,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 404,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 404,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 405,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 405,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 408,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 408,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 429,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 429,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 444,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 444,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 499,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 499,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 500,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 500,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 502,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 502,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 503,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 503,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 504,
+        "method": "GET",
+        "status": 504,
+        "passed": true
+      },
+      {
+        "origin": 504,
+        "method": "HEAD",
+        "status": 504,
+        "passed": true
+      },
+      {
+        "origin": 599,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 599,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 612,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 612,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 999,
+        "method": "GET",
+        "status": 502,
+        "passed": true
+      },
+      {
+        "origin": 999,
+        "method": "HEAD",
+        "status": 502,
+        "passed": true
+      }
+    ]
+  },
+  "dav_empty_persisted_fixture": {
+    "persisted_model": "GET/HEAD/PROPFIND agree",
+    "propfind_object_requests": 0,
+    "production_DAV": "unchanged",
+    "stat_equivalence": "not proved by fake metadata"
+  },
+  "protocol": {
+    "passed": 93,
+    "cases": [
+      "anonymous-before-object",
+      "query-token-is-not-auth",
+      "internal-is-private",
+      "forged-internal-cannot-authenticate",
+      "full-object",
+      "head-is-one-object-head",
+      "dirty-MIME-sanitized",
+      "object-control-headers-ignored",
+      "signed-target-byte-preservation",
+      "invalid-key-closed",
+      "invalid-key-closed",
+      "invalid-key-closed",
+      "invalid-key-closed",
+      "invalid-key-closed",
+      "source-error-201-GET",
+      "source-error-201-HEAD",
+      "source-error-202-GET",
+      "source-error-202-HEAD",
+      "source-error-204-GET",
+      "source-error-204-HEAD",
+      "source-error-205-GET",
+      "source-error-205-HEAD",
+      "source-error-207-GET",
+      "source-error-207-HEAD",
+      "source-error-226-GET",
+      "source-error-226-HEAD",
+      "source-error-300-GET",
+      "source-error-300-HEAD",
+      "source-error-301-GET",
+      "source-error-301-HEAD",
+      "source-error-302-GET",
+      "source-error-302-HEAD",
+      "source-error-307-GET",
+      "source-error-307-HEAD",
+      "source-error-308-GET",
+      "source-error-308-HEAD",
+      "source-error-400-GET",
+      "source-error-400-HEAD",
+      "source-error-401-GET",
+      "source-error-401-HEAD",
+      "source-error-403-GET",
+      "source-error-403-HEAD",
+      "source-error-404-GET",
+      "source-error-404-HEAD",
+      "source-error-405-GET",
+      "source-error-405-HEAD",
+      "source-error-408-GET",
+      "source-error-408-HEAD",
+      "source-error-429-GET",
+      "source-error-429-HEAD",
+      "source-error-444-GET",
+      "source-error-444-HEAD",
+      "source-error-499-GET",
+      "source-error-499-HEAD",
+      "source-error-500-GET",
+      "source-error-500-HEAD",
+      "source-error-502-GET",
+      "source-error-502-HEAD",
+      "source-error-503-GET",
+      "source-error-503-HEAD",
+      "source-error-504-GET",
+      "source-error-504-HEAD",
+      "source-error-599-GET",
+      "source-error-599-HEAD",
+      "source-error-612-GET",
+      "source-error-612-HEAD",
+      "source-error-999-GET",
+      "source-error-999-HEAD",
+      "entity-bounded",
+      "entity-open",
+      "entity-suffix",
+      "entity-unsatisfied",
+      "entity-malformed",
+      "entity-multiple",
+      "entity-if-range-match",
+      "entity-if-range-miss",
+      "entity-if-range-weak",
+      "entity-if-range-date",
+      "entity-if-range-old-date",
+      "entity-none-match",
+      "entity-none-match-weak",
+      "entity-none-date-priority",
+      "entity-modified-date",
+      "entity-match-failed",
+      "entity-unmodified-failed",
+      "entity-match-ok",
+      "source-ignores-range",
+      "empty-object",
+      "empty-head",
+      "incomplete-short",
+      "incomplete-stall-body",
+      "header-timeout",
+      "progress-outlives-total-budget"
+    ],
+    "source_612_status": 502
+  },
+  "dav": {
+    "business_routes": "unchanged",
+    "entity_protocol": "shared isolated FM entity proof",
+    "metadata": "DB size=7 and key/time intentionally disagree with object size/ETag/date",
+    "migration": "required before DAV integration",
+    "clients": "Finder and Windows not tested"
+  },
+  "cancellation": {
+    "body": {
+      "source_stop_s": 0.010135282995179296,
+      "extra_bytes": 65536,
+      "source_bytes": 131072
+    },
+    "before_headers": {
+      "source_stop_s": 0.010123853920958936,
+      "extra_bytes": 0,
+      "source_bytes": 0
+    }
+  },
+  "downstream_idle_and_limit": {
+    "limit": 4,
+    "fifth_status": 503,
+    "idle_release_s": 0.909092927002348,
+    "source_bytes": [
+      2228224,
+      2228224,
+      2359296,
+      2162688
+    ]
+  },
+  "gate_outcomes": {
+    "protocol": "PASS",
+    "error_contract": "PASS",
+    "negative_controls": "PASS",
+    "performance": "NOT_RUN",
+    "resources": "NOT_RUN",
+    "production_dav_integration": "PENDING",
+    "real_origin_metadata_and_backfill": "PENDING",
+    "real_clients": "PENDING",
+    "isolated_deployment_resource_limits": "PENDING",
+    "authorized_cutover": "PENDING"
+  },
+  "production_blockers": [
+    "performance",
+    "resources",
+    "production_dav_integration",
+    "real_origin_metadata_and_backfill",
+    "real_clients",
+    "isolated_deployment_resource_limits",
+    "authorized_cutover"
+  ],
+  "production_gate": "BLOCKED",
+  "topology": {
+    "data_plane_hops": 2,
+    "private_transport": "Unix socket under 0700 runtime directory",
+    "resource_scope": "same nginx master/workers for both hops plus native descendants; all response temp paths and socket descriptors included",
+    "normalization_boundary": "before final client headers commit"
+  },
+  "source_requests": 120,
+  "candidate_curl_execs": 0,
+  "passed": true
+}
