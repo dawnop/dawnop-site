@@ -1,0 +1,199 @@
+{
+  "positive_before": "PASS",
+  "positive_after": "PASS",
+  "negative_controls": [
+    {
+      "mutant": "logical-etag",
+      "location": "core/src/api/webdav.dawn",
+      "compiled": true,
+      "assertion": "k2.dav-three-methods",
+      "expected": "k2.dav-three-methods",
+      "exit_code": 1
+    },
+    {
+      "mutant": "logical-modified",
+      "location": "core/src/api/webdav.dawn",
+      "compiled": true,
+      "assertion": "k2.dav-three-methods",
+      "expected": "k2.dav-three-methods",
+      "exit_code": 1
+    },
+    {
+      "mutant": "stat-oracle",
+      "location": "core/src/util/representation.dawn",
+      "compiled": true,
+      "assertion": "k2.dav-three-methods",
+      "expected": "k2.dav-three-methods",
+      "exit_code": 1
+    },
+    {
+      "mutant": "copy-source-date",
+      "location": "core/src/svc/files.dawn",
+      "compiled": true,
+      "assertion": "k2.copy-move-and-writer-coverage",
+      "expected": "k2.copy-move-and-writer-coverage",
+      "exit_code": 1
+    },
+    {
+      "mutant": "drop-missing-publication",
+      "location": "core/src/repo/repo_drop.dawn",
+      "compiled": true,
+      "assertion": "k2.copy-move-and-writer-coverage",
+      "expected": "k2.copy-move-and-writer-coverage",
+      "exit_code": 1
+    },
+    {
+      "mutant": "zero-hint-fallback",
+      "location": "core/src/util/representation.dawn",
+      "compiled": true,
+      "assertion": "zero remains authoritative",
+      "expected": "zero remains authoritative",
+      "exit_code": 1
+    },
+    {
+      "mutant": "negative-size",
+      "location": "core/src/util/representation.dawn",
+      "compiled": true,
+      "assertion": "zero remains authoritative",
+      "expected": "zero remains authoritative",
+      "exit_code": 1
+    },
+    {
+      "mutant": "ordinary-overwrite",
+      "location": "core/src/qiniu/sign.dawn",
+      "compiled": true,
+      "assertion": "k2.ordinary-token-replay-and-register",
+      "expected": "k2.ordinary-token-replay-and-register",
+      "exit_code": 1
+    },
+    {
+      "mutant": "copy-force",
+      "location": "core/src/qiniu/rs.dawn",
+      "compiled": true,
+      "assertion": "k2.copy-move-and-writer-coverage",
+      "expected": "k2.copy-move-and-writer-coverage",
+      "exit_code": 1
+    },
+    {
+      "mutant": "propfind-head",
+      "location": "core/src/api/webdav.dawn",
+      "compiled": true,
+      "assertion": "k2.dav-three-methods",
+      "expected": "k2.dav-three-methods",
+      "exit_code": 1
+    },
+    {
+      "mutant": "get-prehead",
+      "location": "core/src/api/webdav.dawn",
+      "compiled": true,
+      "assertion": "k2.dav-three-methods",
+      "expected": "k2.dav-three-methods",
+      "exit_code": 1
+    },
+    {
+      "mutant": "half-capability",
+      "location": "core/src/api/webdav.dawn",
+      "compiled": true,
+      "assertion": "k2.dav-three-methods",
+      "expected": "k2.dav-three-methods",
+      "exit_code": 1
+    },
+    {
+      "mutant": "empty-old-date",
+      "location": "core/src/util/representation.dawn",
+      "compiled": true,
+      "assertion": "k2.empty-owner-and-transitions",
+      "expected": "k2.empty-owner-and-transitions",
+      "exit_code": 1
+    },
+    {
+      "mutant": "empty-read-clock",
+      "location": "core/src/util/local_empty.dawn",
+      "compiled": true,
+      "assertion": "k2.empty-owner-and-transitions",
+      "expected": "k2.empty-owner-and-transitions",
+      "exit_code": 1
+    },
+    {
+      "mutant": "empty-head-object",
+      "location": "core/src/api/webdav.dawn",
+      "compiled": true,
+      "assertion": "k2.empty-owner-and-transitions",
+      "expected": "k2.empty-owner-and-transitions",
+      "exit_code": 1
+    },
+    {
+      "mutant": "scrub-hides-validator",
+      "location": "core/src/api/webdav.dawn",
+      "compiled": true,
+      "assertion": "k2.dav-three-methods",
+      "expected": "k2.dav-three-methods",
+      "exit_code": 1
+    },
+    {
+      "mutant": "backfill-no-cas",
+      "location": "core/src/repo/repo_fm.dawn",
+      "compiled": true,
+      "assertion": "backfill acceptance",
+      "expected": "backfill acceptance",
+      "exit_code": 1
+    },
+    {
+      "mutant": "backfill-no-rescan",
+      "location": "core/src/representation_backfill.dawn",
+      "compiled": true,
+      "assertion": "backfill acceptance",
+      "expected": "backfill acceptance",
+      "exit_code": 1
+    },
+    {
+      "mutant": "backfill-network-lock",
+      "location": "core/src/representation_backfill.dawn",
+      "compiled": true,
+      "assertion": "backfill acceptance",
+      "expected": "backfill acceptance",
+      "exit_code": 1
+    },
+    {
+      "mutant": "backfill-false-ready",
+      "location": "core/src/representation_backfill.dawn",
+      "compiled": true,
+      "assertion": "backfill acceptance",
+      "expected": "backfill acceptance",
+      "exit_code": 1
+    },
+    {
+      "mutant": "backfill-raw-log",
+      "location": "core/src/representation_backfill.dawn",
+      "compiled": true,
+      "assertion": "backfill acceptance",
+      "expected": "backfill acceptance",
+      "exit_code": 1
+    },
+    {
+      "mutant": "backfill-no-alias-guard",
+      "location": "scripts/representation_backfill.py",
+      "compiled": true,
+      "assertion": "backfill acceptance",
+      "expected": "backfill acceptance",
+      "exit_code": 1
+    },
+    {
+      "mutant": "backfill-no-replica-guard",
+      "location": "scripts/representation_backfill.py",
+      "compiled": true,
+      "assertion": "backfill acceptance",
+      "expected": "backfill acceptance",
+      "exit_code": 1
+    },
+    {
+      "mutant": "backfill-default-apply",
+      "location": "scripts/representation_backfill.py",
+      "compiled": true,
+      "assertion": "backfill acceptance",
+      "expected": "backfill acceptance",
+      "exit_code": 1
+    }
+  ],
+  "passed": true
+}

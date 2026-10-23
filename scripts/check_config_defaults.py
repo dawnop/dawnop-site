@@ -64,8 +64,8 @@ DAWN_SKIP = {"config.dawn"}
 
 # 只在 Dawn 侧存在的键。每条都必须说明为什么 FastAPI 那边没有对应物。
 DAWN_ONLY = {
-    "DAWN_DOWNLOAD_HANDOFF": "Native-only FM X-Accel switch, off by default; JVM keeps the old route.",
-    "DAWN_DOWNLOAD_ORIGIN": "Trusted native download HTTPS origin; must match QINIU_DOMAIN.",
+    "DAWN_DOWNLOAD_HANDOFF": "Trusted download capability for both arms; DAV GET, HEAD and PROPFIND switch together.",
+    "DAWN_DOWNLOAD_ORIGIN": "Trusted download HTTPS origin for both arms; must match QINIU_DOMAIN.",
     "DAWN_PORT": "两个后端同机共存，必须各占一个端口（Dawn 8001 / uvicorn 8000）。"
     "FastAPI 的端口是 systemd 单元里 uvicorn 的命令行参数，根本不是 Settings 字段。",
     "DAWN_CORS_ORIGIN": "形状不同，无法逐字比：FastAPI 的 CORS_ORIGINS 是逗号分隔的"

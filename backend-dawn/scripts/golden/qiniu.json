@@ -2634,6 +2634,18 @@
   },
   "k2.ordinary-token-replay-and-register": {
    "assertions": "PASS"
+  },
+  "k2.copy-move-and-writer-coverage": {
+   "assertions": "PASS"
+  },
+  "k2.metadata-header-validation": {
+   "assertions": "PASS"
+  },
+  "k2.resumable-token-replay": {
+   "assertions": "PASS"
+  },
+  "k2.propfind-scale": {
+   "assertions": "PASS"
   }
  }
 }

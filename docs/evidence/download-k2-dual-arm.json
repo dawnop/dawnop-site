@@ -1,0 +1,173 @@
+{
+  "jvm": {
+    "suites": {
+      "read": {
+        "matched": 58,
+        "complete": true,
+        "diff": [],
+        "new": [],
+        "missing": [],
+        "skips": [
+          "fm.stats"
+        ]
+      },
+      "edge": {
+        "matched": 102,
+        "complete": true,
+        "diff": [],
+        "new": [],
+        "missing": [],
+        "skips": [
+          "fm.stats.ok"
+        ]
+      },
+      "webdav": {
+        "matched": 104,
+        "complete": true,
+        "diff": [],
+        "new": [],
+        "missing": [],
+        "skips": [
+          "copy.file",
+          "delete.file",
+          "get.file",
+          "put.new"
+        ]
+      },
+      "qiniu": {
+        "matched": 102,
+        "complete": true,
+        "diff": [],
+        "new": [],
+        "missing": [],
+        "skips": [
+          "fm.stats"
+        ]
+      }
+    },
+    "representation": {
+      "directories": {
+        "0": {
+          "samples": 20,
+          "p95_ms": 4.038178012706339,
+          "object_requests": 0,
+          "complete": true
+        },
+        "1": {
+          "samples": 20,
+          "p95_ms": 3.1765629537403584,
+          "object_requests": 0,
+          "complete": true
+        },
+        "100": {
+          "samples": 20,
+          "p95_ms": 9.250389994122088,
+          "object_requests": 0,
+          "complete": true
+        },
+        "1000": {
+          "samples": 20,
+          "p95_ms": 264.8063290398568,
+          "object_requests": 0,
+          "complete": true
+        }
+      },
+      "cold_auth_samples": 5,
+      "cold_auth_max_ms": 9.67506889719516
+    },
+    "wall_s": 25.550522729055956,
+    "no_jvm": {}
+  },
+  "native": {
+    "suites": {
+      "read": {
+        "matched": 58,
+        "complete": true,
+        "diff": [],
+        "new": [],
+        "missing": [],
+        "skips": [
+          "fm.stats"
+        ]
+      },
+      "edge": {
+        "matched": 102,
+        "complete": true,
+        "diff": [],
+        "new": [],
+        "missing": [],
+        "skips": [
+          "fm.stats.ok"
+        ]
+      },
+      "webdav": {
+        "matched": 104,
+        "complete": true,
+        "diff": [],
+        "new": [],
+        "missing": [],
+        "skips": [
+          "copy.file",
+          "delete.file",
+          "get.file",
+          "put.new"
+        ]
+      },
+      "qiniu": {
+        "matched": 102,
+        "complete": true,
+        "diff": [],
+        "new": [],
+        "missing": [],
+        "skips": [
+          "fm.stats"
+        ]
+      }
+    },
+    "representation": {
+      "directories": {
+        "0": {
+          "samples": 20,
+          "p95_ms": 75.11619990691543,
+          "object_requests": 0,
+          "complete": true
+        },
+        "1": {
+          "samples": 20,
+          "p95_ms": 71.65275095030665,
+          "object_requests": 0,
+          "complete": true
+        },
+        "100": {
+          "samples": 20,
+          "p95_ms": 79.8872149316594,
+          "object_requests": 0,
+          "complete": true
+        },
+        "1000": {
+          "samples": 20,
+          "p95_ms": 227.86587302107364,
+          "object_requests": 0,
+          "complete": true
+        }
+      },
+      "cold_auth_samples": 5,
+      "cold_auth_max_ms": 93.99191907141358
+    },
+    "wall_s": 86.01874871994369,
+    "no_jvm": {
+      "plain": {
+        "processes": 321,
+        "exec_attempts": 323,
+        "jvm": 0,
+        "path": "curl only"
+      },
+      "qiniu": {
+        "processes": 363,
+        "exec_attempts": 480,
+        "jvm": 0,
+        "path": "curl only"
+      }
+    }
+  }
+}

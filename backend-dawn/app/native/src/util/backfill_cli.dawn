@@ -1,0 +1,56 @@
+# Explicit maintenance input only. No developer dotenv or inherited DB/cloud
+# configuration is consulted. The Python launcher owns identity and receipts.
+use std/io
+use site_core/util/jsonread.{body_obj, str_or, opt_int}
+use site_core/util/jsonx.{obj, jstr, jint, jbool}
+use site_core/representation_backfill.{Options, run, Document, serialize}
+use site_core/qiniu/creds.{Qiniu}
+use site_core/util/download_handoff.{configured}
+use db/native_sqlite.{with_database}
+use util/http_curl.{with_upstream, CurlConfig}
+use site_core/db/runtime.{DbConfig, with_db}
+use site_core/db/sql.{execute as execute_sql}
+use site_core/backup.{require_engine}
+
+pub fn execute(input: String) -> Unit !io = {
+  let attempted: Result[Result[Result[Document, String], ForeignError], ForeignError] = catch_panic(() => catch_fault(() => process(input)))
+  let summary = match attempted { Ok(Ok(Ok(value))) -> value
+    _ -> obj([("version", jstr("download-k2-backfill-v1")), ("ready", jbool(false)), ("internal_failures", jint(1))]) }
+  println(serialize(summary))
+}
+
+fn integer(m: Map[String, Document], name: String, lo: Int, hi: Int) -> Result[Int, String] =
+  match opt_int(m, name) { Some(n) -> if n >= lo && n <= hi { Ok(n) } else { Err("invalid budget") }
+    None -> Err("missing budget") }
+
+fn required(m: Map[String, Document], name: String) -> Result[String, String] = {
+  let s = str_or(m, name, "")
+  if s == "" { Err("missing explicit configuration") } else { Ok(s) }
+}
+
+fn process(input: String) -> Result[Document, String] !io = {
+  let raw = match io.with_fs_real(() => io.read_file(input)) { Ok(s) -> s
+    Err(_) -> return Err("input unavailable") }
+  let m = body_obj(raw)?
+  let phase = required(m, "phase")?
+  if phase != "inventory" && phase != "dry-run" && phase != "apply" && phase != "verify" && phase != "resume" { return Err("invalid phase") }
+  let options = Options { phase = phase, page_size = integer(m, "page_size", 1, 1000)?,
+    max_requests = integer(m, "max_requests", 1, 10000000)?, max_seconds = integer(m, "max_seconds", 21, 86400)?,
+    interval_ms = integer(m, "interval_ms", 0, 60000)?, checkpoint = required(m, "checkpoint")? }
+  let q = Qiniu { ak = required(m, "ak")?, sk = required(m, "sk")?, bucket = required(m, "bucket")?,
+    domain = required(m, "domain")?, expires = 3600, rs_host = required(m, "rs_host")?, up_host = required(m, "rs_host")? }
+  if not configured(q, q.domain) { return Err("invalid representation configuration") }
+  let path = required(m, "db")?
+  let result: Result[Document, String] = with_database(path, "", false, db => process_db(db, q, options, required_or(m, "temp_parent")))?
+  result
+}
+
+fn process_db(db: DbConfig, q: Qiniu, options: Options, temp: String) -> Result[Document, String] !io = {
+  with_db(db, require_engine)?
+  if options.phase != "apply" && options.phase != "resume" {
+    with_db(db, () => execute_sql("PRAGMA query_only=ON", []))?
+  }
+  with_upstream(CurlConfig { temp_parent = temp }, () => run(db, q, options))
+}
+
+fn required_or(m: Map[String, Document], name: String) -> String = str_or(m, name, "")

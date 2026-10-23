@@ -258,7 +258,7 @@ def fts(work, binary):
         json.dumps(observed, ensure_ascii=False, indent=2) + "\n"
     )
     print(
-        "PASS real simple 0.7.1 HTTP routes: Chinese, pinyin, ranking, draft exclusion and pagination; outside 355",
+        "PASS real simple 0.7.1 HTTP routes: Chinese, pinyin, ranking, draft exclusion and pagination; additional to goldens",
         flush=True,
     )
 
@@ -310,14 +310,18 @@ def main():
     )
     (work / "contracts.log").write_bytes(result.stdout + result.stderr)
     summary = json.loads((work / "contracts/summary.json").read_text())
+    expected_count = sum(
+        len(json.loads(path.read_text())["cases"])
+        for path in (HERE.parent / "golden").glob("*.json")
+    )
     for arm, result in summary.items():
         count = sum(s["match"] for s in result["suites"].values())
         assert (
-            count == 355
+            count == expected_count
             and sum(len(s["skipped"]) for s in result["suites"].values()) == 7
         )
         print(
-            f"PASS {arm}: 355/355; original seven skips; wall_s={result['wall_s']:.3f}",
+            f"PASS {arm}: {count}/{expected_count}; original seven skips; wall_s={result['wall_s']:.3f}",
             flush=True,
         )
     for tag, proof in summary["native"]["no_jvm"].items():
@@ -326,6 +330,14 @@ def main():
             f"PASS native no JVM {tag}: {proof['processes']} processes, {proof['exec_attempts']} traced exec attempts, curl only PATH",
             flush=True,
         )
+    for count in ("0", "1"):
+        jvm = summary["jvm"]["representation"]["directories"][count]
+        native = summary["native"]["representation"]["directories"][count]
+        assert native["p95_ms"] <= max(100, jvm["p95_ms"] + 50)
+    print(
+        "PASS PROPFIND 0/1/100/1000 completeness and zero IO; small-directory p95 and cold authentication",
+        flush=True,
+    )
     fts(work / "simple", binary)
     print(
         f"PASS dual arm acceptance wall_s={time.monotonic() - started:.3f}; evidence={work}",

@@ -35,9 +35,7 @@ REPARENT = '"update files set path = ? where path = ?"'
 
 # The upsert behind every file write (proxy upload, /register, WebDAV PUT, text
 # save). Its stamp is the one a move must *not* imitate.
-FILE_UPSERT_STAMP = (
-    ", size = excluded.size, updated_at = datetime('now') where files.is_dir = 0"
-)
+FILE_UPSERT_STAMP = ", size = excluded.size, updated_at = datetime('now')"
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
@@ -119,7 +117,7 @@ MUTANTS = {
     "file-write-never-stamps": (
         "src/repo/repo_fm.dawn",
         FILE_UPSERT_STAMP,
-        ", size = excluded.size where files.is_dir = 0",
+        ", size = excluded.size",
     ),
     # ---- how a signature is spelled ----
     "row-sig-drops-separator": (

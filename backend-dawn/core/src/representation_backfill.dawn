@@ -1,0 +1,182 @@
+# One-shot maintenance. No request-path repair, bucket listing or body reads.
+use std/io
+use db/runtime.{DbConfig, with_db}
+use db/sql.{Db, query, ColStr, str_at, with_tx, scalar_int}
+use repo/repo_fm.{representation_page, representation_cas, representation_duplicate_keys, check_representation_schema}
+use qiniu/creds.{Qiniu}
+use qiniu/rs.{stat}
+use util/representation.{parse, Missing, collect, stat_size, profile}
+use util/crypto.{sha256_hex}
+use util/clock.{system_now}
+use util/jsonx.{obj, jint, jstr, jbool}
+use util/http.{Upstream}
+use json/value.{Json}
+use json/render.{render}
+
+pub alias Document = Json
+pub fn serialize(value: Document) -> String !io = render(value)
+
+pub type Options = { phase: String, page_size: Int, max_requests: Int, max_seconds: Int, interval_ms: Int, checkpoint: String }
+type Inventory = { rows: Int, directories: Int, files: Int, complete: Int, missing: Int, missing_key: Int, negative_size: Int, duplicate_keys: Int, profile_mismatch: Int, key_mismatch: Int }
+
+fn inventory(db: DbConfig, p: String, page_size: Int) -> Result[Inventory, String] !io =
+  with_db(db, () => with_tx(() => {
+    var result = Inventory { rows = 0, directories = 0, files = 0, complete = 0, missing = 0, missing_key = 0, negative_size = 0, duplicate_keys = representation_duplicate_keys()?, profile_mismatch = 0, key_mismatch = 0 }
+    var cursor = 0
+    while true {
+      let page = representation_page(cursor, page_size)?
+      if len(page) == 0 { break }
+      for snapshot in page {
+        let row = snapshot.row
+        result = Inventory { ..result, rows = result.rows + 1 }
+        if row.is_dir { result = Inventory { ..result, directories = result.directories + 1 } }
+        else {
+          result = Inventory { ..result, files = result.files + 1 }
+          if row.size < 0 { result = Inventory { ..result, negative_size = result.negative_size + 1 } }
+          if row.key == None || row.key == Some("") { result = Inventory { ..result, missing_key = result.missing_key + 1 } }
+          match row.representation.profile { Some(old) -> if old != p { result = Inventory { ..result, profile_mismatch = result.profile_mismatch + 1 } }
+            None -> () }
+          if row.representation.key != None && row.representation.key != row.key { result = Inventory { ..result, key_mismatch = result.key_mismatch + 1 } }
+          match parse(row.representation, row.key, row.size, p) {
+            Missing -> { result = Inventory { ..result, missing = result.missing + 1 } }
+            _ -> { result = Inventory { ..result, complete = result.complete + 1 } }
+          }
+        }
+        cursor = snapshot.id
+      }
+    }
+    Ok(Inventory { ..result, rows = scalar_int("select count(*) from files", [])? })
+  }))
+
+fn schema_fingerprint() -> Result[String, String] !Db !io = {
+  check_representation_schema()?
+  let rows = query("select name,type from pragma_table_info('files') order by cid", [], [ColStr, ColStr])?
+  Ok(sha256_hex(join(map(rows, row => str_at(row, 0) ++ ":" ++ str_at(row, 1)), ";")))
+}
+
+fn save_checkpoint(path: String, cursor: Int) -> Result[Unit, String] !io =
+  match io.with_fs_real(() => io.atomic_write_file(path, to_string(cursor))) { Ok(_) -> Ok(())
+    Err(_) -> Err("checkpoint unavailable") }
+
+fn resume_cursor(options: Options) -> Result[Int, String] !io = {
+  if options.phase != "resume" { return Ok(0) }
+  match io.with_fs_real(() => io.read_file(options.checkpoint)) {
+    Ok(s) -> match parse_int(s) { Some(n) -> if n >= 0 { Ok(n) } else { Err("checkpoint invalid") }
+      None -> Err("checkpoint invalid") }
+    Err(_) -> Err("checkpoint unavailable")
+  }
+}
+
+## Output is a fixed aggregate schema. Transport/SQL errors are counted here;
+## no row, identifier, URL, response header or foreign error text escapes.
+pub fn run(db: DbConfig, q: Qiniu, options: Options) -> Result[Json, String] !Upstream !io = {
+  let start = system_now()
+  let p = profile(q.domain)
+  let schema = with_db(db, schema_fingerprint)?
+  let engine = with_db(db, () => query("select sqlite_version(),sqlite_source_id()", [], [ColStr, ColStr]))?
+  let before = inventory(db, p, options.page_size)?
+  var requests = 0
+  var updated = 0
+  var planned = 0
+  var conflicts = 0
+  var metadata_failures = 0
+  var object_missing = 0
+  var database_failures = 0
+  var budget_exhausted = 0
+  var stat_ok = 0
+  var stat_rejected = 0
+  var head_ok = 0
+  var head_rejected = 0
+  var head_le_100_ms = 0
+  var head_le_1000_ms = 0
+  var head_gt_1000_ms = 0
+  let apply = options.phase == "apply" || options.phase == "resume"
+  if options.phase == "dry-run" || apply {
+    var cursor = resume_cursor(options)?
+    # A resumed high-water mark is never the final coverage claim. The second
+    # pass starts at zero to discover new low-id missing rows and conflicts.
+    for pass in range(0, if apply { 2 } else { 1 }) {
+      if pass == 1 { cursor = 0 }
+      var done = false
+      while not done {
+        let after_id = cursor
+        let page = with_db(db, () => representation_page(after_id, options.page_size))?
+        if len(page) == 0 { break }
+        for snapshot in page {
+          let row = snapshot.row
+          cursor = snapshot.id
+          if row.is_dir || parse(row.representation, row.key, row.size, p) != Missing { continue }
+          let key = match row.key { Some(k) -> k
+            None -> { metadata_failures = metadata_failures + 1
+              continue } }
+          if key == "" || row.size < 0 { metadata_failures = metadata_failures + 1
+            continue }
+          let elapsed = io.elapsed_ns(start, system_now()) / 1000000
+          if requests + 2 > options.max_requests || elapsed + 20000 + options.interval_ms * 2 > options.max_seconds * 1000 {
+            budget_exhausted = budget_exhausted + 1
+            done = true
+            break
+          }
+          io.with_clock_real(() => io.sleep_ns(options.interval_ms * 1000000))
+          requests = requests + 1
+          let response = match stat(q, key) { Ok(r) -> r
+            Err(_) -> { metadata_failures = metadata_failures + 1
+              continue } }
+          if response.status == 612 { object_missing = object_missing + 1
+            continue }
+          if response.status != 200 { stat_rejected = stat_rejected + 1
+            metadata_failures = metadata_failures + 1
+            continue }
+          stat_ok = stat_ok + 1
+          let size = match stat_size(response.body, None) { Ok(n) -> n
+            Err(_) -> { metadata_failures = metadata_failures + 1
+              continue } }
+          io.with_clock_real(() => io.sleep_ns(options.interval_ms * 1000000))
+          requests = requests + 1
+          let head_start = system_now()
+          let collected = collect(q, key, size)
+          let head_ms = io.elapsed_ns(head_start, system_now()) / 1000000
+          if head_ms <= 100 { head_le_100_ms = head_le_100_ms + 1 }
+          else if head_ms <= 1000 { head_le_1000_ms = head_le_1000_ms + 1 }
+          else { head_gt_1000_ms = head_gt_1000_ms + 1 }
+          let value = match collected { Ok(v) -> { head_ok = head_ok + 1
+            v }
+            Err(_) -> { head_rejected = head_rejected + 1
+              metadata_failures = metadata_failures + 1
+              continue } }
+          planned = planned + 1
+          if apply {
+            match with_db(db, () => representation_cas(snapshot, value)) {
+              Ok(true) -> { updated = updated + 1 }
+              Ok(false) -> { conflicts = conflicts + 1 }
+              Err(_) -> { database_failures = database_failures + 1 }
+            }
+          }
+        }
+        if apply { save_checkpoint(options.checkpoint, cursor)? }
+        if budget_exhausted > 0 { break }
+      }
+      if budget_exhausted > 0 { break }
+    }
+  }
+  let after = inventory(db, p, options.page_size)?
+  let ready = after.rows == after.directories + after.files && after.files == after.complete &&
+    after.missing == 0 && after.missing_key == 0 && after.negative_size == 0 && after.duplicate_keys == 0 &&
+    conflicts == 0 && metadata_failures == 0 && object_missing == 0 && database_failures == 0 && budget_exhausted == 0
+  Ok(obj([
+    ("version", jstr("download-k2-backfill-v1")), ("phase", jstr(options.phase)),
+    ("sqlite_version", jstr(str_at(engine[0], 0))), ("engine_fingerprint", jstr(sha256_hex(str_at(engine[0], 1)))),
+    ("profile", jstr(p)), ("schema_fingerprint", jstr(schema)), ("ready", jbool(ready)),
+    ("rows", jint(after.rows)), ("directories", jint(after.directories)), ("files", jint(after.files)),
+    ("complete", jint(after.complete)), ("unresolved", jint(after.missing)), ("initial_missing", jint(before.missing)),
+    ("unscanned", jint(after.rows - after.directories - after.files)),
+    ("missing_key", jint(after.missing_key)), ("negative_size", jint(after.negative_size)), ("duplicate_keys", jint(after.duplicate_keys)),
+    ("profile_mismatch", jint(after.profile_mismatch)), ("key_mismatch", jint(after.key_mismatch)),
+    ("requests", jint(requests)), ("planned", jint(planned)), ("updated", jint(updated)), ("conflicts", jint(conflicts)),
+    ("metadata_failures", jint(metadata_failures)), ("object_missing", jint(object_missing)),
+    ("database_failures", jint(database_failures)), ("budget_exhausted", jint(budget_exhausted)),
+    ("stat_ok", jint(stat_ok)), ("stat_rejected", jint(stat_rejected)), ("head_ok", jint(head_ok)), ("head_rejected", jint(head_rejected)),
+    ("head_le_100_ms", jint(head_le_100_ms)), ("head_le_1000_ms", jint(head_le_1000_ms)), ("head_gt_1000_ms", jint(head_gt_1000_ms)),
+    ("elapsed_ms", jint(io.elapsed_ns(start, system_now()) / 1000000)),
+  ]))
+}

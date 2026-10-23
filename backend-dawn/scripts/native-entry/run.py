@@ -445,44 +445,70 @@ def raw_cases(binary, env):
 
 
 def file_cases(binary, env, db):
-    # HEAD's length describes the stored representation, not its empty body.
-    # Reuse one synthetic fixture row to cover a real zero-byte GET as well.
+    # Nonempty plain HEAD is now the explicit unavailable capability case.
+    # Success belongs to the qiniu/nginx suite. Keep local owner framing on the
+    # direct application wire so nginx cannot hide duplicate length fields.
     with sqlite3.connect(db) as connection:
-        size = connection.execute(
-            "select size from files where path='docs/notes.txt'"
-        ).fetchone()[0]
+        original = connection.execute(
+            "select size,representation_kind,representation_key,representation_profile,representation_etag,representation_last_modified_s from files where path='docs/notes.txt'"
+        ).fetchone()
+    result, _ = pipe(
+        binary,
+        env,
+        request("HEAD", "/dav/docs/notes.txt", [("Authorization", "Basic " + AUTH)]),
+    )
+    head, _, body = checked_date(result.stdout).partition(b"\r\n\r\n")
+    check(
+        head.startswith(b"HTTP/1.1 503 ") and not body,
+        "plain-head-capability-unavailable",
+    )
+    local_env = {
+        **env,
+        "DAWN_DOWNLOAD_HANDOFF": "on",
+        "DAWN_DOWNLOAD_ORIGIN": "https://objects.invalid",
+        "QINIU_DOMAIN": "https://objects.invalid",
+        "QINIU_ACCESS_KEY": "fixture-ak",
+        "QINIU_SECRET_KEY": "fixture-sk",
+    }
     try:
-        for method, length in [("HEAD", size), ("GET", 0), ("HEAD", 0)]:
-            if length == 0:
-                with sqlite3.connect(db) as connection:
-                    connection.execute(
-                        "update files set size=0 where path='docs/notes.txt'"
-                    )
+        with sqlite3.connect(db) as connection:
+            connection.execute(
+                "update files set size=0,representation_kind='local-empty-v1',representation_key=key,representation_profile=?,representation_etag=?,representation_last_modified_s=1767225600 where path='docs/notes.txt'",
+                (
+                    "identity-v1:"
+                    + hashlib.sha256(b"https://objects.invalid").hexdigest(),
+                    '"dawn-empty-v1"',
+                ),
+            )
+        for method in ("GET", "HEAD"):
             result, _ = pipe(
                 binary,
-                env,
+                local_env,
                 request(
                     method, "/dav/docs/notes.txt", [("Authorization", "Basic " + AUTH)]
                 ),
             )
-            check(result.returncode == 0, "file-framing-exit", result.stderr)
             wire = checked_date(result.stdout)
             head, separator, body = wire.partition(b"\r\n\r\n")
             check(
-                head.startswith(b"HTTP/1.1 200 OK\r\n") and separator and not body,
+                result.returncode == 0
+                and head.startswith(b"HTTP/1.1 200 OK\r\n")
+                and separator
+                and not body,
                 "file-framing-empty-body",
                 repr(wire),
             )
             check(
-                f"Content-Length: {length}".encode() in head.split(b"\r\n"),
+                b"Content-Length: 0" in head.split(b"\r\n"),
                 "file-representation-length",
                 repr(head),
             )
-            passed(f"raw file {method} length={length}: one length, empty body")
+            passed(f"raw local empty {method}: one length and empty body")
     finally:
         with sqlite3.connect(db) as connection:
             connection.execute(
-                "update files set size=? where path='docs/notes.txt'", (size,)
+                "update files set size=?,representation_kind=?,representation_key=?,representation_profile=?,representation_etag=?,representation_last_modified_s=? where path='docs/notes.txt'",
+                original,
             )
 
 
@@ -637,6 +663,21 @@ def broken_socket(binary, env, data, *, read_head=False):
 
 
 def memory(binary, env, work, peer, db):
+    form = f"username={contract_fixture.FIXTURE_USER}&password={contract_fixture.FIXTURE_PW}".encode()
+    login, _ = pipe(
+        binary,
+        env,
+        request(
+            "POST",
+            "/api/auth/login",
+            [
+                ("Content-Length", str(len(form))),
+                ("Content-Type", "application/x-www-form-urlencoded"),
+            ],
+            form,
+        ),
+    )
+    token = json.loads(login.stdout.split(b"\r\n\r\n", 1)[1])["access_token"]
     peaks = {"upload": [], "download": []}
     for mib in (256, 512):
         data = work / "payload"
@@ -679,8 +720,8 @@ def memory(binary, env, work, peer, db):
                 env,
                 request(
                     "GET",
-                    f"/dav/native-{mib}.bin",
-                    [("Authorization", "Basic " + AUTH)],
+                    f"/api/fm/content?path=native-{mib}.bin",
+                    [("Authorization", "Bearer " + token)],
                 ),
                 None,
                 download,
@@ -698,8 +739,8 @@ def memory(binary, env, work, peer, db):
                 env,
                 request(
                     "GET",
-                    f"/dav/native-{mib}.bin",
-                    [("Authorization", "Basic " + AUTH)],
+                    f"/api/fm/content?path=native-{mib}.bin",
+                    [("Authorization", "Bearer " + token)],
                 ),
                 read_head=True,
             )
@@ -840,7 +881,9 @@ def main():
         env = {
             key: value
             for key, value in os.environ.items()
-            if not key.startswith(("DAWN_", "QINIU_", "TENCENT_"))
+            if not key.startswith(
+                ("DAWN_", "QINIU_", "TENCENT_", "VAULT_", "LIGHTHOUSE_")
+            )
             and key not in {"SECRET_KEY", "DAWNOP_ENV", "LIGHTHOUSE_INSTANCE_ID"}
         }
         env.update(

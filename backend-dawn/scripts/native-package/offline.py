@@ -19,6 +19,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE.parent))
 import contract_fixture  # noqa: E402
+import contract_qiniu_fake  # noqa: E402
 import contract_run  # noqa: E402
 
 
@@ -87,6 +88,10 @@ class Units:
         self.client_uid = int(os.environ.get("SUDO_UID", "1000"))
         self.client_gid = int(os.environ.get("SUDO_GID", "1000"))
         self.peer = entry.Peer(work)
+        cert, _, _ = contract_qiniu_fake.tls_material()
+        self.fake_ca = self.base / "fake-ca.pem"
+        shutil.copy2(cert, self.fake_ca)
+        self.fake_ca.chmod(0o644)
         self.envfile = self.base / "fixture.env"
         contract_run.env_file(self.envfile, self.db, 1, self.peer.base)
         self.envfile.chmod(0o644)
@@ -113,6 +118,11 @@ class Units:
                 continue
             name = path.name.replace("dawnop-native", self.name)
             text = path.read_text().replace("dawnop-native", self.name)
+            if path.name == "dawnop-native@.service":
+                text = text.replace(
+                    "[Service]\n",
+                    f"[Service]\nEnvironment=CURL_CA_BUNDLE={self.fake_ca}\n",
+                )
             text = text.replace("/opt/dawnop-dawn/native/current", str(self.release))
             text = text.replace("/opt/dawnop/backend/.env", str(self.envfile))
             text = text.replace("/opt/dawnop/data/dawnop.db", str(self.db))
@@ -550,6 +560,19 @@ def progress_negative(units, work):
 def transfers(units, work, label="shipped"):
     import hashlib
 
+    form = f"username={contract_fixture.FIXTURE_USER}&password={contract_fixture.FIXTURE_PW}".encode()
+    login = units.exchange(
+        entry.request(
+            "POST",
+            "/api/auth/login",
+            [
+                ("Content-Length", str(len(form))),
+                ("Content-Type", "application/x-www-form-urlencoded"),
+            ],
+            form,
+        )
+    )
+    token = json.loads(login.split(b"\r\n\r\n", 1)[1])["access_token"]
     payload = work / "payload.bin"
     digest = hashlib.sha256()
     with payload.open("wb") as stream:
@@ -590,8 +613,8 @@ def transfers(units, work, label="shipped"):
             units.exchange(
                 entry.request(
                     "GET",
-                    remote,
-                    [("Authorization", "Basic " + entry.AUTH)],
+                    f"/api/fm/content?path=offline-{label}-512.bin",
+                    [("Authorization", "Bearer " + token)],
                 ),
                 output=download,
                 progress=progress,
@@ -755,10 +778,10 @@ def rollback(units, work):
             except OSError:
                 demand(time.monotonic() < deadline, "JVM rollback startup")
                 threading.Event().wait(0.05)
+        token = contract_run.login(f"http://127.0.0.1:{port}")
         request = urllib.request.Request(
-            f"http://127.0.0.1:{port}/dav/",
-            method="PROPFIND",
-            headers={"Authorization": "Basic " + entry.AUTH, "Depth": "1"},
+            f"http://127.0.0.1:{port}/api/fm?path=",
+            headers={"Authorization": "Bearer " + token},
         )
         with urllib.request.urlopen(request, timeout=5) as response:
             demand(

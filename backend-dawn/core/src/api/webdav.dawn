@@ -69,7 +69,6 @@ fn path_segs(rel: String) -> List[String] = filter(str.split(rel, "/"), s => s !
 # segments anyway, so collapsing here is what the rest of the module expects.)
 fn path_join(s: String) -> String = join(path_segs(s), "/")
 
-
 # XML text escaping (& < >), matching xml.sax.saxutils.escape; & must go first.
 fn xml_escape(s: String) -> String = {
   let a = str.replace(s, "&", "&amp;")

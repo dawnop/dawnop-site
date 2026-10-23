@@ -51,11 +51,12 @@ pub fn with_upstream[T](cfg: CurlConfig, body: fn() -> T !Upstream !UpstreamBatc
 
 fn head_reply(cfg: CurlConfig, req: OutReq) -> Result[HeadResp, ForeignError] !io =
   io.with_fs_real(() => io.with_proc_real(() => io.with_clock_real(() => {
+    if req.method != "HEAD" || req.budget_s <= 0 || req.budget_s > 10 { return Err(fault("RequestError", "invalid metadata request")) }
     let start = io.now()
     let dir = io.temp_dir(cfg.temp_parent, "site-head-")?
     bracket(dir, cleanup, d => {
       let attempted: Result[Result[Result[HeadResp, ForeignError], ForeignError], ForeignError] = catch_panic(() => catch_fault(() => {
-        let status = perform(d, req, true, start)?
+        let status = perform(d, req, false, start)?
         let raw = io.read_file(d ++ "/response-headers")?
         let headers = final_head_headers(raw)?
         Ok(HeadResp { status = status, headers = headers })

@@ -123,6 +123,13 @@ if not path.is_file():
     raise SystemExit(f"missing qiniu machine report: {path}")
 report = json.loads(path.read_text(encoding="utf-8"))
 expected_diff = [owner] if owner else []
+# The K2 publication length guard now rejects this corrupted writer before
+# commit. Its status and GC-call observations also expose that same refusal.
+# Require the complete measured set, including the original byte-size owner.
+if owner == "fm.save.utf8-byte-size":
+    expected_diff = ["fm.save.utf8", "fm.save.utf8.calls", owner]
+if owner == "fm.upload-token.deadline-window":
+    expected_diff = [owner, "k2.ordinary-token-replay-and-register", "k2.resumable-token-replay"]
 checks = {
     "schema": report.get("schema") == "dawnop.contract-golden.v1",
     "name": report.get("name") == "qiniu",

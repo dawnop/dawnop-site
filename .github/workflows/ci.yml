@@ -166,7 +166,7 @@ jobs:
       # usage stats stay a named skip; skips are listed in the goldens and
       # printed by every run, so "CI ran it" cannot quietly become "CI compared
       # nothing". Re-record with `contract_run.py --record` and review the diff.
-      - name: dual arm 355 contracts simple routes and negative controls
+      - name: dual arm contracts simple routes and negative controls
         run: backend-dawn/scripts/dual-arm/run.sh --work "${RUNNER_TEMP}/dual-arm"
 
       - name: retain dual arm contract evidence
@@ -271,6 +271,63 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  download-metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '21'
+          distribution: 'graalvm-community'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/cache@v4
+        with:
+          path: .dawn
+          key: dawn-native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.dawn-version', '.dawn-version.sha256', 'scripts/fetch-dawn*.sh') }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/coursier
+          key: coursier-${{ hashFiles('backend-dawn/**/dawn.toml') }}
+          restore-keys: coursier-
+      - name: extract an isolated nginx binary
+        run: |
+          mkdir -p "${RUNNER_TEMP}/k2-nginx"
+          cd "${RUNNER_TEMP}/k2-nginx"
+          apt-get download nginx
+          dpkg-deb -x nginx_*.deb extracted
+          echo "${RUNNER_TEMP}/k2-nginx/extracted/usr/sbin" >> "$GITHUB_PATH"
+      - name: build the current two application owners
+        run: |
+          k2_dawn_bin=$(scripts/fetch-dawn.sh)
+          k2_native_bin=$(scripts/fetch-dawn-native.sh)
+          "$k2_dawn_bin" build backend-dawn/app/jvm -o backend-dawn/backend-dawn.jar
+          "$k2_native_bin" build backend-dawn/app/native -o "${RUNNER_TEMP}/k2-native"
+      - name: synthetic replica safety recovery and races
+        run: |
+          python3 backend-dawn/scripts/prepare_k2_sqlite.py --work "${RUNNER_TEMP}/k2-engine"
+          python3 backend-dawn/scripts/backfill_acceptance.py --binary "${RUNNER_TEMP}/k2-native" --sqlite-library "${RUNNER_TEMP}/k2-engine/libsqlite3.so.0" --summary "${RUNNER_TEMP}/k2-backfill.json"
+      - name: reject partial DAV cohorts
+        run: python3 backend-dawn/scripts/download_preflight.py --self-test
+      - name: compile actual representation and maintenance mutations
+        run: >-
+          python3 backend-dawn/scripts/download_k2_negative.py
+          --jar backend-dawn/backend-dawn.jar
+          --binary "${RUNNER_TEMP}/k2-native"
+          --sqlite-library "${RUNNER_TEMP}/k2-engine/libsqlite3.so.0"
+          --work "${RUNNER_TEMP}/k2-negatives"
+          --summary "${RUNNER_TEMP}/k2-negatives.json"
+          --jobs 2
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: download-metadata-evidence
+          path: |
+            ${{ runner.temp }}/k2-backfill.json
+            ${{ runner.temp }}/k2-negatives.json
+          if-no-files-found: error
+          retention-days: 7
+
   # S4/S5/S6 share toolchains and fixtures. One job adds one runner slot to
   # the existing 24 jobs and keeps setup shared; see docs/ci-native-acceptance-design.md.
   native-acceptance:
@@ -355,7 +412,19 @@ jobs:
           python3 backend-dawn/scripts/native-package/package.py build
           "${RUNNER_TEMP}/native-release" --work "${RUNNER_TEMP}/native-build"
           --sha "${{ github.sha }}"
-      - name: native artifact runs all 355 contracts
+      - name: build a pinned private nginx for jammy contracts
+        run: |
+          mkdir -p "${RUNNER_TEMP}/package-nginx"
+          cd "${RUNNER_TEMP}/package-nginx"
+          curl --fail --location --silent --show-error \
+            https://nginx.org/download/nginx-1.31.3.tar.gz -o nginx.tar.gz
+          echo 'a7657c50811c2d92d9895395e8b873ef60398142c4db21eb647811c38f6dd525  nginx.tar.gz' | sha256sum --check --status
+          tar -xzf nginx.tar.gz
+          cd nginx-1.31.3
+          ./configure --prefix="${RUNNER_TEMP}/package-nginx/private" --with-http_ssl_module
+          make -j2
+          echo "${RUNNER_TEMP}/package-nginx/nginx-1.31.3/objs" >> "$GITHUB_PATH"
+      - name: native artifact runs all current contracts
         run: >-
           python3 backend-dawn/scripts/contract_run.py --arm native
           --native-binary "${RUNNER_TEMP}/native-release/dawnop-native"
@@ -407,12 +476,12 @@ jobs:
   # job on top of ~2-3 minutes of per-shard fixed cost (checkout, toolchain,
   # each harness's own base build and preflight, which every shard repeats
   # because they are what makes its slice trustworthy). Total here is 19 jobs;
-  # with the seven others that is 26, six past the concurrent-job ceiling for
+  # with the eight others that is 27, seven past the concurrent-job ceiling for
   # this account. Adding a shard past that does not fail, it queues — but it also
   # stops buying wall clock, so re-measure before growing this list.
   #
-  # The seven are secrets, backend, native-acceptance, native-package, python-backend, frontend,
-  # and mutants-complete.
+  # The eight are secrets, backend, native-acceptance, native-package, download-metadata,
+  # python-backend, frontend, and mutants-complete.
   # This comment said "the four above" from 2026-08-14 until 2026-08-15 and left
   # mutants-complete out, so every total it stated was one low (the 2026-08-14 run
   # it called 21 jobs was 21 because there were 16 shards then, not 17 — two errors
@@ -538,7 +607,7 @@ jobs:
   # missing mutant are different news and both are worth having.
   mutants-complete:
     runs-on: ubuntu-latest
-    needs: [mutants, native-acceptance, native-package]
+    needs: [mutants, native-acceptance, native-package, download-metadata]
     if: always()
     timeout-minutes: 10
     steps:
@@ -579,6 +648,12 @@ jobs:
         env:
           PACKAGE_RESULT: ${{ needs.native-package.result }}
         run: test "$PACKAGE_RESULT" = success
+
+      - name: download metadata completed successfully
+        if: ${{ !cancelled() }}
+        env:
+          DOWNLOAD_METADATA_RESULT: ${{ needs.download-metadata.result }}
+        run: test "$DOWNLOAD_METADATA_RESULT" = success
 
   # The FastAPI backend is retired from serving (M6 moved every route to Dawn on
   # :8001) but it is not dead code: it is the emergency rollback target —

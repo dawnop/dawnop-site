@@ -9,7 +9,7 @@ use util/paths.{strip_trailing_slash}
 use util/time.{parse_http_date}
 use util/runtime_ttl.{now_s}
 use util/crypto.{sha256_hex}
-use util/errkind.{upstream}
+use util/errkind.{upstream, timeout}
 use std/map
 use json/parser as json_parser
 use json/value.{JObj, JInt}
@@ -66,6 +66,7 @@ fn one(h: HeadResp, name: String) -> Option[String] = {
 }
 
 pub fn from_head(h: HeadResp, key: String, expected: Int, p: String, published_s: Int) -> Result[Published, String] = {
+  if h.status == 504 { return Err(timeout("representation metadata timed out")) }
   let bad = upstream("representation metadata invalid")
   if h.status != 200 || expected < 0 || key == "" || p == "" { return Err(bad) }
   let encodings = filter(h.headers, kv => { let (name, _) = kv
@@ -73,7 +74,7 @@ pub fn from_head(h: HeadResp, key: String, expected: Int, p: String, published_s
   if len(encodings) > 1 { return Err(bad) }
   for (name, value) in h.headers {
     let k = str.to_lower(name)
-    if (k == "content-encoding" && value != "identity") || k == "transfer-encoding" ||
+    if (k == "content-encoding" && str.to_lower(value) != "identity") || k == "transfer-encoding" ||
       (k == "vary" && str.contains(str.to_lower(value), "accept-encoding")) { return Err(bad) }
   }
   let etag = match one(h, "etag") { Some(v) -> v
@@ -81,7 +82,7 @@ pub fn from_head(h: HeadResp, key: String, expected: Int, p: String, published_s
   let date = match one(h, "last-modified") { Some(v) -> v
     None -> return Err(bad) }
   let size = match one(h, "content-length") { Some(v) -> match decimal(v) { Some(n) -> n
-      None -> return Err(bad) }
+    None -> return Err(bad) }
     None -> return Err(bad) }
   let lm = match parse_http_date(date) { Some(n) -> n
     None -> return Err(bad) }
@@ -101,7 +102,7 @@ pub fn collect(q: Qiniu, key: String, expected: Int) -> Result[Published, String
 pub fn parse(s: Stored, key: Option[String], size: Int, p: String) -> Representation =
   match (s.kind, s.key, s.profile, s.etag, s.last_modified_s, key) {
     (Some(kind), Some(k), Some(pr), Some(etag), Some(lm), Some(current)) -> {
-      if k != current || k == "" || pr != p || size < 0 || lm < 0 || not valid_etag(etag) { return Missing }
+      if k != current || k == "" || pr != p || size < 0 || lm < 0 || lm > 253402300799 || not valid_etag(etag) { return Missing }
       let v = Fields { kind = kind, key = k, profile = pr, etag = etag, last_modified_s = lm, size = size }
       if kind == "object-identity-v1" && size > 0 { ObjectIdentity(v) }
       else if kind == "local-empty-v1" && size == 0 && etag == EMPTY_ETAG { LocalEmpty(v) }

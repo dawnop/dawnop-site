@@ -11,8 +11,13 @@ use util/application_http.{new_client}
 use web/exchange.{serve_exchange, ExchangeConfig}
 use web/types.{DEFAULT_MAX_BODY}
 use web/middleware.{with_logging_to_stderr, with_cors, with_body_limit}
+use util/backfill_cli
 
 pub fn main() -> Unit !io = {
+  if unwrap_or(get(args(), 0), "") == "--representation-backfill" {
+    backfill_cli.execute(if len(args()) == 2 { args()[1] } else { "" })
+    return ()
+  }
   let cfg = io.with_fs_real(() => load(env_or("DAWNOP_ENV", "backend/.env")))
   let download_origin = match get_or(cfg, "DAWN_DOWNLOAD_HANDOFF", "off") {
     "off" -> None

@@ -70,6 +70,7 @@ pub fn with_upstream[T](cl: HttpCell, body: fn() -> T !Upstream !UpstreamBatch !
 
 fn wire_head(cl: HttpCell, req: OutReq) -> Result[HeadResp, ForeignError] !io =
   flatten_fault(catch_fault(() => {
+    if req.method != "HEAD" || req.budget_s <= 0 || req.budget_s > 10 { return Err(ForeignError { kind = "site.head.Invalid", message = "invalid metadata request", cause = None }) }
     let built = request_for(req)?
     let resp = client_of(cl).send(built, BodyHandlers.discarding()!)!
     var headers: List[(String, String)] = []

@@ -3,9 +3,12 @@
 import hashlib
 import json
 import re
+import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+import contract_qiniu_fake
 
 
 class Peer(ThreadingHTTPServer):
@@ -18,12 +21,16 @@ class Peer(ThreadingHTTPServer):
         self.payload = None
         self.errors = []
         self.upload_bytes = 0
+        cert, key, _ = contract_qiniu_fake.tls_material()
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        self.socket = context.wrap_socket(self.socket, server_side=True)
         self.thread = threading.Thread(target=self.serve_forever, daemon=True)
         self.thread.start()
 
     @property
     def base(self):
-        return f"http://127.0.0.1:{self.server_port}"
+        return f"https://localhost:{self.server_port}"
 
     def close(self):
         self.shutdown()
@@ -101,10 +108,15 @@ class Handler(BaseHTTPRequestHandler):
             status = 206
         self.send_response(status)
         self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("ETag", '"resource-entity"')
+        self.send_header("Last-Modified", "Thu, 01 Jan 2026 00:00:00 GMT")
         if status == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.send_header("Connection", "close")
         self.end_headers()
+        if self.command == "HEAD":
+            self.close_connection = True
+            return
         try:
             with path.open("rb") as stream:
                 stream.seek(start)
@@ -117,3 +129,5 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
         self.close_connection = True
+
+    do_HEAD = do_GET
