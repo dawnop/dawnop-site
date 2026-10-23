@@ -190,6 +190,26 @@ jobs:
       - name: native single exchange wire resources and negative controls
         run: backend-dawn/scripts/native-entry/run.sh --work "${RUNNER_TEMP}/native-entry"
 
+      - name: extract a private stock nginx binary
+        run: |
+          mkdir -p "${RUNNER_TEMP}/nginx-download"
+          cd "${RUNNER_TEMP}/nginx-download"
+          apt-get download nginx
+          dpkg-deb -x nginx_*.deb extracted
+          echo "${RUNNER_TEMP}/nginx-download/extracted/usr/sbin" >> "$GITHUB_PATH"
+
+      - name: isolated download protocol performance and negative controls
+        run: backend-dawn/scripts/download-transport/run.sh --full --work "${RUNNER_TEMP}/download-transport"
+
+      - name: retain sanitized download evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: download-transport-evidence
+          path: ${{ runner.temp }}/download-transport/summary.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: administrator settings and atomic updates
         run: python3 backend-dawn/scripts/check-settings.py
 

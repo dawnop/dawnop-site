@@ -56,7 +56,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 dawnop-site/
 ├── backend-dawn/               # 生产后端（Dawn → JVM 字节码）
-│   ├── core/                   # 可移植包 site_core，65 个模块；共享路由与业务，零 Java
+│   ├── core/                   # 可移植包 site_core，66 个模块；共享路由与业务，零 Java
 │   │   ├── src/                # config、db/sql、repo、svc 与纯 util/qiniu/tencent，含 Upstream 与 HTTP 类型
 │   │   └── dawn.toml           # web/json/sha2，保持 v0.100.0 tag/hash
 │   ├── app/jvm/                # JVM 应用，6 个模块；路径依赖 ../../core
@@ -276,6 +276,7 @@ dawnop-site/
 ```bash
 # ---- 后端：Dawn（生产用的这套）----
 ./backend-dawn/build.sh                 # 取编译器 → 跑 test/ 白盒测试 → 打 jar（+ lib/）
+backend-dawn/scripts/download-transport/run.sh --full --work <empty-directory> # Isolated nginx download gates
 backend-dawn/scripts/native-entry/run.sh # native 单交换、逐字节 wire、大体、冷启动与先红负控
 python3 backend-dawn/scripts/native-package/package.py build <release> --work <new-work> # S12 私有引擎包；离线单元见 deploy/native-package.md
 backend-dawn/scripts/native-sqlite/run.sh # native handler、SQL 双臂、真实 FTS、BUSY、ASan/LSan

@@ -64,6 +64,8 @@ DAWN_SKIP = {"config.dawn"}
 
 # 只在 Dawn 侧存在的键。每条都必须说明为什么 FastAPI 那边没有对应物。
 DAWN_ONLY = {
+    "DAWN_DOWNLOAD_HANDOFF": "Native-only FM X-Accel switch, off by default; JVM keeps the old route.",
+    "DAWN_DOWNLOAD_ORIGIN": "Trusted native download HTTPS origin; must match QINIU_DOMAIN.",
     "DAWN_PORT": "两个后端同机共存，必须各占一个端口（Dawn 8001 / uvicorn 8000）。"
     "FastAPI 的端口是 systemd 单元里 uvicorn 的命令行参数，根本不是 Settings 字段。",
     "DAWN_CORS_ORIGIN": "形状不同，无法逐字比：FastAPI 的 CORS_ORIGINS 是逗号分隔的"
@@ -95,6 +97,8 @@ PY_ONLY = {
 # 后端读、但**故意不写进模板**的键。模板是一份邀请：写进去的每一行都在说「这个你可以改」。
 # 所以这张名单的每条理由都得答同一个问题——为什么不该邀请人去改它。
 TEMPLATE_OMIT = {
+    "DAWN_DOWNLOAD_HANDOFF": "Isolated prototype has no production approval, so the deployment template omits it.",
+    "DAWN_DOWNLOAD_ORIGIN": "The deployment owner configures this with the default-off download prototype.",
     "ALGORITHM": "Dawn 侧 HS256 是 util/jwt.dawn 里的常量，写死的。在 .env 里改这个键"
     "只动 FastAPI 一半，结果是两个后端签发的 token 互不认。模板不提供它，"
     "就是不邀请人去改。",

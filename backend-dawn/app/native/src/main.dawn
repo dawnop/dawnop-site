@@ -3,7 +3,7 @@ use std/io
 use wire/finish.{finish_exchange}
 use wire/headers.{application_transport}
 use site_core/config.{load, get_or}
-use site_core/application.{configure, app_routes}
+use site_core/application.{configure, app_routes_with_download}
 use site_core/maintenance
 use site_core/util/jsonx.{fastapi_errors}
 use db/native_sqlite.{with_database, backup_database}
@@ -14,6 +14,11 @@ use web/middleware.{with_logging_to_stderr, with_cors, with_body_limit}
 
 pub fn main() -> Unit !io = {
   let cfg = io.with_fs_real(() => load(env_or("DAWNOP_ENV", "backend/.env")))
+  let download_origin = match get_or(cfg, "DAWN_DOWNLOAD_HANDOFF", "off") {
+    "off" -> None
+    "on" -> Some(get_or(cfg, "DAWN_DOWNLOAD_ORIGIN", ""))
+    _ -> panic("DAWN_DOWNLOAD_HANDOFF must be on or off")
+  }
   let path = get_or(cfg, "DAWN_DB_PATH", "backend/dawnop.db")
   let ext = get_or(cfg, "DAWN_SIMPLE_EXT", "backend/extensions/libsimple")
   let mode = unwrap_or(get(args(), 0), "")
@@ -38,7 +43,7 @@ pub fn main() -> Unit !io = {
     } else {
       required(maintenance.check_schema(db))
       serve_exchange(ExchangeConfig { max_body = DEFAULT_MAX_BODY, errors = fastapi_errors() },
-        app_routes(app, new_client()), [with_logging_to_stderr,
+        app_routes_with_download(app, new_client(), download_origin), [with_logging_to_stderr,
           next => with_cors(app.origin, next),
           next => with_body_limit(2000000, next)], application_transport())
       match finish_exchange() { Ok(_) -> ()

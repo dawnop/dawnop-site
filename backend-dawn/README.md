@@ -92,6 +92,11 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   `docs/curl-transport-design.md`。上传按追加裁决改用 upload-file，显式 method/request-target，固定长度并抑制 Expect；
   原内存阈值不变，退回 data-binary 的真实256/512 MiB负控必须红。
 
+- Native FM download prototype: `scripts/download-transport/run.sh --work <empty-directory>`;
+  add `--full` for three-arm timing and 256/512 MiB resource gates. Default off via
+  `DAWN_DOWNLOAD_HANDOFF=off`; protocol and production blockers are documented in
+  [`../docs/download-handoff-design.md`](../docs/download-handoff-design.md). DAV routes are unchanged.
+
 - native 入口：仓库根运行 `backend-dawn/scripts/native-entry/run.sh`，实际 check/build/test app/native，
   检查完整依赖图零 Java，并先证明应用手写重复响应长度、启动 println、吞 guard 拒绝、立即关闭 socket 和请求期重跑迁移五个负控会红。
   原始响应逐行断言 Content-Length 至多一行，覆盖 DAV OPTIONS、HEAD 文件元数据、零字节 200、204 和错误；native 单测另覆盖无生产路由的 304。
@@ -192,7 +197,7 @@ WAL 查询结果必须是 wal、配置扩展必须加载；错误关闭连接并
 
 ## 模块地图
 
-S10 保留独立的 core、JVM/native app 和 test 根。core 有 65 个模块，持有全部路由、业务、
+S10 保留独立的 core、JVM/native app 和 test 根。core 有 66 个模块，持有全部路由、业务、
 配置装配与迁移接口；两个入口通过路径依赖消费同一份 application.app_routes。
 JVM 只留 6 个模块（入口、JDBC、HTTP 适配及测试构造），native 有 6 个 Dawn 模块及 fd teardown C 接缝。
 测试仍在一次性 JVM 同模块镜像合并白盒片段；core 自身和 native 完整依赖图分别接受零 Java 扫描。
@@ -200,6 +205,7 @@ JVM 只留 6 个模块（入口、JDBC、HTTP 适配及测试构造），native 
 - `core/src/db/runtime.dawn` 的 DbConfig 保存配置与纯 Dawn DbOps 工厂，泛型 with_db 在操作记录
   的 bracket 内安装 Db 六臂。JVM 工厂每工作单元开关真实 JDBC；native 外层 sqlite.with_db 拥有
   单交换唯一连接，借用操作只在该动态作用域内执行，不扩展既有写事务。
+- `core/src/util/download_handoff.dawn`: site-only signed download target and MIME control response, with no network IO.
 - `core/src/util/http_runtime.dawn` 保存四种出站形状和显式 batch 的 IO 回调；两端
   util/application_http 适配实际 owner，共享路由实际执行时安装 Upstream/UpstreamBatch。
 - `core/src/util/runtime_ttl.dawn` 保存五槽 SQLite 地址；JVM util/ttl 只为既有测试提供路径构造。
