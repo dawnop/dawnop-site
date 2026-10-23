@@ -373,9 +373,9 @@ pub fn grant_direct(a: Auth, token: String, name: String, size: Int) -> Result[D
   let chosen = with_db(a.db, () => settle(with_immediate_tx(() => reserve_tx(d, name, key))))?
   let deadline = direct_deadline(now, d.expires_at, a.qiniu.expires)
   Ok(DirectGrant {
-    token: upload_token_limited(a.qiniu, key, deadline, direct_size_limit(d)),
-    key: key,
-    name: chosen,
+    token = upload_token_limited(a.qiniu, key, deadline, direct_size_limit(d)),
+    key = key,
+    name = chosen,
   })
 }
 

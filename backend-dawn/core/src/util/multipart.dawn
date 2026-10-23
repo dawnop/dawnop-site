@@ -136,10 +136,10 @@ fn parse_part(chunk: Bytes) -> Option[Part] =
             match disp_name(headers) {
               None -> None
               Some(name) -> Some(Part {
-                name: name,
-                filename: disp_filename(headers),
-                content_type: part_ctype(headers),
-                content: content,
+                name = name,
+                filename = disp_filename(headers),
+                content_type = part_ctype(headers),
+                content = content,
               })
             }
           }

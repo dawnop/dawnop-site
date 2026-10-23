@@ -7,7 +7,7 @@ use util/clock.{system_s}
 pub type TtlCell = { db: DbConfig, address: cache.CacheSlot }
 
 pub fn new_cell(db: DbConfig, namespace: String) -> TtlCell =
-  TtlCell { db: without_extension(db), address: cache.slot(namespace) }
+  TtlCell { db = without_extension(db), address = cache.slot(namespace) }
 
 pub fn init_cache(db: DbConfig) -> Unit !io =
   required(with_db(without_extension(db), cache.ensure_schema))

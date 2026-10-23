@@ -35,7 +35,7 @@ use util/jsonx.{obj, jint, jstr, jbool}
 pub fn server_block(cpu_cell: TtlCell) -> Json !Fs !io = {
   let space = match io.disk_space("/") {
     Ok(s) -> s
-    Err(_) -> DiskSpace { total: 0, available: 0 }
+    Err(_) -> DiskSpace { total = 0, available = 0 }
   }
   let dtotal = space.total
   let dfree = space.available
@@ -357,9 +357,9 @@ pub fn lighthouse_start(secret_id: String, secret_key: String, region: String, i
       None
     } else {
       Some(LighthousePending {
-        traffic: traffic_start(secret_id, secret_key, region, instance),
-        instance: instance_start(secret_id, secret_key, region, instance),
-        trend: cpu_trend_start(secret_id, secret_key, region, instance),
+        traffic = traffic_start(secret_id, secret_key, region, instance),
+        instance = instance_start(secret_id, secret_key, region, instance),
+        trend = cpu_trend_start(secret_id, secret_key, region, instance),
       })
     }
   })
@@ -519,9 +519,9 @@ pub fn qiniu_start(a: Auth, respack_cell: TtlCell) -> Option[QiniuPending] !Upst
     None
   } else {
     Some(QiniuPending {
-      kodo: kodo_start(a),
-      domains: cdn_domains_start(a.qiniu),
-      respack: match cache_get(respack_cell, 300) {
+      kodo = kodo_start(a),
+      domains = cdn_domains_start(a.qiniu),
+      respack = match cache_get(respack_cell, 300) {
         Some(_s) -> None
         None -> Some(respack_start(a.qiniu))
       },
@@ -559,7 +559,7 @@ fn kodo_start(a: Auth) -> Result[KodoPending, String] !Upstream !io = {
   let count = kodo_series_start(a.qiniu, "count", 30)?
   let flow = flow_series_start(a.qiniu, "flow", 30)?
   let hits = flow_series_start(a.qiniu, "hits", 30)?
-  Ok(KodoPending { space: space, count: count, flow: flow, hits: hits })
+  Ok(KodoPending { space = space, count = count, flow = flow, hits = hits })
 }
 
 fn kodo_stats(started: Result[KodoPending, String]) -> Result[List[(String, Json)], String] !io = {

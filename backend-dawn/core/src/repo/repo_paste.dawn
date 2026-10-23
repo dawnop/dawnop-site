@@ -40,7 +40,7 @@ pub fn limits_json(m: Map[String, Int]) -> Json = obj(map(LIMITS, spec => {
   (key, jint(unwrap_or(map.get(m, key), fallback)))
 }))
 
-fn row(r: List[Cell]) -> Paste = Paste { id: str_at(r, 0), title: str_at(r, 1), content: str_at(r, 2), created_at: int_at(r, 3), expires_at: opt_int_at(r, 4), size_bytes: int_at(r, 5) }
+fn row(r: List[Cell]) -> Paste = Paste { id = str_at(r, 0), title = str_at(r, 1), content = str_at(r, 2), created_at = int_at(r, 3), expires_at = opt_int_at(r, 4), size_bytes = int_at(r, 5) }
 
 pub fn as_json(p: Paste) -> Json = obj([
   ("id", jstr(p.id)), ("title", jstr(p.title)), ("content", jstr(p.content)),

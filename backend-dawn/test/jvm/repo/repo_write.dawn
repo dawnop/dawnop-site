@@ -61,30 +61,30 @@ fn article_updated(c: DbConn) -> String !io =
 # a patch with nothing set — the shape an empty PUT body arrives as
 fn no_patch() -> ArticlePatch =
   ArticlePatch {
-    title: None,
-    slug: None,
-    summary: None,
-    content: None,
-    published: None,
-    auto_title: None,
-    page_id: None,
-    tags: None,
-    created_at: None,
+    title = None,
+    slug = None,
+    summary = None,
+    content = None,
+    published = None,
+    auto_title = None,
+    page_id = None,
+    tags = None,
+    created_at = None,
   }
 
 # every field present, each carrying the value already stored — page_id is the
 # stored null, sent explicitly, which is Some(None) and not None
 fn same_patch() -> ArticlePatch =
   ArticlePatch {
-    title: Some("Title"),
-    slug: Some("title"),
-    summary: Some("Sum"),
-    content: Some("Body"),
-    published: Some(true),
-    auto_title: Some(false),
-    page_id: Some(None),
-    tags: Some(["seed"]),
-    created_at: None,
+    title = Some("Title"),
+    slug = Some("title"),
+    summary = Some("Sum"),
+    content = Some("Body"),
+    published = Some(true),
+    auto_title = Some(false),
+    page_id = Some(None),
+    tags = Some(["seed"]),
+    created_at = None,
   }
 
 fn put_article(c: DbConn, p: ArticlePatch) -> Unit !io =
@@ -112,7 +112,7 @@ test "PUT article: an empty patch is not an edit" {
 test "PUT article: changing one field advances updated_at" {
   let c = article_test_db()
   let same = same_patch()
-  put_article(c, ArticlePatch { ..same, title: Some("Title 2") })
+  put_article(c, ArticlePatch { ..same, title = Some("Title 2") })
   assert article_updated(c) != STALE
   assert with_jdbc(c, () => scalar_int("select count(*) from articles where title = 'Title 2'", [])) == Ok(1)
 }
@@ -120,14 +120,14 @@ test "PUT article: changing one field advances updated_at" {
 test "PUT article: each editable field on its own counts as an edit" {
   let none = no_patch()
   let edits: List[ArticlePatch] = [
-    ArticlePatch { ..none, title: Some("T2") },
-    ArticlePatch { ..none, slug: Some("other") },
-    ArticlePatch { ..none, summary: Some("S2") },
-    ArticlePatch { ..none, content: Some("B2") },
-    ArticlePatch { ..none, published: Some(false) },
-    ArticlePatch { ..none, auto_title: Some(true) },
-    ArticlePatch { ..none, page_id: Some(Some(7)) },
-    ArticlePatch { ..none, created_at: Some("2021-02-03T04:05:06Z") },
+    ArticlePatch { ..none, title = Some("T2") },
+    ArticlePatch { ..none, slug = Some("other") },
+    ArticlePatch { ..none, summary = Some("S2") },
+    ArticlePatch { ..none, content = Some("B2") },
+    ArticlePatch { ..none, published = Some(false) },
+    ArticlePatch { ..none, auto_title = Some(true) },
+    ArticlePatch { ..none, page_id = Some(Some(7)) },
+    ArticlePatch { ..none, created_at = Some("2021-02-03T04:05:06Z") },
   ]
   for p in edits {
     let c = article_test_db()
@@ -152,7 +152,7 @@ test "article_sig ignores the view counter but sees a real edit" {
 test "PUT article: retagging is an edit" {
   let c = article_test_db()
   let none = no_patch()
-  put_article(c, ArticlePatch { ..none, tags: Some(["jvm"]) })
+  put_article(c, ArticlePatch { ..none, tags = Some(["jvm"]) })
   assert article_updated(c) != STALE
   assert with_jdbc(c, () => scalar_int("select count(*) from article_tags where article_id = 1", [])) == Ok(1)
 }
@@ -161,11 +161,11 @@ test "PUT article: re-sending the same tag set in another order is not an edit" 
   let c = article_test_db()
   let none = no_patch()
   # first save really retags, so it advances
-  put_article(c, ArticlePatch { ..none, tags: Some(["jvm", "dawn"]) })
+  put_article(c, ArticlePatch { ..none, tags = Some(["jvm", "dawn"]) })
   assert article_updated(c) != STALE
   # tags are a set: the same two names, swapped, is the same state
   let _r = must(with_jdbc(c, () => exec("update articles set updated_at = '${STALE}' where id = 1", [])))
-  put_article(c, ArticlePatch { ..none, tags: Some(["dawn", "jvm"]) })
+  put_article(c, ArticlePatch { ..none, tags = Some(["dawn", "jvm"]) })
   assert article_updated(c) == STALE
   # and the links survived the rewrite intact
   assert with_jdbc(c, () => scalar_int("select count(*) from article_tags where article_id = 1", [])) == Ok(2)
@@ -174,18 +174,18 @@ test "PUT article: re-sending the same tag set in another order is not an edit" 
 test "PUT article: dropping a tag and adding one are both edits" {
   let none = no_patch()
   let c = article_test_db()
-  put_article(c, ArticlePatch { ..none, tags: Some(["jvm", "dawn"]) })
+  put_article(c, ArticlePatch { ..none, tags = Some(["jvm", "dawn"]) })
   # drop one
   let _r = must(with_jdbc(c, () => exec("update articles set updated_at = '${STALE}' where id = 1", [])))
-  put_article(c, ArticlePatch { ..none, tags: Some(["jvm"]) })
+  put_article(c, ArticlePatch { ..none, tags = Some(["jvm"]) })
   assert article_updated(c) != STALE
   # add a different one
   let _r2 = must(with_jdbc(c, () => exec("update articles set updated_at = '${STALE}' where id = 1", [])))
-  put_article(c, ArticlePatch { ..none, tags: Some(["jvm", "sqlite"]) })
+  put_article(c, ArticlePatch { ..none, tags = Some(["jvm", "sqlite"]) })
   assert article_updated(c) != STALE
   # clearing them all is an edit too
   let _r3 = must(with_jdbc(c, () => exec("update articles set updated_at = '${STALE}' where id = 1", [])))
-  put_article(c, ArticlePatch { ..none, tags: Some([]) })
+  put_article(c, ArticlePatch { ..none, tags = Some([]) })
   assert article_updated(c) != STALE
   assert with_jdbc(c, () => scalar_int("select count(*) from article_tags where article_id = 1", [])) == Ok(0)
 }

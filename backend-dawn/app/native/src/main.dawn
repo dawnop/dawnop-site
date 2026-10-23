@@ -37,7 +37,7 @@ pub fn main() -> Unit !io = {
       io.eprintln("expired pastes removed: ${required(maintenance.cleanup(db))}")
     } else {
       required(maintenance.check_schema(db))
-      serve_exchange(ExchangeConfig { max_body: DEFAULT_MAX_BODY, errors: fastapi_errors() },
+      serve_exchange(ExchangeConfig { max_body = DEFAULT_MAX_BODY, errors = fastapi_errors() },
         app_routes(app, new_client()), [with_logging_to_stderr,
           next => with_cors(app.origin, next),
           next => with_body_limit(2000000, next)], application_transport())

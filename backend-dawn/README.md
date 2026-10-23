@@ -302,7 +302,7 @@ JVM 只留 6 个模块（入口、JDBC、HTTP 适配及测试构造），native 
   假服务器接受连接后先停住再迟迟作答（有限停顿，所以变异体是转红而不是把门禁挂死），
   `inflate-deadline` 保留 `.timeout(` 只把值改荒谬，`client-per-call` 保留唯一那处 builder 只让它
   每次调用跑一遍，`timeout-tag-second-opinion` 给标签另开一套判据——三个都只有真跑才判得出来。
-  `RequestBody` 不透明包装纯数据 `FileParts { head, file: FileSpan { path, offset, length }, tail }`，
+  `RequestBody` 不透明包装纯数据 `FileParts { head, file = FileSpan { path, offset, length }, tail }`，
   `OutBody.FileBody` 替代 PublishedBody。file_body 只预检文件大小，不创建 publisher；JVM owner 在
   request_for 内把完整文件描述转换成 ofFile/concat，保持原流式发送。当前 JVM 明确拒绝非完整文件范围；
   拒绝返回 ForeignError 并经原 502 分类，S8 可直接使用描述中的 offset/length。`ResponseStream` 不透明包装 web8 BodySource，

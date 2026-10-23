@@ -9,7 +9,7 @@ use site_core/db/runtime.{DbConfig, DbOps}
 use site_core/backup
 
 pub fn config(path: String, ext: String) -> DbConfig =
-  DbConfig { path: path, ext: ext, connect: connect }
+  DbConfig { path = path, ext = ext, connect = connect }
 
 fn connect(path: String, ext: String) -> DbOps !io = {
   let c = open_ext("jdbc:sqlite:${path}")

@@ -32,7 +32,7 @@ pub fn response(argv: List[String]) -> Response !Upstream !io = {
   let base_headers = if mode == "bad-header" { [("X-Probe", "bad\r\nInjected: true")] } else { [("Authorization", "Bearer transport-fixture-secret"), ("Range", "bytes=7-263"), ("X-Probe", "literal \\\" \${unchanged}")] }
   let body = if mode == "upload" || mode == "slice" || mode == "put" {
     FileBody(request_body(bytes.utf8("multipart-head\r\n\u{0}"), FileSpan {
-      path: path, offset: if mode == "slice" { 17 } else { 0 }, length: size,
+      path = path, offset = if mode == "slice" { 17 } else { 0 }, length = size,
     }, bytes.utf8("\r\n\u{0}multipart-tail")))
   } else if mode == "raw" {
     RawBody(io.with_fs_real(() => match io.read_bytes(path) { Ok(b) -> b
@@ -55,10 +55,10 @@ pub fn response(argv: List[String]) -> Response !Upstream !io = {
     }
   }
   let req = OutReq {
-    method: if mode == "put" { "PUT" }
+    method = if mode == "put" { "PUT" }
     else if mode == "upload" || mode == "raw" || mode == "slice" || mode == "post" { "POST" }
     else if mode == "head" { "HEAD" } else { "GET" },
-    url: url, headers: headers, body: body, budget_s: budget,
+    url = url, headers = headers, body = body, budget_s = budget,
   }
   if mode == "bytes" {
     match exchange_bytes(req) { Ok(r) -> binary(r.status, "application/octet-stream", r.bytes)
@@ -95,14 +95,14 @@ pub fn serve(reply: Response, start: io.Instant) -> Unit !io = {
   io.eprintln("TRANSPORT_HEADERS_NS=" ++ to_string(elapsed(start)))
   let measured = match response_body(reply) {
     Stream(source, length) -> streaming(response_status(reply), "application/octet-stream", BodySource {
-      read: (pos, n) => {
+      read = (pos, n) => {
         let piece = source.read(pos, n)
         if pos == 0 && len(piece) > 0 {
           io.eprintln("TRANSPORT_FIRST_NS=" ++ to_string(elapsed(start)))
         }
         piece
       },
-      close: source.close,
+      close = source.close,
     }, length)
     _ -> {
       io.eprintln("TRANSPORT_FIRST_NS=" ++ to_string(elapsed(start)))

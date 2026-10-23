@@ -1037,7 +1037,7 @@ fn options_response() -> Response =
 # "detail", compact JSON, "application/json; charset=utf-8"), byte for byte what
 # the old raw(401, ...) wrote, and appends the challenge header the same way.
 fn unauthorized() -> HttpError =
-  HttpError { ..http_error(401, "需要认证"), headers: [("WWW-Authenticate", "Basic realm=\"dawnop-webdav\"")] }
+  HttpError { ..http_error(401, "需要认证"), headers = [("WWW-Authenticate", "Basic realm=\"dawnop-webdav\"")] }
 
 # Ok = authorized; Err = the 401 to answer. The shared HMAC cache and SQLite
 # lease check current account state without holding a write lock over bcrypt.
@@ -1156,8 +1156,8 @@ fn dav_route(a: Auth, cl: HttpCell, v: String) -> Route = {
 # A bare request carrying only the tail capture dav_rel reads.
 fn rest_req(segs: List[String]) -> Request =
   Request {
-    method: "GET", path: "/dav", raw_path: "/dav",
-    params: map.from([("rest", segs)]),
-    query: map.empty(), headers: map.empty(),
-    body: bytes.utf8(""), body_file: None, route: None,
+    method = "GET", path = "/dav", raw_path = "/dav",
+    params = map.from([("rest", segs)]),
+    query = map.empty(), headers = map.empty(),
+    body = bytes.utf8(""), body_file = None, route = None,
   }

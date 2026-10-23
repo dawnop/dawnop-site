@@ -5,7 +5,7 @@
 
     # defaults mirror app/config.py (Settings field defaults)
 
-它下面第五行是 `instance: get_or(cfg, "LIGHTHOUSE_INSTANCE_ID", "")`，
+它下面第五行是 `instance = get_or(cfg, "LIGHTHOUSE_INSTANCE_ID", "")`，
 而 `backend/app/config.py` 对应那行是 `lighthouse_instance_id: str = "lhins-xxxxxxxx"`
 （真实的实例 ID 已抹去，它是这台机器的身份，不该躺在公开仓库里）。
 两边不一致，就在那句「mirror」正下方，躺了一个多月没人发现——因为「mirror」只是一句话，
@@ -714,7 +714,7 @@ def mutants() -> int:
     mutated = dict(srcs)
     mutated["core/src/application.dawn"] = _mutate(
         srcs["core/src/application.dawn"],
-        '    instance: get_or(cfg, "LIGHTHOUSE_INSTANCE_ID", ""),\n',
+        '    instance = get_or(cfg, "LIGHTHOUSE_INSTANCE_ID", ""),\n',
         "",
     )
     expect(

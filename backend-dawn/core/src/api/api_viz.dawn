@@ -52,8 +52,8 @@ pub fn viz_create(a: Auth) -> Handler =
             Err(http_error(422, "source 不能为空"))
           } else {
             let nv = NewViz {
-              slug: slug, name: str_or(m, "name", ""), source: source,
-              compiled: str_or(m, "compiled", ""), style: str_or(m, "style", ""),
+              slug = slug, name = str_or(m, "name", ""), source = source,
+              compiled = str_or(m, "compiled", ""), style = str_or(m, "style", ""),
             }
             match as_http(with_db(a.db, () => viz_create_read(nv)), 500)? {
               Some(j) -> Ok(json_response(201, j))

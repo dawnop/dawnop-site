@@ -23,11 +23,11 @@ pub type MonitorResult = { third: Json, vault: Json, packs: Option[Json] }
 fn tc_on(cfg: MonitorConfig) -> Bool = cfg.tencent_id != "" && cfg.tencent_key != ""
 
 fn plain(id: String, req: OutReq) -> MonitorRequest =
-  MonitorRequest { item: BatchReq { id: id, req: req }, fail: "" }
+  MonitorRequest { item = BatchReq { id = id, req = req }, fail = "" }
 fn qreq(id: String, p: stats.PreparedQ) -> MonitorRequest =
-  MonitorRequest { item: BatchReq { id: id, req: p.req }, fail: p.fail }
+  MonitorRequest { item = BatchReq { id = id, req = p.req }, fail = p.fail }
 fn get_request(url: String) -> OutReq =
-  OutReq { method: "GET", url: url, headers: [], body: NoBody, budget_s: MANAGEMENT_TIMEOUT_S }
+  OutReq { method = "GET", url = url, headers = [], body = NoBody, budget_s = MANAGEMENT_TIMEOUT_S }
 fn vault_base(url: String) -> String =
   if str.ends_with(url, "/alive") { str.slice(url, 0, len(url) - 6) } else { url }
 
@@ -109,7 +109,7 @@ pub fn assemble(cfg: MonitorConfig, cached: Option[Json], packs: Option[Json], f
     None -> obj([("lighthouse", lighthouse(cfg, replies)),
       ("qiniu", qiniu(cfg, packs, first, replies, second, later)), ("cached_at", jint(system_s()))])
   }
-  MonitorResult { third: third, vault: vault_collect(cfg.vault_alive, cfg.vault_public, replies), packs: fresh_packs }
+  MonitorResult { third = third, vault = vault_collect(cfg.vault_alive, cfg.vault_public, replies), packs = fresh_packs }
 }
 
 fn tc_json(replies: List[BatchReply], id: String, action: String) -> Result[Json, String] = {

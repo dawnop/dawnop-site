@@ -139,7 +139,7 @@ def acceptance(work, dawn, jar):
         (
             "swallow-wal-sql-error",
             'let mode = required((c.query)("PRAGMA journal_mode=WAL", [], [ColStr]))',
-            'let mode = match (c.query)("PRAGMA journal_mode=WAL", [], [ColStr]) { Ok(v) -> v\n Err(_) -> QueryResult { names: ["journal_mode"], rows: [[VStr("wal")]] } }',
+            'let mode = match (c.query)("PRAGMA journal_mode=WAL", [], [ColStr]) { Ok(v) -> v\n Err(_) -> QueryResult { names = ["journal_mode"], rows = [[VStr("wal")]] } }',
             "wal-sql",
             "startup-wal-sql",
         ),

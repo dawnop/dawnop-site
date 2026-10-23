@@ -202,7 +202,7 @@ def controls(work, dawnc, fixture, env):
             [
                 (
                     adapter,
-                    '_ -> return Err(ForeignError { kind: "site.db.wal", message: "SQLite did not enter WAL mode", cause: None })',
+                    '_ -> return Err(ForeignError { kind = "site.db.wal", message = "SQLite did not enter WAL mode", cause = None })',
                     "_ -> ()",
                 )
             ],

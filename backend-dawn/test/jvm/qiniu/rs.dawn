@@ -45,13 +45,13 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
   # up_host is filled in once the stub server has a port; the upload token does
   # not cover the host, so the expected body can be built before that.
   let creds = Qiniu {
-    ak: "test-ak",
-    sk: "test-sk",
-    bucket: "test-bucket",
-    domain: "",
-    expires: 3600,
-    rs_host: "",
-    up_host: "",
+    ak = "test-ak",
+    sk = "test-sk",
+    bucket = "test-bucket",
+    domain = "",
+    expires = 3600,
+    rs_host = "",
+    up_host = "",
   }
   let key = "many-chunks.bin"
   let mime = "application/octet-stream"
@@ -62,7 +62,7 @@ test "the streaming multipart body goes on the wire byte-exactly, across many ch
   # upload therefore proves the public upload_file path kept both contracts.
   let expected_path = test_support.file(expected)
   let (server, port) = test_support.peer("multipart", 200, expected_path, 0)
-  let q = Qiniu { ..creds, up_host: "http://127.0.0.1:${port}" }
+  let q = Qiniu { ..creds, up_host = "http://127.0.0.1:${port}" }
 
   match with_upstream(new_client(), () => upload_file(q, key, src_path, mime, deadline)) {
     Err(m) -> panic("byte-exact upload failed: ${m}")
@@ -88,13 +88,13 @@ test "a missing upload file keeps the upload_file error prefix" {
   let path = test_support.file(bytes.utf8(""))
   test_support.remove(path)
   let q = Qiniu {
-    ak: "ak",
-    sk: "sk",
-    bucket: "bucket",
-    domain: "",
-    expires: 3600,
-    rs_host: "",
-    up_host: "http://127.0.0.1:1",
+    ak = "ak",
+    sk = "sk",
+    bucket = "bucket",
+    domain = "",
+    expires = 3600,
+    rs_host = "",
+    up_host = "http://127.0.0.1:1",
   }
   match with_upstream(new_client(), () => upload_file(q, "key", path, "application/octet-stream", 1234567890)) {
     Ok(_) -> panic("a missing file must not produce a request body")
@@ -109,12 +109,12 @@ test "a refused qiniu call is an Err, not Ok(false)" {
   # The regression this pins: these operations used to end in `Ok(r.status == 200)`,
   # so a 401 came back as Ok(false). Every caller discarded the Bool, so
   # /api/fm/create-file recorded a FileObject for an object qiniu never accepted.
-  match ok_status(HttpResp { status: 200, body: "{}" }, "upload") {
+  match ok_status(HttpResp { status = 200, body = "{}" }, "upload") {
     Ok(_) -> ()
     Err(m) -> panic("a 200 must be Ok, got ${m}")
   }
 
-  match ok_status(HttpResp { status: 401, body: "{\"error\":\"bad token\"}" }, "upload") {
+  match ok_status(HttpResp { status = 401, body = "{\"error\":\"bad token\"}" }, "upload") {
     Ok(_) -> panic("a 401 must not be Ok")
     Err(m) -> {
       # the status and qiniu's own message survive into the error
@@ -124,7 +124,7 @@ test "a refused qiniu call is an Err, not Ok(false)" {
     }
   }
 
-  match ok_status(HttpResp { status: 503, body: "down" }, "upload_file") {
+  match ok_status(HttpResp { status = 503, body = "down" }, "upload_file") {
     Ok(_) -> panic("a refused file upload must not be Ok")
     Err(m) -> {
       assert m == "upload_file: qiniu 503 down"

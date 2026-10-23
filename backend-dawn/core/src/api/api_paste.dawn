@@ -40,10 +40,10 @@ fn list(a: Auth, req: Request, admin: Bool) -> Result[Response, HttpError] !io =
   if len(code_points(q)) > 120 { return Err(http_error(422, "搜索最多 120 字")) }
   let status = if admin { unwrap_or(query(req, "status"), "") } else { "" }
   if status != "" && status != "active" && status != "expired" && status != "permanent" { return Err(http_error(422, "状态无效")) }
-  let after = if admin { query_int_bounded(req, "after", 0, 0, 4102444800, fmt: fastapi_errors())? } else { 0 }
-  let before = if admin { query_int_bounded(req, "before", 0, 0, 4102444800, fmt: fastapi_errors())? } else { 0 }
-  let page = query_int_bounded(req, "page", 1, 1, 1000000, fmt: fastapi_errors())?
-  let size = query_int_bounded(req, "size", 20, 1, 50, fmt: fastapi_errors())?
+  let after = if admin { query_int_bounded(req, "after", 0, 0, 4102444800, fmt = fastapi_errors())? } else { 0 }
+  let before = if admin { query_int_bounded(req, "before", 0, 0, 4102444800, fmt = fastapi_errors())? } else { 0 }
+  let page = query_int_bounded(req, "page", 1, 1, 1000000, fmt = fastapi_errors())?
+  let size = query_int_bounded(req, "size", 20, 1, 50, fmt = fastapi_errors())?
   let now = system_s()
   Ok(json_ok(db(a, () => repo_paste.listing(now, admin, q, status, after, before, page, size))?))
 }
@@ -72,7 +72,7 @@ fn create(a: Auth) -> Handler = req => {
   let id = with_random_real(() => uuid_hex())
   match db(a, () => paste.create(a.secret, source, title, content, days, now, id))? {
     Ok(p) -> Ok(json_response(201, repo_paste.as_json(p)))
-    Err(e) -> Err(if e.retry > 0 { HttpError { ..http_error(e.status, e.message), headers: [("Retry-After", to_string(e.retry))] } } else { http_error(e.status, e.message) })
+    Err(e) -> Err(if e.retry > 0 { HttpError { ..http_error(e.status, e.message), headers = [("Retry-After", to_string(e.retry))] } } else { http_error(e.status, e.message) })
   }
 }
 fn config(a: Auth, admin: Bool) -> Handler = req => {

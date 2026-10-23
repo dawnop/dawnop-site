@@ -53,7 +53,7 @@ pub type FileParts = { head: Bytes, file: FileSpan, tail: Bytes }
 pub opaque type RequestBody = FileParts
 
 pub fn request_body(head: Bytes, file: FileSpan, tail: Bytes) -> RequestBody =
-  FileParts { head: head, file: file, tail: tail }
+  FileParts { head = head, file = file, tail = tail }
 
 pub fn request_parts(body: RequestBody) -> FileParts = body
 
@@ -148,7 +148,7 @@ type PendingBox = { run: fn() -> Result[HttpResp, ForeignError] !io, budget_s: I
 ## budget its failure will be reported against and the thunk that delivers the
 ## reply.
 pub fn pending(budget_s: Int, run: fn() -> Result[HttpResp, ForeignError] !io) -> Pending =
-  PendingBox { run: run, budget_s: budget_s }
+  PendingBox { run = run, budget_s = budget_s }
 
 # ---- what callers see ----
 
@@ -162,7 +162,7 @@ fn settle[T](budget_s: Int, r: Result[T, ForeignError]) -> Result[T, String] =
 
 fn text_exchange(method: String, url: String, headers: List[(String, String)], body: OutBody, budget_s: Int) -> Result[HttpResp, String] !Upstream =
   settle(budget_s, exchange(OutReq {
-    method: method, url: url, headers: headers, body: body, budget_s: budget_s,
+    method = method, url = url, headers = headers, body = body, budget_s = budget_s,
   }))
 
 ## A GET whose body comes back as text. Ok on transport success; a non-2xx status
@@ -193,7 +193,7 @@ pub fn fetch_bytes(url: String, headers: List[(String, String)]) -> Result[Bytes
 
 fn fetch_bytes_within(url: String, headers: List[(String, String)], budget_s: Int) -> Result[BytesResp, String] !Upstream =
   settle(budget_s, exchange_bytes(OutReq {
-    method: "GET", url: url, headers: headers, body: NoBody, budget_s: budget_s,
+    method = "GET", url = url, headers = headers, body = NoBody, budget_s = budget_s,
   }))
 
 ## True for a 2xx. Callers proxying bytes must check: an upstream error body is
@@ -209,7 +209,7 @@ pub fn fetch_stream(url: String, headers: List[(String, String)]) -> Result[Stre
 
 fn fetch_stream_within(url: String, headers: List[(String, String)], budget_s: Int) -> Result[StreamResp, String] !Upstream =
   settle(budget_s, exchange_stream(OutReq {
-    method: "GET", url: url, headers: headers, body: NoBody, budget_s: budget_s,
+    method = "GET", url = url, headers = headers, body = NoBody, budget_s = budget_s,
   }))
 
 ## True for a 2xx (206 included — a Range hit). Same contract as ok_status: a non-2xx
@@ -321,7 +321,7 @@ fn start_exchange(method: String, url: String, headers: List[(String, String)], 
 
 fn start_within(method: String, url: String, headers: List[(String, String)], body: OutBody, budget_s: Int) -> Result[Pending, String] !Upstream =
   settle(budget_s, exchange_start(OutReq {
-    method: method, url: url, headers: headers, body: body, budget_s: budget_s,
+    method = method, url = url, headers = headers, body = body, budget_s = budget_s,
   }))
 
 ## Wait for a started exchange. Identical contract to `fetch`/`post`: a
@@ -354,12 +354,12 @@ fn unwrap_execution(e: ForeignError) -> ForeignError =
     None -> e
     Some(c) ->
       match str.index_of(c, ": ") {
-        None -> ForeignError { kind: c, message: "", cause: None }
+        None -> ForeignError { kind = c, message = "", cause = None }
         Some(i) ->
           ForeignError {
-            kind: str.slice(c, 0, i),
-            message: str.slice(c, i + 2, len(c)),
-            cause: None,
+            kind = str.slice(c, 0, i),
+            message = str.slice(c, i + 2, len(c)),
+            cause = None,
           }
       }
   }
@@ -369,5 +369,5 @@ fn unwrap_execution(e: ForeignError) -> ForeignError =
 pub fn file_body(head: Bytes, src: String, tail: Bytes) -> Result[RequestBody, String] !io =
   match io.with_fs_real(() => io.file_size(src)) {
     Err(e) -> Err(fe_text(e))
-    Ok(size) -> Ok(request_body(head, FileSpan { path: src, offset: 0, length: size }, tail))
+    Ok(size) -> Ok(request_body(head, FileSpan { path = src, offset = 0, length = size }, tail))
   }

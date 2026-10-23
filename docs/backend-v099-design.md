@@ -27,7 +27,24 @@ native 包离线验收；不改变 workflow、分片或门禁预算。
 故意改错 JVM 摘要末位后缓存被拒绝。原 Dawn 源码正式 `dawn check app/jvm`
 返回 `ok`，诊断零条。`dawn lock` 重新解析后仍为同一 JDBC artifact，无锁文件差异。
 迁移前 parser 扫描为 N=17、R=939、P=0，共 956 处、63 文件，与前报告完全一致。
-迁移与完整 CI 的结果待回填。
+源码已迁移全部 956 处；宿主 Python 逐项更新 47 个值分隔符（含两个 tokenizer
+探针字段），另更新 README 一处与配置守卫注释一处。工具直接识别的 Python
+候选只有 19 处，其余是截断的变异锚点、返回语句或 lexer 探针，不能把解析下界
+当作全部嵌入数量。第二遍扫描源码与嵌入候选均为零。第二遍 fmt 前后全部
+135 个跟踪 Dawn 文件的 SHA256 不变，原九族 161 个变异锚点全部应用成功。
+
+本机 JVM 461 个测试通过，初始化五项负控全部先编译再由断言拒绝；core 闭包
+四包 76 源文件零 Java，四项真实负控均拒绝。JVM 契约 355 matched、七个原 skip，
+golden 目录 tree 仍为 `51c009c884c8d0e9151b58f21d57a789cd92d4d4`。
+本机 curl 双臂、全部九项真实负控、256/512MiB 传输、内存与磁盘限额验收通过。
+完整 native、变异与包验收由原有 26 job GitHub CI 执行，结果随 PR 记录。
+
+## Show 影响
+
+唯一显式派生 Show 的站点类型是 SQL `Cell`，它的构造器为位置参数，输出不含
+record 字段分隔符。它用于类型不匹配 panic 与备份完整性失败日志；HTTP 不依赖
+record 的派生 Show。`ForeignError` 在边界经 `fe_text` 显式拼接 kind/message，
+HTTP JSON 和 WebDAV XML 使用既有序列化。无需新增兼容层或改黄金输出。
 
 ## 不做的（理由）
 

@@ -23,8 +23,8 @@ fn test_db() -> DbConn !io = {
 
 fn a_page(title: String, hint: String) -> NewPage =
   NewPage {
-    title: title, slug_hint: hint, kind: "content", description: "", content: "",
-    auto_title: false, nav_visible: true, nav_order: 0, created_at: None,
+    title = title, slug_hint = hint, kind = "content", description = "", content = "",
+    auto_title = false, nav_visible = true, nav_order = 0, created_at = None,
   }
 
 use db/sql.{scalar_int}

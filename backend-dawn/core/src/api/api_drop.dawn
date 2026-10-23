@@ -281,12 +281,12 @@ pub fn create_ep(a: Auth) -> Handler =
       let m = body_map(req)?
       let dir = req_str(m, "dir")?
       let s = DropSpec {
-        dir: fm_split(dir),
-        label: opt_str_or(m, "label", "")?,
-        expires_in_s: opt_int_or(m, "expires_in_s", DEFAULT_EXPIRES_S)?,
-        max_files: opt_int_or(m, "max_files", DEFAULT_MAX_FILES)?,
-        max_file_bytes: opt_int_or(m, "max_file_bytes", DEFAULT_MAX_FILE_BYTES)?,
-        max_total_bytes: opt_int_or(m, "max_total_bytes", DEFAULT_MAX_TOTAL_BYTES)?,
+        dir = fm_split(dir),
+        label = opt_str_or(m, "label", "")?,
+        expires_in_s = opt_int_or(m, "expires_in_s", DEFAULT_EXPIRES_S)?,
+        max_files = opt_int_or(m, "max_files", DEFAULT_MAX_FILES)?,
+        max_file_bytes = opt_int_or(m, "max_file_bytes", DEFAULT_MAX_FILE_BYTES)?,
+        max_total_bytes = opt_int_or(m, "max_total_bytes", DEFAULT_MAX_TOTAL_BYTES)?,
       }
       let made = lift(with_random_real(() => create_drop(a, s)))?
       let (d, _token) = made

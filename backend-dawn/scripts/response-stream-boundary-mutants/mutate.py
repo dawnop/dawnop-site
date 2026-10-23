@@ -140,11 +140,11 @@ def main() -> int:
             http,
             "pub fn response_stream(source: BodySource) -> ResponseStream = source\n",
             "pub fn response_stream(source: BodySource) -> ResponseStream = BodySource {\n"
-            "  read: (pos, n) => match catch_panic(() => catch_fault(() => source.read(pos, n))) {\n"
+            "  read = (pos, n) => match catch_panic(() => catch_fault(() => source.read(pos, n))) {\n"
             "    Ok(Ok(piece)) -> piece\n"
             '    _ -> bytes.utf8("")\n'
             "  },\n"
-            "  close: source.close,\n"
+            "  close = source.close,\n"
             "}\n",
         )
     else:

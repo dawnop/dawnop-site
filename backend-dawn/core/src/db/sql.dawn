@@ -56,7 +56,7 @@ fn names_of(names: List[String]) -> Map[String, Int] =
 pub fn query_rows(q: String, ps: List[SqlV], cols: List[Col]) -> Result[List[Row], String] !Db = {
   let result = db_query(q, ps, cols)?
   let names = names_of(result.names)
-  Ok(map(result.rows, cells => Row { cells: cells, names: names }))
+  Ok(map(result.rows, cells => Row { cells = cells, names = names }))
 }
 
 ## Row-count convenience for existing DML callers. Use execute for DDL.

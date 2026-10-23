@@ -103,8 +103,8 @@ fn gc_log_add(r: String, s: String) -> Unit !io = test_support.log_add(r, s)
 
 fn gc_test_qiniu() -> Qiniu =
   Qiniu {
-    ak: "ak", sk: "sk", bucket: "b", domain: "",
-    expires: 3600, rs_host: "http://127.0.0.1:1", up_host: "http://127.0.0.1:1",
+    ak = "ak", sk = "sk", bucket = "b", domain = "",
+    expires = 3600, rs_host = "http://127.0.0.1:1", up_host = "http://127.0.0.1:1",
   }
 
 # Whether a second connection can start its own write transaction right now.
@@ -140,7 +140,7 @@ test "gc's write transaction spans one outbound call, on the management budget" 
         # what a hung rs endpoint looks like from inside the transaction
         gc_log_add(seen, "${req.method} budget=${to_string(req.budget_s)}")
         io.with_clock_real(() => io.sleep_ns(stall_ms * 1000000))
-        Ok(HttpResp { status: 200, body: "{}" })
+        Ok(HttpResp { status = 200, body = "{}" })
       }
       exchange_bytes(req) => Err(no_answer("exchange_bytes"))
       exchange_stream(req) => Err(no_answer("exchange_stream"))
@@ -179,9 +179,9 @@ test "a delete that times out leaves the writer free, it does not wedge the site
   let outcome = {
     with handle Upstream {
       exchange(req) => Err(ForeignError {
-        kind: "java.net.http.HttpTimeoutException",
-        message: "request timed out",
-        cause: None,
+        kind = "java.net.http.HttpTimeoutException",
+        message = "request timed out",
+        cause = None,
       })
       exchange_bytes(req) => Err(no_answer("exchange_bytes"))
       exchange_stream(req) => Err(no_answer("exchange_stream"))

@@ -44,7 +44,7 @@ fn account(secret: String, username: String) -> Result[Option[Account], String] 
   let rows = query("select u.id,u.password_hash,u.created_at from users u left join auth_account_state s on s.user_id=u.id where u.username=? and coalesce(s.enabled,1)=1", [PStr(username)], [ColInt, ColStr, ColStr])?
   Ok(match get(rows, 0) {
     None -> None
-    Some(r) -> Some(Account { id: int_at(r, 0), hash: str_at(r, 1), version: version(secret, int_at(r, 0), username, str_at(r, 1), str_at(r, 2)) })
+    Some(r) -> Some(Account { id = int_at(r, 0), hash = str_at(r, 1), version = version(secret, int_at(r, 0), username, str_at(r, 1), str_at(r, 2)) })
   })
 }
 

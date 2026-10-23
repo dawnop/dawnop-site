@@ -33,7 +33,7 @@ fn result[T](r: Result[T, ForeignError]) -> Result[T, String] = match r {
 
 fn native_query(c: sqlite.Db, q: String, ps: List[SqlV], cols: List[Col]) -> Result[QueryResult, String] !io = {
   let rows = result(sqlite.query(c, q, map(ps, value), map(cols, column)))?
-  Ok(QueryResult { names: rows.names, rows: map(rows.rows, row => map(row, cell)) })
+  Ok(QueryResult { names = rows.names, rows = map(rows.rows, row => map(row, cell)) })
 }
 
 fn with_sqlite[T, !e](c: sqlite.Db, body: fn() -> T !Db !e) -> T !io = {
@@ -53,7 +53,7 @@ fn initialize(c: sqlite.Db, ext: String) -> Result[Unit, ForeignError] !io = {
   let mode = sqlite.query(c, "PRAGMA journal_mode=WAL", [], [sqlite.ColText])?
   match mode.rows {
     [[sqlite.Text("wal")]] -> ()
-    _ -> return Err(ForeignError { kind: "site.db.wal", message: "SQLite did not enter WAL mode", cause: None })
+    _ -> return Err(ForeignError { kind = "site.db.wal", message = "SQLite did not enter WAL mode", cause = None })
   }
   load_simple(c, ext)
 }
@@ -72,7 +72,7 @@ pub fn backup_database(path: String, ext: String, dest: String) -> Result[Unit, 
     load_simple(c, ext)?
     match with_sqlite(c, () => backup.snapshot(dest)) {
       Ok(_) -> Ok(())
-      Err(m) -> Err(ForeignError { kind: "site.backup.copy", message: m, cause: None })
+      Err(m) -> Err(ForeignError { kind = "site.backup.copy", message = m, cause = None })
     }
   }))
 }
@@ -80,7 +80,7 @@ pub fn backup_database(path: String, ext: String, dest: String) -> Result[Unit, 
 fn check_backup_engine(c: sqlite.Db) -> Result[Unit, ForeignError] !io =
   match with_sqlite(c, () => backup.require_engine()) {
     Ok(_) -> Ok(())
-    Err(m) -> Err(ForeignError { kind: "site.backup.engine", message: m, cause: None })
+    Err(m) -> Err(ForeignError { kind = "site.backup.engine", message = m, cause = None })
   }
 
 ## Initialize each connection before running body; all errors reach the caller.
@@ -90,7 +90,7 @@ pub fn with_db[T, !e](path: String, ext: String, body: fn() -> Result[T, String]
     initialize(c, ext)?
     match with_sqlite(c, body) {
       Ok(v) -> Ok(v)
-      Err(m) -> Err(ForeignError { kind: "site.db.body", message: m, cause: None })
+      Err(m) -> Err(ForeignError { kind = "site.db.body", message = m, cause = None })
     }
   })
   match run {
@@ -101,13 +101,13 @@ pub fn with_db[T, !e](path: String, ext: String, body: fn() -> Result[T, String]
 
 # A borrowed operations record never leaves the enclosing sqlite.with_db callback.
 fn connection(c: sqlite.Db) -> DbOps = DbOps {
-  query: (q, ps, cols) => native_query(c, q, ps, cols),
-  execute: (q, ps) => result(sqlite.execute(c, q, map(ps, value))),
-  changes: (q, ps) => result(sqlite.execute_changes(c, q, map(ps, value))),
-  last_id: () => result(sqlite.last_id(c)),
-  busy_timeout: ms => result(sqlite.busy_timeout(c, ms)),
-  in_transaction: () => result(sqlite.in_transaction(c)),
-  close: () => (),
+  query = (q, ps, cols) => native_query(c, q, ps, cols),
+  execute = (q, ps) => result(sqlite.execute(c, q, map(ps, value))),
+  changes = (q, ps) => result(sqlite.execute_changes(c, q, map(ps, value))),
+  last_id = () => result(sqlite.last_id(c)),
+  busy_timeout = ms => result(sqlite.busy_timeout(c, ms)),
+  in_transaction = () => result(sqlite.in_transaction(c)),
+  close = () => (),
 }
 
 ## Serve mode only checks persistent WAL mode. Migration mode may establish it.
@@ -115,10 +115,10 @@ pub fn with_database[T](path: String, ext: String, migrate: Bool, body: fn(DbCon
   result(sqlite.with_db(path, c => {
     sqlite.busy_timeout(c, 5000)?
     let mode = sqlite.query(c, if migrate { "PRAGMA journal_mode=WAL" } else { "PRAGMA journal_mode" }, [], [sqlite.ColText])?
-    if mode.rows != [[sqlite.Text("wal")]] { return Err(ForeignError { kind: "site.db.wal", message: "database must be migrated to WAL before serving", cause: None }) }
+    if mode.rows != [[sqlite.Text("wal")]] { return Err(ForeignError { kind = "site.db.wal", message = "database must be migrated to WAL before serving", cause = None }) }
     load_simple(c, ext)?
     let ops = connection(c)
-    Ok(body(DbConfig { path: path, ext: ext, connect: (requested, requested_ext) => {
+    Ok(body(DbConfig { path = path, ext = ext, connect = (requested, requested_ext) => {
       if requested != path || (requested_ext != "" && requested_ext != ext) { panic("database scope mismatch") }
       ops
     } }))

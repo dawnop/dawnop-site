@@ -30,12 +30,12 @@ fn col_types() -> List[Col] = [ColStr, ColInt, ColStr, ColStr, ColInt, ColStr]
 
 fn row_of(r: List[Cell]) -> FileRow =
   FileRow {
-    path: str_at(r, 0),
-    is_dir: bool_at(r, 1),
-    key: opt_str_at(r, 2),
-    content_type: opt_or_blank(r, 3),
-    size: int_at(r, 4),
-    updated_at: str_at(r, 5),
+    path = str_at(r, 0),
+    is_dir = bool_at(r, 1),
+    key = opt_str_at(r, 2),
+    content_type = opt_or_blank(r, 3),
+    size = int_at(r, 4),
+    updated_at = str_at(r, 5),
   }
 
 fn opt_or_blank(r: List[Cell], i: Int) -> String =
@@ -346,8 +346,8 @@ fn replace_file_tx(rel: String, key: String, content_type: String, size: Int, po
   let existing = get_row(rel)?
   let _i = insert_file_row(rel, key, content_type, size)?
   Ok(ReplaceOutcome {
-    target_existed: existing != None,
-    superseded_key: superseded_file_key(existing, key),
+    target_existed = existing != None,
+    superseded_key = superseded_file_key(existing, key),
   })
 }
 
@@ -586,9 +586,9 @@ pub fn commit_webdav_move(old_rel: String, new_rel: String, overwrite: Bool) -> 
     let replaced: List[FileRow] = if destination_existed { delete_subtree_tx(new_rel)? } else { [] }
     let moved = reparent_loop(paths, old_rel, new_rel, 0)?
     Ok(SubtreeWriteOutcome {
-      destination_existed: destination_existed,
-      replaced_rows: replaced,
-      written: moved,
+      destination_existed = destination_existed,
+      replaced_rows = replaced,
+      written = moved,
     })
   })
 
@@ -630,7 +630,7 @@ pub fn validate_subtree_destination(old_rel: String, new_rel: String) -> Result[
 ## the request-wide immediate transaction before applying each plan.
 pub fn prepare_fm_move(old_rel: String, new_rel: String) -> Result[MovePlan, String] !Db !io = {
   let _v = validate_subtree_destination(old_rel, new_rel)?
-  Ok(MovePlan { source_root: old_rel, destination_root: new_rel })
+  Ok(MovePlan { source_root = old_rel, destination_root = new_rel })
 }
 
 ## Reject every row under an absent-destination operation. FM uses this strict
@@ -719,9 +719,9 @@ fn prepare_copy_tree(old_rel: String, new_rel: String) -> Result[CopyTree, Strin
   let _s = validate_present_subtree(rows, old_rel)?
   let _o = validate_copy_source_rows(rows, 0)?
   Ok(CopyTree {
-    source_root: old_rel,
-    destination_root: new_rel,
-    rows: map(rows, o => CopiedRow { source: o, copied_key: None }),
+    source_root = old_rel,
+    destination_root = new_rel,
+    rows = map(rows, o => CopiedRow { source = o, copied_key = None }),
   })
 }
 
@@ -833,9 +833,9 @@ pub fn commit_webdav_copy(tree: CopyTree, overwrite: Bool) -> Result[SubtreeWrit
     let _t = validate_copy_targets([tree])?
     let written = insert_copy_trees([tree], 0)?
     Ok(SubtreeWriteOutcome {
-      destination_existed: destination_existed,
-      replaced_rows: replaced,
-      written: written,
+      destination_existed = destination_existed,
+      replaced_rows = replaced,
+      written = written,
     })
   })
 

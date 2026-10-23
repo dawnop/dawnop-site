@@ -1,13 +1,13 @@
 test "signatures match the qiniu SDK byte-for-byte" {
   # cross-checked against qiniu.Auth("AKtest","SKtest") with fixed deadline
   let q = Qiniu {
-    ak: "AKtest",
-    sk: "SKtest",
-    bucket: "mybucket",
-    domain: "",
-    expires: 3600,
-    rs_host: "",
-    up_host: "",
+    ak = "AKtest",
+    sk = "SKtest",
+    bucket = "mybucket",
+    domain = "",
+    expires = 3600,
+    rs_host = "",
+    up_host = "",
   }
   assert upload_token(q, "path/to/key.jpg", 1783976183) ==
     "AKtest:LdlhAwhBCGjF3a-wmS6FRzyLyik=:eyJzY29wZSI6Im15YnVja2V0OnBhdGgvdG8va2V5LmpwZyIsImRlYWRsaW5lIjoxNzgzOTc2MTgzfQ=="
@@ -34,13 +34,13 @@ test "a limited upload token carries insertOnly and fsizeLimit after scope and d
   # expected bytes computed with Python hmac/base64 over the literal policy
   # {"scope":"mybucket:path/to/key.jpg","deadline":1783976183,"insertOnly":1,"fsizeLimit":1048576}
   let q = Qiniu {
-    ak: "AKtest",
-    sk: "SKtest",
-    bucket: "mybucket",
-    domain: "",
-    expires: 3600,
-    rs_host: "",
-    up_host: "",
+    ak = "AKtest",
+    sk = "SKtest",
+    bucket = "mybucket",
+    domain = "",
+    expires = 3600,
+    rs_host = "",
+    up_host = "",
   }
   assert upload_token_limited(q, "path/to/key.jpg", 1783976183, 1048576) ==
     "AKtest:6zGYQhyncrYVUlKVvSiVDuIgP0Q=:eyJzY29wZSI6Im15YnVja2V0OnBhdGgvdG8va2V5LmpwZyIsImRlYWRsaW5lIjoxNzgzOTc2MTgzLCJpbnNlcnRPbmx5IjoxLCJmc2l6ZUxpbWl0IjoxMDQ4NTc2fQ=="

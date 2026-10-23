@@ -42,7 +42,7 @@ def build(work, arm, backend=BACKEND):
             "[deps]\n", f'[deps]\nsite_sqlite = "{backend / "app/native"}"\n'
         )
         owner = "use site_sqlite/util/http_curl.{with_upstream, CurlConfig}"
-        body = "with_upstream(CurlConfig { temp_parent: argv[3] }, () => main_scenario(argv))"
+        body = "with_upstream(CurlConfig { temp_parent = argv[3] }, () => main_scenario(argv))"
         compiler = Path(run([ROOT / "scripts/fetch-dawn-native.sh"])[0].stdout.strip())
         artifact = work / "consumer"
     else:
@@ -183,8 +183,8 @@ def controls(work, base, env):
             "drop-error",
             "native",
             native,
-            "elapsed_ms: duration, error: error",
-            "elapsed_ms: duration, error: if code == 28 { error } else { None }",
+            "elapsed_ms = duration, error = error",
+            "elapsed_ms = duration, error = if code == 28 { error } else { None }",
             "mixed",
             "item-error",
         ),
@@ -192,8 +192,8 @@ def controls(work, base, env):
             "drop-timeout",
             "native",
             native,
-            "elapsed_ms: duration, error: error",
-            "elapsed_ms: duration, error: if code == 28 { None } else { error }",
+            "elapsed_ms = duration, error = error",
+            "elapsed_ms = duration, error = if code == 28 { None } else { error }",
             "mixed",
             "item-timeout",
         ),
@@ -201,8 +201,8 @@ def controls(work, base, env):
             "serial",
             "jvm",
             jvm,
-            "Ok(BatchStarted { response: future, completion: completed })",
-            "let _ = completed.get()!\n    Ok(BatchStarted { response: future, completion: completed })",
+            "Ok(BatchStarted { response = future, completion = completed })",
+            "let _ = completed.get()!\n    Ok(BatchStarted { response = future, completion = completed })",
             "parallel",
             "parallel-wall",
         ),
@@ -210,8 +210,8 @@ def controls(work, base, env):
             "drop-error",
             "jvm",
             jvm,
-            "elapsed_ms: elapsed, error: Some(real)",
-            "elapsed_ms: elapsed, error: None",
+            "elapsed_ms = elapsed, error = Some(real)",
+            "elapsed_ms = elapsed, error = None",
             "mixed",
             "item-error",
         ),
@@ -219,8 +219,8 @@ def controls(work, base, env):
             "drop-timeout",
             "jvm",
             jvm,
-            "elapsed_ms: elapsed, error: Some(real)",
-            'elapsed_ms: elapsed, error: if str.ends_with(real.kind, "TimeoutException") { None } else { Some(real) }',
+            "elapsed_ms = elapsed, error = Some(real)",
+            'elapsed_ms = elapsed, error = if str.ends_with(real.kind, "TimeoutException") { None } else { Some(real) }',
             "mixed",
             "item-timeout",
         ),

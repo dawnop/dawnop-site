@@ -599,7 +599,7 @@ def report_tokenizer_self_test(root: Path) -> bool:
     )
     check_probe(
         "nested braces inside interpolation",
-        'const VALUE = "${pick({ outer: { label: "streaming }" } }, '
+        'const VALUE = "${pick({ outer = { label = "streaming }" } }, '
         'alias.streaming(raw))}"\n',
         STREAMING_SYMBOL_IDENTIFIERS,
         [("streaming", 1)],

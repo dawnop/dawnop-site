@@ -25,4 +25,4 @@ pub fn with_db[T, !e](db: DbConfig, body: fn() -> T !Db !e) -> T !io = {
   body()
 }
 
-pub fn without_extension(db: DbConfig) -> DbConfig = DbConfig { ..db, ext: "" }
+pub fn without_extension(db: DbConfig) -> DbConfig = DbConfig { ..db, ext = "" }

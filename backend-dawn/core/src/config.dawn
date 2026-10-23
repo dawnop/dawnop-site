@@ -17,8 +17,8 @@ pub type Config = { values: Map[String, String] }
 ## with a lifetime longer than the read).
 pub fn load(path: String) -> Config !Fs =
   match io.read_file(path) {
-    Ok(text) -> Config { values: parse_env(text) }
-    Err(_) -> Config { values: map.empty() }
+    Ok(text) -> Config { values = parse_env(text) }
+    Err(_) -> Config { values = map.empty() }
   }
 
 fn parse_env(text: String) -> Map[String, String] =
