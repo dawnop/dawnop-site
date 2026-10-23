@@ -346,6 +346,7 @@ fn range_pair(a: String, b: String, total: Int) -> Option[(Int, Int)] =
   }
 
 fn with_meta(r: Response, size: Int, etag: String, lastmod: String) -> Response =
+  # HEAD has no body to measure; this is the stored GET representation's size.
   add_headers(r, [("Content-Length", to_string(size)), ("Accept-Ranges", "bytes"), ("Last-Modified", lastmod), ("ETag", etag)])
 
 fn add_headers(r: Response, hs: List[(String, String)]) -> Response =
@@ -1027,7 +1028,8 @@ const DAV_VERBS: List[String] =
 const ALLOW: String = "OPTIONS, PROPFIND, HEAD, GET, PUT, DELETE, MKCOL, MOVE, COPY, LOCK, UNLOCK"
 
 fn options_response() -> Response =
-  add_headers(text(200, ""), [("DAV", "1, 2"), ("Allow", ALLOW), ("MS-Author-Via", "DAV"), ("Content-Length", "0")])
+  # The exchange owns framing, including the zero length of this empty body.
+  add_headers(text(200, ""), [("DAV", "1, 2"), ("Allow", ALLOW), ("MS-Author-Via", "DAV")])
 
 # ---- auth ----
 
