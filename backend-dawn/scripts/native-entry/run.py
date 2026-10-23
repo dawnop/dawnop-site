@@ -61,6 +61,7 @@ def request(method, path, headers=(), body=b""):
 def expected(status, body, *, vary=True, headers=(), head=False, content_type=None):
     reasons = {
         200: "OK",
+        204: "No Content",
         400: "Bad Request",
         401: "Unauthorized",
         404: "Not Found",
@@ -69,7 +70,8 @@ def expected(status, body, *, vary=True, headers=(), head=False, content_type=No
     }
     ct = content_type or "application/json; charset=utf-8"
     extra = (
-        [("Content-Type", ct), ("Content-Length", str(len(body)))]
+        [("Content-Type", ct)]
+        + ([] if status == 204 else [("Content-Length", str(len(body)))])
         + ([("Vary", "Origin")] if vary else [])
         + list(headers)
     )
@@ -108,7 +110,19 @@ def pipe(binary, env, data=b"", argv=()):
         [str(binary), *argv], input=data, capture_output=True, env=env, timeout=20
     )
     elapsed = (time.monotonic_ns() - start) / 1_000_000
+    if result.stdout.startswith(b"HTTP/"):
+        checked_content_length(result.stdout)
     return result, elapsed
+
+
+def checked_content_length(wire):
+    head = wire.partition(b"\r\n\r\n")[0]
+    lengths = [
+        line
+        for line in head.split(b"\r\n")[1:]
+        if line.split(b":", 1)[0].lower() == b"content-length"
+    ]
+    check(len(lengths) <= 1, "single-response-content-length", repr(lengths))
 
 
 def checked_date(wire):
@@ -116,6 +130,7 @@ def checked_date(wire):
     # before comparing every remaining byte; contract normalizers are unchanged.
     head, sep, body = wire.partition(b"\r\n\r\n")
     lines = head.split(b"\r\n")
+    checked_content_length(wire)
     dates = [line for line in lines if line.lower().startswith(b"date:")]
     check(len(dates) == 1, "one-valid-date", repr(dates))
     date = email.utils.parsedate_to_datetime(
@@ -250,6 +265,14 @@ def copy_mutant(work, name, relative, old, new):
 def controls(work, dawnc, env, db):
     variants = [
         (
+            "application-content-length",
+            "core/src/api/webdav.dawn",
+            '[("DAV", "1, 2"), ("Allow", ALLOW), ("MS-Author-Via", "DAV")]',
+            '[("DAV", "1, 2"), ("Allow", ALLOW), ("MS-Author-Via", "DAV"), ("Content-Length", "0")]',
+            lambda binary: raw_cases(binary, env),
+            "single-response-content-length",
+        ),
+        (
             "startup-println",
             "app/native/src/main.dawn",
             "      required(maintenance.check_schema(db))",
@@ -310,9 +333,43 @@ def controls(work, dawnc, env, db):
 
 
 def raw_cases(binary, env):
+    dav_headers = [
+        ("DAV", "1, 2"),
+        (
+            "Allow",
+            "OPTIONS, PROPFIND, HEAD, GET, PUT, DELETE, MKCOL, MOVE, COPY, LOCK, UNLOCK",
+        ),
+        ("MS-Author-Via", "DAV"),
+    ]
     cases = [
+        *[
+            (
+                "options-" + label,
+                request("OPTIONS", path),
+                expected(
+                    200,
+                    b"",
+                    vary=False,
+                    headers=dav_headers,
+                    content_type="text/plain; charset=utf-8",
+                ),
+            )
+            for label, path in [("root", "/dav/"), ("missing", "/dav/__missing__")]
+        ],
         ("health", request("GET", "/api/health"), expected(200, HEALTH)),
         ("head", request("HEAD", "/api/health"), expected(200, HEALTH, head=True)),
+        (
+            "empty-204",
+            request(
+                "UNLOCK", "/dav/docs/notes.txt", [("Authorization", "Basic " + AUTH)]
+            ),
+            expected(204, b"", vary=False, content_type="text/plain; charset=utf-8"),
+        ),
+        (
+            "head-error",
+            request("HEAD", "/missing"),
+            expected(404, error_body("Not Found"), head=True),
+        ),
         (
             "not-found",
             request("GET", "/missing"),
@@ -385,6 +442,48 @@ def raw_cases(binary, env):
     passed(
         "guard refusal before body, queued and late body, bounded idle teardown, no RST"
     )
+
+
+def file_cases(binary, env, db):
+    # HEAD's length describes the stored representation, not its empty body.
+    # Reuse one synthetic fixture row to cover a real zero-byte GET as well.
+    with sqlite3.connect(db) as connection:
+        size = connection.execute(
+            "select size from files where path='docs/notes.txt'"
+        ).fetchone()[0]
+    try:
+        for method, length in [("HEAD", size), ("GET", 0), ("HEAD", 0)]:
+            if length == 0:
+                with sqlite3.connect(db) as connection:
+                    connection.execute(
+                        "update files set size=0 where path='docs/notes.txt'"
+                    )
+            result, _ = pipe(
+                binary,
+                env,
+                request(
+                    method, "/dav/docs/notes.txt", [("Authorization", "Basic " + AUTH)]
+                ),
+            )
+            check(result.returncode == 0, "file-framing-exit", result.stderr)
+            wire = checked_date(result.stdout)
+            head, separator, body = wire.partition(b"\r\n\r\n")
+            check(
+                head.startswith(b"HTTP/1.1 200 OK\r\n") and separator and not body,
+                "file-framing-empty-body",
+                repr(wire),
+            )
+            check(
+                f"Content-Length: {length}".encode() in head.split(b"\r\n"),
+                "file-representation-length",
+                repr(head),
+            )
+            passed(f"raw file {method} length={length}: one length, empty body")
+    finally:
+        with sqlite3.connect(db) as connection:
+            connection.execute(
+                "update files set size=? where path='docs/notes.txt'", (size,)
+            )
 
 
 def descendants(pid):
@@ -488,6 +587,7 @@ def download_digest(path):
             check(bool(byte) and len(head) < 16384, "download-header")
             head += byte
         check(b"Transfer-Encoding: chunked\r\n" in head, "download-framing", head)
+        checked_content_length(head)
         while True:
             line = stream.readline(64)
             check(line.endswith(b"\r\n"), "download-chunk-line")
@@ -566,6 +666,7 @@ def memory(binary, env, work, peer, db):
             "upload-status",
             upload.read_bytes(),
         )
+        checked_content_length(upload.read_bytes())
         check(
             peer.last_upload[1:] == (size, digest.hexdigest()),
             "upload-full-binary-digest",
@@ -772,6 +873,7 @@ def main():
         )
         controls(work, dawnc, env, db)
         raw_cases(binary, env)
+        file_cases(binary, env, db)
         readonly(binary, env, db)
         disconnect(binary, env, work)
         numbers = cold(binary, env, db)

@@ -399,7 +399,7 @@ test "OPTIONS advertises DAV class 1,2 and an Allow matching the routed verbs" {
   # names on emission. Field names are case-insensitive (RFC 9110 §5.1), so that
   # is conforming, but a case-sensitive `grep '^DAV:'` will miss it.
   assert response_headers(options_response()) ==
-    [("DAV", "1, 2"), ("Allow", ALLOW), ("MS-Author-Via", "DAV"), ("Content-Length", "0")]
+    [("DAV", "1, 2"), ("Allow", ALLOW), ("MS-Author-Via", "DAV")]
   # Allow cannot drift from the verbs dav_routes actually registers.
   assert ALLOW == fold(DAV_VERBS, "", (acc, v) => if acc == "" { v } else { acc ++ ", " ++ v })
 }

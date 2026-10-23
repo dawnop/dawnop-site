@@ -93,7 +93,8 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
   原内存阈值不变，退回 data-binary 的真实256/512 MiB负控必须红。
 
 - native 入口：仓库根运行 `backend-dawn/scripts/native-entry/run.sh`，实际 check/build/test app/native，
-  检查完整依赖图零 Java，并先证明启动 println、吞 guard 拒绝、立即关闭 socket 和请求期重跑迁移四个负控会红。
+  检查完整依赖图零 Java，并先证明应用手写重复响应长度、启动 println、吞 guard 拒绝、立即关闭 socket 和请求期重跑迁移五个负控会红。
+  原始响应逐行断言 Content-Length 至多一行，覆盖 DAV OPTIONS、HEAD 文件元数据、零字节 200、204 和错误；native 单测另覆盖无生产路由的 304。
   包含手写 HTTP 字节、TCP 早拒绝/晚到 body/断连、256/512 MiB 全摘要与全进程树 RSS、单交换冷启动。
   CLI 为无参数 serve（stdin/stdout）、`--migrate`、`--cleanup-pastes` 与 `--backup <dest>`；日志均走 stderr。
   手工构建：`DAWNC=$(scripts/fetch-dawn-native.sh)` 后 `$DAWNC build backend-dawn/app/native -o /tmp/dawnop-native`。

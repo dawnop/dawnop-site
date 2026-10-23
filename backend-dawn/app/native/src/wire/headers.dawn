@@ -5,7 +5,9 @@ use std/bytes
 use std/str
 use std/io
 use site_core/util/time.{http_date}
-use web/exchange.{Transport, stdio_transport}
+use web/exchange.{Transport, stdio_transport, serve_exchange, exchange_config}
+use web/router.{route_get}
+use web/types.{text}
 
 fn first_write() -> Int !io = extern c "site_wire_first_write" else 0
 
@@ -32,5 +34,30 @@ pub fn application_transport() -> Transport = {
   Transport {
     read = wire.read,
     write = raw => wire.write(if first_write() == 1 { head(raw) } else { raw }),
+  }
+}
+
+test "exchange owns one length for empty, HEAD, withheld and error responses" {
+  # Exercise the real writer before the application header reorder. No site
+  # route currently returns 304, so cover that status with an isolated route.
+  for status in [200, 204, 304, 400, 500] {
+    for method in ["GET", "HEAD"] {
+      let data = bytes.utf8("${method} /empty HTTP/1.1\r\nHost: local\r\n\r\n")
+      let count = if status == 204 || status == 304 || method == "HEAD" { 0 } else { 1 }
+      let transport = Transport {
+        read = (pos, n) => bytes.slice(data, pos, pos + n),
+        write = raw => {
+          let wire = bytes.decode_utf8_lossy(raw)
+          assert str.starts_with(wire, "HTTP/1.1 ${status} ")
+          let fields = list.drop(str.split(wire, "\r\n"), 1)
+          let lengths = filter(fields, line => name(line) == "content-length")
+          assert len(lengths) <= 1
+          assert len(lengths) == count
+          if count == 1 { assert lengths == ["Content-Length: 0"] }
+          assert str.ends_with(wire, "\r\n\r\n")
+        },
+      }
+      serve_exchange(exchange_config(), [route_get("/empty", _req => Ok(text(status, "")))], [], transport)
+    }
   }
 }
