@@ -1,4 +1,3 @@
-use site_core/util/representation as test_representation
 use web/types.{response_headers}
 use site_core/util/errkind.{precondition, upstream, timeout}
 test "dav_rel joins the tail segments and refuses one holding a slash" {
@@ -369,28 +368,13 @@ fn parent_row(path: String, is_dir: Bool) -> FileRow =
     content_type = "",
     size = 0,
     updated_at = "2026-01-01 00:00:00",
-    representation = test_representation.missing(),
+    representation = representation.missing(),
   }
 
 test "parent check accepts root and directories but rejects missing rows" {
   assert parent_is_directory("", None)
   assert parent_is_directory("docs", Some(parent_row("docs", true)))
   assert not parent_is_directory("missing", None)
-}
-
-test "range_pair parses the WebDAV Range forms against a total size" {
-  # explicit start-end (inclusive), clamped to total-1
-  assert range_pair("0", "1023", 5000) == Some((0, 1023))
-  assert range_pair("100", "999999", 5000) == Some((100, 4999))
-  # open-ended start-
-  assert range_pair("500", "", 5000) == Some((500, 4999))
-  # suffix -N = last N bytes
-  assert range_pair("", "500", 5000) == Some((4500, 4999))
-  assert range_pair("", "999999", 5000) == Some((0, 4999))
-  # unsatisfiable / malformed
-  assert range_pair("5000", "", 5000) == None
-  assert range_pair("", "0", 5000) == None
-  assert range_pair("x", "", 5000) == None
 }
 
 test "OPTIONS advertises DAV class 1,2 and an Allow matching the routed verbs" {

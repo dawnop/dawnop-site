@@ -55,14 +55,16 @@ pub fn handoff(q: Qiniu, origin: String, method: String, key: String, mime: Stri
 
 ## Shared unconditional metadata and handoff target construction.
 pub fn download_url(q: Qiniu, origin: String, key: String) -> Result[String, String] !io = {
-  if not valid_origin(origin) || strip_trailing_slash(q.domain) != strip_trailing_slash(origin) ||
-    not valid_access_key(q.ak) || q.sk == "" || not valid_key(key) {
+  if not configured(q, origin) || not valid_key(key) {
     return Err("download configuration invalid")
   }
   let path = "/" ++ join(map(str.split(key, "/"), pct_encode), "/")
   let base = strip_trailing_slash(origin)
   Ok(private_url(q, base ++ path, now_s() + q.expires))
 }
+
+pub fn configured(q: Qiniu, origin: String) -> Bool = valid_origin(origin) &&
+  strip_trailing_slash(q.domain) == strip_trailing_slash(origin) && valid_access_key(q.ak) && q.sk != ""
 
 test "origin and key admission is closed" {
   assert valid_origin("https://objects.invalid")

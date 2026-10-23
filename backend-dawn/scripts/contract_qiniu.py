@@ -157,7 +157,9 @@ def scrub(value):
     if isinstance(value, dict):
         out = {}
         for k, v in value.items():
-            if k == "token" and isinstance(v, str):
+            if k in {"etag", "last-modified"}:
+                out[k] = v
+            elif k == "token" and isinstance(v, str):
                 out[k] = "<upload-token>"
             elif k == "last_modified" and str(value.get("path", "")).startswith(
                 SANDBOX
@@ -169,8 +171,18 @@ def scrub(value):
     if isinstance(value, list):
         return [scrub(v) for v in value]
     if isinstance(value, str):
-        out = _SIGNED.sub("e=<deadline>&token=<signature>", _KEY.sub(_alias, value))
-        return out.replace(FAKE_BASE[0], "<fake-qiniu>") if FAKE_BASE[0] else out
+        parts = re.split(r"(<D:getetag>.*?</D:getetag>)", value)
+        out = "".join(
+            part if part.startswith("<D:getetag>") else _KEY.sub(_alias, part)
+            for part in parts
+        )
+        out = _SIGNED.sub("e=<deadline>&token=<signature>", out)
+        if FAKE_BASE[0]:
+            out = out.replace(FAKE_BASE[0], "<fake-qiniu>").replace(
+                FAKE_BASE[0].replace("http://127.0.0.1", "https://localhost"),
+                "<fake-qiniu>",
+            )
+        return out
     return value
 
 
@@ -375,7 +387,7 @@ def raw_request(base, method, path, header_pairs, body=b"", timeout=15):
     urllib always frames a body with a Content-Length it computes itself, so a
     chunked upload, or one header sent twice, can only be spelled here.
     """
-    parts = urllib.parse.urlsplit(base)
+    parts = urllib.parse.urlsplit(os.environ.get("CONTRACT_APPLICATION_BASE", base))
     host, port = parts.hostname, parts.port or 80
     lines = [
         f"{method} {path} HTTP/1.1",
@@ -1046,7 +1058,7 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
         text = dav_normalize(raw.decode("utf-8", "replace"))
         kept = {k: hd[k] for k in KEEP if k in hd}
         if f"/{PREFIX}/" in path:  # a row this run created: its mtime is wall clock
-            kept.pop("last-modified", None)
+            pass  # Persisted file Last-Modified remains observable.
         value = {
             "method": method,
             "path": path,
@@ -1181,16 +1193,15 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
     # recorded unfollowed, so the Location (and the fact that it is signed) is
     # the case rather than the bytes behind it
     dav_case(
-        "get.file.302",
+        "get.file.all-ua",
         "GET",
         "/dav/docs/notes.txt",
         {"User-Agent": REDIRECT_UA},
         follow=False,
     )
+    dav_case("head.file", "HEAD", "/dav/docs/notes.txt")
     dav_case("get.dir", "GET", "/dav/docs", {"User-Agent": PROXY_UA})
-    calls_case(
-        "get.file.calls", "two proxied reads (one ranged); the 302 fetches nothing"
-    )
+    calls_case("get.file.calls", "three GETs and one HEAD use the same entity owner")
 
     dav_case(
         "put.new",
@@ -1312,7 +1323,7 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
         {
             "path": f"{SANDBOX}/direct.bin",
             "key": minted.get("key", "missing-key"),
-            "size": 999999,
+            "size": len("planted by the contract"),
             "content_type": "application/x-not-what-qiniu-says",
         },
     )
@@ -1672,6 +1683,18 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
                 (rel, key, stored, len(legacy_bytes)),
             )
         fake.plant(key, legacy_bytes, "application/octet-stream")
+        origin = fake_base.replace("http://127.0.0.1", "https://localhost")
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                "update files set representation_kind='object-identity-v1',representation_key=key,representation_profile=?,representation_etag=?,representation_last_modified_s=1767225600 where key=?",
+                (
+                    "identity-v1:" + hashlib.sha256(origin.encode()).hexdigest(),
+                    '"download-'
+                    + hashlib.sha256(legacy_bytes.encode()).hexdigest()
+                    + '"',
+                    key,
+                ),
+            )
         basic = "Basic " + base64.b64encode(auth.encode()).decode()
         probes = {
             "dav.head": ("HEAD", f"/dav/{rel}", [("Authorization", basic)]),
@@ -1842,6 +1865,9 @@ def main():  # noqa: C901 - a case list; splitting it would only hide the order
     fake.clear_calls()
 
     drop_cases(g, B, token, auth, fake, fake_base, db_path)
+    import contract_representation
+
+    contract_representation.run(g, B, token, auth, fake, db_path, fake_base)
 
     # What is still not covered here, and why it is not a fake's job.
     g.skip(

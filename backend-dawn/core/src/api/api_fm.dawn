@@ -4,6 +4,7 @@
 use util/download_handoff.{handoff}
 use util/http_runtime.{HttpCell, with_upstream}
 use util/representation
+use util/local_empty
 use std/str
 use std/bytes
 use std/map
@@ -234,7 +235,11 @@ fn content_with_download(a: Auth, cl: HttpCell, download_origin: Option[String])
         match o.key {
           Some(k) -> {
             match download_origin {
-              Some(origin) -> return handoff(a.qiniu, origin, req.method, k, o.content_type)
+              Some(origin) -> match representation.parse(o.representation, o.key, o.size, representation.profile(origin)) {
+                representation.Missing -> return Err(http_error(503, "download representation unavailable"))
+                representation.LocalEmpty(v) -> return util_empty_response(req, v, o.content_type)
+                representation.ObjectIdentity(_) -> return handoff(a.qiniu, origin, req.method, k, o.content_type)
+              }
               None -> ()
             }
             let url = signed_url(a.qiniu, k, "")
@@ -270,6 +275,9 @@ fn mutation_failure(msg: String) -> HttpError = {
   let (_k, t) = split_kind(msg)
   http_error(mutation_status(msg), t)
 }
+
+fn util_empty_response(req: Request, value: representation.Published, mime: String) -> Result[Response, HttpError] =
+  local_empty.respond(req, value, safe_persisted_mime(mime))
 
 fn mutation_status(msg: String) -> Int = {
   let (k, _t) = split_kind(msg)
@@ -505,7 +513,7 @@ pub fn register(a: Auth, cl: HttpCell) -> Handler =
           let _preflight = as_http_with(register_preflight(a, rel, key), conflict_or(500))?
           let r = as_http_with(as_outbound(stat(a.qiniu, key)), mutation_failure)?
           if r.status == 200 {
-            Ok(json_ok(as_http_with(register_row(a, rel, key, r.body, opt_int(m, "size"), str_or(m, "content_type", "")), conflict_or(500))?))
+            Ok(json_ok(as_http_with(register_row(a, rel, key, r.body, opt_int(m, "size"), str_or(m, "content_type", "")), mutation_failure)?))
           } else {
             Err(register_stat_failure(r.status))
           }

@@ -43,9 +43,9 @@
    "status": 207,
    "headers": {
     "content-type": "application/xml; charset=\"utf-8\"",
-    "content-length": "1283"
+    "content-length": "1324"
    },
-   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/docs-copy/</D:href><D:propstat><D:prop><D:displayname>docs-copy</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/docs-copy/img/</D:href><D:propstat><D:prop><D:displayname>img</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/docs-copy/notes.txt</D:href><D:propstat><D:prop><D:displayname>notes.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>137</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"<key1>\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/docs-copy/</D:href><D:propstat><D:prop><D:displayname>docs-copy</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/docs-copy/img/</D:href><D:propstat><D:prop><D:displayname>img</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/docs-copy/notes.txt</D:href><D:propstat><D:prop><D:displayname>notes.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>Thu, 01 Jan 2026 00:00:01 GMT</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>137</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"download-fa4e059c88cfe010d4dad742b5149331e20adcfc219da25698a4be64df3c047c\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
    "facts": {
     "hrefs": [
      "/dav/dav-test/docs-copy/",
@@ -66,7 +66,7 @@
     "lastmodified": [
      "WALL-CLOCK",
      "WALL-CLOCK",
-     "WALL-CLOCK"
+     "Thu, 01 Jan 2026 00:00:01 GMT"
     ],
     "collections": 2,
     "statuses": [
@@ -80,9 +80,9 @@
    "status": 207,
    "headers": {
     "content-type": "application/xml; charset=\"utf-8\"",
-    "content-length": "935"
+    "content-length": "976"
    },
-   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/docs-copy/img/</D:href><D:propstat><D:prop><D:displayname>img</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/docs-copy/img/cover.png</D:href><D:propstat><D:prop><D:displayname>cover.png</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>20480</D:getcontentlength><D:getcontenttype>image/png</D:getcontenttype><D:getetag>\"<key2>\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/docs-copy/img/</D:href><D:propstat><D:prop><D:displayname>img</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/docs-copy/img/cover.png</D:href><D:propstat><D:prop><D:displayname>cover.png</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>Thu, 01 Jan 2026 00:00:01 GMT</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>20480</D:getcontentlength><D:getcontenttype>image/png</D:getcontenttype><D:getetag>\"download-15ea0c64cb7e3c967d08e7dff8b4582f473fc86b2aba833582b88dc26e3cfc32\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
    "facts": {
     "hrefs": [
      "/dav/dav-test/docs-copy/img/",
@@ -100,7 +100,7 @@
     ],
     "lastmodified": [
      "WALL-CLOCK",
-     "WALL-CLOCK"
+     "Thu, 01 Jan 2026 00:00:01 GMT"
     ],
     "collections": 1,
     "statuses": [
@@ -114,14 +114,24 @@
     {
      "op": "copy",
      "src": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
-     "dst": "<key2>",
+     "dst": "<key1>",
      "found": true
+    },
+    {
+     "op": "head",
+     "key": "<key1>",
+     "outcome": "full"
     },
     {
      "op": "copy",
      "src": "11111111-2222-3333-4444-555555555555",
-     "dst": "<key1>",
+     "dst": "<key2>",
      "found": true
+    },
+    {
+     "op": "head",
+     "key": "<key2>",
+     "outcome": "full"
     }
    ]
   },
@@ -131,7 +141,9 @@
    "status": 200,
    "headers": {
     "content-type": "text/plain",
-    "etag": "\"<key1>\""
+    "content-length": "137",
+    "etag": "\"download-fa4e059c88cfe010d4dad742b5149331e20adcfc219da25698a4be64df3c047c\"",
+    "last-modified": "Thu, 01 Jan 2026 00:00:01 GMT"
    },
    "body": "fixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nf"
   },
@@ -153,6 +165,11 @@
      "src": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
      "dst": "<key3>",
      "found": true
+    },
+    {
+     "op": "head",
+     "key": "<key3>",
+     "outcome": "full"
     }
    ]
   },
@@ -208,8 +225,9 @@
    "status": 200,
    "headers": {
     "content-type": "text/plain",
-    "etag": "\"11111111-2222-3333-4444-555555555555\"",
-    "last-modified": "Tue, 06 Jan 2026 04:00:00 GMT"
+    "content-length": "137",
+    "etag": "\"download-fa4e059c88cfe010d4dad742b5149331e20adcfc219da25698a4be64df3c047c\"",
+    "last-modified": "Thu, 01 Jan 2026 00:00:00 GMT"
    },
    "body": "fixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nf"
   },
@@ -219,19 +237,33 @@
    "status": 206,
    "headers": {
     "content-type": "text/plain",
-    "etag": "\"11111111-2222-3333-4444-555555555555\"",
-    "last-modified": "Tue, 06 Jan 2026 04:00:00 GMT"
+    "content-length": "16",
+    "etag": "\"download-fa4e059c88cfe010d4dad742b5149331e20adcfc219da25698a4be64df3c047c\"",
+    "last-modified": "Thu, 01 Jan 2026 00:00:00 GMT"
    },
    "body": "fixture object f"
   },
-  "get.file.302": {
+  "get.file.all-ua": {
    "method": "GET",
    "path": "/dav/docs/notes.txt",
-   "status": 302,
+   "status": 200,
    "headers": {
-    "content-type": "text/plain; charset=utf-8",
-    "content-length": "0",
-    "location": "<fake-qiniu>/11111111-2222-3333-4444-555555555555?e=<deadline>&token=<signature>"
+    "content-type": "text/plain",
+    "content-length": "137",
+    "etag": "\"download-fa4e059c88cfe010d4dad742b5149331e20adcfc219da25698a4be64df3c047c\"",
+    "last-modified": "Thu, 01 Jan 2026 00:00:00 GMT"
+   },
+   "body": "fixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nf"
+  },
+  "head.file": {
+   "method": "HEAD",
+   "path": "/dav/docs/notes.txt",
+   "status": 200,
+   "headers": {
+    "content-type": "text/plain",
+    "content-length": "137",
+    "etag": "\"download-fa4e059c88cfe010d4dad742b5149331e20adcfc219da25698a4be64df3c047c\"",
+    "last-modified": "Thu, 01 Jan 2026 00:00:00 GMT"
    },
    "body": ""
   },
@@ -246,7 +278,7 @@
    "body": "{\"detail\":\"不能下载目录\"}"
   },
   "get.file.calls": {
-   "note": "two proxied reads (one ranged); the 302 fetches nothing",
+   "note": "three GETs and one HEAD use the same entity owner",
    "calls": [
     {
      "op": "download",
@@ -257,6 +289,16 @@
      "op": "download",
      "key": "11111111-2222-3333-4444-555555555555",
      "outcome": "range 0-15"
+    },
+    {
+     "op": "download",
+     "key": "11111111-2222-3333-4444-555555555555",
+     "outcome": "full"
+    },
+    {
+     "op": "head",
+     "key": "11111111-2222-3333-4444-555555555555",
+     "outcome": "full"
     }
    ]
   },
@@ -278,6 +320,11 @@
      "key": "<key5>.txt",
      "size": 24,
      "mime": "text/plain"
+    },
+    {
+     "op": "head",
+     "key": "<key5>.txt",
+     "outcome": "full"
     }
    ]
   },
@@ -287,7 +334,9 @@
    "status": 200,
    "headers": {
     "content-type": "text/plain",
-    "etag": "\"<key5>.txt\""
+    "content-length": "24",
+    "etag": "\"download-a336ddb85ee14ac0143dc3226c71b4f14976c818f93ddafe2fc78dfe9a558ed0\"",
+    "last-modified": "Thu, 01 Jan 2026 00:00:00 GMT"
    },
    "body": "hello from the contract\n"
   },
@@ -310,6 +359,11 @@
      "mime": "text/plain"
     },
     {
+     "op": "head",
+     "key": "<key6>.txt",
+     "outcome": "full"
+    },
+    {
      "op": "delete",
      "key": "<key5>.txt",
      "existed": true
@@ -322,7 +376,9 @@
    "status": 200,
    "headers": {
     "content-type": "text/plain",
-    "etag": "\"<key6>.txt\""
+    "content-length": "36",
+    "etag": "\"download-f4d4806dd62aeef54de3cbc29bc5ad4df79b3b678670d5388ebe0798e5c4c192\"",
+    "last-modified": "Thu, 01 Jan 2026 00:00:00 GMT"
    },
    "body": "second write, longer than the first\n"
   },
@@ -422,10 +478,20 @@
      "found": true
     },
     {
+     "op": "head",
+     "key": "<key7>",
+     "outcome": "full"
+    },
+    {
      "op": "copy",
      "src": "11111111-2222-3333-4444-555555555555",
      "dst": "<key8>",
      "found": true
+    },
+    {
+     "op": "head",
+     "key": "<key8>",
+     "outcome": "full"
     }
    ]
   },
@@ -596,6 +662,11 @@
      "key": "<key9>",
      "size": 0,
      "mime": "text/markdown"
+    },
+    {
+     "op": "head",
+     "key": "<key9>",
+     "outcome": "full"
     }
    ]
   },
@@ -619,6 +690,11 @@
      "key": "<key10>.md",
      "size": 24,
      "mime": "text/markdown"
+    },
+    {
+     "op": "head",
+     "key": "<key10>.md",
+     "outcome": "full"
     },
     {
      "op": "delete",
@@ -667,7 +743,7 @@
    "request": {
     "path": "qiniu://dav-test/direct.bin",
     "key": "<key11>.bin",
-    "size": 999999,
+    "size": 23,
     "content_type": "application/x-not-what-qiniu-says"
    },
    "body": {
@@ -693,6 +769,11 @@
     {
      "op": "stat",
      "key": "<key11>.bin"
+    },
+    {
+     "op": "head",
+     "key": "<key11>.bin",
+     "outcome": "full"
     }
    ]
   },
@@ -834,10 +915,20 @@
      "found": true
     },
     {
+     "op": "head",
+     "key": "<key12>",
+     "outcome": "full"
+    },
+    {
      "op": "copy",
      "src": "11111111-2222-3333-4444-555555555555",
      "dst": "<key13>",
      "found": true
+    },
+    {
+     "op": "head",
+     "key": "<key13>",
+     "outcome": "full"
     },
     {
      "op": "delete",
@@ -852,9 +943,9 @@
    "status": 207,
    "headers": {
     "content-type": "application/xml; charset=\"utf-8\"",
-    "content-length": "1331"
+    "content-length": "1372"
    },
-   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/copy-overwrite-target/</D:href><D:propstat><D:prop><D:displayname>copy-overwrite-target</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/copy-overwrite-target/img/</D:href><D:propstat><D:prop><D:displayname>img</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/copy-overwrite-target/notes.txt</D:href><D:propstat><D:prop><D:displayname>notes.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>137</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"<key13>\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/copy-overwrite-target/</D:href><D:propstat><D:prop><D:displayname>copy-overwrite-target</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/copy-overwrite-target/img/</D:href><D:propstat><D:prop><D:displayname>img</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/copy-overwrite-target/notes.txt</D:href><D:propstat><D:prop><D:displayname>notes.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>Thu, 01 Jan 2026 00:00:01 GMT</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>137</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"download-fa4e059c88cfe010d4dad742b5149331e20adcfc219da25698a4be64df3c047c\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
    "facts": {
     "hrefs": [
      "/dav/dav-test/copy-overwrite-target/",
@@ -875,7 +966,7 @@
     "lastmodified": [
      "WALL-CLOCK",
      "WALL-CLOCK",
-     "WALL-CLOCK"
+     "Thu, 01 Jan 2026 00:00:01 GMT"
     ],
     "collections": 2,
     "statuses": [
@@ -889,9 +980,9 @@
    "status": 207,
    "headers": {
     "content-type": "application/xml; charset=\"utf-8\"",
-    "content-length": "959"
+    "content-length": "1000"
    },
-   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/copy-overwrite-target/img/</D:href><D:propstat><D:prop><D:displayname>img</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/copy-overwrite-target/img/cover.png</D:href><D:propstat><D:prop><D:displayname>cover.png</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>20480</D:getcontentlength><D:getcontenttype>image/png</D:getcontenttype><D:getetag>\"<key12>\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/copy-overwrite-target/img/</D:href><D:propstat><D:prop><D:displayname>img</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/copy-overwrite-target/img/cover.png</D:href><D:propstat><D:prop><D:displayname>cover.png</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>Thu, 01 Jan 2026 00:00:01 GMT</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>20480</D:getcontentlength><D:getcontenttype>image/png</D:getcontenttype><D:getetag>\"download-15ea0c64cb7e3c967d08e7dff8b4582f473fc86b2aba833582b88dc26e3cfc32\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
    "facts": {
     "hrefs": [
      "/dav/dav-test/copy-overwrite-target/img/",
@@ -909,7 +1000,7 @@
     ],
     "lastmodified": [
      "WALL-CLOCK",
-     "WALL-CLOCK"
+     "Thu, 01 Jan 2026 00:00:01 GMT"
     ],
     "collections": 1,
     "statuses": [
@@ -933,7 +1024,9 @@
    "status": 200,
    "headers": {
     "content-type": "text/plain",
-    "etag": "\"<key13>\""
+    "content-length": "137",
+    "etag": "\"download-fa4e059c88cfe010d4dad742b5149331e20adcfc219da25698a4be64df3c047c\"",
+    "last-modified": "Thu, 01 Jan 2026 00:00:01 GMT"
    },
    "body": "fixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nf"
   },
@@ -943,8 +1036,9 @@
    "status": 200,
    "headers": {
     "content-type": "text/plain",
-    "etag": "\"11111111-2222-3333-4444-555555555555\"",
-    "last-modified": "Tue, 06 Jan 2026 04:00:00 GMT"
+    "content-length": "137",
+    "etag": "\"download-fa4e059c88cfe010d4dad742b5149331e20adcfc219da25698a4be64df3c047c\"",
+    "last-modified": "Thu, 01 Jan 2026 00:00:00 GMT"
    },
    "body": "fixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nfixture object for docs/notes.txt\nf"
   },
@@ -1030,9 +1124,9 @@
    "status": 207,
    "headers": {
     "content-type": "application/xml; charset=\"utf-8\"",
-    "content-length": "974"
+    "content-length": "1011"
    },
-   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/move-overwrite-target/nested/</D:href><D:propstat><D:prop><D:displayname>nested</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/move-overwrite-target/nested/payload.txt</D:href><D:propstat><D:prop><D:displayname>payload.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>29</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"<key16>.txt\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
+   "body": "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:multistatus xmlns:D=\"DAV:\"><D:response><D:href>/dav/dav-test/move-overwrite-target/nested/</D:href><D:propstat><D:prop><D:displayname>nested</D:displayname><D:resourcetype><D:collection/></D:resourcetype><D:getlastmodified>WALL-CLOCK</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/dav/dav-test/move-overwrite-target/nested/payload.txt</D:href><D:propstat><D:prop><D:displayname>payload.txt</D:displayname><D:resourcetype></D:resourcetype><D:getlastmodified>Thu, 01 Jan 2026 00:00:00 GMT</D:getlastmodified><D:creationdate>WALL-CLOCK</D:creationdate><D:getcontentlength>29</D:getcontentlength><D:getcontenttype>text/plain</D:getcontenttype><D:getetag>\"download-b766bd58ad2d5517ed701354996f235dbd78c74ad750ccc49a32b350c09e1869\"</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>",
    "facts": {
     "hrefs": [
      "/dav/dav-test/move-overwrite-target/nested/",
@@ -1050,7 +1144,7 @@
     ],
     "lastmodified": [
      "WALL-CLOCK",
-     "WALL-CLOCK"
+     "Thu, 01 Jan 2026 00:00:00 GMT"
     ],
     "collections": 1,
     "statuses": [
@@ -1064,7 +1158,9 @@
    "status": 200,
    "headers": {
     "content-type": "text/plain",
-    "etag": "\"<key16>.txt\""
+    "content-length": "29",
+    "etag": "\"download-b766bd58ad2d5517ed701354996f235dbd78c74ad750ccc49a32b350c09e1869\"",
+    "last-modified": "Thu, 01 Jan 2026 00:00:00 GMT"
    },
    "body": "MOVE overwrite payload bytes\n"
   },
@@ -1199,13 +1295,18 @@
    "calls": [
     {
      "op": "upload",
-     "key": "<key17>.txt",
+     "key": "<key16>.txt",
      "size": 39,
      "mime": "text/plain"
     },
     {
+     "op": "head",
+     "key": "<key16>.txt",
+     "outcome": "full"
+    },
+    {
      "op": "delete",
-     "key": "<key18>",
+     "key": "<key17>",
      "existed": true
     }
    ]
@@ -1299,12 +1400,14 @@
     "dav.head": {
      "status_line": "HTTP/1.1 200 OK",
      "header_names": [
+      "server",
       "date",
+      "content-length",
+      "connection",
+      "etag",
       "last-modified",
       "content-type",
-      "etag",
-      "content-length",
-      "accept-ranges"
+      "x-content-type-options"
      ],
      "content_type_values": [
       "application/octet-stream"
@@ -1316,48 +1419,57 @@
     "dav.get": {
      "status_line": "HTTP/1.1 200 OK",
      "header_names": [
+      "server",
       "date",
-      "transfer-encoding",
+      "content-length",
+      "connection",
+      "etag",
       "last-modified",
       "content-type",
-      "etag",
-      "accept-ranges"
+      "x-content-type-options"
      ],
      "content_type_values": [
       "application/octet-stream"
      ],
      "malformed_header_lines": [],
      "mentions_injected": false,
-     "body_size": 22
+     "body_size": 12
     },
     "fm.content": {
      "status_line": "HTTP/1.1 200 OK",
      "header_names": [
+      "server",
       "date",
-      "transfer-encoding",
+      "content-length",
+      "connection",
+      "etag",
+      "last-modified",
       "content-type",
-      "vary"
+      "vary",
+      "x-content-type-options"
      ],
      "content_type_values": [
       "application/octet-stream"
      ],
      "malformed_header_lines": [],
      "mentions_injected": false,
-     "body_size": 22
+     "body_size": 12
     },
     "dav.propfind": {
      "status_line": "HTTP/1.1 207 ",
      "header_names": [
+      "server",
       "date",
       "content-type",
-      "content-length"
+      "content-length",
+      "connection"
      ],
      "content_type_values": [
       "application/xml; charset=\"utf-8\""
      ],
      "malformed_header_lines": [],
      "mentions_injected": false,
-     "body_size": 595,
+     "body_size": 647,
      "getcontenttype_values": [
       "application/octet-stream"
      ]
@@ -1368,12 +1480,14 @@
     "dav.head": {
      "status_line": "HTTP/1.1 200 OK",
      "header_names": [
+      "server",
       "date",
+      "content-length",
+      "connection",
+      "etag",
       "last-modified",
       "content-type",
-      "etag",
-      "content-length",
-      "accept-ranges"
+      "x-content-type-options"
      ],
      "content_type_values": [
       "application/octet-stream"
@@ -1385,48 +1499,57 @@
     "dav.get": {
      "status_line": "HTTP/1.1 200 OK",
      "header_names": [
+      "server",
       "date",
-      "transfer-encoding",
+      "content-length",
+      "connection",
+      "etag",
       "last-modified",
       "content-type",
-      "etag",
-      "accept-ranges"
+      "x-content-type-options"
      ],
      "content_type_values": [
       "application/octet-stream"
      ],
      "malformed_header_lines": [],
      "mentions_injected": false,
-     "body_size": 22
+     "body_size": 12
     },
     "fm.content": {
      "status_line": "HTTP/1.1 200 OK",
      "header_names": [
+      "server",
       "date",
-      "transfer-encoding",
+      "content-length",
+      "connection",
+      "etag",
+      "last-modified",
       "content-type",
-      "vary"
+      "vary",
+      "x-content-type-options"
      ],
      "content_type_values": [
       "application/octet-stream"
      ],
      "malformed_header_lines": [],
      "mentions_injected": false,
-     "body_size": 22
+     "body_size": 12
     },
     "dav.propfind": {
      "status_line": "HTTP/1.1 207 ",
      "header_names": [
+      "server",
       "date",
       "content-type",
-      "content-length"
+      "content-length",
+      "connection"
      ],
      "content_type_values": [
       "application/xml; charset=\"utf-8\""
      ],
      "malformed_header_lines": [],
      "mentions_injected": false,
-     "body_size": 592,
+     "body_size": 645,
      "getcontenttype_values": [
       "application/octet-stream"
      ]
@@ -1437,12 +1560,14 @@
     "dav.head": {
      "status_line": "HTTP/1.1 200 OK",
      "header_names": [
+      "server",
       "date",
+      "content-length",
+      "connection",
+      "etag",
       "last-modified",
       "content-type",
-      "etag",
-      "content-length",
-      "accept-ranges"
+      "x-content-type-options"
      ],
      "content_type_values": [
       "application/octet-stream"
@@ -1454,48 +1579,57 @@
     "dav.get": {
      "status_line": "HTTP/1.1 200 OK",
      "header_names": [
+      "server",
       "date",
-      "transfer-encoding",
+      "content-length",
+      "connection",
+      "etag",
       "last-modified",
       "content-type",
-      "etag",
-      "accept-ranges"
+      "x-content-type-options"
      ],
      "content_type_values": [
       "application/octet-stream"
      ],
      "malformed_header_lines": [],
      "mentions_injected": false,
-     "body_size": 22
+     "body_size": 12
     },
     "fm.content": {
      "status_line": "HTTP/1.1 200 OK",
      "header_names": [
+      "server",
       "date",
-      "transfer-encoding",
+      "content-length",
+      "connection",
+      "etag",
+      "last-modified",
       "content-type",
-      "vary"
+      "vary",
+      "x-content-type-options"
      ],
      "content_type_values": [
       "application/octet-stream"
      ],
      "malformed_header_lines": [],
      "mentions_injected": false,
-     "body_size": 22
+     "body_size": 12
     },
     "dav.propfind": {
      "status_line": "HTTP/1.1 207 ",
      "header_names": [
+      "server",
       "date",
       "content-type",
-      "content-length"
+      "content-length",
+      "connection"
      ],
      "content_type_values": [
       "application/xml; charset=\"utf-8\""
      ],
      "malformed_header_lines": [],
      "mentions_injected": false,
-     "body_size": 622,
+     "body_size": 665,
      "getcontenttype_values": [
       "application/octet-stream"
      ]
@@ -1513,6 +1647,11 @@
       "key": "<fresh-key>.bin",
       "size": 9,
       "mime": "application/octet-stream"
+     },
+     {
+      "op": "head",
+      "key": "<fresh-key>.bin",
+      "outcome": "full"
      },
      {
       "op": "delete",
@@ -1534,6 +1673,7 @@
    "mint_status": 200,
    "policy_keys": [
     "deadline",
+    "insertOnly",
     "scope"
    ],
    "scope_is_bucket_and_key": true,
@@ -2476,6 +2616,24 @@
    "responses_checked": true,
    "no_object_key": true,
    "no_storage_path": true
+  },
+  "k2.dav-three-methods": {
+   "assertions": "PASS"
+  },
+  "k2.conditions-and-ranges": {
+   "assertions": "PASS"
+  },
+  "k2.missing-and-mismatched-metadata": {
+   "assertions": "PASS"
+  },
+  "k2.head-failure-preserves-old-row": {
+   "assertions": "PASS"
+  },
+  "k2.empty-owner-and-transitions": {
+   "assertions": "PASS"
+  },
+  "k2.ordinary-token-replay-and-register": {
+   "assertions": "PASS"
   }
  }
 }

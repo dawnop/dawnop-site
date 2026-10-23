@@ -53,6 +53,7 @@ Standalone (the harness starts it in-process instead):
 import argparse
 import atexit
 import base64
+import email.utils
 import functools
 import hashlib
 import hmac
@@ -258,7 +259,8 @@ class Handler(BaseHTTPRequestHandler):
     def _send(self, status: int, body: bytes, mime="application/json", extra=None):
         self.send_response(status)
         self.send_header("Content-Type", mime)
-        self.send_header("Content-Length", str(len(body)))
+        if status != 304:
+            self.send_header("Content-Length", str(len(body)))
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -431,6 +433,49 @@ class Handler(BaseHTTPRequestHandler):
             ),
             "Last-Modified": obj.get("last_modified", "Thu, 01 Jan 2026 00:00:00 GMT"),
         }
+        tag, modified = metadata["ETag"], metadata["Last-Modified"]
+
+        def timestamp(value):
+            try:
+                return email.utils.parsedate_to_datetime(value).timestamp()
+            except (ValueError, TypeError, OverflowError):
+                return None
+
+        def matches(value, weak=False):
+            return value == "*" or any(
+                (item.strip().removeprefix("W/") == tag.removeprefix("W/"))
+                if weak
+                else item.strip() == tag and not tag.startswith("W/")
+                for item in value.split(",")
+            )
+
+        match, none = self.headers.get("If-Match"), self.headers.get("If-None-Match")
+        ius, ims = (
+            timestamp(self.headers.get("If-Unmodified-Since")),
+            timestamp(self.headers.get("If-Modified-Since")),
+        )
+        lm = timestamp(modified)
+        status = 200
+        if match and not matches(match):
+            status = 412
+        elif not match and ius is not None and lm > ius:
+            status = 412
+        elif none and matches(none, weak=True):
+            status = 304
+        elif not none and ims is not None and lm <= ims:
+            status = 304
+        if status != 200:
+            self.bucket.log(
+                op="head" if self.command == "HEAD" else "download",
+                key=key,
+                outcome=f"conditional {status}",
+            )
+            return self._send(
+                status,
+                b"" if status == 304 else b"precondition failed",
+                "text/plain",
+                metadata,
+            )
         if self.command == "HEAD":
             self.bucket.log(op="head", key=key, outcome="full")
             self.bucket.stall_if_armed("head")
@@ -439,7 +484,29 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(
                 200, content, obj["mime"] or "application/octet-stream", metadata
             )
-        rng = _range(self.headers.get("Range", ""), len(content))
+        given_range = self.headers.get("Range", "")
+        if_range = self.headers.get("If-Range")
+        if if_range and (
+            if_range.startswith("W/")
+            or not (
+                (not tag.startswith("W/") and if_range == tag)
+                or (timestamp(if_range) is not None and timestamp(if_range) >= lm)
+            )
+        ):
+            given_range = ""
+        rng = _range(given_range, len(content))
+        if (
+            rng is None
+            and re.fullmatch(r"bytes=(\d*)-(\d*)", given_range)
+            and any(re.fullmatch(r"bytes=(\d*)-(\d*)", given_range).groups())
+        ):
+            self.bucket.log(op="download", key=key, outcome="range 416")
+            return self._send(
+                416,
+                b"range not satisfiable",
+                "text/plain",
+                {**metadata, "Content-Range": f"bytes */{len(content)}"},
+            )
         if rng is None:
             self.bucket.log(op="download", key=key, outcome="full")
             return self._send(
@@ -582,7 +649,7 @@ def _range(header: str, total: int):
 
 def serve(port: int) -> ThreadingHTTPServer:
     """Start the fake on `port` in a daemon thread; returns the server."""
-    base = f"https://127.0.0.1:{port}"
+    base = f"https://localhost:{port}"
     handler = type("BoundHandler", (Handler,), {"bucket": Bucket(base)})
     cert, key, _ = tls_material()
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

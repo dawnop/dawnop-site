@@ -1,0 +1,70 @@
+# Pure conditional owner for the explicit local empty representation only.
+use std/str
+use std/list
+use util/representation.{Published, fields, valid_etag, EMPTY_ETAG}
+use util/time.{parse_http_date, http_date}
+use web/types.{Request, Response, HttpError, http_error, raw, with_header, headers_all}
+
+fn ows(c: Char) -> Bool = c == ' ' || c == '\t'
+
+fn tags(s: String) -> Option[List[String]] = {
+  if s == "*" { return Some(["*"]) }
+  var result: List[String] = []
+  var i = 0
+  while i < len(s) {
+    while i < len(s) && ows(str.at(s, i)) { i = i + 1 }
+    let start = i
+    if i + 2 <= len(s) && str.slice(s, i, i + 2) == "W/" { i = i + 2 }
+    if i >= len(s) || str.at(s, i) != '"' { return None }
+    i = i + 1
+    while i < len(s) && str.at(s, i) != '"' { i = i + 1 }
+    if i >= len(s) { return None }
+    i = i + 1
+    let value = str.slice(s, start, i)
+    if not valid_etag(value) { return None }
+    result = result ++ [value]
+    while i < len(s) && ows(str.at(s, i)) { i = i + 1 }
+    if i < len(s) {
+      if str.at(s, i) != ',' { return None }
+      i = i + 1
+      if i == len(s) { return None }
+    }
+  }
+  if len(result) == 0 { None } else { Some(result) }
+}
+
+fn supplied_tags(req: Request, name: String) -> Result[Option[List[String]], HttpError] = {
+  let hs = headers_all(req, name)
+  if len(hs) == 0 { return Ok(None) }
+  if len(hs) != 1 { return Err(http_error(400, "invalid conditional header")) }
+  match tags(str.trim(hs[0])) { Some(v) -> Ok(Some(v))
+    None -> Err(http_error(400, "invalid conditional header")) }
+}
+
+fn date(req: Request, name: String) -> Option[Int] = {
+  let hs = headers_all(req, name)
+  if len(hs) == 1 { parse_http_date(hs[0]) } else { None }
+}
+
+pub fn status(req: Request, modified_s: Int) -> Result[Int, HttpError] = {
+  let im = supplied_tags(req, "if-match")?
+  match im {
+    Some(ts) -> if not list.any(ts, t => t == "*" || t == EMPTY_ETAG) { return Ok(412) }
+    None -> match date(req, "if-unmodified-since") { Some(t) -> if modified_s > t { return Ok(412) }
+      None -> () }
+  }
+  match supplied_tags(req, "if-none-match")? {
+    Some(ts) -> if list.any(ts, t => t == "*" || t == EMPTY_ETAG || t == "W/" ++ EMPTY_ETAG) { return Ok(304) }
+    None -> match date(req, "if-modified-since") { Some(t) -> if modified_s <= t { return Ok(304) }
+      None -> () }
+  }
+  Ok(200)
+}
+
+## Range and If-Range are deliberately ignored. No object or clock operation.
+pub fn respond(req: Request, value: Published, mime: String) -> Result[Response, HttpError] = {
+  let v = fields(value)
+  let code = status(req, v.last_modified_s)?
+  let response = with_header(with_header(raw(code, mime, ""), "ETag", v.etag), "Last-Modified", http_date(v.last_modified_s))
+  Ok(if req.method == "HEAD" && code != 304 { with_header(response, "Content-Length", "0") } else { response })
+}
