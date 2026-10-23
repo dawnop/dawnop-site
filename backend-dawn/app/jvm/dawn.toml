@@ -17,27 +17,27 @@ sqlite = "org.xerial:sqlite-jdbc:3.53.4.0"
 # new tag. Tag archives fetch straight from GitHub with no proxy; it is deploy.sh's
 # CI-artifact download that needs one.
 [deps.web]
-url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.98.0.zip"
+url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.99.0.zip"
 version = "8.0.0"
-hash = "d1:ed4f56d6ef1c8d5ca1ce41990333754191987bbfd71ac33206afff9e86495743"
+hash = "d1:df95132fa4a1228fcf1e8a05a0e4ab41b5fc3e046746d647b1d458e9de1a63e7"
 subdir = "packages/web"
 
 [deps.web_jvm]
-url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.98.0.zip"
+url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.99.0.zip"
 version = "2.0.0"
-hash = "d1:ed4f56d6ef1c8d5ca1ce41990333754191987bbfd71ac33206afff9e86495743"
+hash = "d1:df95132fa4a1228fcf1e8a05a0e4ab41b5fc3e046746d647b1d458e9de1a63e7"
 subdir = "packages/web-jvm"
 
 [deps.json]
-url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.98.0.zip"
+url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.99.0.zip"
 version = "2.0.2"
-hash = "d1:ed4f56d6ef1c8d5ca1ce41990333754191987bbfd71ac33206afff9e86495743"
+hash = "d1:df95132fa4a1228fcf1e8a05a0e4ab41b5fc3e046746d647b1d458e9de1a63e7"
 subdir = "packages/json"
 
 [deps.sha2]
-url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.98.0.zip"
+url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.99.0.zip"
 version = "2.0.1"
-hash = "d1:ed4f56d6ef1c8d5ca1ce41990333754191987bbfd71ac33206afff9e86495743"
+hash = "d1:df95132fa4a1228fcf1e8a05a0e4ab41b5fc3e046746d647b1d458e9de1a63e7"
 subdir = "packages/sha2"
 
 [deps]

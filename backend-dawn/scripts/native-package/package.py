@@ -150,7 +150,7 @@ def build(output, work, sha):
     result = {
         "schema": 1,
         "commit": sha,
-        "toolchain": "v0.98.0",
+        "toolchain": "v0.99.0",
         "platform": "linux-x86_64",
         "build_platform": platform.platform(),
         "glibc_floor": versions,

@@ -18,7 +18,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 BACKEND = HERE.parents[1]
 ROOT = BACKEND.parent
-HASH = "ed4f56d6ef1c8d5ca1ce41990333754191987bbfd71ac33206afff9e86495743"
+HASH = "df95132fa4a1228fcf1e8a05a0e4ab41b5fc3e046746d647b1d458e9de1a63e7"
 ARCHIVE = Path(os.environ.get("DAWN_PKG_CACHE", Path.home() / ".dawn/pkg")) / (
     "d1-" + HASH
 )
