@@ -82,7 +82,8 @@ def project(work, name, change=None, old=False):
         assert text.count(before) == 1, (name, text.count(before))
         if "QueryResult {" in after:
             text = text.replace(
-                "Db, ColStr, VStr, PStr}", "Db, ColStr, VStr, PStr, QueryResult}"
+                "Db, ColStr, VStr, PStr, query}",
+                "Db, ColStr, VStr, PStr, query, QueryResult}",
             )
         source.write_text(text.replace(before, after))
     return app

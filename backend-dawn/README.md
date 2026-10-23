@@ -95,7 +95,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 - native 入口：仓库根运行 `backend-dawn/scripts/native-entry/run.sh`，实际 check/build/test app/native，
   检查完整依赖图零 Java，并先证明启动 println、吞 guard 拒绝、立即关闭 socket 和请求期重跑迁移四个负控会红。
   包含手写 HTTP 字节、TCP 早拒绝/晚到 body/断连、256/512 MiB 全摘要与全进程树 RSS、单交换冷启动。
-  CLI 为无参数 serve（stdin/stdout）、`--migrate` 与 `--cleanup-pastes`；日志均走 stderr。
+  CLI 为无参数 serve（stdin/stdout）、`--migrate`、`--cleanup-pastes` 与 `--backup <dest>`；日志均走 stderr。
   手工构建：`DAWNC=$(scripts/fetch-dawn-native.sh)` 后 `$DAWNC build backend-dawn/app/native -o /tmp/dawnop-native`。
   先用已有业务 schema 的隔离库和同一 DAWNOP_ENV 执行 --migrate，再喂请求到 stdin；此处无部署授权。
   fd teardown 在 flush 后半关闭写端，最多排空 8 MiB / 300 ms，随后退出，不会循环服务第二个交换。
@@ -191,7 +191,7 @@ WAL 查询结果必须是 wal、配置扩展必须加载；错误关闭连接并
 
 ## 模块地图
 
-S10 保留独立的 core、JVM/native app 和 test 根。core 有 64 个模块，持有全部路由、业务、
+S10 保留独立的 core、JVM/native app 和 test 根。core 有 65 个模块，持有全部路由、业务、
 配置装配与迁移接口；两个入口通过路径依赖消费同一份 application.app_routes。
 JVM 只留 6 个模块（入口、JDBC、HTTP 适配及测试构造），native 有 6 个 Dawn 模块及 fd teardown C 接缝。
 测试仍在一次性 JVM 同模块镜像合并白盒片段；core 自身和 native 完整依赖图分别接受零 Java 扫描。
@@ -203,6 +203,13 @@ JVM 只留 6 个模块（入口、JDBC、HTTP 适配及测试构造），native 
   util/application_http 适配实际 owner，共享路由实际执行时安装 Upstream/UpstreamBatch。
 - `core/src/util/runtime_ttl.dawn` 保存五槽 SQLite 地址；JVM util/ttl 只为既有测试提供路径构造。
 - `core/src/application.dawn` 统一环境默认值和路由顺序，两个入口配置文件均只加载一次。
+- `core/src/backup.dawn`：维护命令 `--backup <dest>` 的共享版本门、VACUUM INTO 快照与副本
+  integrity/FTS external-content 校验。专用连接先用内存库拒绝 <3.51.3，再校验源连接，
+  不 configure、不 migrate、不请求切换 WAL，配置 tokenizer 加载失败即拒绝。
+  `scripts/backup-engine/runtime.py` 构建真两臂、固定 SQLite/simple 与旧引擎负控夹具；
+  根目录 `scripts/backup_db_mutants.py --work <空目录>` 只改哨兵副本并验证先红后绿。
+  `backend/tests/test_backup_db.py` 的真脚本/真库判词自动跑 JVM/native，生产安装见
+  [`deploy/README.md`](../deploy/README.md#五库备份)。
 - `core/src/maintenance.dawn` 显式 migrate、check_schema、cleanup。serve 路径不建表；
   native 只核对已有 WAL 和 additive schema，未准备的库在写出 wire 前失败。
 

@@ -3,9 +3,10 @@ use db/jdbc.{open_ext, with_connection, db_connection}
 use site_core/db/runtime as site_runtime
 use std/str
 use std/fmt.{parse_int}
-use site_core/db/sql.{Db, ColStr, VStr, PStr}
+use site_core/db/sql.{Db, ColStr, VStr, PStr, query}
 
 use site_core/db/runtime.{DbConfig, DbOps}
+use site_core/backup
 
 pub fn config(path: String, ext: String) -> DbConfig =
   DbConfig { path: path, ext: ext, connect: connect }
@@ -56,4 +57,19 @@ fn engine_info(c: DbOps) -> String !io = {
 pub fn probe_engine() -> String !io = {
   let c = open_ext("jdbc:sqlite::memory:")
   with_connection(c, () => engine_info(db_connection(c)))
+}
+
+# Do not run the application WAL initialization or migrations for backups.
+pub fn backup_database(path: String, ext: String, dest: String) -> Result[Unit, String] !io = {
+  with_connection(open_ext("jdbc:sqlite::memory:"), backup.require_engine)?
+  with_connection(open_ext("jdbc:sqlite:${path}"), () => {
+    backup.require_engine()?
+    if ext != "" { let _ = site_query_extension(ext)? }
+    backup.snapshot(dest)
+  })
+}
+
+fn site_query_extension(ext: String) -> Result[Unit, String] !Db = {
+  let _ = query("select load_extension(?)", [PStr(ext)], [ColStr])?
+  Ok(())
 }

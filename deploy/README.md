@@ -434,84 +434,98 @@ curl -s -H "X-Rollback-Probe: $(sudo cat /opt/dawnop/backend/.rollback-probe)" \
 ## 五、库备份
 
 `/opt/dawnop/data/dawnop.db` 每天存一份压缩快照到 `/opt/dawnop/backups`，保留 14 份。
-脚本 [`backup-db.sh`](./backup-db.sh)，定时器 [`dawnop-backup.timer`](./dawnop-backup.timer)。
+脚本 [`backup-db.sh`](./backup-db.sh) 调站点的 `--backup <dest>`，默认运行正式 JVM jar
+及旁边完整 `lib/`，不依赖系统 SQLite CLI。维护命令对实际引擎执行 >=3.51.3 版本门，
+用 `VACUUM INTO` 取一致快照，再由同一连接 attach 副本，检查完整的
+`PRAGMA integrity_check` 结果与所有 FTS5 的 `integrity-check`（rank=1，同时验证外部正文）。
+任何失败都不压缩、不发布、不轮转；不运行 migrate，不修改源库日志模式。
 
-判词在 `backend/tests/test_backup_db.py`（跑真脚本、真库），负控在
-`scripts/backup_db_mutants.py`。
+判词在 `backend/tests/test_backup_db.py`，同一组真库判词运行 JVM/native 两臂；
+负控在 `scripts/backup_db_mutants.py`，只改带哨兵的隔离副本。
+方案比较见 [`backup-engine-design.md`](../docs/backup-engine-design.md)。
 
-### 装
+### 安装或更新（由协调者在获批后执行）
+
+先确认目标 main 完整 SHA 的 CI 全绿，并安装该版本的正式 jar 与完整依赖闭包；
+旧 jar 没有 `--backup`，只替换脚本无法工作。JRE 21、gzip、sha256sum 必须可用。
+**无需安装 sqlite3 CLI**。不要为备份升级或替换系统共享库。
+
 ```bash
-# 依赖：sqlite3 命令行工具。2026-08-14 实测这台机器上没有它（libsqlite3-0 有，CLI 没有），
-# 装它会顺带把 libsqlite3-0 从 3.37.2-2ubuntu0.3 升到 0.7（同一安全序列内的点版本）。
-# 服务器 sqlite 是 3.37.2；本地跑判词的那台是 3.53（linuxbrew），两者行为差异没有对拍过。
-sudo apt-get install -y sqlite3
+# 更新期间暂停计划任务，并确认已有 oneshot 已退出；不杀正在产出快照的进程。
+sudo systemctl stop dawnop-backup.timer
+systemctl is-active dawnop-backup.service  # 应为 inactive
 
-# 备份目录。/opt/dawnop 不归 dawnop，所以这一步只能 root 做，脚本自己造不出来
 sudo mkdir -p /opt/dawnop/backups
 sudo chown dawnop:dawnop /opt/dawnop/backups
 sudo chmod 700 /opt/dawnop/backups
-
-# 脚本（unit 的 ExecStart 指的就是这个路径）
 sudo install -m 755 -o root -g root deploy/backup-db.sh /opt/dawnop/backup-db.sh
-
-sudo cp deploy/dawnop-backup.service deploy/dawnop-backup.timer /etc/systemd/system/
+sudo install -m 644 -o root -g root deploy/backup-engine.conf /opt/dawnop/backup-engine.conf
+sudo install -m 644 -o root -g root deploy/dawnop-backup.service deploy/dawnop-backup.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now dawnop-backup.timer
 ```
 
-`backup-db.sh` 不在任何 rsync 范围内（`一、日常更新` 只同步 `backend/` 与 `frontend/dist/`），
-改了脚本要重跑上面那条 `install`。
+公开配置 [`backup-engine.conf`](./backup-engine.conf) 由 systemd `EnvironmentFile` 读取，
+包含 `BACKUP_ENGINE=jvm`、`BACKUP_JAR=/opt/dawnop-dawn/backend-dawn.jar`、JRE21 的
+`JAVA_HOME`/`PATH` 与 tokenizer 路径，不放任何密钥。脚本用 argv 数组执行引擎，
+不接受一整串 shell 命令。单元仍以 dawnop 运行，只允许库目录及备份目录写入；
+jar、lib/ 和扩展只读。`PrivateTmp` 允许 JDBC 解包内嵌引擎。
+安装前以 dawnop 身份核对 JRE 可执行、jar/lib/ 与扩展可读、所有父目录可遍历。
 
-### 验
+S13 验收通过后，才可把 `BACKUP_ENGINE` 改为 `native`，其
+`BACKUP_NATIVE=/opt/dawnop-dawn/native/current/dawnop-native` 必须来自已验收的私有引擎包，
+不能指向随便链接系统 SQLite 的 ELF。同时把 `DAWN_SIMPLE_EXT` 改为
+`/opt/dawnop-dawn/native/current/extensions/libsimple.so`。native 包 constructor 的来源/版本门与 core
+版本门都必须保留；不配置全局 `LD_LIBRARY_PATH`。切换后重跑下面手动自检，记录配置
+偏离仓库默认 JVM 的原因。更改该文件后下一次 oneshot 直接读取，无需重启后端。
+
+### 自检
+
 ```bash
-# 手动跑一次，看它写了什么
+sudo -u dawnop /usr/lib/jvm/java-21-openjdk-amd64/bin/java -jar /opt/dawnop-dawn/backend-dawn.jar --engine-info
+# 应是固定 JDBC 实际版本与 source id，且不打开业务库。
 sudo systemctl start dawnop-backup
-journalctl -u dawnop-backup -n 20 --no-pager
-# 期望有一行：backup-db: 写入 /opt/dawnop/backups/dawnop-<时间戳>.db.gz（N 字节），保留 14 份，删除旧备份 M 个
-
-# 下次触发时间
-systemctl list-timers dawnop-backup.timer
-
-# 产物自己校验自己。整条都要在 dawnop 身份里跑：目录是 700 dawnop，
-# 你自己的账号连 cd 进去都不行，`cd` 写在 sudo 外面这条命令就废了
-sudo -u dawnop sh -c 'cd /opt/dawnop/backups && sha256sum -c ./*.sha256'
+journalctl -u dawnop-backup -n 30 --no-pager
+# 必须出现 database backup verified 和 backup-db: 写入...；退出状态必须成功。
+systemctl show dawnop-backup -p Result -p ExecMainStatus
+sudo -u dawnop sh -c 'cd /opt/dawnop/backups && sha256sum -c ./*.sha256 && gzip -t ./*.db.gz'
+sudo systemctl enable --now dawnop-backup.timer
+systemctl list-timers dawnop-backup.timer dawnop-paste-cleanup.timer dawnop-native-cleanup.timer
 ```
+
+库目录为 WAL/SHM 仍需可写；不能因“备份只读”把它改成只读。定时为本地 00:20，
+再抖动 0..5 分钟；JVM/native cleanup 都是整点 + 0..60 秒，正常计划无冲突。
+重启后 Persistent 补跑或超长任务仍可能相遇，修复版引擎与 SQLite 锁负责并发安全。
+`check_server_drift.py` 同时核对脚本、service、timer 与公开引擎配置；它需要服务器
+访问，只由协调者在获批后运行，本任务不运行。
 
 ### 恢复
+
+恢复须另行获批。先在私有临时目录解压并用**同一修复版引擎**产生已完整验证的副本：
+
 ```bash
-# 1. 挑一份，解压到临时位置，先验它是好的
-cd /tmp
-sudo cp /opt/dawnop/backups/dawnop-20260814T000000Z.db.gz .
-gunzip dawnop-20260814T000000Z.db.gz
-sqlite3 dawnop-20260814T000000Z.db 'PRAGMA integrity_check;'   # 必须是 ok
-
-# 2. 停后端。换文件前必须没有进程连着它
-sudo systemctl stop dawnop-dawn
-
-# 3. 留住现场再覆盖。现在这个坏库仍是唯一记录了「出事之后发生过什么」的东西
-sudo mv /opt/dawnop/data/dawnop.db /opt/dawnop/data/dawnop.db.before-restore
-# 这个库是 delete 模式，正常情况下不会有这两个文件；真有就是上次没停干净，一起清掉
-sudo rm -f /opt/dawnop/data/dawnop.db-wal /opt/dawnop/data/dawnop.db-shm
-sudo install -m 644 -o dawnop -g dawnop \
-  /tmp/dawnop-20260814T000000Z.db /opt/dawnop/data/dawnop.db
-
-# 4. 起
-sudo systemctl start dawnop-dawn
-curl -s http://127.0.0.1:8001/api/health
+sudo -u dawnop mkdir -m 700 /opt/dawnop/backups/restore-check
+sudo -u dawnop sh -c 'gzip -dc /opt/dawnop/backups/dawnop-<UTC时间戳>.db.gz > /opt/dawnop/backups/restore-check/input.db'
+sudo -u dawnop env DAWNOP_ENV=/dev/null DAWN_DB_PATH=/opt/dawnop/backups/restore-check/input.db DAWN_SIMPLE_EXT=/opt/dawnop/backend/extensions/libsimple.so \
+  /usr/lib/jvm/java-21-openjdk-amd64/bin/java -jar /opt/dawnop-dawn/backend-dawn.jar --backup /opt/dawnop/backups/restore-check/verified.db
 ```
 
-留下的 `-wal` / `-shm` 必须一起删。SQLite 会把它们当成新库的一部分回放，
-结果既不是备份也不是原库。（这个库 `journal_mode=delete`，2026-08-14 实测，
-所以这一步平时是空转；写在这里是因为模式是可以被改的，而改了以后没人会回来更新这份文档。）
+确认命令成功及摘要后，停备份 timer、两个 cleanup timer，停实际启用的 JVM 服务或
+native socket/实例，确认没有打开者；保留当前 DB/WAL/SHM 整套事故现场，再换入
+`verified.db` 并设置 dawnop 属主。**不能**把旧 WAL/SHM 留在恢复库旁边，也不能在
+仍有连接时删除它们。恢复后显式执行当前版本要求的 prepare/migrate，验证 health、
+文章及两种 FTS；按先前记录只恢复一种 cleanup 执行者和备份 timer。完整恢复演练
+尚未在生产执行，不能把这里的步骤当成已验收结果。
 
 ### 保留策略
 
-每天 00:00（本地时区，`RandomizedDelaySec=1800` 内抖动）一份，留最近 14 份。
-文件名里的时间戳是 UTC，字典序即时间序。改份数改 `dawnop-backup.service` 的
-`Environment=KEEP=`。
+每天本地 00:20–00:25 一份，留最近 14 份。文件名为 UTC，字典序即时间序。
+份数在 service 的 `Environment=KEEP=`；脚本支持 `DB`、`DEST`、`KEEP` 或同名 CLI 参数。
+轮转只删完整匹配 `dawnop-<UTC时间戳>.db.gz` 的文件与对应 `.sha256`，外来文件不动。
+KEEP 必须至少为 1；单引号与空格路径按 SQL 参数绑定，不经点命令解析。
 
-轮转只删 `dawnop-<UTC 时间戳>.db.gz` 这个模式的文件和它的 `.sha256`，
-目录里放的别的东西不会被动。
+完成全客户端盘点后，若没有其他管理员工具依赖，可以另行卸载 `sqlite3` **CLI 包**，
+以免旧引擎再碰共享库；卸载不是本任务动作，也不代表系统所有 SQLite 客户端已整改。
+保留系统 `libsqlite3-0`，不做 autoremove；native 仍使用包内固定私有库，JVM 使用固定 JDBC。
 
 ### 这个方案没覆盖的
 

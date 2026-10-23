@@ -56,7 +56,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```
 dawnop-site/
 ├── backend-dawn/               # 生产后端（Dawn → JVM 字节码）
-│   ├── core/                   # 可移植包 site_core，64 个模块；共享路由与业务，零 Java
+│   ├── core/                   # 可移植包 site_core，65 个模块；共享路由与业务，零 Java
 │   │   ├── src/                # config、db/sql、repo、svc 与纯 util/qiniu/tencent，含 Upstream 与 HTTP 类型
 │   │   └── dawn.toml           # web/json/sha2，保持 v0.98.0 tag/hash
 │   ├── app/jvm/                # JVM 应用，6 个模块；路径依赖 ../../core
@@ -281,6 +281,7 @@ python3 backend-dawn/scripts/native-package/package.py build <release> --work <n
 backend-dawn/scripts/native-sqlite/run.sh # native handler、SQL 双臂、真实 FTS、BUSY、ASan/LSan
 java -jar backend-dawn/backend-dawn.jar # 跑起来（lib/ 须在 jar 旁边）
 python3 backend-dawn/scripts/test_project.py # 独立运行全量白盒单测
+python3 scripts/backup_db_mutants.py --work /tmp/site-backup-controls # 备份两臂先红负控，目录须为空
 python3 backend-dawn/scripts/check_core.py --negative-controls # core native 门禁
 backend-dawn/scripts/clock-fs/run.sh       # Clock/Fs 双臂与真实源码负控
 backend-dawn/scripts/monitor-batch/run.sh # S9 双臂批次、隔离、并行和负控（含 HTTP 类型泄漏负控）
