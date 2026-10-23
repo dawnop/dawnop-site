@@ -10,6 +10,7 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import shutil
 import socket
 import sqlite3
@@ -454,7 +455,22 @@ def protocol(number, token, peer, db, results):
         if length is not None:
             check(r["bytes"] == length, label + " length")
         if status == 206:
-            check(header(r, "Content-Range") is not None, "206 range ownership")
+            content_range = re.fullmatch(
+                r"bytes (\d+)-(\d+)/(\d+)", header(r, "Content-Range") or ""
+            )
+            check(content_range is not None, "206 range ownership")
+            first, last, total = map(int, content_range.groups())
+            check(
+                total == peer.size and last - first + 1 == r["bytes"],
+                "206 wire range and length agree",
+            )
+            expected_body = (BLOCK + BLOCK)[
+                first % len(BLOCK) : first % len(BLOCK) + r["bytes"]
+            ]
+            check(
+                r["sha256"] == hashlib.sha256(expected_body).hexdigest(),
+                "206 wire bytes agree with range",
+            )
         if status == 416:
             check(
                 header(r, "Content-Range") == f"bytes */{peer.size}", "416 object size"
@@ -474,6 +490,10 @@ def protocol(number, token, peer, db, results):
     for key in ("short", "stall-body"):
         r = case("incomplete-" + key, key=key)
         check(not r["complete"], "incomplete entity must not succeed")
+        check(
+            r["sha256"] == expected_digest(r["bytes"]),
+            "no error JSON or second response appended after final head",
+        )
     case("header-timeout", 504, key="stall-head")
     peer.size = 20
     r = case("progress-outlives-total-budget", key="drip")
