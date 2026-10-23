@@ -58,7 +58,7 @@ dawnop-site/
 ├── backend-dawn/               # 生产后端（Dawn → JVM 字节码）
 │   ├── core/                   # 可移植包 site_core，65 个模块；共享路由与业务，零 Java
 │   │   ├── src/                # config、db/sql、repo、svc 与纯 util/qiniu/tencent，含 Upstream 与 HTTP 类型
-│   │   └── dawn.toml           # web/json/sha2，保持 v0.99.0 tag/hash
+│   │   └── dawn.toml           # web/json/sha2，保持 v0.100.0 tag/hash
 │   ├── app/jvm/                # JVM 应用，6 个模块；路径依赖 ../../core
 │   │   ├── src/                # main、JDBC owner、HTTP 适配与测试用缓存构造
 │   │   ├── dawn.toml           # web_jvm、sqlite-jdbc 与 site_core
