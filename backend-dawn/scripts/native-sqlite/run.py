@@ -157,7 +157,10 @@ pub fn main() -> Unit !io = {
 def compare(work, native, jar, fixture, env, mode):
     ext = str(work / "libsimple.so") if mode == "fts" else ""
     outputs = []
-    for arm, command in [("jdbc", ["java", "-jar", jar]), ("native", [native])]:
+    for arm, command in [
+        ("jdbc", ["java", "-XX:-UsePerfData", "-jar", jar]),
+        ("native", [native]),
+    ]:
         p = fresh(work, mode + "-" + arm, fixture)
         r, elapsed = run([*command, mode, p, ext], env=env)
         outputs.append(r.stdout.splitlines())

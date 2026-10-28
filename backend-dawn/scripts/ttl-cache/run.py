@@ -157,7 +157,10 @@ def controls(work, dawnc, dawn, fixture, env):
             [dawn, "build", jvm_project(work / name, project.parents[1]), "-o", jar],
             env=env,
         )
-        for arm, command in [("native", [binary]), ("jdbc", ["java", "-jar", jar])]:
+        for arm, command in [
+            ("native", [binary]),
+            ("jdbc", ["java", "-XX:-UsePerfData", "-jar", jar]),
+        ]:
             path = SQL.fresh(work, name + arm, fixture)
             result, _ = run([*command, mode, path], env=env, good=False)
             log = result.stdout + result.stderr
@@ -189,8 +192,12 @@ pub fn cache_get(cell: TtlCell, _ttl: Int) -> Option[String] !io = {
         env=env,
     )
     path = SQL.fresh(work, "process-memory", fixture)
-    run(["java", "-jar", jar, "cache-write-now", path], env=env)
-    result, _ = run(["java", "-jar", jar, "cache-read-now", path], env=env, good=False)
+    run(["java", "-XX:-UsePerfData", "-jar", jar, "cache-write-now", path], env=env)
+    result, _ = run(
+        ["java", "-XX:-UsePerfData", "-jar", jar, "cache-read-now", path],
+        env=env,
+        good=False,
+    )
     log = result.stdout + result.stderr
     (work / "process-memory.log").write_text(log)
     assert result.returncode != 0 and "process-restart-hit" in log, log
@@ -218,7 +225,10 @@ def main():
         run([dawnc, "build", BACKEND / "test/native", "-o", native], env=env)
         jar = work / "jdbc.jar"
         run([dawn, "build", jvm_project(work), "-o", jar], env=env)
-        commands = {"jdbc": ["java", "-jar", jar], "native": [native]}
+        commands = {
+            "jdbc": ["java", "-XX:-UsePerfData", "-jar", jar],
+            "native": [native],
+        }
         observations = []
         for arm, command in commands.items():
             path = SQL.fresh(work, "suite-" + arm, fixture)

@@ -3,10 +3,12 @@
 import argparse
 import hmac
 import importlib.util
+import os
 import selectors
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -84,7 +86,9 @@ def build(work, dawnc, dawn, backend=BACKEND):
         compiler = dawnc if arm == "native" else dawn
         run([compiler, "build", project(work, arm, backend), "-o", artifact])
         commands[arm] = (
-            [artifact] if arm == "native" else ["java", "-Xmx96m", "-jar", artifact]
+            [artifact]
+            if arm == "native"
+            else ["java", "-XX:-UsePerfData", "-Xmx96m", "-jar", artifact]
         )
     return commands
 
@@ -94,22 +98,33 @@ def count(path):
         return c.execute("select count(*) from auth_test_bcrypt").fetchone()[0]
 
 
-def ready(children, expected):
+def ready(children, expected, timeout=45):
     with selectors.DefaultSelector() as selector:
         for child in children:
             selector.register(child.stdout, selectors.EVENT_READ, child)
-        deadline = time.monotonic() + 45
+        deadline = time.monotonic() + timeout
+        pending = {child: bytearray() for child in children}
         while selector.get_map():
-            events = selector.select(max(0, deadline - time.monotonic()))
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, "process barrier timed out"
+            events = selector.select(remaining)
             assert events, "process barrier timed out"
             for key, _ in events:
-                line = key.fileobj.readline().strip()
-                assert line == expected, (
-                    line,
-                    key.data.poll(),
-                    key.data.stderr.read() if key.data.poll() is not None else "",
-                )
-                selector.unregister(key.fileobj)
+                # Read only through the token. TextIO can buffer the next line,
+                # hiding it from the selector after a leading HotSpot warning.
+                # One byte also keeps partial lines within the same deadline.
+                chunk = os.read(key.fd, 1)
+                assert chunk, f"process exited before barrier {expected!r}"
+                line = pending[key.data]
+                line.extend(chunk)
+                assert len(line) <= 65536, "process barrier line too long"
+                if chunk != b"\n":
+                    continue
+                if line.rstrip(b"\r\n") == expected.encode():
+                    selector.unregister(key.fileobj)
+                else:
+                    sys.stderr.write(line.decode(errors="replace"))
+                line.clear()
 
 
 def burst(commands, path, password, *, expected=1, negative=False):
@@ -280,6 +295,8 @@ def main():
     parser.add_argument("--skip-controls", action="store_true")
     args = parser.parse_args()
     started = time.monotonic()
+    result, _ = run([sys.executable, HERE / "ready_control.py"])
+    print(result.stdout, end="", flush=True)
     dawnc = Path(run([ROOT / "scripts/fetch-dawn-native.sh"])[0].stdout.strip())
     dawn = Path(run([ROOT / "scripts/fetch-dawn.sh"])[0].stdout.strip())
     with tempfile.TemporaryDirectory(prefix="site-auth-") as temporary:
