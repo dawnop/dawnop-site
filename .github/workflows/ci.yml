@@ -192,6 +192,7 @@ jobs:
 
       - name: extract a private stock nginx binary
         run: |
+          sudo apt-get update
           mkdir -p "${RUNNER_TEMP}/nginx-download"
           cd "${RUNNER_TEMP}/nginx-download"
           apt-get download nginx
