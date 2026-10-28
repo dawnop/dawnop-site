@@ -292,6 +292,7 @@ jobs:
           restore-keys: coursier-
       - name: extract an isolated nginx binary
         run: |
+          sudo apt-get update
           mkdir -p "${RUNNER_TEMP}/k2-nginx"
           cd "${RUNNER_TEMP}/k2-nginx"
           apt-get download nginx
