@@ -66,7 +66,7 @@ def build(work, arm, backend=BACKEND):
     return (
         [str(artifact)]
         if arm == "native"
-        else ["java", "-Xms32m", "-Xmx256m", "-jar", str(artifact)]
+        else ["java", "-XX:-UsePerfData", "-Xms32m", "-Xmx256m", "-jar", str(artifact)]
     )
 
 

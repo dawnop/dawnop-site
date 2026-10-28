@@ -95,7 +95,14 @@ def builds(work, backend=BACKEND, native_only=False):
     if not native_only:
         jar = work / "jvm-probe.jar"
         run([dawn, "build", project(work, "jvm"), "-o", jar])
-        commands["jvm"] = ["java", "-Xms32m", "-Xmx256m", "-jar", str(jar)]
+        commands["jvm"] = [
+            "java",
+            "-XX:-UsePerfData",
+            "-Xms32m",
+            "-Xmx256m",
+            "-jar",
+            str(jar),
+        ]
     return commands
 
 

@@ -171,6 +171,7 @@ def matrix(work, dawn, dawnc, fixture, fixtures, env):
             r = run(
                 [
                     "java",
+                    "-XX:-UsePerfData",
                     "-jar",
                     work / "probe.jar",
                     "jvm",

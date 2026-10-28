@@ -99,7 +99,7 @@ def acceptance(work, dawn, jar):
     old = project(work, "old-driver", old=True)
     oldjar = work / "old.jar"
     run([dawn, "build", old, "-o", oldjar])
-    r = run(["java", "-jar", oldjar, "version"], good=False)
+    r = run(["java", "-XX:-UsePerfData", "-jar", oldjar, "version"], good=False)
     (work / "old-driver.log").write_text(r.stdout + r.stderr)
     assert (
         r.returncode != 0
@@ -147,7 +147,10 @@ def acceptance(work, dawn, jar):
         app = project(work, name, (before, after))
         target = work / name / "probe.jar"
         run([dawn, "build", app, "-o", target])
-        r = run(["java", "-jar", target, mode, work / (name + ".db")], good=False)
+        r = run(
+            ["java", "-XX:-UsePerfData", "-jar", target, mode, work / (name + ".db")],
+            good=False,
+        )
         (work / (name + ".log")).write_text(r.stdout + r.stderr)
         assert r.returncode != 0 and "assertion: " + reason in r.stdout + r.stderr, (
             name,
@@ -162,12 +165,14 @@ def acceptance(work, dawn, jar):
     target = work / "positive/probe.jar"
     run([dawn, "build", app, "-o", target])
     for mode in ("version", "wal", "wal-sql", "extension", "ok"):
-        r = run(["java", "-jar", target, mode, work / "positive.db"])
+        r = run(
+            ["java", "-XX:-UsePerfData", "-jar", target, mode, work / "positive.db"]
+        )
         (work / (mode + ".log")).write_text(r.stdout + r.stderr)
         if mode == "version":
             assert "sqlite_version=3.53.4 sqlite_source_id=" in r.stdout
     check(jar, lock)
-    r = run(["java", "-jar", jar, "--engine-info"])
+    r = run(["java", "-XX:-UsePerfData", "-jar", jar, "--engine-info"])
     assert "sqlite_version=3.53.4 sqlite_source_id=" in r.stderr and not r.stdout
     print(r.stderr.strip(), flush=True)
     print(

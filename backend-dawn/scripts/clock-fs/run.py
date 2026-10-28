@@ -61,7 +61,9 @@ def build_probe(work, backend, compiler, arm):
     result, elapsed = run([compiler, "build", project, "-o", artifact])
     (work / (arm + ".build.log")).write_text(result.stdout + result.stderr)
     ok(f"{work.name}/{arm} compiled; wall_s={elapsed:.3f}")
-    return ["java", "-jar", artifact] if arm == "jvm" else [artifact]
+    return (
+        ["java", "-XX:-UsePerfData", "-jar", artifact] if arm == "jvm" else [artifact]
+    )
 
 
 def invoke(work, command, arm, files, owner=None):
