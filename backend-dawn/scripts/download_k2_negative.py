@@ -267,13 +267,13 @@ def mutate(name, backend):
         replace(p, "http_date(v.last_modified_s)", "http_date(system_s())")
         replace(
             p,
-            "mime: String) -> Result[Response, HttpError] =",
-            "mime: String) -> Result[Response, HttpError] !io =",
+            "mime: String, at: Loc = caller()) -> Result[Response, HttpError] =",
+            "mime: String, at: Loc = caller()) -> Result[Response, HttpError] !io =",
         )
         replace(
             backend / "core/src/api/api_fm.dawn",
-            "mime: String) -> Result[Response, HttpError] =",
-            "mime: String) -> Result[Response, HttpError] !io =",
+            "mime: String, at: Loc = caller()) -> Result[Response, HttpError] =",
+            "mime: String, at: Loc = caller()) -> Result[Response, HttpError] !io =",
         )
     elif name == "empty-head-object":
         replace(

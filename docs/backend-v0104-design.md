@@ -21,6 +21,7 @@
 - `util/local_empty.respond` 增加 Loc，转给 raw 以及每层 with_header。
 - `api/api_fm.util_empty_response` 增加 Loc，继续转给 local_empty.respond。
 - `response-stream-boundary-mutants/mutate.py` 的 break-owner-adapter 与 bypass-streaming-symbol 两处函数值都显式传递 length 和 Loc；前者的锚点同步新包装声明。FFI 检查器同步声明与转发锚点，保留原 owner 和判词。
+- `download_k2_negative.py` 的 empty-read-clock 同步 local_empty 与 api_fm 两处函数签名锚点；保留原编译要求与语义断言。首轮 CI 揭示该遗漏后补齐全部 24 个 K2 锚点预检。
 
 其余构造调用位于业务响应创建点，沿用直接调用默认位置；固定状态的 receipt、options 与已验证的 handoff 在自身业务构造位置报告。生产源码与测试不存在受影响构造器的函数值，宿主脚本内嵌的函数值仅上述两处。tokenizer 自测的残片只测试词法识别，不作为可编译 consumer。
 
