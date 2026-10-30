@@ -251,10 +251,10 @@ fn get_or_head(a: Auth, req: Request, rel: String, origin: String) -> Result[Res
   }
 }
 
-fn add_headers(r: Response, hs: List[(String, String)]) -> Response =
+fn add_headers(r: Response, hs: List[(String, String)], at: Loc = caller()) -> Response =
   fold(hs, r, (acc, kv) => {
     let (k, v) = kv
-    with_header(acc, k, v)
+    with_header(acc, k, v, at = at)
   })
 
 # ---- write helpers ----

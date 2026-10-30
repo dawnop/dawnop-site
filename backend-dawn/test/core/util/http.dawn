@@ -93,3 +93,22 @@ test "a request body is multipart bytes and an explicit stable file description"
   assert parts.file == file
   assert parts.tail == tail
 }
+
+use std/loc
+
+test "stream response refusals retain the application call location" {
+  let stream = bytes_stream(bytes.utf8(""))
+  let mark = loc.here()
+  let result = catch_panic(() => stream_response(100, "application/octet-stream", stream))
+  assert match result {
+    Err(e) -> str.starts_with(e.message, "illegal response status 100") &&
+      str.contains(e.message, " at ${loc.path(mark)}:${loc.line(mark) + 1}:")
+    Ok(_) -> false
+  }
+  let at = loc.here()
+  let forwarded = catch_panic(() => stream_response(200, "bad\n", stream, at = at))
+  assert match forwarded {
+    Err(e) -> str.contains(e.message, " at ${loc.path(at)}:${loc.line(at)}:${loc.col(at)}")
+    Ok(_) -> false
+  }
+}

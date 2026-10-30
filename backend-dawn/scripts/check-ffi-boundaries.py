@@ -40,9 +40,11 @@ WEB_STREAM_IMPORT = "use web/types.{Response, BodySource, streaming}"
 WEB_INPUT_SOURCE_IMPORT = "use web_jvm/server.{input_source}"
 STREAM_RESPONSE_DECLARATION = (
     "pub fn stream_response(status: Int, content_type: String, "
-    "stream: ResponseStream) -> Response ="
+    "stream: ResponseStream, at: Loc = caller()) -> Response ="
 )
-STREAM_RESPONSE_FORWARD = "streaming(status, content_type, raw_response_source(stream))"
+STREAM_RESPONSE_FORWARD = (
+    "streaming(status, content_type, raw_response_source(stream), at = at)"
+)
 RESPONSE_BODY_SEAM_ASSERTION = "ffi.web3-response-body-seam-confined"
 RESPONSE_BODY_SEAM_IDENTIFIERS = frozenset({"Stream", "ResponseBody"})
 STREAMING_SYMBOL_ASSERTION = "ffi.web3-streaming-symbol-confined"

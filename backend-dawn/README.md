@@ -53,7 +53,7 @@ dawnop.com 博客后端的 **Dawn 重写**（dawn-lang M6，计划见 dawn-lang 
 
 ## 依赖与构建
 
-- 编译器钉在 v0.100.0；web 8.0.0（纯 Dawn，包名 web8）、web_jvm 2.0.0（JVM 服务器，包名 web_jvm2）、
+- 编译器钉在 v0.104.0；web 9.0.0（纯 Dawn，包名 web9）、web_jvm 2.0.0（JVM 服务器，包名 web_jvm2）、
   json 与 sha2 都来自同版 tag 归档。入口使用 `web_jvm/server`，表单解析使用
   `web/wire`；JVM HTTP owner 在响应臂内用 `input_source` 把私有
   InputStream 转成 core ResponseStream 所包装的 BodySource。源的 read(pos, n) 接收累计字节偏移；
@@ -244,7 +244,7 @@ JVM 只留 6 个模块（入口、JDBC、HTTP 适配及测试构造），native 
   查询并核对 WAL，再按需用固定 sqlite3_simple_init 的 C 接口加载扩展；失败返回调用层，
   不执行 body。SQL 扩展 gate 始终关闭。NULL、列名和重复 label、Bool、SQL quote row_sig
   与 core 事务规则保持；不把 sqlite3_changes 用于 DDL 或编辑检测。版本和源码树摘要
-  固定到工具链同一个 v0.100.0 URL/subdir。详见 `docs/native-sqlite-design.md`（仓库根）。
+  固定到工具链同一个 v0.104.0 URL/subdir。详见 `docs/native-sqlite-design.md`（仓库根）。
 - `core/src/db/sql.dawn` — 站点 `Db` 效果与 `SqlV/Col/Cell/Row/QueryResult`：
   六个操作为 db_query、execute、execute_changes、last_id、busy_timeout、in_transaction，
   均返回 Result[..., String]。query/query_rows、exec、scalar_int、require_tx、row_sig 与普通泛型
@@ -325,7 +325,7 @@ JVM 只留 6 个模块（入口、JDBC、HTTP 适配及测试构造），native 
   `RequestBody` 不透明包装纯数据 `FileParts { head, file = FileSpan { path, offset, length }, tail }`，
   `OutBody.FileBody` 替代 PublishedBody。file_body 只预检文件大小，不创建 publisher；JVM owner 在
   request_for 内把完整文件描述转换成 ofFile/concat，保持原流式发送。当前 JVM 明确拒绝非完整文件范围；
-  拒绝返回 ForeignError 并经原 502 分类，S8 可直接使用描述中的 offset/length。`ResponseStream` 不透明包装 web8 BodySource，
+  拒绝返回 ForeignError 并经原 502 分类，S8 可直接使用描述中的 offset/length。`ResponseStream` 不透明包装 web9 BodySource，
   JVM 臂先用 input_source 转换，core stream_response 再交 web 泵；转交不读源，读错误保留到消费时。
   HEAD/无体状态、成功、失败/断连由 web bracket 关闭；非2xx拒绝由 close_stream 关闭。
   response-stream 原七项一对一保留，再加错误被吞为 EOF 的第八项，共九组161变异。

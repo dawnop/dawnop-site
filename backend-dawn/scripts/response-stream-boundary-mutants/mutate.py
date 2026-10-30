@@ -76,17 +76,17 @@ def main() -> int:
             "  }))",
         )
     elif args.mutant == "break-owner-adapter":
-        # web6 gave `streaming` a defaulted `length`; a function value does not
-        # carry defaults, so calls through `forward` pass `None` explicitly.
+        # Function values carry neither web6's length nor web9's caller default.
+        # Keep this mutant compiling so only the owner adapter assertion fails.
         replace_once(
             http,
             "pub fn stream_response(status: Int, content_type: String, "
-            "stream: ResponseStream) -> Response =\n"
-            "  streaming(status, content_type, raw_response_source(stream))\n",
+            "stream: ResponseStream, at: Loc = caller()) -> Response =\n"
+            "  streaming(status, content_type, raw_response_source(stream), at = at)\n",
             "pub fn stream_response(status: Int, content_type: String, "
-            "stream: ResponseStream) -> Response = {\n"
+            "stream: ResponseStream, at: Loc = caller()) -> Response = {\n"
             "  let forward = streaming\n"
-            "  forward(status, content_type, raw_response_source(stream), None)\n"
+            "  forward(status, content_type, raw_response_source(stream), None, at)\n"
             "}\n",
         )
     elif args.mutant == "bypass-owner-adapter":
@@ -127,10 +127,10 @@ def main() -> int:
         )
         append_once(
             api_fm,
-            "pub fn bypassed_owner_forward() -> Response !io = {\n"
+            "pub fn bypassed_owner_forward(at: Loc = caller()) -> Response !io = {\n"
             "  let forward = streaming\n"
             '  let raw_stream = URL.new("http://127.0.0.1").openStream()!\n'
-            '  forward(200, "application/octet-stream", input_source(raw_stream), None)\n'
+            '  forward(200, "application/octet-stream", input_source(raw_stream), None, at)\n'
             "}",
         )
     elif args.mutant == "discard-source-error":

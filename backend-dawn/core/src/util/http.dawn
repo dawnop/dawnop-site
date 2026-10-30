@@ -232,8 +232,8 @@ fn fetch_stream_within(url: String, headers: List[(String, String)], budget_s: I
 pub fn ok_stream(r: StreamResp) -> Bool = r.status >= 200 && r.status < 300
 
 ## Transfer source ownership to the web pump, including HEAD and failure cleanup.
-pub fn stream_response(status: Int, content_type: String, stream: ResponseStream) -> Response =
-  streaming(status, content_type, raw_response_source(stream))
+pub fn stream_response(status: Int, content_type: String, stream: ResponseStream, at: Loc = caller()) -> Response =
+  streaming(status, content_type, raw_response_source(stream), at = at)
 
 ## Release a rejected upstream response. Close failures remain non-fatal.
 pub fn close_stream(s: ResponseStream) -> Unit !io = {

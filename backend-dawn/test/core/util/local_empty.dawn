@@ -23,3 +23,17 @@ test "local empty conditions preserve precedence and ignore ranges" {
       Ok(_) -> { assert false } }
   }
 }
+
+use std/loc
+use std/str
+use rep_support
+
+test "local empty response refusals retain the application call location" {
+  let value = rep_support.publication("empty", 0)
+  let mark = loc.here()
+  let result = catch_panic(() => respond(request([]), value, "bad\n"))
+  assert match result {
+    Err(e) -> str.contains(e.message, " at ${loc.path(mark)}:${loc.line(mark) + 1}:")
+    Ok(_) -> false
+  }
+}
