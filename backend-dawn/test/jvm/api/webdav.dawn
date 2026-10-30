@@ -403,3 +403,15 @@ test "spilled body size errors retain WebDAV status 500" {
     let _ = io.delete(dir)
   })
 }
+
+use std/loc
+
+test "DAV header wrapper refusals retain the application call location" {
+  let base = text(200, "")
+  let mark = loc.here()
+  let result = catch_panic(() => add_headers(base, [("X-Test", "bad\n")]))
+  assert match result {
+    Err(e) -> str.contains(e.message, " at ${loc.path(mark)}:${loc.line(mark) + 1}:")
+    Ok(_) -> false
+  }
+}

@@ -62,9 +62,9 @@ pub fn status(req: Request, modified_s: Int) -> Result[Int, HttpError] = {
 }
 
 ## Range and If-Range are deliberately ignored. No object or clock operation.
-pub fn respond(req: Request, value: Published, mime: String) -> Result[Response, HttpError] = {
+pub fn respond(req: Request, value: Published, mime: String, at: Loc = caller()) -> Result[Response, HttpError] = {
   let v = fields(value)
   let code = status(req, v.last_modified_s)?
-  let response = with_header(with_header(raw(code, mime, ""), "ETag", v.etag), "Last-Modified", http_date(v.last_modified_s))
-  Ok(if req.method == "HEAD" && code != 304 { with_header(response, "Content-Length", "0") } else { response })
+  let response = with_header(with_header(raw(code, mime, "", at = at), "ETag", v.etag, at = at), "Last-Modified", http_date(v.last_modified_s), at = at)
+  Ok(if req.method == "HEAD" && code != 304 { with_header(response, "Content-Length", "0", at = at) } else { response })
 }

@@ -5,7 +5,7 @@ name = "transport_scenarios"
 site_core = "../../core"
 
 [deps.web]
-url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.100.0.zip"
-version = "8.0.0"
-hash = "d1:e89861b527cb60ab91654d19660a7f8686737e6ad644f0e0833c4b958baeb626"
+url = "https://github.com/dawnop/dawn-lang/archive/refs/tags/v0.104.0.zip"
+version = "9.0.0"
+hash = "d1:1c09386a8e89e03e03fdb14c613cd3224073470630be80e5514244e5c39c1178"
 subdir = "packages/web"
